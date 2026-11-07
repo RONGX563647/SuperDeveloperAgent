@@ -28,7 +28,7 @@ agent:
 
 logging:
   level:
-    org.example.agent: INFO
+    top.rongx.agent: INFO
     io.agentscope: INFO
   pattern:
     console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

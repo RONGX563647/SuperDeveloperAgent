@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>org.example.agent</groupId>
+        <groupId>top.rongx</groupId>
         <artifactId>agent-platform</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
@@ -15,37 +15,37 @@
     <dependencies>
         <!-- 需要读到全部模块的字节码（ArchUnit） -->
         <dependency>
-            <groupId>org.example.agent</groupId>
+            <groupId>top.rongx</groupId>
             <artifactId>agent-domain</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.example.agent</groupId>
+            <groupId>top.rongx</groupId>
             <artifactId>agent-infra</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.example.agent</groupId>
+            <groupId>top.rongx</groupId>
             <artifactId>agent-governance</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.example.agent</groupId>
+            <groupId>top.rongx</groupId>
             <artifactId>agent-executor</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.example.agent</groupId>
+            <groupId>top.rongx</groupId>
             <artifactId>agent-tools</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.example.agent</groupId>
+            <groupId>top.rongx</groupId>
             <artifactId>agent-runtime</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.example.agent</groupId>
+            <groupId>top.rongx</groupId>
             <artifactId>agent-gateway</artifactId>
             <scope>test</scope>
         </dependency>

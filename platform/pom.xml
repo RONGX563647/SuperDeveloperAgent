@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.example.agent</groupId>
+    <groupId>top.rongx</groupId>
     <artifactId>agent-platform</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
@@ -55,37 +55,37 @@
             </dependency>
 
             <dependency>
-                <groupId>org.example.agent</groupId>
+                <groupId>top.rongx</groupId>
                 <artifactId>agent-domain</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.example.agent</groupId>
+                <groupId>top.rongx</groupId>
                 <artifactId>agent-infra</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.example.agent</groupId>
+                <groupId>top.rongx</groupId>
                 <artifactId>agent-governance</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.example.agent</groupId>
+                <groupId>top.rongx</groupId>
                 <artifactId>agent-executor</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.example.agent</groupId>
+                <groupId>top.rongx</groupId>
                 <artifactId>agent-tools</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.example.agent</groupId>
+                <groupId>top.rongx</groupId>
                 <artifactId>agent-runtime</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.example.agent</groupId>
+                <groupId>top.rongx</groupId>
                 <artifactId>agent-gateway</artifactId>
                 <version>${project.version}</version>
             </dependency>
