@@ -1,0 +1,9 @@
+# 迁移基线：已发布的迁移文件 sha256
+# 格式：<相对路径> <sha256>
+# 维护：每次发布后把新迁移追加到这里并提交；已在基线中的文件不允许再改（改了 M1 会失败）
+#
+# 生成（在 platform/ 下执行）：
+#   PowerShell : Get-ChildItem -Recurse -Filter "V*.sql" | Where-Object { $_.FullName -match "db\\migration" } |
+#                ForEach-Object { "{0} {1}" -f $_.FullName.Replace((Get-Location).Path + '\','').Replace('\','/'),
+#                                            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() }
+#   bash       : find . -path '*/db/migration/V*.sql' -type f -exec sha256sum {} \;
