@@ -47,6 +47,22 @@ cd web && npm install && npm run dev    # http://127.0.0.1:5173
 
 详见 [platform/README.md](platform/README.md)。
 
+## 代码托管与流水线
+
+| 项 | 说明 |
+|---|---|
+| 代码托管 | **Gitee**（Maven groupId `top.rongx`，Java 根包 `top.rongx.agent`） |
+| 流水线 | [`.workflow/build.yml`](.workflow/build.yml)（Gitee Go）。本质只有一条：`cd platform && mvn -B verify` |
+| 门禁 | 分支保护 + `mvn verify` 必须绿（规约检查已并入构建） |
+
+```bash
+git remote add origin https://gitee.com/<你的账号>/agentscope-ruoyi.git
+git push -u origin main --tags
+```
+
+> Gitee Go 的字段名以平台文档为准（首次接入核对 `triggers` / `step` / `artifacts`）。
+> 若该套餐不含 Gitee Go，把上面那条命令接到任意 runner（自建 / 云效 / Jenkins）即可，效果一致。
+
 ## 提交规范
 
 遵循 [项目规约 §12](docs/项目规约-v1.0.md)：

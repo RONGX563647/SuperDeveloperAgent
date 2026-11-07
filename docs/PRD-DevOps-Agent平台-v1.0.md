@@ -28,7 +28,7 @@
 |---|---|
 | P1 | 平台是**独立服务**，与 RuoYi-Vue 业务服务器分开部署，仅内网访问 |
 | P2 | 平台**托管多个项目**（多项目为一级实体），首期为 1 个（RuoYi-Vue-Plus） |
-| P3 | 工作项（需求/缺陷）**事实源在 Gitee / GitLab Issues**，平台不自建工单系统 |
+| P3 | 工作项（需求/缺陷）**事实源在 Gitee Issues**（代码托管平台为 Gitee；GitLab 适配作为可选扩展，接口见 §4.3），平台不自建工单系统 |
 | P4 | 部署形态：**单机 Docker / docker-compose，短期不上 K8s** |
 | P5 | **CI/CD 自研**：平台内建流水线引擎，**锁定 Java(Maven) + Vue(pnpm/npm) 两栈**，靠 4 种 stage 类型扩展；不部署 Jenkins、不接外部 CI |
 | P6 | 平台具备 AIOps 能力，但**生产写操作默认不自动执行**（L3 需审批） |
