@@ -100,7 +100,7 @@ Vite 已把 `/api` 代理到 `127.0.0.1:8090`。
         规约条款见《规约自动化检查》§2；如为误报请加 `// spec-ignore: R06 <原因>` 并登记项目规约 §13
 ```
 
-详见 [spec-checks/README.md](spec-checks/README.md)。CI 流水线见 [.gitlab-ci.yml](.gitlab-ci.yml)（GitLab CI；其他平台把 `mvn verify` 搬过去即可）。
+详见 [spec-checks/README.md](spec-checks/README.md)。CI 流水线见 [`.workflow/build.yml`](../.workflow/build.yml)（Gitee Go；本质只是跑一条 `mvn -B verify`，换任何 CI 都能用）。
 
 ## 刻意留白（不是遗漏）
 

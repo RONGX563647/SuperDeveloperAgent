@@ -1,0 +1,44 @@
+# Gitee Go 流水线（Gitee 平台的官方 CI）
+#
+# ⚠️ 首次接入请对照 Gitee Go 文档核对字段：不同套餐/版本对 `triggers`、`step` 名称、
+#    `artifacts` 的支持略有差异。本文件只依赖两个稳定事实：
+#      1) 平台的 CI 就是跑一条命令：`mvn -B verify`（规约检查已并入，失败即中断）
+#      2) 产物目录固定：platform/agent-gateway/target/*-exec.jar
+#    如果 Gitee Go 不可用，把这两点搬到任意 CI（自建 runner / Jenkins / 云效）即可。
+
+version: 1.0
+name: agent-platform
+displayName: 研发运维智能体平台
+
+triggers:
+  push:
+    branches:
+      include:
+        - master
+        - main
+  pull_request:
+    branches:
+      include:
+        - master
+        - main
+
+stages:
+  - name: verify
+    displayName: 构建与规约检查
+    strategy: naturally
+    trigger: auto
+    steps:
+      - step: build@maven
+        name: maven_verify
+        displayName: mvn verify（编译 + 规约检查 + 单测）
+        jdkVersion: "21"
+        mavenVersion: "3.9.9"
+        # 如用私服，把 settings.xml 放在仓库外的 Gitee 凭据里再引用；默认走公网仓库
+        commands:
+          - cd platform
+          - mvn -B -q verify
+        artifacts:
+          - name: platform/agent-gateway/target
+          - name: platform/spec-checks/target/surefire-reports
+        caches:
+          - ~/.m2/repository
