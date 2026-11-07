@@ -19,6 +19,9 @@ management:
 
 # 模型：API Key 必须由环境变量注入，代码与配置库中不得出现（规约 §8）
 agent:
+  # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）
+  workspace:
+    root: ${AGENT_WORKSPACE_ROOT:./data/workspaces}
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}

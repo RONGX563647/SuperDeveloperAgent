@@ -71,6 +71,7 @@ Vite 已把 `/api` 代理到 `127.0.0.1:8090`。
 | 对话 + SSE 流式 | ✅ 可用（`POST /api/v1/chat`），实测能收到 `AgentStartEvent` / `ModelCallStartEvent` |
 | 项目上下文服务端绑定 | ✅ 可用（`ProjectContext` 经 `RuntimeContext` 注入，模型无法提供 `projectId`） |
 | 只读工具 | ✅ `project_info`、`list_envs`、`ci_list_pipelines`、`ci_status` |
+| **方案 D：动作契约 + 仓库内配方** | ✅ `list_actions` / `plan_action` / `run_action`；配方解析顺序 `ci/actions.yml → Taskfile.yml → Makefile → 内置默认`；实测跑通"读配方 → 执行 → 产物 sha256" |
 | 变更请求（不能自确认） | ✅ `request_confirmation` 产出 `changeId` + `planHash` |
 | 人工确认 → 一次性令牌 | ✅ `POST /api/v1/changes/{id}/confirm`（5 分钟、绑定 planHash、用后失效） |
 | 统一错误响应（含 traceId） | ✅ 已验证：`{code, message, traceId}` |
@@ -105,10 +106,12 @@ Vite 已把 `/api` 代理到 `127.0.0.1:8090`。
 ## 刻意留白（不是遗漏）
 
 1. **没有 `confirm` 工具**——确认只能由人在 HTTP 接口完成（规约 §4.10 第一道守卫）；
-2. **`PipelineEngine` 是空实现**——避免在契约未评审前写死细节；
-3. **高危密码校验失败关闭**——账号体系未接入时 `FailClosedPasswordVerifier` 一律拒绝，而不是放行；
-4. **事件映射用反射**——骨架阶段够用；正式版应按 32 类事件映射成稳定枚举，避免前端依赖内部类名；
-5. **`changeId` 由前端从文本里正则提取**——临时手段，应由后端发专用 SSE 事件（见 TODO）。
+2. **`PipelineEngine` 是空实现**——`ci_run` 走的是它；真正的执行走 `run_action`（方案 D）；
+3. **动作执行尚未套容器沙箱**——`ProcessActionRunner` 是 P0 验证版，直接在宿主进程执行；正式版把 `runOne` 换成容器内执行，其余逻辑不变；
+4. **`stack_deploy` / `stack_rollback` 没有配方**——它们要接窄控制器，属下一阶段；
+5. **高危密码校验失败关闭**——账号体系未接入时 `FailClosedPasswordVerifier` 一律拒绝，而不是放行；
+6. **事件映射用反射**——骨架阶段够用；正式版应按 32 类事件映射成稳定枚举；
+7. **`changeId` 由前端从文本里正则提取**——临时手段，应由后端发专用 SSE 事件。
 
 ---
 
@@ -116,7 +119,7 @@ Vite 已把 `/api` 代理到 `127.0.0.1:8090`。
 
 | # | 任务 | 对应规约 |
 |---|---|---|
-| 1 | `apply` 接口 + `PipelineEngine` 真实实现（先 `mvn`/`npm`） | 执行器契约 §3.1–3.2 |
+| 1 | 把 `ProcessActionRunner` 换成容器沙箱执行（复用 `DockerSandboxConfig`） | 执行器契约 §1.7 |
 | 2 | 前端改为消费专用 `change` 事件，去掉正则提取 | PRD §4.10 |
 | 3 | 账号体系（本地账号 + BCrypt）替换 `X-User-Id` | PRD §4.10 |
 | 4 | 会话与消息落库（替换内存） | 项目规约 §5 |

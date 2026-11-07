@@ -20,6 +20,11 @@
             <groupId>top.rongx</groupId>
             <artifactId>agent-infra</artifactId>
         </dependency>
+        <!-- 执行面实现（ActionRunner 等）由网关装配 -->
+        <dependency>
+            <groupId>top.rongx</groupId>
+            <artifactId>agent-executor</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc</artifactId>
