@@ -29,6 +29,7 @@ _research/     市场调研与源码能力盘点（含采集脚本）
 | 7 | [执行面设计（K8s/Jenkins/Flyway）](docs/devops-agent-执行面设计-k8s-jenkins-flyway.md) | 「拥有类似能力」的三条路线 |
 | 8 | [多项目托管 v4](docs/多项目托管设计-v4.md) | 项目作为作用域边界 |
 | 9 | [Jenkins 能力复刻与复用 · 规划](docs/Jenkins能力复刻与复用-规划-v1.md) | CI 引擎该复刻什么、复用什么、明确不做什么 |
+| 10 | [开源 CI 集成复用 · 调研](docs/开源CI集成复用-调研-v1.md) | 有没有现成开源 CI 能直接用（结论：SCM 绑死 Gitee） |
 
 **背景与推演**（按时间顺序，记录结论如何演化）：
 
