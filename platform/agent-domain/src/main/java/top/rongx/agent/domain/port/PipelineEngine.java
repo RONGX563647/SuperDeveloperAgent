@@ -36,4 +36,9 @@ public interface PipelineEngine {
 
     /** 运行产出物。 */
     List<ArtifactRef> artifacts(String runId);
+
+    /** 运行日志尾部（供构建历史查看；默认无）。 */
+    default String logTail(String runId) {
+        return "";
+    }
 }

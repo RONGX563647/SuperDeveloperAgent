@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +33,9 @@ final class ProcessExecutor {
         }
     }
 
-    StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink) {
+    StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
+                     BooleanSupplier cancelled) {
+        long deadline = System.nanoTime() + Math.max(1, budgetMillis) * 1_000_000L;
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(dir.toFile())
                 .redirectErrorStream(true);
@@ -50,7 +53,21 @@ final class ProcessExecutor {
 
         boolean finished;
         try {
-            finished = process.waitFor(Math.max(1, budgetMillis), TimeUnit.MILLISECONDS);
+            while (true) {
+                if (cancelled != null && cancelled.getAsBoolean()) {
+                    process.destroyForcibly();
+                    joinQuietly(reader);
+                    return StepOutcome.failed(143, "E-303", "执行被取消：" + String.join(" ", argv));
+                }
+                if (process.waitFor(200, TimeUnit.MILLISECONDS)) {
+                    finished = true;
+                    break;
+                }
+                if (System.nanoTime() - deadline > 0) {
+                    finished = false;
+                    break;
+                }
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();

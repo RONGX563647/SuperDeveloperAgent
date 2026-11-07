@@ -8,14 +8,12 @@ import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
-import org.springframework.stereotype.Component;
 
 /**
- * 空实现：跑通链路用，不真正执行构建。
+ * 空实现：仅作为替换模板保留，未注册为 Spring Bean。
  *
- * <p>替换为真实实现时保持端口不变；工具层与前端无需改动。
+ * <p>真实流水线由 {@link BuiltInPipelineEngine} 提供（见 {@link PipelineConfig}）。
  */
-@Component
 public class NoopPipelineEngine implements PipelineEngine {
 
     private final Map<String, StageStatus> runs = new ConcurrentHashMap<>();

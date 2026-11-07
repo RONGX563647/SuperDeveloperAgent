@@ -1,6 +1,7 @@
 package top.rongx.agent.domain.port;
 
 import java.nio.file.Path;
+import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 
@@ -20,4 +21,18 @@ public interface ActionRunner {
      * @return 结构化结果 + 日志尾部
      */
     ActionResult run(Path workspace, ActionSpec spec);
+
+    /** 执行是否被容器/沙箱隔离（false = 宿主进程，无隔离）。fail-closed 据此判定。 */
+    default boolean isolated() {
+        return false;
+    }
+
+    /**
+     * 可取消的执行：执行期间轮询 {@code cancelled}，为真时终止进程并返回 E-303。
+     *
+     * <p>默认实现不支持取消（向后兼容）；真实实现应覆盖。
+     */
+    default ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled) {
+        return run(workspace, spec);
+    }
 }

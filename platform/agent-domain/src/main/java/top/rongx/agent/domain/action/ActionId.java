@@ -7,11 +7,12 @@ import top.rongx.agent.domain.tool.ToolLevel;
 /**
  * 动作目录（方案 D 的"词汇表"）。
  *
- * <p>Agent 只会说这 5 个词；它不需要知道底下是 Maven 还是 pnpm，是 compose 还是 K8s。
+ * <p>这是流水线的"词汇表"：stage 只能引用这些动作，不能写任意命令。
  */
 public enum ActionId {
 
     BACKEND_BUILD("backend_build", ToolLevel.L2_EXECUTE_ISOLATED),
+    BACKEND_TEST("backend_test", ToolLevel.L2_EXECUTE_ISOLATED),
     FRONTEND_BUILD("frontend_build", ToolLevel.L2_EXECUTE_ISOLATED),
     IMAGE_PACKAGE("image_package", ToolLevel.L2_EXECUTE_ISOLATED),
     STACK_DEPLOY("stack_deploy", ToolLevel.L3_EXECUTE_PROD),

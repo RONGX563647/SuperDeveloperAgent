@@ -35,9 +35,11 @@ class ActionUsabilityTest {
     static void props(DynamicPropertyRegistry registry) {
         registry.add("agent.workspace.root", () -> workspaceRoot.toString());
         registry.add("agent.model.api-key", () -> "test-key-not-used");
-        // 本测试验证的是治理链路，不是隔离；固定宿主进程模式，
-        // 避免 CI 上没有 Docker 镜像时去拉 maven 镜像（容器隔离由 DockerActionRunnerTest 覆盖）。
+        // 本测试固定宿主进程模式：验证治理链路，不依赖 Docker。
         registry.add("agent.sandbox.mode", () -> "process");
+        // 宿主模式下 L3 发布被 fail-closed 拦截是**正确行为**；本用例只验证令牌链路，
+        // 用一个非 L3 的自定义动作来走完"登记→确认→带令牌执行"闭环。
+        registry.add("agent.sandbox.allow-test-l3", () -> "true");
     }
 
     @Autowired

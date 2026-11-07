@@ -12,9 +12,14 @@ import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.project.ProjectContext;
 
 /**
- * 动作写工具（L2：仅测试环境）。
+ * 动作写工具（动作层入口，L2：仅测试环境）。
  *
- * <p>L3 动作在这里被拒绝——它们必须走「登记变更 → 人确认 → 带令牌 apply」的 HTTP 路径。
+ * <p>层级契约：{@code run_action} 是「动作层」入口——执行单个命名动作（backend_build 等）。
+ * 它也是 {@code ci_run} 流水线每个 stage 的底层执行单元（共用同一套 ActionRunner 与门禁）。
+ * 优先用 ci_run 跑整条流水线；仅当需要单独验证/调试某个动作时才用本工具。
+ *
+ * <p>L3 动作（stack_deploy/stack_rollback）在这里被拒绝——它们必须走
+ * 「登记变更 → 人确认 → 带令牌 apply」的 HTTP 路径。
  */
 @Component
 public class ActionCommandTools {
@@ -27,7 +32,8 @@ public class ActionCommandTools {
 
     @Tool(name = "run_action",
             description = """
-                    执行一个动作（仅限测试环境的构建类动作）。写操作。
+                    执行单个动作（仅限测试环境的构建类动作）。写操作，动作层入口。
+                    与 ci_run 的关系：ci_run 跑整条流水线；本工具只跑一个命名动作，用于单步调试。
                     执行前建议先调用 plan_action 并把命令原文告知用户。
                     stack_deploy / stack_rollback 属 L3，不能由此工具执行，需走变更确认流程。""",
             readOnly = false, concurrencySafe = false)

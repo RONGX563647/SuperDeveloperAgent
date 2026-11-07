@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
+import top.rongx.agent.domain.action.ActionSource;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.change.ChangePlan;
 import top.rongx.agent.domain.change.PlanHasher;
@@ -19,12 +20,20 @@ import top.rongx.agent.domain.project.ProjectContext;
 /**
  * 动作编排服务（工具与 HTTP 共用同一套门禁，避免两条路径行为不一致）。
  *
+ * <p>术语统一：{@code ActionSpec} 是执行层唯一表示；规约里提到的 {@code PipelineSpec}
+ * 仅是文档概念，运行时一个 pipeline stage 就规约为一个 {@code ActionSpec}。
+ * 编排层（{@code ci_run}→{@code PipelineEngine}）与动作层（{@code run_action}→本服务）
+ * 共用同一套 ActionRunner 与门禁，二者是组合关系，不是两条竞争路径。
+ *
  * <p>门禁：
  * <ul>
  *   <li>L2：可直接执行，但**仅非生产环境**；</li>
  *   <li>L3（stack_deploy / stack_rollback）：必须先登记变更 → 人确认拿令牌 → 带令牌 apply，
  *       且令牌绑定的 planHash 必须等于**当前实际配方**的哈希（配方改了就失效）。</li>
  * </ul>
+ *
+ * <p>fail-closed：宿主进程无隔离时，拒绝不可审计（make/task）或影响生产（L3）的动作，
+ * 防止"无 Docker 回退宿主"绕过沙箱不变量 S1-S7。
  */
 @Service
 public class ActionService {
@@ -33,15 +42,19 @@ public class ActionService {
     private final ActionRunner runner;
     private final ChangeStore changes;
     private final String workspaceRoot;
+    /** 仅供测试：让可用性测试在无 Docker 环境也能验证 L3 令牌闭环。生产恒为 false。 */
+    private final boolean allowTestL3;
 
     public ActionService(ActionResolver resolver,
                          ActionRunner runner,
                          ChangeStore changes,
-                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
+                         @Value("${agent.sandbox.allow-test-l3:false}") boolean allowTestL3) {
         this.resolver = resolver;
         this.runner = runner;
         this.changes = changes;
         this.workspaceRoot = workspaceRoot;
+        this.allowTestL3 = allowTestL3;
     }
 
     /** 项目工作区根目录：{@code <workspaceRoot>/<projectId>}。 */
@@ -75,6 +88,7 @@ public class ActionService {
         }
         Path root = requireWorkspace(ctx);
         ActionSpec spec = plan(ctx, action);
+        assertHostSafe(ctx, spec);
         return runner.run(root, spec);
     }
 
@@ -92,7 +106,7 @@ public class ActionService {
     }
 
     /**
-     * 凭证执行（仅 L3）。调用方必须已校验令牌；这里再校验"配方未被改动"。
+     * 凭证执行（仅 L3）。调用方必须已校验令牌；这里再校验"配方未被改动"与"宿主安全"。
      *
      * @param confirmedPlanHash 令牌里绑定的 planHash
      */
@@ -106,21 +120,40 @@ public class ActionService {
         if (!actual.equals(confirmedPlanHash)) {
             throw new IllegalStateException("配方在确认后已被修改，请重新确认（planHash 不匹配）");
         }
+        assertHostSafe(ctx, spec);
         return runner.run(root, spec);
     }
 
-    /** 配方哈希：动作 + 来源 + 实际命令，任何一项变化都会改变哈希。 */
+    /** 配方哈希：动作 + 来源 + commit + 实际命令，任何一项变化都会改变哈希。 */
     public String specHash(ProjectContext ctx, ActionSpec spec) {
         String commands = spec.steps().stream()
                 .map(argv -> String.join(" ", argv))
                 .reduce((a, b) -> a + " && " + b)
                 .orElse("");
         return PlanHasher.hash(ctx.projectId(), ctx.env(), spec.action().wireName(),
-                spec.source().ref(), commands);
+                spec.source().ref(), spec.source().commit(), commands);
     }
 
     public Optional<ActionSpec> find(ProjectContext ctx, ActionId action) {
         return resolver.resolve(workspace(ctx), action);
+    }
+
+    /**
+     * fail-closed：宿主进程无隔离时，拒绝不可审计（make/task）或影响生产（L3）的动作。
+     * 容器内（isolated=true）放行；宿主仅允许 actions.yml/内置 直写命令的 L2 动作。
+     */
+    private void assertHostSafe(ProjectContext ctx, ActionSpec spec) {
+        if (runner.isolated() || allowTestL3) {
+            return;
+        }
+        boolean untrusted = spec.source().kind() == ActionSource.Kind.MAKEFILE
+                || spec.source().kind() == ActionSource.Kind.TASKFILE;
+        boolean affectsProd = !spec.action().autoExecutable();
+        if (untrusted || affectsProd) {
+            throw new IllegalStateException("宿主进程无隔离，拒绝执行 " + spec.action().wireName()
+                    + "（来源=" + spec.source().ref() + "）：不可审计或影响生产。"
+                    + "请启用 Docker 沙箱，或改用 ci/actions.yml 直写命令（L2 且仅非生产）。");
+        }
     }
 
     private Path requireWorkspace(ProjectContext ctx) {

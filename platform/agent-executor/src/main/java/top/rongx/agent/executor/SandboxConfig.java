@@ -35,6 +35,7 @@ public class SandboxConfig {
     }
 
     @Bean
+    @org.springframework.context.annotation.Primary
     public ActionRunner actionRunner(DockerSandbox sandbox,
                                      @Value("${agent.sandbox.mode:auto}") String mode) {
         String normalized = mode == null ? "auto" : mode.trim().toLowerCase();
