@@ -101,7 +101,7 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 | **动作 HTTP 接口（不经模型也能用）** | ✅ `GET /api/v1/actions`、`…/{action}/plan`、`POST …/{action}/run`、`POST …/{action}/request` |
 | **L3 审批闭环** | ✅ `request` → `/changes/{id}/confirm` 拿令牌 → `/changes/{id}/apply` 执行；令牌一次性、5 分钟、绑定 `planHash` |
 | **可用性测试** | ✅ 11 例（列表/计划/成功/失败/L3 拦截/令牌复用/配方变更/跨单令牌），`mvn verify` 全绿 |
-| **容器沙箱执行** | ✅ 非 root（uid 1000）/ `--network none` 断网 / `--cap-drop ALL` / 内存·CPU·pids 限额；`auto` 自动探测，无 Docker 时回退宿主并告警 |
+| **容器沙箱执行** | ✅ 非 root（uid 1000）/ `--cap-drop ALL` / 内存·CPU·pids 限额 / 网络三档（`bridge` 默认·`build-net` 生产·`none` 发布）；`auto` 自动探测，无 Docker 时回退宿主并告警 |
 | 变更请求（不能自确认） | ✅ `request_confirmation` 产出 `changeId` + `planHash` |
 | 人工确认 → 一次性令牌 | ✅ `POST /api/v1/changes/{id}/confirm`（5 分钟、绑定 planHash、用后失效） |
 | 统一错误响应（含 traceId） | ✅ 已验证：`{code, message, traceId}` |
@@ -148,7 +148,7 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 
 | # | 任务 | 对应规约 |
 |---|---|---|
-| 1 | 依赖缓存卷（构建期断网也能跑 `mvn`/`pnpm`） | 流水线设计 §13 |
+| 1 | 依赖缓存卷（加速重复构建；也是发布期 `--network none` 的前提） | 流水线设计 §13 |
 | 2 | 前端把动作面板接上（接口已就绪，见上文 curl） | PRD §4.10 |
 | 3 | 账号体系（本地账号 + BCrypt）替换 `X-User-Id` | PRD §4.10 |
 | 4 | 会话与消息落库（替换内存） | 项目规约 §5 |

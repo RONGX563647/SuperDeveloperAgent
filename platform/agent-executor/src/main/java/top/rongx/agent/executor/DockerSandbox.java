@@ -10,7 +10,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>约束（均在开发机实测过）：
  * <ul>
- *   <li>{@code --network none} —— 构建期无外网（依赖走缓存卷，见后续"缓存"任务）；</li>
+ *   <li><b>网络按档位</b>：默认 {@code bridge}（能拉依赖）；{@code build-net} 为生产建议的专用网络；
+ *       {@code none} 仅在"缓存已预热"的发布构建或构建不可信代码时使用；</li>
  *   <li>{@code --user 1000:1000} —— 非 root；</li>
  *   <li>{@code --cap-drop ALL --security-opt no-new-privileges} —— 不可提权；</li>
  *   <li>{@code --memory/--cpus/--pids-limit} —— 资源上限；</li>
@@ -18,8 +19,8 @@ import java.util.concurrent.TimeUnit;
  *   <li>工作区挂到 {@code /ws} 并作为工作目录，产物落回宿主目录。</li>
  * </ul>
  *
- * <p><b>注意</b>：镜像需自带工具链（如 {@code maven:3.9-eclipse-temurin-21}），
- * 且当前**不注入凭据**——需要私服凭据时应挂载只读 settings.xml（下一阶段）。
+ * <p><b>注意</b>：镜像需自带工具链（如 {@code maven:3.9-eclipse-temurin-21}）。
+ * 当前**不往容器注入任何凭据**（本环境无私服）；需要时挂只读 settings.xml。
  */
 public class DockerSandbox {
 
@@ -38,7 +39,7 @@ public class DockerSandbox {
                          String memory, String cpus, int pidsLimit, String user) {
         this.dockerBinary = dockerBinary == null ? "docker" : dockerBinary;
         this.image = image;
-        this.network = network == null ? "none" : network;
+        this.network = network == null ? "bridge" : network;
         this.memory = memory == null ? "2g" : memory;
         this.cpus = cpus == null ? "2" : cpus;
         this.pidsLimit = pidsLimit <= 0 ? 512 : pidsLimit;

@@ -26,7 +26,9 @@ agent:
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:auto}          # auto | docker | process
     image: ${AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
-    network: ${AGENT_SANDBOX_NETWORK:none}    # 构建期断网；需要拉依赖时改为 bridge
+    # 网络策略：bridge=能拉依赖（默认）；build-net=专用网络（生产建议，见文档）；
+    #          none=完全断网，仅用于"缓存已预热"的发布构建或构建不可信代码
+    network: ${AGENT_SANDBOX_NETWORK:bridge}
     memory: 2g
     cpus: "2"
     pids-limit: 512

@@ -58,8 +58,16 @@ class DockerSandboxTest {
     void defaultsAreSafe() {
         DockerSandbox d = new DockerSandbox(null, "img", null, null, null, 0, null);
         List<String> cmd = d.wrap(Path.of("E:/w"), List.of("x"));
-        assertTrue(cmd.contains("none"), "默认无网络");
+        assertTrue(cmd.contains("bridge"), "默认能拉依赖（build-net/none 按需显式指定）");
         assertTrue(cmd.contains("1000:1000"), "默认非 root");
         assertTrue(cmd.contains("512"), "默认 pids 限制");
+    }
+
+    @Test
+    @DisplayName("网络档位可显式收紧到 none")
+    void networkCanBeLockedDown() {
+        DockerSandbox locked = new DockerSandbox("docker", "img", "none", "2g", "2", 512, "1000:1000");
+        List<String> cmd = locked.wrap(Path.of("E:/w"), List.of("x"));
+        assertEquals("none", cmd.get(cmd.indexOf("--network") + 1));
     }
 }
