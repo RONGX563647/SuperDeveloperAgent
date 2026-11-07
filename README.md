@@ -28,6 +28,7 @@ _research/     市场调研与源码能力盘点（含采集脚本）
 | 6 | [窄控制器](docs/窄控制器设计-单机滚动部署器.md) | 单机 compose 滚动发布 |
 | 7 | [执行面设计（K8s/Jenkins/Flyway）](docs/devops-agent-执行面设计-k8s-jenkins-flyway.md) | 「拥有类似能力」的三条路线 |
 | 8 | [多项目托管 v4](docs/多项目托管设计-v4.md) | 项目作为作用域边界 |
+| 9 | [Jenkins 能力复刻与复用 · 规划](docs/Jenkins能力复刻与复用-规划-v1.md) | CI 引擎该复刻什么、复用什么、明确不做什么 |
 
 **背景与推演**（按时间顺序，记录结论如何演化）：
 
