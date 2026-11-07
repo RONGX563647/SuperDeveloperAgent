@@ -1,0 +1,26 @@
+:root {
+  --ink: #0f2a43;
+  --ink-soft: #3c556e;
+  --accent: #e06c2a;
+  --line: #e4e8ee;
+  --bg: #f5f7fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  font-family: 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.mono {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
