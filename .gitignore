@@ -1,0 +1,45 @@
+# 构建产物
+target/
+dist/
+build/
+*.class
+*.jar
+!**/lib/*.jar
+
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 日志
+*.log
+logs/
+
+# IDE / 编辑器
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# 本地环境与临时文件
+.env
+.env.local
+.env.*.local
+*.local.yml
+.dsh-office-*/
+.DS_Store
+Thumbs.db
+
+# 外部源码快照（仅分析用，不入库）
+# 需要时按各仓库 README 重新克隆，例如：
+#   git clone --depth 1 https://gitee.com/dromara/RuoYi-Vue-Plus.git
+#   git clone --depth 1 https://gitee.com/y_project/RuoYi.git
+#   git clone --depth 1 https://github.com/agentscope-ai/agentscope-java.git
+vendor/
+RuoYi/
+RuoYi-Vue-Plus/
+agentscope-java/
+ruoyi-ai/
+
+# Python
+__pycache__/
+*.pyc
