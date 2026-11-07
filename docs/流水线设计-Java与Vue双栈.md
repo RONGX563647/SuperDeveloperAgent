@@ -94,7 +94,8 @@ deliverable: static           # → 走静态原子发布，不是容器
 ② Stage 执行    每 stage 一个一次性容器：
                 docker run --rm \
                   -v <worktree>:/ws -v m2-<proj>:/root/.m2 -v pnpm-<proj>:/root/.local/share/pnpm/store \
-                  --network=build-net --memory=2g --cpus=2 --pids-limit=512 \
+                  --network=${SANDBOX_NETWORK:-bridge} \
+                  --memory=2g --cpus=2 --pids-limit=512 \
                   --user 1000:1000 --read-only=false <pinned image> <argv…>
 ③ 产物          docker-build 由执行器（非 agent）执行；静态发布由 publisher 执行
 ④ 日志          容器 stdout/stderr 逐行 → SSE + 落库（保留头尾，中间折叠）
