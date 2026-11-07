@@ -23,10 +23,16 @@ public class ChangeRegistry implements ChangeStore {
     @Override
     public ChangePlan request(String projectId, String env, String kind, String summary,
                               String imageDigest, String frontendDistHash, boolean highRisk) {
-        String changeId = "chg-" + UUID.randomUUID();
         String planHash = PlanHasher.hash(projectId, env, kind, imageDigest, frontendDistHash, summary);
+        return registerWithHash(projectId, env, kind, summary, planHash, highRisk);
+    }
+
+    @Override
+    public ChangePlan registerWithHash(String projectId, String env, String kind, String summary,
+                                       String planHash, boolean highRisk) {
+        String changeId = "chg-" + UUID.randomUUID();
         ChangePlan plan = new ChangePlan(changeId, projectId, env, kind, planHash, summary,
-                imageDigest, frontendDistHash, highRisk, null);
+                null, null, highRisk, null);
         changes.put(changeId, plan);
         return plan;
     }

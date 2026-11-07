@@ -2,34 +2,22 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
-import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionSpec;
-import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.project.ProjectContext;
 
-/**
- * 动作只读工具：列目录、看计划。
- *
- * <p>与 {@link ActionCommandTools} 分开，是因为 AgentScope 的工具分组按对象注册，
- * 读写混在一个类里会把只读方法一起锁进未激活的写组。
- */
+/** 动作只读工具：列目录、看计划（与 HTTP 接口共用 {@link ActionService}）。 */
 @Component
 public class ActionQueryTools {
 
-    private final ActionResolver resolver;
-    private final String workspaceRoot;
+    private final ActionService actions;
 
-    public ActionQueryTools(ActionResolver resolver,
-                            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this.resolver = resolver;
-        this.workspaceRoot = workspaceRoot;
+    public ActionQueryTools(ActionService actions) {
+        this.actions = actions;
     }
 
     @Tool(name = "list_actions",
@@ -38,11 +26,10 @@ public class ActionQueryTools {
                     执行任何动作前先调用本工具确认动作名与来源。""",
             readOnly = true, concurrencySafe = true)
     public String listActions(ProjectContext ctx) {
-        Path root = projectRoot(ctx);
-        List<ActionSpec> specs = resolver.resolveAll(root);
+        List<ActionSpec> specs = actions.list(ctx);
         if (specs.isEmpty()) {
             return "当前项目没有可用动作。请在仓库提供 ci/actions.yml 或 Makefile。"
-                    + "\nevidence: workspace:" + root;
+                    + "\nevidence: workspace:" + actions.workspace(ctx);
         }
         String body = specs.stream()
                 .map(s -> "- %s  [%s]  ← %s%s".formatted(
@@ -52,7 +39,7 @@ public class ActionQueryTools {
                         s.source().humanAuthored() ? "" : "（平台默认）"))
                 .collect(Collectors.joining("\n"));
         return "actions（项目 %s）:\n%s\nevidence: workspace:%s"
-                .formatted(ctx.projectId(), body, root);
+                .formatted(ctx.projectId(), body, actions.workspace(ctx));
     }
 
     @Tool(name = "plan_action",
@@ -65,15 +52,11 @@ public class ActionQueryTools {
                     description = "动作名：backend_build / frontend_build / image_package / stack_deploy / stack_rollback")
             String action,
             ProjectContext ctx) {
-        Optional<ActionId> id = ActionId.fromWire(action);
+        var id = ActionId.fromWire(action);
         if (id.isEmpty()) {
             return "err: 未知动作 " + action + "；可用：" + wireNames();
         }
-        Optional<ActionSpec> spec = resolver.resolve(projectRoot(ctx), id.get());
-        if (spec.isEmpty()) {
-            return "err: 动作 " + action + " 没有配方。可在仓库提供 ci/actions.yml（推荐）或 Makefile。";
-        }
-        ActionSpec s = spec.get();
+        ActionSpec s = actions.plan(ctx, id.get());
         String commands = s.steps().stream()
                 .map(argv -> "  " + String.join(" ", argv))
                 .collect(Collectors.joining("\n"));
@@ -97,13 +80,7 @@ public class ActionQueryTools {
                 s.source().ref());
     }
 
-    private Path projectRoot(ProjectContext ctx) {
-        return Path.of(workspaceRoot).resolve(ctx.projectId()).toAbsolutePath().normalize();
-    }
-
     private String wireNames() {
-        return Arrays.stream(ActionId.values())
-                .map(ActionId::wireName)
-                .collect(Collectors.joining(", "));
+        return Arrays.stream(ActionId.values()).map(ActionId::wireName).collect(Collectors.joining(", "));
     }
 }

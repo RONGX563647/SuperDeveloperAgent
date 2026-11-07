@@ -60,6 +60,32 @@ Vite 已把 `/api` 代理到 `127.0.0.1:8090`。
 
 ---
 
+## 动作 HTTP API（不依赖模型，可直接 curl）
+
+```bash
+# 1) 看这个项目能做什么
+curl -H "X-User-Id: dev" "http://127.0.0.1:8090/api/v1/actions?projectId=RY&env=test"
+
+# 2) 看某个动作会执行什么（命令原文）
+curl -H "X-User-Id: dev" "http://127.0.0.1:8090/api/v1/actions/backend_build/plan?projectId=RY"
+
+# 3) 执行 L2 动作（构建类，生产环境会被拒）
+curl -X POST -H "X-User-Id: dev" \
+  "http://127.0.0.1:8090/api/v1/actions/backend_build/run?projectId=RY&env=test"
+
+# 4) L3 动作三步走：登记 → 确认 → 执行
+CHG=$(curl -s -X POST -H "X-User-Id: dev" \
+  "http://127.0.0.1:8090/api/v1/actions/stack_deploy/request?projectId=RY&env=test" | jq -r .changeId)
+TOKEN=$(curl -s -X POST -H "X-User-Id: dev" -H "Content-Type: application/json" -d '{}' \
+  "http://127.0.0.1:8090/api/v1/changes/$CHG/confirm" | jq -r .confirmToken)
+curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
+  "http://127.0.0.1:8090/api/v1/changes/$CHG/apply"
+```
+
+> 配方放在项目工作区 `<workspaceRoot>/<projectId>/ci/actions.yml`（默认 `./data/workspaces`）。
+
+---
+
 ## 当前能做到什么
 
 > ✅ 下表已在 **JDK 21.0.2 + Maven 3.9.16 + AgentScope 2.0.0 + Spring Boot 4.0.4** 实际编译并启动验证。
@@ -72,12 +98,14 @@ Vite 已把 `/api` 代理到 `127.0.0.1:8090`。
 | 项目上下文服务端绑定 | ✅ 可用（`ProjectContext` 经 `RuntimeContext` 注入，模型无法提供 `projectId`） |
 | 只读工具 | ✅ `project_info`、`list_envs`、`ci_list_pipelines`、`ci_status` |
 | **方案 D：动作契约 + 仓库内配方** | ✅ `list_actions` / `plan_action` / `run_action`；配方解析顺序 `ci/actions.yml → Taskfile.yml → Makefile → 内置默认`；实测跑通"读配方 → 执行 → 产物 sha256" |
+| **动作 HTTP 接口（不经模型也能用）** | ✅ `GET /api/v1/actions`、`…/{action}/plan`、`POST …/{action}/run`、`POST …/{action}/request` |
+| **L3 审批闭环** | ✅ `request` → `/changes/{id}/confirm` 拿令牌 → `/changes/{id}/apply` 执行；令牌一次性、5 分钟、绑定 `planHash` |
+| **可用性测试** | ✅ 11 例（列表/计划/成功/失败/L3 拦截/令牌复用/配方变更/跨单令牌），`mvn verify` 全绿 |
 | 变更请求（不能自确认） | ✅ `request_confirmation` 产出 `changeId` + `planHash` |
 | 人工确认 → 一次性令牌 | ✅ `POST /api/v1/changes/{id}/confirm`（5 分钟、绑定 planHash、用后失效） |
 | 统一错误响应（含 traceId） | ✅ 已验证：`{code, message, traceId}` |
 | 模型调用链路 | ✅ 已验证到 provider：填错 key 会收到 DashScope 的 401，并以 `event:error` 优雅返回 |
-| 执行变更 | ⛔ 未实现（没有 `apply` 接口，也**故意没有** `confirm` 工具） |
-| 流水线执行器 | ⛔ `NoopPipelineEngine`（接口已定，四个 stage 待实现） |
+| 流水线执行器（旧 `PipelineEngine`） | ⛔ `NoopPipelineEngine`，只服务 `ci_run` 工具；真实执行走 `run_action` |
 | 账号体系 / 登录 | ⛔ 骨架用 `X-User-Id` 头；高危确认失败关闭 |
 
 ### 编译/启动时踩到的两个坑（已修复）

@@ -2,39 +2,27 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.Optional;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.artifact.ArtifactRef;
-import top.rongx.agent.domain.port.ActionResolver;
-import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.project.ProjectContext;
 
 /**
  * 动作写工具（L2：仅测试环境）。
  *
- * <p>三道门禁在工具层强制：① L3 动作拒绝；② 生产环境拒绝；③ 工作区不存在拒绝。
+ * <p>L3 动作在这里被拒绝——它们必须走「登记变更 → 人确认 → 带令牌 apply」的 HTTP 路径。
  */
 @Component
 public class ActionCommandTools {
 
-    private final ActionResolver resolver;
-    private final ActionRunner runner;
-    private final String workspaceRoot;
+    private final ActionService actions;
 
-    public ActionCommandTools(ActionResolver resolver,
-                              ActionRunner runner,
-                              @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this.resolver = resolver;
-        this.runner = runner;
-        this.workspaceRoot = workspaceRoot;
+    public ActionCommandTools(ActionService actions) {
+        this.actions = actions;
     }
 
     @Tool(name = "run_action",
@@ -46,32 +34,15 @@ public class ActionCommandTools {
     public String runAction(
             @ToolParam(name = "action", description = "动作名，见 list_actions 的返回") String action,
             ProjectContext ctx) {
-        Optional<ActionId> id = ActionId.fromWire(action);
+        var id = ActionId.fromWire(action);
         if (id.isEmpty()) {
             return "err: 未知动作 " + action + "；可用：" + wireNames();
         }
-        ActionId target = id.get();
-        if (!target.autoExecutable()) {
-            return "err: " + target.wireName() + " 属 L3（影响生产），不能直接执行。"
-                    + "请先调用 request_confirmation 走人工确认流程。";
-        }
-        if (ctx.isProduction()) {
-            return "err: 生产环境不允许直接执行动作，请先在测试环境验证。";
-        }
-        Path root = projectRoot(ctx);
-        if (!Files.isDirectory(root)) {
-            return "err: 项目工作区不存在：" + root + "（请先接入项目或克隆仓库）";
-        }
-        Optional<ActionSpec> spec = resolver.resolve(root, target);
-        if (spec.isEmpty()) {
-            return "err: 动作 " + action + " 没有配方。";
-        }
-
-        ActionResult result = runner.run(root, spec.get());
-        return format(result, spec.get(), root);
+        ActionResult result = actions.run(ctx, id.get());
+        return format(result, actions.plan(ctx, id.get()));
     }
 
-    private String format(ActionResult result, ActionSpec spec, Path root) {
+    private String format(ActionResult result, ActionSpec spec) {
         var stage = result.result();
         String artifacts = stage.artifacts().isEmpty()
                 ? "（无）"
@@ -87,7 +58,6 @@ public class ActionCommandTools {
                 artifacts: %s
                 log tail:
                 %s
-                evidence: workspace:%s
                 """.formatted(
                 spec.action().wireName(),
                 stage.status(),
@@ -96,8 +66,7 @@ public class ActionCommandTools {
                 spec.source().ref(),
                 spec.steps().stream().map(a -> String.join(" ", a)).collect(Collectors.joining(" && ")),
                 artifacts,
-                result.logTail() == null || result.logTail().isBlank() ? "（无输出）" : result.logTail(),
-                root);
+                result.logTail() == null || result.logTail().isBlank() ? "（无输出）" : result.logTail());
     }
 
     private String formatArtifact(ArtifactRef artifact) {
@@ -107,13 +76,7 @@ public class ActionCommandTools {
         return "%s  sha256:%s  %s".formatted(artifact.ref(), digest, human);
     }
 
-    private Path projectRoot(ProjectContext ctx) {
-        return Path.of(workspaceRoot).resolve(ctx.projectId()).toAbsolutePath().normalize();
-    }
-
     private String wireNames() {
-        return Arrays.stream(ActionId.values())
-                .map(ActionId::wireName)
-                .collect(Collectors.joining(", "));
+        return Arrays.stream(ActionId.values()).map(ActionId::wireName).collect(Collectors.joining(", "));
     }
 }

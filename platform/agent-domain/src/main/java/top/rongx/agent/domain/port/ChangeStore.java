@@ -26,6 +26,15 @@ public interface ChangeStore {
     ChangePlan request(String projectId, String env, String kind, String summary,
                        String imageDigest, String frontendDistHash, boolean highRisk);
 
+    /**
+     * 用**调用方给定的 planHash** 登记变更。
+     *
+     * <p>动作类变更（stack_deploy / stack_rollback）的哈希来自"实际配方"，
+     * 而不是摘要文本：这样配方在确认之后被改动，执行时会因哈希不符被拒。
+     */
+    ChangePlan registerWithHash(String projectId, String env, String kind, String summary,
+                                String planHash, boolean highRisk);
+
     /** 按 id 查。 */
     Optional<ChangePlan> find(String changeId);
 }

@@ -1,0 +1,133 @@
+package top.rongx.agent.tools;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.action.ActionId;
+import top.rongx.agent.domain.action.ActionResult;
+import top.rongx.agent.domain.action.ActionSpec;
+import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.change.PlanHasher;
+import top.rongx.agent.domain.port.ActionResolver;
+import top.rongx.agent.domain.port.ActionRunner;
+import top.rongx.agent.domain.port.ChangeStore;
+import top.rongx.agent.domain.project.ProjectContext;
+
+/**
+ * 动作编排服务（工具与 HTTP 共用同一套门禁，避免两条路径行为不一致）。
+ *
+ * <p>门禁：
+ * <ul>
+ *   <li>L2：可直接执行，但**仅非生产环境**；</li>
+ *   <li>L3（stack_deploy / stack_rollback）：必须先登记变更 → 人确认拿令牌 → 带令牌 apply，
+ *       且令牌绑定的 planHash 必须等于**当前实际配方**的哈希（配方改了就失效）。</li>
+ * </ul>
+ */
+@Service
+public class ActionService {
+
+    private final ActionResolver resolver;
+    private final ActionRunner runner;
+    private final ChangeStore changes;
+    private final String workspaceRoot;
+
+    public ActionService(ActionResolver resolver,
+                         ActionRunner runner,
+                         ChangeStore changes,
+                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+        this.resolver = resolver;
+        this.runner = runner;
+        this.changes = changes;
+        this.workspaceRoot = workspaceRoot;
+    }
+
+    /** 项目工作区根目录：{@code <workspaceRoot>/<projectId>}。 */
+    public Path workspace(ProjectContext ctx) {
+        return Path.of(workspaceRoot).resolve(ctx.projectId()).toAbsolutePath().normalize();
+    }
+
+    public List<ActionSpec> list(ProjectContext ctx) {
+        return resolver.resolveAll(workspace(ctx));
+    }
+
+    /**
+     * 解析动作计划；没有配方时抛 {@link IllegalArgumentException}（对应 HTTP 400）。
+     */
+    public ActionSpec plan(ProjectContext ctx, ActionId action) {
+        return resolver.resolve(workspace(ctx), action)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "动作 " + action.wireName() + " 没有配方。可在仓库提供 ci/actions.yml（推荐）或 Makefile。"));
+    }
+
+    /**
+     * 直接执行（仅 L2）。
+     */
+    public ActionResult run(ProjectContext ctx, ActionId action) {
+        if (!action.autoExecutable()) {
+            throw new IllegalStateException(action.wireName()
+                    + " 属 L3（影响生产），不能直接执行。请先 request → confirm → apply。");
+        }
+        if (ctx.isProduction()) {
+            throw new IllegalStateException("生产环境不允许直接执行动作，请先在测试环境验证。");
+        }
+        Path root = requireWorkspace(ctx);
+        ActionSpec spec = plan(ctx, action);
+        return runner.run(root, spec);
+    }
+
+    /**
+     * 登记一次 L3 变更（等待人工确认）。返回的 planHash 绑定**当前配方**。
+     */
+    public ChangePlan requestApproval(ProjectContext ctx, ActionId action) {
+        if (action.autoExecutable()) {
+            throw new IllegalArgumentException(action.wireName() + " 属 L2，可直接执行，无需审批。");
+        }
+        ActionSpec spec = plan(ctx, action);
+        String hash = specHash(ctx, spec);
+        return changes.registerWithHash(ctx.projectId(), ctx.env(), action.wireName(),
+                spec.describe(), hash, false);
+    }
+
+    /**
+     * 凭证执行（仅 L3）。调用方必须已校验令牌；这里再校验"配方未被改动"。
+     *
+     * @param confirmedPlanHash 令牌里绑定的 planHash
+     */
+    public ActionResult apply(ProjectContext ctx, ActionId action, String confirmedPlanHash) {
+        if (action.autoExecutable()) {
+            throw new IllegalStateException(action.wireName() + " 属 L2，请直接执行。");
+        }
+        Path root = requireWorkspace(ctx);
+        ActionSpec spec = plan(ctx, action);
+        String actual = specHash(ctx, spec);
+        if (!actual.equals(confirmedPlanHash)) {
+            throw new IllegalStateException("配方在确认后已被修改，请重新确认（planHash 不匹配）");
+        }
+        return runner.run(root, spec);
+    }
+
+    /** 配方哈希：动作 + 来源 + 实际命令，任何一项变化都会改变哈希。 */
+    public String specHash(ProjectContext ctx, ActionSpec spec) {
+        String commands = spec.steps().stream()
+                .map(argv -> String.join(" ", argv))
+                .reduce((a, b) -> a + " && " + b)
+                .orElse("");
+        return PlanHasher.hash(ctx.projectId(), ctx.env(), spec.action().wireName(),
+                spec.source().ref(), commands);
+    }
+
+    public Optional<ActionSpec> find(ProjectContext ctx, ActionId action) {
+        return resolver.resolve(workspace(ctx), action);
+    }
+
+    private Path requireWorkspace(ProjectContext ctx) {
+        Path root = workspace(ctx);
+        if (!Files.isDirectory(root)) {
+            throw new IllegalArgumentException("项目工作区不存在：" + root + "（请先接入项目或克隆仓库）");
+        }
+        return root;
+    }
+}

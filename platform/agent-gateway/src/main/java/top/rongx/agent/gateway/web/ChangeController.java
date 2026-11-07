@@ -2,11 +2,14 @@ package top.rongx.agent.gateway.web;
 
 import java.time.Instant;
 import java.util.Map;
+import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.security.PasswordVerifier;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.governance.ConfirmToken;
 import top.rongx.agent.governance.ConfirmTokenService;
+import top.rongx.agent.tools.ActionService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,13 +31,52 @@ public class ChangeController {
     private final ChangeStore registry;
     private final ConfirmTokenService tokens;
     private final PasswordVerifier passwordVerifier;
+    private final ActionService actions;
+    private final ProjectContextResolver contextResolver;
 
     public ChangeController(ChangeStore registry,
                             ConfirmTokenService tokens,
-                            PasswordVerifier passwordVerifier) {
+                            PasswordVerifier passwordVerifier,
+                            ActionService actions,
+                            ProjectContextResolver contextResolver) {
         this.registry = registry;
         this.tokens = tokens;
         this.passwordVerifier = passwordVerifier;
+        this.actions = actions;
+        this.contextResolver = contextResolver;
+    }
+
+    /**
+     * 用确认令牌执行变更（L3 的落地点）。
+     *
+     * <p>三道校验：令牌一次性且未过期 → 绑定同一个 changeId → 绑定的 planHash 等于**当前配方**的哈希。
+     * 任何一步不符都拒绝，因此"确认 A、执行 B"在架构上不可能发生。
+     *
+     * @param changeId          变更单
+     * @param confirmToken      确认令牌（由 {@code /confirm} 签发）
+     * @param userId            执行人
+     */
+    @PostMapping("/{changeId}/apply")
+    public ActionController.RunView apply(@PathVariable String changeId,
+                                          @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                          @RequestHeader(value = "X-Confirm-Token", required = false) String confirmToken) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("未认证：缺少 X-User-Id");
+        }
+        if (confirmToken == null || confirmToken.isBlank()) {
+            throw new IllegalArgumentException("缺少确认令牌：需要 X-Confirm-Token 头");
+        }
+        ChangePlan plan = registry.find(changeId)
+                .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
+
+        // 一次性 + 过期 + changeId/planHash 绑定，全部在 consume 里校验
+        tokens.consume(confirmToken, changeId, plan.planHash());
+
+        ActionId action = ActionId.fromWire(plan.kind())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "该变更不是可执行动作（kind=" + plan.kind() + "）"));
+        ProjectContext ctx = contextResolver.resolve(plan.projectId(), plan.env(), userId);
+        return ActionController.RunView.of(actions.apply(ctx, action, plan.planHash()));
     }
 
     /** 确认卡片数据：展示字段而非自然语言摘要（规约 §4.10 第四道守卫）。 */
