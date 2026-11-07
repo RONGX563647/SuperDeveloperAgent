@@ -101,6 +101,7 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 | **动作 HTTP 接口（不经模型也能用）** | ✅ `GET /api/v1/actions`、`…/{action}/plan`、`POST …/{action}/run`、`POST …/{action}/request` |
 | **L3 审批闭环** | ✅ `request` → `/changes/{id}/confirm` 拿令牌 → `/changes/{id}/apply` 执行；令牌一次性、5 分钟、绑定 `planHash` |
 | **可用性测试** | ✅ 11 例（列表/计划/成功/失败/L3 拦截/令牌复用/配方变更/跨单令牌），`mvn verify` 全绿 |
+| **容器沙箱执行** | ✅ 非 root（uid 1000）/ `--network none` 断网 / `--cap-drop ALL` / 内存·CPU·pids 限额；`auto` 自动探测，无 Docker 时回退宿主并告警 |
 | 变更请求（不能自确认） | ✅ `request_confirmation` 产出 `changeId` + `planHash` |
 | 人工确认 → 一次性令牌 | ✅ `POST /api/v1/changes/{id}/confirm`（5 分钟、绑定 planHash、用后失效） |
 | 统一错误响应（含 traceId） | ✅ 已验证：`{code, message, traceId}` |
@@ -135,7 +136,7 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 
 1. **没有 `confirm` 工具**——确认只能由人在 HTTP 接口完成（规约 §4.10 第一道守卫）；
 2. **`PipelineEngine` 是空实现**——`ci_run` 走的是它；真正的执行走 `run_action`（方案 D）；
-3. **动作执行尚未套容器沙箱**——`ProcessActionRunner` 是 P0 验证版，直接在宿主进程执行；正式版把 `runOne` 换成容器内执行，其余逻辑不变；
+3. **沙箱不注入凭据**——私服/DB 凭据还没挂进容器，需要时挂只读 `settings.xml`（下一阶段）；
 4. **`stack_deploy` / `stack_rollback` 没有配方**——它们要接窄控制器，属下一阶段；
 5. **高危密码校验失败关闭**——账号体系未接入时 `FailClosedPasswordVerifier` 一律拒绝，而不是放行；
 6. **事件映射用反射**——骨架阶段够用；正式版应按 32 类事件映射成稳定枚举；
@@ -147,8 +148,8 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 
 | # | 任务 | 对应规约 |
 |---|---|---|
-| 1 | 把 `ProcessActionRunner` 换成容器沙箱执行（复用 `DockerSandboxConfig`） | 执行器契约 §1.7 |
-| 2 | 前端改为消费专用 `change` 事件，去掉正则提取 | PRD §4.10 |
+| 1 | 依赖缓存卷（构建期断网也能跑 `mvn`/`pnpm`） | 流水线设计 §13 |
+| 2 | 前端把动作面板接上（接口已就绪，见上文 curl） | PRD §4.10 |
 | 3 | 账号体系（本地账号 + BCrypt）替换 `X-User-Id` | PRD §4.10 |
 | 4 | 会话与消息落库（替换内存） | 项目规约 §5 |
-| 5 | 把 `ci/` 检查器接入 `mvn verify` | 规约自动化检查 |
+| 5 | 容器内注入私服凭据（只读挂载 settings.xml） | 执行器契约 §1.7 |

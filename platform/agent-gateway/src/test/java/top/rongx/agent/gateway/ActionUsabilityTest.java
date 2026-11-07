@@ -35,6 +35,9 @@ class ActionUsabilityTest {
     static void props(DynamicPropertyRegistry registry) {
         registry.add("agent.workspace.root", () -> workspaceRoot.toString());
         registry.add("agent.model.api-key", () -> "test-key-not-used");
+        // 本测试验证的是治理链路，不是隔离；固定宿主进程模式，
+        // 避免 CI 上没有 Docker 镜像时去拉 maven 镜像（容器隔离由 DockerActionRunnerTest 覆盖）。
+        registry.add("agent.sandbox.mode", () -> "process");
     }
 
     @Autowired

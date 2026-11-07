@@ -22,6 +22,15 @@ agent:
   # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）
   workspace:
     root: ${AGENT_WORKSPACE_ROOT:./data/workspaces}
+  # 动作执行沙箱：auto=Docker 可用就用容器，否则退回宿主进程
+  sandbox:
+    mode: ${AGENT_SANDBOX_MODE:auto}          # auto | docker | process
+    image: ${AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
+    network: ${AGENT_SANDBOX_NETWORK:none}    # 构建期断网；需要拉依赖时改为 bridge
+    memory: 2g
+    cpus: "2"
+    pids-limit: 512
+    user: "1000:1000"                          # 非 root
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}
