@@ -47,8 +47,27 @@ cd web && npm install && npm run dev    # http://127.0.0.1:5173
 
 详见 [platform/README.md](platform/README.md)。
 
-## 关于外部源码引用
+## 提交规范
 
+遵循 [项目规约 §12](docs/项目规约-v1.0.md)：
+
+| 项 | 约定 |
+|---|---|
+| 提交信息 | `type(scope): 摘要`，type ∈ `feat` / `fix` / `refactor` / `test` / `docs` / `chore` / `ci` |
+| scope | 模块名（`platform` / `web` / `spec-checks` / `docs`）或省略 |
+| 分支 | `feat/<issue>-<slug>`、`fix/<issue>-<slug>`、`chore/...`；**禁止直推 main** |
+| 粒度 | 一个提交只做一件事；文档与代码分开提交；生成物（jar/pptx 源）与源文件分开 |
+| 语言 | 摘要用中文，type/scope 用英文 |
+
+示例：
+
+```
+feat(platform): 增加治理模块（动作门禁与确认令牌）
+docs: 流水线执行器契约规约
+test(platform): 接入规约自动化检查（ArchUnit + 扫描）
+```
+
+## 关于外部源码引用
 `docs/` 中 v1、v2 两份报告的「证据索引」引用了 `../RuoYi/`、`../agentscope-java/`、`../RuoYi-Vue-Plus/` 下的源码路径。
 这些是**分析当时的源码快照，已从本仓库移除**（见 [.gitignore](.gitignore) 中的克隆命令），因此那些链接不可点击，但结论与引用的类名/行号仍可对照上游仓库复核。
 
