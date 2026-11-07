@@ -1,0 +1,20 @@
+# 构建产物
+target/
+build*.log
+app*.log
+run.log
+
+# 前端
+web/node_modules/
+web/dist/
+web/.vite/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 本地环境
+.env
+.env.local
+*.local.yml
