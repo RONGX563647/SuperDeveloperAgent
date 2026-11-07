@@ -26,6 +26,7 @@ public final class PlanHasher {
      * @return 64 位小写十六进制
      */
     public static String hash(String projectId, String env, String kind, String... parts) {
+        // 1. 规范化拼接待哈希字段（null 归一为空串，避免歧义）
         StringBuilder sb = new StringBuilder();
         sb.append(nullToEmpty(projectId)).append('|')
                 .append(nullToEmpty(env)).append('|')
@@ -35,6 +36,7 @@ public final class PlanHasher {
                 sb.append('|').append(nullToEmpty(part));
             }
         }
+        // 2. 取 SHA-256 作为计划指纹（确认令牌绑定此值）
         return sha256(sb.toString());
     }
 

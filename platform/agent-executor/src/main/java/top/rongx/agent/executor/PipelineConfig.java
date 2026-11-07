@@ -29,7 +29,10 @@ public class PipelineConfig {
     public PipelineEngine pipelineEngine(ActionResolver recipes,
                                          @Qualifier("hostActionRunner") ProcessActionRunner host,
                                          @Qualifier("actionRunner") ActionRunner sandboxed,
-                                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        return new BuiltInPipelineEngine(recipes, sandboxed, host, Path.of(workspaceRoot));
+                                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
+                                         @Value("${agent.pipeline.history:true}") boolean persist) {
+        Path root = Path.of(workspaceRoot);
+        RunHistoryStore store = persist ? RunHistoryStore.file(root) : RunHistoryStore.disabled();
+        return new BuiltInPipelineEngine(recipes, sandboxed, host, root, store);
     }
 }

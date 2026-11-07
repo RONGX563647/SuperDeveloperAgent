@@ -10,10 +10,14 @@ import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 
 /**
- * 空实现：仅作为替换模板保留，未注册为 Spring Bean。
+ * 空实现（已废弃）：仅作为替换模板保留，未注册为 Spring Bean，不会被装配选中。
  *
  * <p>真实流水线由 {@link BuiltInPipelineEngine} 提供（见 {@link PipelineConfig}）。
+ * 保留此类的唯一目的是作为"最小可运行骨架"参考，勿在新代码中引用。
+ *
+ * @deprecated 由 {@link BuiltInPipelineEngine} 取代；本类不实现任何真实编排。
  */
+@Deprecated(since = "0.1.0", forRemoval = false)
 public class NoopPipelineEngine implements PipelineEngine {
 
     private final Map<String, StageStatus> runs = new ConcurrentHashMap<>();

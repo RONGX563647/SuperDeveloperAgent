@@ -17,14 +17,23 @@ import org.yaml.snakeyaml.Yaml;
  */
 public record PipelineDefinition(String name, List<StageDef> stages, List<StageDef> onFailure) {
 
-    /** stage 定义。 */
+    /**
+     * stage 定义。
+     *
+     * @param workdir 可选：相对仓库根的工作目录（monorepo 必备，如 {@code backend} / {@code frontend}）
+     * @param image   可选：该 stage 专用工具链镜像
+     * @param url     type=health 时
+     * @param expected type=health 时期望状态码
+     */
     public record StageDef(
             String id,
-            String type,        // git-checkout | action | health
-            String action,      // type=action 时的动作名
-            String runner,      // container | host
-            String url,         // type=health 时
-            int expected) {     // type=health 时期望状态码
+            String type,
+            String action,
+            String runner,
+            String workdir,
+            String image,
+            String url,
+            int expected) {
     }
 
     /** 从仓库根读 {@code ci/pipeline.yml}。 */
@@ -67,6 +76,8 @@ public record PipelineDefinition(String name, List<StageDef> stages, List<StageD
                     type,
                     action,
                     str(m, "runner", "container"),
+                    m.get("workdir") == null ? null : str(m, "workdir", ""),
+                    m.get("image") == null ? null : str(m, "image", ""),
                     m.get("url") == null ? null : str(m, "url", ""),
                     m.get("expected") instanceof Number n ? n.intValue() : 200));
         }

@@ -3,6 +3,7 @@ package top.rongx.agent.tools;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.action.ActionId;
@@ -35,16 +36,19 @@ public class ActionCommandTools {
                     执行单个动作（仅限测试环境的构建类动作）。写操作，动作层入口。
                     与 ci_run 的关系：ci_run 跑整条流水线；本工具只跑一个命名动作，用于单步调试。
                     执行前建议先调用 plan_action 并把命令原文告知用户。
-                    stack_deploy / stack_rollback 属 L3，不能由此工具执行，需走变更确认流程。""",
+                    stack_deploy / stack_rollback 属 L3，不能由此工具执行，需走变更确认流程。
+                    params 为可选覆盖（如 backend_build 的 profile）；键名与取值范围见 plan_action 输出。""",
             readOnly = false, concurrencySafe = false)
     public String runAction(
             @ToolParam(name = "action", description = "动作名，见 list_actions 的返回") String action,
+            @ToolParam(name = "params",
+                    description = "可选参数覆盖，Map<参数名,值>；键与取值范围见 plan_action") Map<String, String> params,
             ProjectContext ctx) {
         var id = ActionId.fromWire(action);
         if (id.isEmpty()) {
             return "err: 未知动作 " + action + "；可用：" + wireNames();
         }
-        ActionResult result = actions.run(ctx, id.get());
+        ActionResult result = actions.run(ctx, id.get(), params == null ? Map.of() : params);
         return format(result, actions.plan(ctx, id.get()));
     }
 

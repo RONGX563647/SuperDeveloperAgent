@@ -2,7 +2,9 @@ package top.rongx.agent.tools;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -76,9 +78,17 @@ public class ActionService {
     }
 
     /**
-     * 直接执行（仅 L2）。
+     * 直接执行（仅 L2）。不带参数覆盖。
      */
     public ActionResult run(ProjectContext ctx, ActionId action) {
+        return run(ctx, action, Map.of());
+    }
+
+    /**
+     * 直接执行（仅 L2），允许覆盖动作参数（如 backend_build 的 profile）。
+     * 覆盖值会经 {@code allowed} 枚举校验，并注入 steps 的 ${param.x} 占位符。
+     */
+    public ActionResult run(ProjectContext ctx, ActionId action, Map<String, String> overrides) {
         if (!action.autoExecutable()) {
             throw new IllegalStateException(action.wireName()
                     + " 属 L3（影响生产），不能直接执行。请先 request → confirm → apply。");
@@ -88,8 +98,9 @@ public class ActionService {
         }
         Path root = requireWorkspace(ctx);
         ActionSpec spec = plan(ctx, action);
-        assertHostSafe(ctx, spec);
-        return runner.run(root, spec);
+        ActionSpec bound = bindParams(spec, overrides);
+        assertHostSafe(ctx, bound);
+        return runner.run(root, bound);
     }
 
     /**
@@ -111,6 +122,17 @@ public class ActionService {
      * @param confirmedPlanHash 令牌里绑定的 planHash
      */
     public ActionResult apply(ProjectContext ctx, ActionId action, String confirmedPlanHash) {
+        return apply(ctx, action, confirmedPlanHash, Map.of());
+    }
+
+    /**
+     * 凭证执行（仅 L3），允许覆盖动作参数。其余门禁同 {@link #apply}。
+     *
+     * @param confirmedPlanHash 令牌里绑定的 planHash
+     * @param overrides         动作参数覆盖（经 allowed 校验后注入 steps）
+     */
+    public ActionResult apply(ProjectContext ctx, ActionId action, String confirmedPlanHash,
+                              Map<String, String> overrides) {
         if (action.autoExecutable()) {
             throw new IllegalStateException(action.wireName() + " 属 L2，请直接执行。");
         }
@@ -120,8 +142,45 @@ public class ActionService {
         if (!actual.equals(confirmedPlanHash)) {
             throw new IllegalStateException("配方在确认后已被修改，请重新确认（planHash 不匹配）");
         }
-        assertHostSafe(ctx, spec);
-        return runner.run(root, spec);
+        ActionSpec bound = bindParams(spec, overrides);
+        assertHostSafe(ctx, bound);
+        return runner.run(root, bound);
+    }
+
+    /**
+     * 合并参数默认值与运行时覆盖：覆盖 key 必须在声明内，值若声明了 allowed 枚举则必须命中。
+     * 合并后把 ${param.x} 占位符替换为实际值。无参数时原样返回。
+     */
+    private ActionSpec bindParams(ActionSpec spec, Map<String, String> overrides) {
+        if (spec.params().isEmpty() && (overrides == null || overrides.isEmpty())) {
+            return spec;
+        }
+        Map<String, String> merged = new LinkedHashMap<>(spec.params());
+        for (Map.Entry<String, String> e : overrides.entrySet()) {
+            String name = e.getKey();
+            if (!spec.allowed().containsKey(name)) {
+                throw new IllegalArgumentException("动作 " + spec.action().wireName()
+                        + " 不接受参数 " + name + "；可用：" + spec.allowed().keySet());
+            }
+            List<String> allowed = spec.allowed().get(name);
+            if (!allowed.isEmpty() && !allowed.contains(e.getValue())) {
+                throw new IllegalArgumentException("参数 " + name + " 取值 " + e.getValue()
+                        + " 不在允许范围 " + allowed);
+            }
+            merged.put(name, e.getValue());
+        }
+        List<List<String>> steps = spec.steps().stream()
+                .map(argv -> argv.stream()
+                        .map(t -> {
+                            String out = t;
+                            for (Map.Entry<String, String> e : merged.entrySet()) {
+                                out = out.replace("${param." + e.getKey() + "}", e.getValue());
+                            }
+                            return out;
+                        }).toList())
+                .toList();
+        return new ActionSpec(spec.action(), steps, spec.produce(), spec.timeout(),
+                spec.source(), Map.copyOf(merged), spec.allowed());
     }
 
     /** 配方哈希：动作 + 来源 + commit + 实际命令，任何一项变化都会改变哈希。 */

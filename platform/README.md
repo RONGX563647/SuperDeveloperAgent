@@ -100,8 +100,12 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 | **方案 D：动作契约 + 仓库内配方** | ✅ `list_actions` / `plan_action` / `run_action`；配方解析顺序 `ci/actions.yml → Taskfile.yml → Makefile → 内置默认`；实测跑通"读配方 → 执行 → 产物 sha256" |
 | **动作 HTTP 接口（不经模型也能用）** | ✅ `GET /api/v1/actions`、`…/{action}/plan`、`POST …/{action}/run`、`POST …/{action}/request` |
 | **L3 审批闭环** | ✅ `request` → `/changes/{id}/confirm` 拿令牌 → `/changes/{id}/apply` 执行；令牌一次性、5 分钟、绑定 `planHash` |
-| **可用性测试** | ✅ 11 例（列表/计划/成功/失败/L3 拦截/令牌复用/配方变更/跨单令牌），`mvn verify` 全绿 |
+| **前端运行面板** | ✅ `/pipeline`：动作列表、gitSha 触发、1s 轮询、stage 着色、产物 digest、日志；`npm run build` 通过，无头浏览器验证渲染 |
+| **Gitee webhook** | ✅ Token/HMAC 鉴权 + 同 commit 幂等；`GET /api/v1/webhooks/gitee/history` 查历史 |
+| **并发与持久化** | ✅ 项目级串行队列 + 4 线程池；每次运行落 YAML，重启可恢复 |
 | **容器沙箱执行** | ✅ 非 root（uid 1000）/ `--cap-drop ALL` / 内存·CPU·pids 限额 / 网络三档（`bridge` 默认·`build-net` 生产·`none` 发布）；`auto` 自动探测，无 Docker 时回退宿主并告警 |
+| **真实 Java + Vue 双栈流水线** | ✅ `ci/pipeline.yml` 支持 stage 级 `image` / `workdir`；容器内 `mvn package` 与 `npm install + Vite build` 产出 jar 与 dist；依赖缓存卷加速 |
+| **CI/CD 验收** | ✅ 检出→构建→测试→镜像→部署→健康→回滚 4/4；双栈 4/4；`mvn verify` 9 模块全绿 |
 | 变更请求（不能自确认） | ✅ `request_confirmation` 产出 `changeId` + `planHash` |
 | 人工确认 → 一次性令牌 | ✅ `POST /api/v1/changes/{id}/confirm`（5 分钟、绑定 planHash、用后失效） |
 | 统一错误响应（含 traceId） | ✅ 已验证：`{code, message, traceId}` |
@@ -135,12 +139,10 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 ## 刻意留白（不是遗漏）
 
 1. **没有 `confirm` 工具**——确认只能由人在 HTTP 接口完成（规约 §4.10 第一道守卫）；
-2. **`PipelineEngine` 是空实现**——`ci_run` 走的是它；真正的执行走 `run_action`（方案 D）；
-3. **沙箱不注入凭据**——私服/DB 凭据还没挂进容器，需要时挂只读 `settings.xml`（下一阶段）；
-4. **`stack_deploy` / `stack_rollback` 没有配方**——它们要接窄控制器，属下一阶段；
-5. **高危密码校验失败关闭**——账号体系未接入时 `FailClosedPasswordVerifier` 一律拒绝，而不是放行；
-6. **事件映射用反射**——骨架阶段够用；正式版应按 32 类事件映射成稳定枚举；
-7. **`changeId` 由前端从文本里正则提取**——临时手段，应由后端发专用 SSE 事件。
+2. **沙箱不注入凭据**——本环境无私服；需要时挂只读 `settings.xml`（下一阶段）；
+3. **高危密码校验失败关闭**——账号体系未接入时 `FailClosedPasswordVerifier` 一律拒绝，而不是放行；
+4. **事件映射用反射**——骨架阶段够用；正式版应按 32 类事件映射成稳定枚举；
+5. **`changeId` 由前端从文本里正则提取**——临时手段，应由后端发专用 SSE 事件。
 
 ---
 
@@ -148,8 +150,8 @@ curl -X POST -H "X-User-Id: dev" -H "X-Confirm-Token: $TOKEN" \
 
 | # | 任务 | 对应规约 |
 |---|---|---|
-| 1 | 依赖缓存卷（加速重复构建；也是发布期 `--network none` 的前提） | 流水线设计 §13 |
-| 2 | 前端把动作面板接上（接口已就绪，见上文 curl） | PRD §4.10 |
-| 3 | 账号体系（本地账号 + BCrypt）替换 `X-User-Id` | PRD §4.10 |
-| 4 | 会话与消息落库（替换内存） | 项目规约 §5 |
-| 5 | 容器内注入私服凭据（只读挂载 settings.xml） | 执行器契约 §1.7 |
+| 1 | 账号体系（本地账号 + BCrypt）替换 `X-User-Id` | PRD §4.10 |
+| 2 | 会话与消息落库（替换内存） | 项目规约 §5 |
+| 3 | 专用 `build-net` + 防火墙规则限制构建容器访问内网 | 执行器契约 §网络策略 |
+| 4 | 后端发专用 `change` SSE 事件，去掉前端正则提取 | PRD §4.10 |
+| 5 | 窄控制器 8 步滚动发布（当前 deploy 由仓库配方提供） | 窄控制器设计 |

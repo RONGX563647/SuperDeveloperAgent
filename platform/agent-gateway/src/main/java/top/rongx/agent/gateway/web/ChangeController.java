@@ -60,22 +60,24 @@ public class ChangeController {
     public ActionController.RunView apply(@PathVariable String changeId,
                                           @RequestHeader(value = "X-User-Id", required = false) String userId,
                                           @RequestHeader(value = "X-Confirm-Token", required = false) String confirmToken) {
+        // 1. 认证与令牌头校验
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("未认证：缺少 X-User-Id");
         }
         if (confirmToken == null || confirmToken.isBlank()) {
             throw new IllegalArgumentException("缺少确认令牌：需要 X-Confirm-Token 头");
         }
+        // 2. 取出变更单（不存在即拒绝）
         ChangePlan plan = registry.find(changeId)
                 .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
-
-        // 一次性 + 过期 + changeId/planHash 绑定，全部在 consume 里校验
+        // 3. 消费令牌：一次性 + 未过期 + 绑定 changeId 与当前 planHash（防篡改复用）
         tokens.consume(confirmToken, changeId, plan.planHash());
-
+        // 4. 解析动作并解析项目上下文
         ActionId action = ActionId.fromWire(plan.kind())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "该变更不是可执行动作（kind=" + plan.kind() + "）"));
         ProjectContext ctx = contextResolver.resolve(plan.projectId(), plan.env(), userId);
+        // 5. 带令牌落地执行（ActionService 再次核对 planHash）
         return ActionController.RunView.of(actions.apply(ctx, action, plan.planHash()));
     }
 

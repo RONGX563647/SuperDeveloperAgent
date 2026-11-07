@@ -41,4 +41,14 @@ public interface PipelineEngine {
     default String logTail(String runId) {
         return "";
     }
+
+    /** 最近构建历史（含重启前落盘的运行）；默认无。 */
+    default List<RunSummary> history() {
+        return List.of();
+    }
+
+    /** 历史视图（domain 层数据结构，避免 gateway 依赖执行面具体类）。 */
+    record RunSummary(String runId, String projectId, String pipelineId, String gitSha,
+                      StageStatus status, int stageCount) {
+    }
 }

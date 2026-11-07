@@ -47,13 +47,17 @@ public class ConfirmTokenService {
      * @return 令牌
      */
     public ConfirmToken issue(String userId, String changeId, String planHash) {
+        // 1. 签发人必须来自已登录会话，不得为空（令牌与人绑定）
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("签发人不能为空");
         }
+        // 2. 生成 24 字节随机令牌值（不可预测）
         byte[] buf = new byte[24];
         random.nextBytes(buf);
+        // 3. 组装令牌：绑定 userId + changeId + planHash，TTL 内有效
         ConfirmToken token = new ConfirmToken(HexFormat.of().formatHex(buf), userId, changeId, planHash,
                 clock.instant().plus(TTL), false);
+        // 4. 入库待消费
         tokens.put(token.token(), token);
         return token;
     }
@@ -64,24 +68,29 @@ public class ConfirmTokenService {
      * @throws IllegalStateException 令牌不存在 / 已用 / 过期 / 与计划不匹配
      */
     public ConfirmToken consume(String tokenValue, String changeId, String planHash) {
+        // 1. 令牌必须存在
         ConfirmToken token = tokens.get(tokenValue);
         if (token == null) {
             throw new IllegalStateException("确认令牌不存在");
         }
+        // 2. 不可重复使用
         if (token.used()) {
             throw new IllegalStateException("确认令牌已被使用");
         }
+        // 3. 不可过期（过期即销毁，防重放）
         if (token.expired(clock.instant())) {
             tokens.remove(tokenValue);
             throw new IllegalStateException("确认令牌已过期");
         }
+        // 4. 绑定变更单必须一致
         if (!token.changeId().equals(changeId)) {
             throw new IllegalStateException("确认令牌与变更单不匹配");
         }
-        // 关键守卫：确认的必须是这个计划，而不是"同一个变更单的任意计划"
+        // 5. 关键守卫：确认的是当前计划哈希，而非"同单任意计划"（防配方篡改后复用令牌）
         if (!token.planHash().equals(planHash)) {
             throw new IllegalStateException("计划已变更，请重新确认");
         }
+        // 6. 标记为已用并存回（一次性）
         ConfirmToken used = token.markUsed();
         tokens.put(tokenValue, used);
         return used;

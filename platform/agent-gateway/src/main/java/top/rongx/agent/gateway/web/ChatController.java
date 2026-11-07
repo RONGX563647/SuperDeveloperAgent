@@ -57,13 +57,16 @@ public class ChatController {
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody ChatRequest request,
                            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        // 1. 认证：缺少用户头直接拒绝
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("未认证：缺少 X-User-Id");
         }
+        // 2. 服务端解析并校验项目上下文（模型不可篡改）
         ProjectContext ctx = contextResolver.resolve(request.projectId(), request.env(), userId);
+        // 3. 建立 SSE 发射器，向业务层要事件流
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message());
-
+        // 4. 虚拟线程异步推送：逐事件映射为 DTO 并发送
         executor.submit(() -> {
             try {
                 long seq = 0;

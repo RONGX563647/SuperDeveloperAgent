@@ -129,7 +129,7 @@ final class ProcessExecutor {
         }
     }
 
-    /** 日志尾部：最后 30 行且不超过 4000 字符。 */
+    /** 日志尾部：最后 30 行且不超过 4000 字符。输出前经 {@link #redact} 脱敏。 */
     static String tail(StringBuilder sink) {
         String text;
         synchronized (sink) {
@@ -141,7 +141,26 @@ final class ProcessExecutor {
         if (joined.length() > 4000) {
             joined = "…" + joined.substring(joined.length() - 4000);
         }
-        return joined;
+        return redact(joined);
+    }
+
+    /**
+     * 日志脱敏（规约 §1.6 redactor）：过滤常见的密钥/凭证形状，避免写入证据链。
+     * 仅做形态匹配，不做内容解析；命中即替换为 {@code ***}。
+     */
+    static String redact(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        // 1. Authorization / Bearer / token 赋值
+        text = text.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._-]{16,}", "$1***");
+        text = text.replaceAll("(?i)((?:" + "token|secret|password|passwd|api[_-]?key|access[_-]?key"
+                + "|authorization" + ")\\s*[=:]\\s*)[^\\s\"']{8,}", "$1***");
+        // 2. 长十六进制串（sha256/jwt 第二段等）按行内孤立 token 处理
+        text = text.replaceAll("\\b[0-9a-fA-F]{64}\\b", "***");
+        // 3. 形如 -----BEGIN ... PRIVATE KEY----- 的 PEM 块
+        text = text.replaceAll("(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "***PEM***");
+        return text;
     }
 
     static void warn(String message) {

@@ -60,12 +60,25 @@ public class ActionQueryTools {
         String commands = s.steps().stream()
                 .map(argv -> "  " + String.join(" ", argv))
                 .collect(Collectors.joining("\n"));
+        String paramPart;
+        if (s.params().isEmpty()) {
+            paramPart = "（无）";
+        } else {
+            paramPart = s.params().entrySet().stream()
+                    .map(e -> "  - %s = %s%s".formatted(
+                            e.getKey(), e.getValue(),
+                            s.allowed().getOrDefault(e.getKey(), List.of()).isEmpty()
+                                    ? "" : " (allowed: " + s.allowed().get(e.getKey()) + ")"))
+                    .collect(Collectors.joining("\n"));
+        }
         return """
                 action: %s
                 level: %s
                 source: %s（%s）
                 timeout: %dm
                 produce: %s
+                params:
+                %s
                 commands:
                 %s
                 evidence: %s
@@ -76,6 +89,7 @@ public class ActionQueryTools {
                 s.source().humanAuthored() ? "来自项目仓库，人写的" : "平台内置默认",
                 s.timeout().toMinutes(),
                 s.produce().isEmpty() ? "（未声明）" : String.join(", ", s.produce()),
+                paramPart,
                 commands,
                 s.source().ref());
     }

@@ -13,6 +13,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.yaml.snakeyaml.Yaml;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSource;
@@ -23,9 +26,14 @@ import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.executor.RunHistoryStore.RunSnapshot;
 
 /**
  * 内置流水线引擎：把「检出 → 构建 → 测试 → 镜像 → 部署 → 健康检查」串成一次可追溯的运行。
+ *
+ * <p><b>编排职责边界（P3 澄清）</b>：平台<b>不</b>拥有多 stage 编排逻辑本身——
+ * 编排由仓库 {@code ci/pipeline.yml}（数据，人写、versioned）声明，本引擎只是其确定性执行器。
+ * 这与"模型写命令"严格隔离：模型只能 {@code ci_run} 触发一条已定义流水线，不能拼 stage。
  *
  * <p>与 Jenkins 的对应关系：
  * <ul>
@@ -36,7 +44,8 @@ import top.rongx.agent.domain.run.StageStatus;
  *   <li>{@code health} stage ↔ 发布门禁。</li>
  * </ul>
  *
- * <p>执行面是确定性代码，不调用任何模型（规约 A3）。
+ * <p>执行面是确定性代码，不调用任何模型（规约 A3）。每个 stage 底层都分解为
+ * {@code ActionSpec}（动作层），与 {@code run_action} 共用同一套 ActionRunner 与门禁。
  */
 public class BuiltInPipelineEngine implements PipelineEngine {
 
@@ -50,13 +59,25 @@ public class BuiltInPipelineEngine implements PipelineEngine {
     private final Map<String, RunState> runs = new ConcurrentHashMap<>();
     /** 每个项目最近一次成功发布的镜像 tag，供回滚使用。 */
     private final Map<String, String> lastGood = new ConcurrentHashMap<>();
+    /** 有界队列：全局并发上限 4；同一项目串行由 TriggerScheduler 保证。 */
+    private final ExecutorService workers = Executors.newFixedThreadPool(4, Thread.ofVirtual().factory());
+    private final TriggerScheduler scheduler = new TriggerScheduler();
+    /** 构建历史持久化（重启可恢复）。 */
+    private final RunHistoryStore history;
 
     public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
                                  ActionRunner host, Path workspaceRoot) {
+        this(recipes, sandboxed, host, workspaceRoot, RunHistoryStore.disabled());
+    }
+
+    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
+                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history) {
         this.recipes = recipes;
         this.sandboxed = sandboxed;
         this.host = host;
         this.workspaceRoot = workspaceRoot;
+        this.history = history == null ? RunHistoryStore.disabled() : history;
+        restoreHistory();
     }
 
     // ---------------------------------------------------------------- PipelineEngine
@@ -83,7 +104,8 @@ public class BuiltInPipelineEngine implements PipelineEngine {
         String runId = "run-" + UUID.randomUUID().toString().substring(0, 8);
         RunState state = new RunState(runId, projectId, pipelineId, sha);
         runs.put(runId, state);
-        Thread.ofVirtual().start(() -> execute(state));
+        history.save(state.snapshot());
+        scheduler.submit(projectId, () -> workers.submit(() -> execute(state)));
         return runId;
     }
 
@@ -104,6 +126,7 @@ public class BuiltInPipelineEngine implements PipelineEngine {
         RunState s = runs.get(runId);
         if (s != null && !s.status.isTerminal()) {
             s.cancelled = true;
+            history.save(s.snapshot());
         }
     }
 
@@ -113,17 +136,67 @@ public class BuiltInPipelineEngine implements PipelineEngine {
         return s == null ? List.of() : List.copyOf(s.artifacts);
     }
 
-    /** 供验收/排障：某次运行的全部日志尾部。 */
+    /** 供验收/排障：某次运行的全部日志尾部（经脱敏，避免凭证入链）。 */
     @Override
     public String logTail(String runId) {
         RunState s = runs.get(runId);
-        return s == null ? "" : s.log.toString();
+        if (s != null) {
+            return ProcessExecutor.redact(s.log.toString());
+        }
+        return history.list().stream()
+                .filter(h -> h.runId().equals(runId))
+                .findFirst().map(h -> ProcessExecutor.redact(h.log())).orElse("");
+    }
+
+    /** 构建历史列表（含重启前落盘的运行），转为 domain 视图。 */
+    @Override
+    public List<RunSummary> history() {
+        return history.list().stream()
+                .map(h -> new RunSummary(h.runId(), h.projectId(), h.pipelineId(), h.gitSha(),
+                        h.status(), h.stages().size()))
+                .toList();
+    }
+
+    /** 排队数量（可观测性）。 */
+    public int pendingCount() {
+        return scheduler.pendingCount();
+    }
+
+    private void restoreHistory() {
+        for (RunHistoryStore.RunSnapshot snap : history.list()) {
+            if (runs.containsKey(snap.runId())) {
+                continue;
+            }
+            RunState restored = new RunState(snap.runId(), snap.projectId(), snap.pipelineId(), snap.gitSha());
+            restored.status = snap.status();
+            restored.stages.addAll(snap.stages());
+            restored.artifacts.addAll(snap.artifacts());
+            restored.log.append(snap.log());
+            runs.put(snap.runId(), restored);
+            if (snap.status() == StageStatus.SUCCEEDED && "release".equals(snap.pipelineId())) {
+                // 回滚锚点：取该次运行登记的镜像 tag
+                snap.artifacts().stream()
+                        .filter(a -> a.kind().equals("image"))
+                        .findFirst()
+                        .ifPresent(a -> lastGood.put(snap.projectId(), a.ref()));
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 执行
 
     private void execute(RunState state) {
-        state.status = StageStatus.RUNNING;
+        try {
+            state.status = StageStatus.RUNNING;
+            doExecute(state);
+        } finally {
+            // 每次运行结束（含异常）都落盘，保证重启后可查询历史
+            history.save(state.snapshot());
+            scheduler.complete(state.projectId);
+        }
+    }
+
+    private void doExecute(RunState state) {
         Path projectDir = workspaceRoot.resolve(state.projectId).toAbsolutePath().normalize();
         Path source = projectDir.resolve("repo");
         Path runDir = projectDir.resolve("runs").resolve(state.runId);
@@ -219,13 +292,17 @@ public class BuiltInPipelineEngine implements PipelineEngine {
             }
             ActionSpec original = resolved.get();
             ActionSpec substituted = substitute(original, vars);
-            ActionRunner runner = "host".equals(stage.runner()) ? host : sandboxed;
-            ActionResult result = runner.run(runDir, substituted, () -> state.cancelled);
+            ActionRunner runner = selectRunner(stage);
+            // monorepo：stage 可在子目录执行（如 backend / frontend），
+            // 但产物与镜像仍按仓库根记账，避免各模块配方各写一套路径。
+            Path stageDir = (stage.workdir() == null || stage.workdir().isBlank())
+                    ? runDir : runDir.resolve(stage.workdir()).normalize();
+            ActionResult result = runner.run(stageDir, substituted, () -> state.cancelled);
 
             state.log.append('[').append(stage.id()).append("] ")
                     .append(result.logTail()).append('\n');
             state.stages.add(rename(result.result(), stage.id()));
-            state.artifacts.addAll(result.result().artifacts());
+            state.artifacts.addAll(prefixArtifacts(result.result().artifacts(), stage.workdir()));
 
             if (result.result().status() == StageStatus.SUCCEEDED
                     && "image_package".equals(stage.action())) {
@@ -238,6 +315,37 @@ public class BuiltInPipelineEngine implements PipelineEngine {
             state.stages.add(StageResult.failed(stage.id(), 1, "E-2xx", e.getMessage(), elapsed(start)));
             return false;
         }
+    }
+
+    /** 把子目录 stage 的相对产物路径补成仓库根相对路径（便于统一记账/下载）。 */
+    private List<ArtifactRef> prefixArtifacts(List<ArtifactRef> artifacts, String workdir) {
+        if (workdir == null || workdir.isBlank()) {
+            return artifacts;
+        }
+        String prefix = workdir.replace('\\', '/').replaceAll("^/+|/+$", "") + "/";
+        return artifacts.stream()
+                .map(a -> new ArtifactRef(a.kind(), prefix + a.ref(), a.digest(),
+                        a.sizeBytes(), a.meta()))
+                .toList();
+    }
+
+    /**
+     * 选择执行器：host 走宿主；container 且声明了 {@code image} 时，
+     * 用该 stage 专属工具链镜像新建一个沙箱（同一套隔离参数，只换镜像）。
+     */
+    private ActionRunner selectRunner(PipelineDefinition.StageDef stage) {
+        if ("host".equals(stage.runner())) {
+            return host;
+        }
+        if (stage.image() == null || stage.image().isBlank()) {
+            return sandboxed;
+        }
+        if (sandboxed instanceof DockerActionRunner dockerRunner) {
+            DockerSandbox base = dockerRunner.sandbox();
+            return new DockerActionRunner(base.withImage(stage.image()));
+        }
+        // 宿主模式下忽略 image（工具链由宿主机提供）
+        return host;
     }
 
     private boolean health(RunState state, PipelineDefinition.StageDef stage, long start) {
@@ -352,6 +460,12 @@ public class BuiltInPipelineEngine implements PipelineEngine {
         final StringBuilder log = new StringBuilder();
         volatile StageStatus status = StageStatus.PENDING;
         volatile boolean cancelled = false;
+
+        RunSnapshot snapshot() {
+            return new RunHistoryStore.RunSnapshot(runId, projectId, pipelineId, gitSha,
+                    status, List.copyOf(stages), List.copyOf(artifacts),
+                    ProcessExecutor.redact(log.toString()));
+        }
 
         RunState(String runId, String projectId, String pipelineId, String gitSha) {
             this.runId = runId;

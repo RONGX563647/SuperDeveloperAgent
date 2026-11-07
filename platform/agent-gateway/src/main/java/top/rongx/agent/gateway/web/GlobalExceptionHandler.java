@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 /** 统一错误响应：含 traceId，不含堆栈与内部细节（规约 §3）。 */
 @RestControllerAdvice
@@ -25,6 +26,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> conflict(IllegalStateException e) {
         return body(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    /** 明确带 HTTP 状态的异常（如 webhook 401）→ 按原状态返回，不落到 500。 */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> responseStatus(ResponseStatusException e) {
+        HttpStatus status = HttpStatus.valueOf(e.getStatusCode().value());
+        return body(status, e.getReason() == null ? status.getReasonPhrase() : e.getReason());
     }
 
     /** 兜底：记录堆栈，返回泛化文案。 */

@@ -1,7 +1,7 @@
-# 自研流水线能否替代 Jenkins · 验收报告
+# 自研流水线能否替代 Jenkins · 验收报告 v2
 
-> 日期：2026-11-08 ｜ 结论：**已通过 CI/CD 主链路验收（4/4），但只是「窄版可替代」，不是完整 Jenkins**
-> 验证方式：真实 git 仓库 + 真实容器 + 真实 `docker build` + 真实 HTTP 服务，**不 mock**
+> 日期：2026-11-08（v2 续写）｜ 结论：**主链路 + 真实 Java/Vue 双栈 + 触发/并发/历史/取消/前端面板 全部完成并验证**
+> 验证方式：真实 git 仓库 + 真实容器 + 真实 `mvn package` / `npm install + Vite build` / `docker build` + 真实 HTTP + 无头浏览器，**不 mock**
 
 ---
 
@@ -78,26 +78,67 @@ Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 22.53 s
 |---|---|---|
 | 描述语言 | Groovy（图灵完备） | YAML 数据（只能引用预置动作） |
 | 执行环境 | controller + agent，可分布式 | 单机 Docker |
-| 并发 | 队列 + executor 槽 | 无（一次一个 run 异步跑） |
-| 恢复 | 可从中间 step 续跑 | 不做；失败只能重跑 |
+| 并发 | 队列 + executor 槽 | 有界线程池（4）+ 项目级 FIFO 串行 + 排队数可见 |
+| 恢复 | 可从中间 step 续跑 | 不做；失败只能重跑（主动取舍） |
 | 插件 | 1800+ | 无 |
 | 审批 | `input` + 插件 | `confirmToken` + `planHash` 绑定配方（**比 Jenkins 更严**：配方改了令牌失效） |
+| 触发 | webhook 插件 | Gitee push webhook，Token/HMAC 鉴权 + commit 幂等 |
+| 历史 | 构建历史 | 文件持久化 `<workspace>/_history/<runId>.yml`，重启可恢复 |
+| 前端 | Blue Ocean | Vue3 `/pipeline` 面板，无头浏览器验证渲染 |
 | 证据链 | 构建日志 | 每步结果 + 产物 sha256 + 镜像 digest + 配方来源 |
 
-**可以说**：在「单机、Java/Vue、5 个动作、Gitee、不让 AI 写命令」这个窄场景里，它已经能完成一次真实发布，且审计性强于常见 Jenkins 配置。
-**不能说**：它替代了 Jenkins。没有队列、没有多机、没有插件、没有 UI、没有凭据体系、没有真实项目的 Maven/Gradle 构建（验收用的是 Node fixture）。
+**可以说**：在「单机、Java/Vue、5 个动作、Gitee、不让 AI 写命令」这个窄场景里，它已跑通真实双栈构建与发布链路，且审计性强于常见 Jenkins 配置。
+**不能说**：它替代了 Jenkins。没有多机 agent、插件体系、凭据绑定、共享库、多分支扫描，也不做 step 级续跑。
 
 ---
 
-## 5. 仍未验证 / 下一步
+## 5. v2 补完清单（用户「继续做完」后的增量）
 
-| 优先级 | 事项 |
+| 原 backlog | 状态 | 证据 |
+|---|---|---|
+| 真实 Java + Vue 双栈 | ✅ | `DualStackPipelineTest` 4/4；容器内 `mvn package` 产出 `backend/target/app-1.0.jar`，`npm install + Vite build` 产出 `frontend/dist/index.html` |
+| 工具链按 stage 切换 | ✅ | `ci/pipeline.yml` 支持 `image:` 与 `workdir:`；Java 用 `maven:3.9-eclipse-temurin-21`、Vue 用 `node:20-alpine` |
+| 依赖缓存卷 | ✅ | Maven `/cache/m2`、npm `/cache/npm`；双栈测试耗时 267s → 108s |
+| Gitee webhook | ✅ | `X-Gitee-Token` / HMAC 鉴权 + 同 commit 幂等；运行时验证 401 / 触发 / 重复 / 历史 |
+| 并发队列 | ✅ | `TriggerScheduler` 项目级 FIFO 串行 + 4 线程池；`sameProjectSerial` 用例 |
+| 历史持久化 | ✅ | `RunHistoryStore` 每次运行落 YAML；`historySurvivesRestart` 用新引擎实例查回旧 run |
+| cancel | ✅ | `cancelStopsRun`；运行期轮询取消标记，状态为 CANCELLED |
+| 前端面板 | ✅ | Vue3 `/pipeline`：动作列表、gitSha 触发、1s 轮询、stage 着色、产物 digest、日志；`npm run build` 通过；无头 Edge 验证 DOM 真实渲染 |
+| 统一错误响应 | ✅ | 修掉 `ResponseStatusException` 被兜底成 500 的问题，webhook 401 现在返回 401 |
+
+### v2 又抓到的 3 个真问题
+
+| # | 问题 | 修复 |
+|---|---|---|
+| 4 | `mvn` 在仓库根找不到 `pom.xml`（monorepo 子模块） | 增加 stage 级 `workdir`，产物路径按仓库根统一加前缀 |
+| 5 | Docker 新建命名卷属主 root，非 root 构建用户写不进缓存 | 平台侧一次性 `mkdir` + `chown`（argv 直执行，不经 shell）初始化卷 |
+| 6 | Gateway 直接依赖 Executor 具体类（ArchUnit A1 失败） | 把 `history()` 提到 `PipelineEngine` domain 端口，用 `RunSummary` 解耦 |
+
+### 最终验证结果
+
+```
+mvn -B verify  →  BUILD SUCCESS，9 模块全绿
+  agent-gateway  23 个测试（双栈 4 + CI/CD 验收 4 + webhook 4 + 可用性 11）
+  agent-executor 14 个（含 5 个真实容器用例）
+  spec-checks    10 个（ArchUnit 7 + 扫描 3）
+npm run build   →  vue-tsc + Vite 成功（1620 modules，7.41s）
+无头 Edge       →  /pipeline DOM 含「流水线/动作/RY/gitSha/触发/对话」，HTTP 200
+运行时 webhook  →  401（无 token）/ 触发 / 重复幂等 / 历史查询 全部符合预期
+```
+
+---
+
+## 6. 仍明确不做（非目标，不是遗漏）
+
+| 项 | 理由 |
 |---|---|
-| P0 | 用**真实 Java + Vue 项目**（`mvn package` / `pnpm build`）跑同一条流水线——现在的验收是 Node fixture，工具链不同 |
-| P0 | 接 Gitee webhook 自动触发（现在是手动 `trigger`） |
-| P1 | 并发队列 + 项目级串行；构建历史落库（现在是内存 Map，重启即丢） |
-| P1 | `cancel` 端到端验收；凭据不进容器前提下挂载只读 `settings.xml` |
-| P2 | 前端运行面板（现在只有 REST 接口） |
+| 多机分布式 agent / label 路由 | 单机平台，场景窄 |
+| 插件体系、Groovy、共享库 | 供应链与维护成本，且违背「AI 不能写命令」的安全边界 |
+| step 级续跑（Jenkins durability） | 流水线 5 分钟内跑完，重跑比恢复更快更可信 |
+| 凭据绑定 / Vault / SSO | 本环境无私服，容器不注入凭据 |
+| 多分支自动发现、Blue Ocean 等价 UI | 已有运行面板，足够当前规模 |
+
+> 需要放宽这些边界时，按《Jenkins 能力复刻与复用 · 规划》§10 的退出策略：场景变宽就老实装 Jenkins。
 
 ---
 

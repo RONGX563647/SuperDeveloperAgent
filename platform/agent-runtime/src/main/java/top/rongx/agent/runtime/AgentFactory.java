@@ -34,10 +34,11 @@ public class AgentFactory {
 
     /** 为一个会话构造 Agent。Agent 无状态，可每次新建。 */
     public ReActAgent create(ProjectContext ctx) {
+        // 1. 权限模式按环境决定：生产 DEFAULT（写必 ASK），非生产 ACCEPT_EDITS
         PermissionContextState permission = PermissionContextState.builder()
                 .mode(ctx.isProduction() ? PermissionMode.DEFAULT : PermissionMode.ACCEPT_EDITS)
                 .build();
-
+        // 2. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
         return ReActAgent.builder()
                 .name("devops-agent")
                 .sysPrompt(systemPrompt(ctx))

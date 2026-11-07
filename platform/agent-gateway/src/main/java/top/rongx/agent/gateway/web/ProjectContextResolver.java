@@ -30,15 +30,19 @@ public class ProjectContextResolver {
      * @throws IllegalArgumentException 项目不存在、环境不属于该项目
      */
     public ProjectContext resolve(String projectId, String env, String userId) {
+        // 1. 项目必须存在（服务端校验，模型不可伪造）
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + projectId));
+        // 2. 环境缺省为 test
         String targetEnv = (env == null || env.isBlank()) ? "test" : env;
+        // 3. 环境必须属于该项目（防止越权访问他人环境）
         boolean known = projects.findEnvs(project.id()).stream()
                 .map(ProjectEnv::env)
                 .anyMatch(targetEnv::equals);
         if (!known) {
             throw new IllegalArgumentException("环境不属于该项目: " + targetEnv);
         }
+        // 4. 构造不可变上下文
         return new ProjectContext(project.id(), targetEnv, userId, project.repoUrl());
     }
 }

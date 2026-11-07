@@ -46,3 +46,8 @@ __pycache__/
 
 # 本地工作区与运行数据
 data/
+
+# 编辑器/工具产物
+.workbuddy/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
