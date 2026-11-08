@@ -46,10 +46,10 @@ function normalizeSha(raw: string): string {
 
 const shaValid = computed(() => /^[0-9a-f]{7,40}$/.test(props.sha))
 const hint = computed(() => {
-  // 仓库里没有 ci/pipeline.yml 时后端不返回任何流水线（不猜构建命令），
-  // 这里要把"下一步做什么"说清楚，而不是只说缺文件。
+  // 定义通常在接入时由平台自动生成（存平台侧），仓库里的 ci/pipeline.yml 只是可选覆盖；
+  // 所以这里只在"确实读不到"时给一句排查指引。
   if (!props.pipelines.length) {
-    return '该仓库还没有 ci/pipeline.yml：到「项目」页点「生成流水线脚本」，提交后即可运行'
+    return '未读取到流水线定义：确认项目已接入后刷新，或在项目页「生成流水线定义」重新生成'
   }
   if (!props.pipelineId) return '请选择流水线'
   if (!props.sha) return '请选择提交（从项目 git 历史中选，或粘贴 sha）'

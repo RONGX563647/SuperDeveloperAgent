@@ -6,6 +6,7 @@ import { Close, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import ResizableSplitter from '../components/project/ResizableSplitter.vue'
 import TriggerBar from '../components/pipeline/TriggerBar.vue'
+import EnvStateBand from '../components/pipeline/EnvStateBand.vue'
 import HistoryList from '../components/pipeline/HistoryList.vue'
 import ActionPanel from '../components/pipeline/ActionPanel.vue'
 import StageTimeline from '../components/pipeline/StageTimeline.vue'
@@ -288,6 +289,14 @@ function openedRun(item: HistoryItem): void {
   syncUrl(item.runId)
 }
 
+/** 环境状态带触发了运行：切到对应环境并打开该 run 的详情。 */
+function onEnvStarted(id: string, envKey: string): void {
+  if (envKey) appStore.env = envKey
+  void openRun(id)
+  syncUrl(id)
+  void loadHistory()
+}
+
 async function rerun(item: HistoryItem): Promise<void> {
   sha.value = item.gitSha.slice(0, 8)
   pipelineId.value = item.pipelineId
@@ -460,6 +469,13 @@ const runDuration = computed(() => {
             </label>
           </div>
 
+          <EnvStateBand
+            :project-id="projectId"
+            :sha="sha"
+            :busy="triggerBusy"
+            @started="onEnvStarted"
+          />
+
           <TriggerBar
             v-model:pipeline-id="pipelineId"
             v-model:sha="sha"
@@ -536,7 +552,7 @@ const runDuration = computed(() => {
           <p class="re-sub">
             {{ pipelines.length
               ? '在上方填入提交 sha 触发一次，或从左侧历史点开某次运行'
-              : '该仓库还没提交 ci/pipeline.yml——生成并提交后再回来运行' }}
+              : '还没有可用的流水线定义：刷新一次，或到项目页重新生成（平台会按仓库结构自动生成）' }}
           </p>
           <button
             type="button" class="re-btn"

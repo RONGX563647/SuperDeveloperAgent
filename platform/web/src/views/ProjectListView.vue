@@ -42,6 +42,8 @@ const scaffoldTarget = ref('docker')
 const scaffoldLoading = ref(false)
 const scaffoldApplying = ref(false)
 const scaffoldOverwrite = ref(false)
+/** 默认存平台侧（生成即可运行）；勾选则同时写进仓库 ci/（随代码 review，需自行提交）。 */
+const scaffoldToRepo = ref(false)
 
 /** 当前作用项目：优先树选中项，其次全局 projectId。 */
 const scaffoldProjectId = computed(() => {
@@ -84,13 +86,16 @@ async function applyScaffold(): Promise<void> {
   if (!scaffoldProjectId.value || !scaffoldPlan.value) return
   scaffoldApplying.value = true
   try {
+    const mode = scaffoldToRepo.value ? 'repo' : 'platform'
     const result = await scaffoldApply(
-      scaffoldProjectId.value, scaffoldTarget.value, scaffoldOverwrite.value)
+      scaffoldProjectId.value, scaffoldTarget.value, scaffoldOverwrite.value, mode)
     if (!result.written.length) {
-      ElMessage.warning('没有写入任何文件（可能已存在；勾选"覆盖"后重试）')
+      ElMessage.warning(result.note ?? '没有写入任何文件（可能已存在；勾选"覆盖"后重试）')
       return
     }
-    ElMessage.success(`已生成：${result.written.join('、')}（记得提交到仓库）`)
+    ElMessage.success(mode === 'repo'
+      ? `已写入仓库：${result.written.join('、')}（记得提交后再运行）`
+      : '已保存到平台，可直接在流水线页运行')
     scaffoldDialog.value = false
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '写入失败')
@@ -236,8 +241,8 @@ const overviewProject = computed(() =>
       </div>
     </div>
 
-    <!-- 生成流水线脚本：预览 → 落盘（写入仓库 ci/，随代码 review） -->
-    <el-dialog v-model="scaffoldDialog" title="生成平台流水线脚本" width="720px">
+    <!-- 生成流水线定义：预览 → 保存（默认存平台侧，勾选才写进仓库 ci/） -->
+    <el-dialog v-model="scaffoldDialog" title="生成流水线定义" width="720px">
       <div class="scaffold">
         <div class="sc-row">
           <span class="sc-label">项目</span>
@@ -260,7 +265,9 @@ const overviewProject = computed(() =>
           <div v-for="f in scaffoldPlan.files" :key="f.path" class="sc-file">
             <div class="sc-file-head">
               <code class="mono">{{ f.path }}</code>
-              <span class="sc-file-hint">写入仓库（不自动提交）</span>
+              <span class="sc-file-hint">
+                {{ scaffoldToRepo ? '写入仓库（需自行提交）' : '保存到平台（生成即可运行）' }}
+              </span>
             </div>
             <pre class="sc-code mono">{{ f.content }}</pre>
           </div>
@@ -268,6 +275,9 @@ const overviewProject = computed(() =>
       </div>
 
       <template #footer>
+        <el-checkbox v-model="scaffoldToRepo" size="small" class="sc-overwrite">
+          写入仓库 ci/（随代码 review，不自动提交）
+        </el-checkbox>
         <el-checkbox v-model="scaffoldOverwrite" size="small" class="sc-overwrite">
           覆盖已存在文件
         </el-checkbox>
@@ -276,7 +286,7 @@ const overviewProject = computed(() =>
           重新扫描
         </el-button>
         <el-button type="primary" :disabled="!scaffoldPlan" :loading="scaffoldApplying" @click="applyScaffold">
-          写入 ci/ 目录
+          {{ scaffoldToRepo ? '写入仓库 ci/' : '保存到平台' }}
         </el-button>
       </template>
     </el-dialog>

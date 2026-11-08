@@ -10,6 +10,7 @@ export interface PipelineListView {
 export interface TriggerRunView {
   runId: string
   status: string
+  env?: string
 }
 
 /** 一次运行的 stage 结果（按执行顺序）。status 为 StageStatus 枚举名。 */
@@ -58,11 +59,19 @@ export function triggerPipeline(
   pipelineId: string,
   projectId: string,
   gitSha: string,
-  deployTarget?: string
+  deployTarget?: string,
+  env?: string,
+  confirmToken?: string
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
-    body: JSON.stringify({ projectId, gitSha, deployTarget: deployTarget ?? null })
+    body: JSON.stringify({
+      projectId,
+      gitSha,
+      env: env ?? 'test',
+      deployTarget: deployTarget ?? null,
+      confirmToken: confirmToken ?? null
+    })
   })
 }
 

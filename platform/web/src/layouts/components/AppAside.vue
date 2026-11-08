@@ -89,10 +89,14 @@ function formatTime(ms: number): string {
             <el-icon><component :is="e.icon" /></el-icon>
             <span>{{ e.label }}</span>
           </router-link>
-          <button type="button" class="nav-entry is-muted" disabled title="设置面板待接入">
+          <router-link
+            to="/settings"
+            class="nav-entry"
+            :class="{ active: activeName === 'settings' }"
+          >
             <el-icon><Setting /></el-icon>
             <span>设置</span>
-          </button>
+          </router-link>
         </nav>
 
         <div class="group-head">

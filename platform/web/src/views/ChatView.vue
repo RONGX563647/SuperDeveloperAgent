@@ -8,6 +8,7 @@ import { appStore } from '../stores/app'
 import { useAgentChat } from '../composables/useAgentChat'
 import { useFollowScroll } from '../composables/useFollowScroll'
 import { getToken } from '../api/auth'
+import { modelOptions } from '../api/settings'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import ApprovalRequestCard from '../components/chat/ApprovalRequestCard.vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
@@ -70,6 +71,22 @@ const placeholder = computed(() =>
 )
 
 const canSend = computed(() => !!input.value.trim() && !streaming.value)
+
+/** 当前模型名（设置页的默认模型；未配置时显示环境变量模型）。 */
+const activeModelName = ref('qwen-plus')
+const activeModelSource = ref('')
+
+async function loadActiveModel(): Promise<void> {
+  try {
+    const options = await modelOptions()
+    if (options.modelName) {
+      activeModelName.value = options.modelName
+      activeModelSource.value = options.activeName ?? ''
+    }
+  } catch {
+    // 未配置/无权限时保留占位
+  }
+}
 
 // 内容变化时粘底滚动（流式增量/新消息都会触发）
 watch(
@@ -137,6 +154,7 @@ function onMountedGreeting() {
 onMounted(() => {
   appStore.touchSession('')
   onMountedGreeting()
+  void loadActiveModel()
   void nextTick(() => scrollToLatest({ force: true }))
 })
 </script>
@@ -217,7 +235,8 @@ onMounted(() => {
           <div class="bar-right">
             <span class="metric mono">
               <el-icon><Cpu /></el-icon>
-              qwen-plus
+              {{ activeModelName }}
+              <template v-if="activeModelSource"> · {{ activeModelSource }}</template>
               <template v-if="streaming || elapsedMs">
                 · {{ (elapsedMs / 1000).toFixed(1) }}s · {{ tokens }} ev
               </template>

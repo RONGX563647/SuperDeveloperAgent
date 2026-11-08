@@ -209,13 +209,21 @@ export function scaffoldPreview(projectId: string, target: string): Promise<Scaf
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/scaffold?${q}`)
 }
 
-/** 落盘：把生成结果写入仓库 ci/；overwrite=true 才覆盖已有文件。 */
+/** 保存：默认存到平台侧（生成即可运行）；mode='repo' 才写进仓库 ci/（需自行提交）。 */
 export function scaffoldApply(
   projectId: string,
   target: string,
-  overwrite = false
-): Promise<{ written: string[]; skipped: string[]; notes: string[] }> {
-  const q = new URLSearchParams({ target, overwrite: String(overwrite) })
+  overwrite = false,
+  mode: 'platform' | 'repo' = 'platform'
+): Promise<{
+  savedTo: string
+  written: string[]
+  skipped: string[]
+  notes: string[]
+  note?: string
+  stack?: string
+}> {
+  const q = new URLSearchParams({ target, overwrite: String(overwrite), mode })
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/scaffold?${q}`, {
     method: 'POST'
   })
