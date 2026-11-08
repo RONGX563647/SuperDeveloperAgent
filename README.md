@@ -47,8 +47,11 @@ export AGENT_MODEL_API_KEY=sk-xxx      # Windows: $env:AGENT_MODEL_API_KEY="sk-x
 mvn -q verify                          # 编译 + 规约检查 + 单测
 java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
 
-cd web && npm install && npm run dev    # http://127.0.0.1:5173
+cd web && npm install && npm run dev    # http://localhost:5173
 ```
+
+> 前端只监听 `localhost`：用 `127.0.0.1` 打不开是正常的（Vite 默认绑 `::1`）。
+> 要让 IPv4 可达，用 `npm run dev -- --host 127.0.0.1`；回归脚本也按 `localhost` 取址。
 
 详见 [platform/README.md](platform/README.md)。
 
@@ -96,7 +99,10 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | ✅ 11 份（PRD / 规约 / 契约 / 设计 / 分析） |
-| 后端骨架 | ✅ 8 模块编译通过，`mvn verify` 16 个测试全绿 |
-| 前端骨架 | ✅ Vue3 + Vite + Element Plus（未在本机构建验证） |
-| 端到端能力 | 🟡 对话 + SSE + 只读工具 + 确认令牌；**执行（apply）与流水线实现待补** |
+| 设计文档 | ✅ `docs/` 20 份已入库（PRD / 项目规约 / 执行器契约 / 设计 / 分析 / 验收） |
+| 后端 | ✅ 9 模块，`mvn -B verify` 124 个测试（123 通过 / 1 跳过：需真实模型 Key） |
+| 前端 | ✅ Vue3 + Vite + Element Plus；`npm run build`（vue-tsc strict）通过 |
+| 项目接入 | ✅ 本地目录 / 远程 clone（DIRECT 不复制仓库）；自检 + 按仓库结构生成 `ci/` 脚本 |
+| 流水线 | ✅ 检出 → 容器内构建/测试 → 镜像 → 平台部署 → 健康检查；历史落盘、可取消、可重跑 |
+| 回归脚本 | ✅ `platform/web/scripts/*.mjs`（布局 / 登录 / 外壳隔离 / 交互 / 流水线交互 / 缺定义引导），需本地起前端 dev server |
+| 未做 | ⬜ 会话与消息持久化、用户管理界面、markdown 渲染、多租户 |
