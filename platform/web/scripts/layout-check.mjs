@@ -1,9 +1,11 @@
 // 布局回归检查：用真实浏览器测量，而不是只看 DOM 结构。
+// 受守卫保护的页面需要先登录——脚本检测到 /login 会自动走一遍登录。
 // 运行：node scripts/layout-check.mjs [url] [screenshot]
 import { existsSync } from 'node:fs'
 import puppeteer from 'puppeteer-core'
 
-const URL = process.argv[2] ?? 'http://127.0.0.1:5173/chat'
+const TARGET_URL = process.argv[2] ?? 'http://127.0.0.1:5173/chat'
+const ORIGIN = new URL(TARGET_URL).origin
 const EDGE_CANDIDATES = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
@@ -21,11 +23,32 @@ const browser = await puppeteer.launch({
   args: ['--no-first-run', '--disable-gpu', '--window-size=1440,900']
 })
 
+/** 登录（守卫后的页面测量前置步骤）。 */
+async function ensureLoggedIn(page) {
+  await page.goto(ORIGIN + '/login', { waitUntil: 'networkidle2', timeout: 30000 })
+  await page.evaluate(() => {
+    const inputs = document.querySelectorAll('.login-card input')
+    if (!inputs.length) return
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    setter.call(inputs[0], 'devops'); inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+    setter.call(inputs[1], 'devops-2026'); inputs[1].dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await page.click('.login-card button.el-button--primary')
+  await new Promise((r) => setTimeout(r, 2500))
+}
+
 try {
   const page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
-  await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 })
+  await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 30000 })
   await new Promise((r) => setTimeout(r, 1200))
+
+  // 被守卫弹到登录页 → 登录后重试一次
+  if (page.url().includes('/login')) {
+    await ensureLoggedIn(page)
+    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 30000 })
+    await new Promise((r) => setTimeout(r, 1200))
+  }
 
   const m = await page.evaluate(() => {
     const rect = (sel) => {

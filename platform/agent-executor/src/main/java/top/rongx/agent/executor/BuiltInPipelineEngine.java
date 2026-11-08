@@ -234,14 +234,20 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private void doExecute(RunState state) {
         Path projectDir = workspaceRoot.resolve(state.projectId).toAbsolutePath().normalize();
-        Path source = projectDir.resolve("repo");
-        Path runDir = projectDir.resolve("runs").resolve(state.runId);
+        // v2：bare 仓库是唯一对象库；构建在独立 worktree 里进行（终态清理）
+        Path bare = projectDir.resolve("git");
+        Path runDir = projectDir.resolve("worktrees").resolve("wt-build-" + state.runId);
         PipelineDefinition definition = null;
+        boolean worktreeCreated = false;
 
         try {
-            Files.createDirectories(runDir.getParent());
-            // stage 1：从 SCM 检出指定提交（Jenkinsfile 也是从 SCM 读的）
-            checkout(source, runDir, state);
+            if (!Files.isDirectory(bare.resolve("objects"))) {
+                throw new IllegalStateException("项目仓库不存在：" + bare
+                        + "（请先通过「接入项目」完成收编或 clone）");
+            }
+            // stage 1：从 bare 检出指定提交到独立 worktree
+            checkout(bare, runDir, state);
+            worktreeCreated = true;
             if (state.cancelled) {
                 state.status = StageStatus.CANCELLED;
                 return;
@@ -286,34 +292,46 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             if (definition != null) {
                 runOnFailure(state, definition, runDir, Map.of());
             }
+        } finally {
+            // 无论成败，构建 worktree 用完即清（worktree 里可能有产物被记账，先落盘历史再删）
+            if (worktreeCreated) {
+                history.save(state.snapshot());
+                cleanupWorktree(bare, runDir, state);
+            }
         }
     }
 
-    /** 检出：先 fetch 同步远端（新 push 的 sha 才存在），再 clone（本地仓库）+ checkout 指定 sha。 */
-    private void checkout(Path source, Path runDir, RunState state) {
+    /**
+     * 检出（v2）：不再 clone，用 git worktree add——毫秒级、零重复存储。
+     * source 现在是 bare 仓库（{@code <workspace>/<id>/git}）；runDir 即本次构建的 worktree
+     * （{@code worktrees/wt-build-<runId>}），构建终态后由 cleanupWorktree 移除。
+     */
+    private void checkout(Path bare, Path runDir, RunState state) {
         long start = System.nanoTime();
-        // 1. 本地托管仓库可能落后于远端：fetch 一下（失败不致命——离线场景仍可构建已有提交）
-        ActionResult fetch = host.run(source, spec("checkout", List.of(
-                List.of("git", "-C", posix(source), "fetch", "--all", "--quiet"))));
-        if (fetch.result().status() != StageStatus.SUCCEEDED) {
-            state.log.append("[checkout] fetch 失败（继续用本地已有提交）：")
-                    .append(fetch.result().errorSummary()).append('\n');
+        ActionResult add = host.run(bare, spec("checkout", List.of(
+                List.of("git", "worktree", "add", "--quiet", "--detach",
+                        posix(runDir), state.gitSha))));
+        if (add.result().status() != StageStatus.SUCCEEDED) {
+            // 新推送的提交可能还没进 bare：提示前置同步
+            throw new IllegalStateException("git worktree add " + state.gitSha
+                    + " 失败：" + add.result().errorSummary()
+                    + "（若为最新提交，请先在项目详情里执行「同步到平台」）");
         }
-        ActionResult clone = host.run(source, spec("checkout", List.of(
-                List.of("git", "clone", "--quiet", "--no-checkout", posix(source), posix(runDir)))));
-        if (clone.result().status() != StageStatus.SUCCEEDED) {
-            throw new IllegalStateException("git clone 失败：" + clone.result().errorSummary());
-        }
-        ActionResult pinned = host.run(source, spec("checkout", List.of(
-                List.of("git", "-C", posix(runDir), "checkout", "--detach", "--quiet", state.gitSha))));
-        if (pinned.result().status() != StageStatus.SUCCEEDED) {
-            throw new IllegalStateException("git checkout " + state.gitSha
-                    + " 失败：" + pinned.result().errorSummary()
-                    + "（若为新推送的提交，请确认本地仓库已 fetch 到该提交）");
-        }
-        state.log.append("[checkout] ").append(state.gitSha).append('\n');
+        state.log.append("[checkout] worktree ").append(state.gitSha).append('\n');
         state.stages.add(StageResult.success("checkout", 0, List.of(),
                 (System.nanoTime() - start) / 1_000_000L));
+    }
+
+    /** 构建终态后清理本次 worktree（失败不影响主流程，prune 兜底）。 */
+    private void cleanupWorktree(Path bare, Path runDir, RunState state) {
+        ActionResult rm = host.run(bare, spec("checkout", List.of(
+                List.of("git", "worktree", "remove", "--force", posix(runDir)))));
+        if (rm.result().status() == StageStatus.SUCCEEDED) {
+            state.log.append("[cleanup] worktree removed\n");
+        } else {
+            state.log.append("[cleanup] worktree 清理失败（prune 兜底）：")
+                    .append(rm.result().errorSummary()).append('\n');
+        }
     }
 
     private boolean runStage(RunState state, PipelineDefinition.StageDef stage,

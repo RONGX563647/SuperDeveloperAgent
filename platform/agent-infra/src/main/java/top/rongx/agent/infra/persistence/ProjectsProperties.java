@@ -34,9 +34,20 @@ public record ProjectsProperties(List<ProjectDef> items) {
 
     public record ProjectDef(String id, String name, String repoUrl, String repoType,
                              String type, int portRangeStart, int portRangeEnd,
-                             List<EnvDef> envs) {
+                             List<EnvDef> envs,
+                             /** 来源：LOCAL（本地目录收编）/ REMOTE（远程 clone）。缺省按 repoUrl 判断。 */
+                             String source,
+                             /** LOCAL 来源的本地目录（平台只读 + fetch，不写）。 */
+                             String localPath) {
         public ProjectDef {
             envs = envs == null ? List.of() : List.copyOf(envs);
+            if (source == null || source.isBlank()) {
+                source = localPath != null && !localPath.isBlank() ? "LOCAL" : "REMOTE";
+            }
+        }
+
+        public boolean isLocal() {
+            return "LOCAL".equalsIgnoreCase(source);
         }
     }
 
