@@ -1,0 +1,21 @@
+﻿import { existsSync } from 'node:fs'
+import puppeteer from 'puppeteer-core'
+const EDGE = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find(p => existsSync(p))
+const browser = await puppeteer.launch({ executablePath: EDGE, headless: 'new', args: ['--no-first-run','--disable-gpu'] })
+const page = await browser.newPage()
+const net = []
+page.on('request', r => net.push(r.method() + ' ' + r.url()))
+page.on('response', r => net.push('  → ' + r.status() + ' ' + r.url()))
+await page.goto('http://127.0.0.1:5173/login', { waitUntil: 'networkidle2' })
+await page.evaluate(() => localStorage.clear())
+await page.reload({ waitUntil: 'networkidle2' })
+const inputs = await page.$$('.login-card input')
+await inputs[0].click({ clickCount: 3 }); await inputs[0].type('devops')
+await inputs[1].click({ clickCount: 3 }); await inputs[1].type('devops-2026')
+await page.click('.login-card button.el-button--primary')
+await new Promise(r => setTimeout(r, 2500))
+console.log('--- network after click ---')
+console.log(net.filter(l => l.includes('/api/')).join('\n'))
+console.log('path:', await page.evaluate(() => location.pathname))
+console.log('token:', await page.evaluate(() => localStorage.getItem('agent.token')))
+await browser.close()

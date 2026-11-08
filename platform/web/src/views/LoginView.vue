@@ -9,7 +9,7 @@ const router = useRouter()
 // 已有 token 直接进主界面（有效性由路由守卫校验）
 if (getToken().length > 0) void router.replace('/chat')
 
-const username = ref('devops')
+const username = ref('')
 const password = ref('')
 const busy = ref(false)
 const errorText = ref('')
@@ -52,7 +52,13 @@ async function doLogin() {
 
       <el-form label-position="top" @submit.prevent="doLogin">
         <el-form-item label="用户名">
-          <el-input v-model="username" size="large" placeholder="admin / devops / viewer" autofocus />
+          <el-input
+            v-model="username"
+            size="large"
+            placeholder="admin / devops / viewer"
+            autofocus
+            @keydown.enter="doLogin"
+          />
         </el-form-item>
         <el-form-item label="密码">
           <el-input
@@ -65,7 +71,15 @@ async function doLogin() {
           />
         </el-form-item>
         <el-alert v-if="errorText" type="error" :closable="false" :title="errorText" show-icon class="err" />
-        <el-button type="primary" size="large" class="submit" :loading="busy" @click="doLogin">
+        <el-button
+          type="primary"
+          size="large"
+          class="submit"
+          native-type="submit"
+          :loading="busy"
+          :disabled="!username.trim() || !password"
+          @click="doLogin"
+        >
           登 录
         </el-button>
       </el-form>
