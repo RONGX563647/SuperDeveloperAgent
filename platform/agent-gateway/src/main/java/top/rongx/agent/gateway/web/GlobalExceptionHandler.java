@@ -9,12 +9,28 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import cn.dev33.satoken.exception.DisableServiceException;
+import cn.dev33.satoken.exception.NotLoginException;
+import cn.dev33.satoken.exception.NotPermissionException;
+import cn.dev33.satoken.exception.NotRoleException;
 
 /** 统一错误响应：含 traceId，不含堆栈与内部细节（规约 §3）。 */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /** 未登录 → 401（Sa-Token 会话缺失）。 */
+    @ExceptionHandler(NotLoginException.class)
+    public ResponseEntity<Map<String, Object>> notLogin(NotLoginException e) {
+        return body(HttpStatus.UNAUTHORIZED, "未登录或会话已过期");
+    }
+
+    /** 无权限/角色 → 403（Sa-Token 权限校验）。 */
+    @ExceptionHandler({NotPermissionException.class, NotRoleException.class, DisableServiceException.class})
+    public ResponseEntity<Map<String, Object>> forbidden(RuntimeException e) {
+        return body(HttpStatus.FORBIDDEN, "无权执行该操作");
+    }
 
     /** 参数/业务校验失败 → 400。 */
     @ExceptionHandler(IllegalArgumentException.class)

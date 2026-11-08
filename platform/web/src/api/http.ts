@@ -1,16 +1,6 @@
-/** 统一 HTTP 封装：注入用户标识、解析统一错误体、附带 traceId。 */
+/** 统一 HTTP 封装：注入登录令牌、解析统一错误体、附带 traceId。 */
 
-const USER_KEY = 'agent.userId'
-
-/** 骨架阶段用本地标识代替登录态；接入账号体系后改为从会话/Token 取。 */
-export function currentUserId(): string {
-  let id = localStorage.getItem(USER_KEY)
-  if (!id) {
-    id = 'dev-' + Math.random().toString(36).slice(2, 8)
-    localStorage.setItem(USER_KEY, id)
-  }
-  return id
-}
+import { getToken, setToken } from './auth'
 
 export class ApiError extends Error {
   constructor(
@@ -23,11 +13,12 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = getToken()
   const res = await fetch(path, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      'X-User-Id': currentUserId(),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init.headers ?? {})
     }
   })
@@ -41,6 +32,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     } catch {
       // 非 JSON 响应，保留默认文案
     }
+    // 会话失效：清掉本地 token，让路由守卫弹登录页
+    if (res.status === 401) setToken('')
     throw new ApiError(traceId ? `${message}（traceId: ${traceId}）` : message, res.status, traceId)
   }
   return (await res.json()) as T

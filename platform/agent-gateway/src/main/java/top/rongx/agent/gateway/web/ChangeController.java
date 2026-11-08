@@ -33,17 +33,20 @@ public class ChangeController {
     private final PasswordVerifier passwordVerifier;
     private final ActionService actions;
     private final ProjectContextResolver contextResolver;
+    private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
 
     public ChangeController(ChangeStore registry,
                             ConfirmTokenService tokens,
                             PasswordVerifier passwordVerifier,
                             ActionService actions,
-                            ProjectContextResolver contextResolver) {
+                            ProjectContextResolver contextResolver,
+                            top.rongx.agent.gateway.auth.CurrentUser currentUser) {
         this.registry = registry;
         this.tokens = tokens;
         this.passwordVerifier = passwordVerifier;
         this.actions = actions;
         this.contextResolver = contextResolver;
+        this.currentUser = currentUser;
     }
 
     /**
@@ -58,12 +61,9 @@ public class ChangeController {
      */
     @PostMapping("/{changeId}/apply")
     public ActionController.RunView apply(@PathVariable String changeId,
-                                          @RequestHeader(value = "X-User-Id", required = false) String userId,
                                           @RequestHeader(value = "X-Confirm-Token", required = false) String confirmToken) {
-        // 1. 认证与令牌头校验
-        if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("未认证：缺少 X-User-Id");
-        }
+        // 1. 认证（Sa-Token 会话）与令牌头校验
+        String userId = currentUser.requireUserId();
         if (confirmToken == null || confirmToken.isBlank()) {
             throw new IllegalArgumentException("缺少确认令牌：需要 X-Confirm-Token 头");
         }
@@ -100,11 +100,8 @@ public class ChangeController {
      */
     @PostMapping("/{changeId}/confirm")
     public ConfirmResponse confirm(@PathVariable String changeId,
-                                   @RequestHeader(value = "X-User-Id", required = false) String userId,
                                    @RequestBody(required = false) ConfirmRequest request) {
-        if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("未认证：缺少 X-User-Id");
-        }
+        String userId = currentUser.requireUserId();
         ChangePlan plan = registry.find(changeId)
                 .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
 

@@ -1,5 +1,5 @@
 import type { AgentEventDto, ChatRequest } from '../types'
-import { currentUserId } from './http'
+import { getToken } from './auth'
 
 /**
  * 发起对话并按 SSE 事件流消费。
@@ -17,7 +17,7 @@ export async function streamChat(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-      'X-User-Id': currentUserId()
+      Authorization: `Bearer ${getToken()}`
     },
     body: JSON.stringify(req),
     signal

@@ -4,7 +4,6 @@ import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -13,12 +12,14 @@ import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.change.ChangePlan;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.tools.ActionService;
 
 /**
  * 动作 HTTP 接口（不经过模型也能用，便于运维与可用性测试）。
  *
  * <p>三条路径：看动作 → 执行 L2 → 或登记 L3 变更（再由 {@code /changes/{id}/confirm} + {@code /apply} 闭环）。
+ * 身份来自 Sa-Token 会话（不再接受请求头伪造）。
  */
 @RestController
 @RequestMapping("/api/v1/actions")
@@ -26,18 +27,21 @@ public class ActionController {
 
     private final ActionService actions;
     private final ProjectContextResolver contextResolver;
+    private final CurrentUser currentUser;
 
-    public ActionController(ActionService actions, ProjectContextResolver contextResolver) {
+    public ActionController(ActionService actions,
+                            ProjectContextResolver contextResolver,
+                            CurrentUser currentUser) {
         this.actions = actions;
         this.contextResolver = contextResolver;
+        this.currentUser = currentUser;
     }
 
     /** 列出当前项目可用动作。 */
     @GetMapping
     public List<ActionView> list(@RequestParam String projectId,
-                                 @RequestParam(defaultValue = "test") String env,
-                                 @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        ProjectContext ctx = resolve(projectId, env, userId);
+                                 @RequestParam(defaultValue = "test") String env) {
+        ProjectContext ctx = resolve(projectId, env);
         return actions.list(ctx).stream().map(ActionView::of).toList();
     }
 
@@ -45,9 +49,8 @@ public class ActionController {
     @GetMapping("/{action}/plan")
     public ActionView plan(@PathVariable String action,
                            @RequestParam String projectId,
-                           @RequestParam(defaultValue = "test") String env,
-                           @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        ProjectContext ctx = resolve(projectId, env, userId);
+                           @RequestParam(defaultValue = "test") String env) {
+        ProjectContext ctx = resolve(projectId, env);
         return ActionView.of(actions.plan(ctx, requireAction(action)));
     }
 
@@ -55,9 +58,9 @@ public class ActionController {
     @PostMapping("/{action}/run")
     public RunView run(@PathVariable String action,
                        @RequestParam String projectId,
-                       @RequestParam(defaultValue = "test") String env,
-                       @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        ProjectContext ctx = resolve(projectId, env, userId);
+                       @RequestParam(defaultValue = "test") String env) {
+        currentUser.checkPermission("action:run");
+        ProjectContext ctx = resolve(projectId, env);
         ActionResult result = actions.run(ctx, requireAction(action));
         return RunView.of(result);
     }
@@ -66,9 +69,9 @@ public class ActionController {
     @PostMapping("/{action}/request")
     public ChangeView request(@PathVariable String action,
                               @RequestParam String projectId,
-                              @RequestParam(defaultValue = "test") String env,
-                              @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        ProjectContext ctx = resolve(projectId, env, userId);
+                              @RequestParam(defaultValue = "test") String env) {
+        currentUser.checkPermission("change:request");
+        ProjectContext ctx = resolve(projectId, env);
         ChangePlan plan = actions.requestApproval(ctx, requireAction(action));
         return new ChangeView(plan.changeId(), plan.projectId(), plan.env(), plan.kind(),
                 plan.summary(), plan.planHash(), plan.highRisk());
@@ -76,10 +79,9 @@ public class ActionController {
 
     // ---------------------------------------------------------------- helpers
 
-    private ProjectContext resolve(String projectId, String env, String userId) {
-        if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("未认证：缺少 X-User-Id");
-        }
+    private ProjectContext resolve(String projectId, String env) {
+        // 身份由 Sa-Token 会话保证；此处若未登录，拦截器已拦截（兜底再查一次）
+        String userId = currentUser.requireUserId();
         return contextResolver.resolve(projectId, env, userId);
     }
 

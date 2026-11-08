@@ -17,6 +17,17 @@ management:
     health:
       show-details: when-authorized
 
+# Sa-Token：读 Authorization: Bearer <token>（前端/CI 统一用这个头）
+sa-token:
+  token-name: Authorization
+  token-prefix: Bearer
+  is-read-header: true
+  is-read-cookie: false
+  timeout: 2592000          # 会话 30 天
+  active-timeout: -1
+  is-concurrent: true
+  is-share: true
+
 # 模型：API Key 必须由环境变量注入，代码与配置库中不得出现（规约 §8）
 agent:
   # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）

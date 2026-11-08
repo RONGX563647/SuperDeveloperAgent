@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Notebook, Plus, Fold, Expand, Search, Setting, MoreFilled } from '@element-plus/icons-vue'
-import { currentUserId } from '../../api/http'
+import { ChatDotRound, Notebook, Plus, Fold, Expand, Search, Setting, MoreFilled, SwitchButton } from '@element-plus/icons-vue'
+import { logout } from '../../api/auth'
 import { appStore } from '../../stores/app'
 
 /**
@@ -17,7 +17,7 @@ const emit = defineEmits<{ 'update:collapsed': [value: boolean] }>()
 
 const route = useRoute()
 const router = useRouter()
-const userId = currentUserId()
+const identity = computed(() => appStore.identity)
 
 const entries = [
   { to: '/chat', name: 'chat', icon: ChatDotRound, label: '对话' },
@@ -39,6 +39,11 @@ function newSession() {
 function openSession(id: string) {
   appStore.selectSession(id)
   void router.push('/chat')
+}
+
+async function doLogout() {
+  await logout()
+  void router.push('/login')
 }
 
 /** 相对时间：比绝对时间短，且不会出现「11-08 15:42」这种要换算的字符串。 */
@@ -123,11 +128,14 @@ function formatTime(ms: number): string {
       <!-- 底部用户行 -->
       <div class="aside-bottom">
         <div class="user-chip">
-          <span class="user-avatar" aria-hidden="true">{{ userId.slice(0, 1).toUpperCase() }}</span>
+          <span class="user-avatar" aria-hidden="true">{{ (identity.displayName || identity.userId).slice(0, 1).toUpperCase() }}</span>
           <div class="user-meta">
-            <span class="user-name">{{ userId }}</span>
-            <span class="user-hint">内网环境 · 写操作需确认</span>
+            <span class="user-name">{{ identity.displayName }}</span>
+            <span class="user-hint">{{ identity.role }} · 内网环境</span>
           </div>
+          <button type="button" class="logout-btn" title="退出登录" @click="doLogout">
+            <el-icon><SwitchButton /></el-icon>
+          </button>
         </div>
       </div>
     </div>
@@ -473,5 +481,24 @@ function formatTime(ms: number): string {
   font-size: 10.5px;
   color: var(--ink-muted);
   white-space: nowrap;
+}
+.logout-btn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin-left: auto;
+  color: rgb(0 0 0 / 45%);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+}
+.logout-btn:hover {
+  color: #f56c6c;
+  background: rgb(0 0 0 / 5%);
 }
 </style>

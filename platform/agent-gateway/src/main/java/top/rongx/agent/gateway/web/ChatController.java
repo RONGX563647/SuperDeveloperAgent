@@ -37,30 +37,29 @@ public class ChatController {
     private final ChatService chatService;
     private final ProjectContextResolver contextResolver;
     private final AgentEventMapper eventMapper;
+    private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     public ChatController(ChatService chatService,
                           ProjectContextResolver contextResolver,
-                          AgentEventMapper eventMapper) {
+                          AgentEventMapper eventMapper,
+                          top.rongx.agent.gateway.auth.CurrentUser currentUser) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
+        this.currentUser = currentUser;
     }
 
     /**
      * 发起一轮对话，以 SSE 返回事件流。
      *
-     * @param request  请求体
-     * @param userId   当前用户（骨架用请求头；接账号体系后改由会话解析）
-     * @return SSE 发射器
+     * @param request 请求体
+     * @return SSE 发射器（身份来自 Sa-Token 会话）
      */
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@RequestBody ChatRequest request,
-                           @RequestHeader(value = "X-User-Id", required = false) String userId) {
-        // 1. 认证：缺少用户头直接拒绝
-        if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("未认证：缺少 X-User-Id");
-        }
+    public SseEmitter chat(@RequestBody ChatRequest request) {
+        // 1. 认证：身份由 Sa-Token 会话保证（客户端不可伪造）
+        String userId = currentUser.requireUserId();
         // 2. 服务端解析并校验项目上下文（模型不可篡改）
         ProjectContext ctx = contextResolver.resolve(request.projectId(), request.env(), userId);
         // 3. 建立 SSE 发射器，向业务层要事件流

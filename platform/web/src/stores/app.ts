@@ -41,6 +41,18 @@ export const appStore = reactive({
   env: 'test',
   sessionId: newId(),
   sessions: loadSessions() as SessionItem[],
+  /** 登录身份（登录成功后写入；未登录为空）。 */
+  identity: { userId: '', displayName: '', role: '' } as { userId: string; displayName: string; role: string },
+
+  /** 写入登录身份。 */
+  setIdentity(identity: { userId: string; displayName: string; role: string }) {
+    appStore.identity = identity
+  },
+
+  /** 清除登录身份。 */
+  clearIdentity() {
+    appStore.identity = { userId: '', displayName: '', role: '' }
+  },
 
   /** 新建会话（侧栏「新会话」与页面「新会话」都走这里）。 */
   newSession() {
