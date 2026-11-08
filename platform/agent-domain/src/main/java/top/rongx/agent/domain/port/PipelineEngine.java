@@ -47,6 +47,25 @@ public interface PipelineEngine {
         return "";
     }
 
+    /**
+     * 增量日志：从 {@code offset} 起返回日志片段，供前端"追加式"渲染。
+     *
+     * <p>默认实现基于 {@link #logTail(String)} 的切片；实现方若持有流式缓冲可覆盖以获得更好性能。
+     * offset 越界时返回空片段（end == offset），表示暂无新增。
+     */
+    default LogSlice logFrom(String runId, int offset) {
+        String full = logTail(runId);
+        if (full == null) {
+            return new LogSlice(0, 0, "");
+        }
+        int from = Math.min(Math.max(0, offset), full.length());
+        return new LogSlice(from, full.length(), full.substring(from));
+    }
+
+    /** 一段增量日志。[offset, end) 为已读区间，text 为新增文本。 */
+    record LogSlice(int offset, int end, String text) {
+    }
+
     /** 最近构建历史（含重启前落盘的运行）；默认无。 */
     default List<RunSummary> history() {
         return List.of();

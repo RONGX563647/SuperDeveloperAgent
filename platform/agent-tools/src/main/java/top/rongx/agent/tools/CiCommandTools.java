@@ -42,8 +42,13 @@ public class CiCommandTools {
         if (pipelineId == null || pipelineId.isBlank()) {
             return "err: pipeline_id 不能为空";
         }
-        if (!engine.pipelines(ctx.projectId()).contains(pipelineId)) {
-            return "err: pipeline 不在白名单：" + pipelineId;
+        java.util.List<String> available = engine.pipelines(ctx.projectId());
+        if (available.isEmpty()) {
+            return "err: 该仓库没有 ci/pipeline.yml（流水线定义随代码版本化）。"
+                    + "请在项目页点「生成流水线脚本」并提交后重试";
+        }
+        if (!available.contains(pipelineId)) {
+            return "err: pipeline 不在白名单：" + pipelineId + "（可用：" + String.join(", ", available) + "）";
         }
         if (gitSha == null || !gitSha.matches("[0-9a-f]{7,40}")) {
             return "err: git_sha 格式非法（需 7-40 位小写十六进制）";
@@ -51,7 +56,13 @@ public class CiCommandTools {
         if (ctx.isProduction()) {
             return "err: 生产环境不允许直接触发构建，请先在测试环境验证";
         }
-        String runId = engine.trigger(ctx.projectId(), pipelineId, Map.of("gitSha", gitSha));
+        String runId;
+        try {
+            runId = engine.trigger(ctx.projectId(), pipelineId, Map.of("gitSha", gitSha));
+        } catch (IllegalArgumentException e) {
+            // 前置校验（缺定义/参数非法）应作为可读错误回给模型，而不是抛异常打断对话
+            return "err: " + e.getMessage();
+        }
         return """
                 runId: %s
                 pipeline: %s

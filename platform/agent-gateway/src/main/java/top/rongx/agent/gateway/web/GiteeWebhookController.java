@@ -73,7 +73,15 @@ public class GiteeWebhookController {
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "仓库未托管：" + project + "（请先在 agent.projects 配置）"));
-        String runId = engine.trigger(projectId, "verify", Map.of("gitSha", sha));
+        String runId;
+        try {
+            runId = engine.trigger(projectId, "verify", Map.of("gitSha", sha));
+        } catch (RuntimeException e) {
+            // 触发被前置校验拒绝（例如该提交里没有 ci/pipeline.yml）：放开去重键，
+            // 让补齐定义后重推 / 重投这次 push 能重试，而不是永远被当成"重复"忽略。
+            seen.remove(key);
+            throw e;
+        }
         return Map.of("runId", runId, "projectId", projectId, "gitSha", sha,
                 "pipeline", "verify", "status", engine.status(runId));
     }

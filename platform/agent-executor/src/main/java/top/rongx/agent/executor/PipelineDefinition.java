@@ -11,11 +11,16 @@ import org.yaml.snakeyaml.Yaml;
  *
  * <p>这是「数据」不是「代码」：stage 只能从白名单里选，不能写 Groovy / shell 片段。
  *
+ * <p>v3（方案 C）新增 {@code deploy:} 段：声明"部署到哪、哪个端口"，
+ * 由<b>平台部署器</b>执行；仓库不再提供部署脚本。
+ *
  * @param name      流水线名
  * @param stages    有序 stage
  * @param onFailure 失败时执行的补救动作（通常是回滚）
+ * @param deploy    部署声明（可为 null：纯构建流水线）
  */
-public record PipelineDefinition(String name, List<StageDef> stages, List<StageDef> onFailure) {
+public record PipelineDefinition(String name, List<StageDef> stages,
+                                 List<StageDef> onFailure, DeploySpec deploy) {
 
     /**
      * stage 定义。
@@ -36,25 +41,93 @@ public record PipelineDefinition(String name, List<StageDef> stages, List<StageD
             int expected) {
     }
 
+    /**
+     * 部署声明。
+     *
+     * @param target        默认部署目标：docker / host / server（运行时可被触发参数覆盖）
+     * @param port          对外端口（docker 映射 / host 监听）
+     * @param containerPort 容器内端口（docker）
+     * @param healthPath    健康检查路径，如 {@code /healthz}
+     * @param artifact      HOST 目标的产物（相对路径，如 {@code backend/target/app.jar}）；空则自动找 jar
+     */
+    public record DeploySpec(String target, int port, int containerPort, String healthPath, String artifact) {
+
+        public static DeploySpec defaults() {
+            return new DeploySpec("docker", 8080, 8080, "/healthz", null);
+        }
+    }
+
     /** 从仓库根读 {@code ci/pipeline.yml}。 */
     public static PipelineDefinition load(Path repoRoot) {
         Path file = repoRoot.resolve("ci/pipeline.yml");
-        Object loaded;
+        String content;
         try {
-            loaded = new Yaml().load(java.nio.file.Files.readString(file));
+            content = java.nio.file.Files.readString(file);
         } catch (Exception e) {
             throw new IllegalArgumentException("无法读取 " + file + "：" + e.getMessage());
         }
+        return parse(content, file.toString());
+    }
+
+    /**
+     * 解析 YAML 文本（{@code origin} 只用于报错，便于定位是哪个文件/分支）。
+     *
+     * <p>读不到文件与解析失败分开报：前者是"没有定义"，后者是"定义写错了"，
+     * 两种失败的处置方式完全不同（生成 vs 修 YAML）。
+     */
+    public static PipelineDefinition parse(String content, String origin) {
+        Object loaded;
+        try {
+            loaded = new Yaml().load(content);
+        } catch (Exception e) {
+            throw new IllegalArgumentException(origin + " 不是合法 YAML：" + e.getMessage(), e);
+        }
         if (!(loaded instanceof Map<?, ?> root)) {
-            throw new IllegalArgumentException(file + " 不是合法的 YAML 映射");
+            throw new IllegalArgumentException(origin + " 不是合法的 YAML 映射");
         }
         String name = str(root, "name", "pipeline");
         List<StageDef> stages = parseStages(root.get("stages"), "stages");
         List<StageDef> onFailure = parseStages(root.get("on-failure"), "on-failure");
         if (stages.isEmpty()) {
-            throw new IllegalArgumentException(file + " 没有定义任何 stage");
+            throw new IllegalArgumentException(origin + " 没有定义任何 stage");
         }
-        return new PipelineDefinition(name, List.copyOf(stages), List.copyOf(onFailure));
+        return new PipelineDefinition(name, List.copyOf(stages), List.copyOf(onFailure),
+                parseDeploy(root.get("deploy")));
+    }
+
+    private static DeploySpec parseDeploy(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) {
+            return null;
+        }
+        int port = map.get("port") instanceof Number p ? p.intValue() : 8080;
+        int containerPort = map.get("containerPort") instanceof Number c ? c.intValue() : port;
+        String artifact = map.get("artifact") == null ? null : String.valueOf(map.get("artifact"));
+        return new DeploySpec(
+                str(map, "target", "docker"),
+                port,
+                containerPort,
+                str(map, "healthPath", "/healthz"),
+                artifact == null || artifact.isBlank() ? null : artifact);
+    }
+
+    /**
+     * 只解析 deploy 段（默认分支受审版本校验用，E-508）。
+     *
+     * <p>内容非法/不存在时返回 null；调用方应按"无法校验"处理，而不是当作一致。
+     */
+    public static DeploySpec parseDeploySection(String yamlContent) {
+        if (yamlContent == null || yamlContent.isBlank()) {
+            return null;
+        }
+        try {
+            Object loaded = new Yaml().load(yamlContent);
+            if (!(loaded instanceof Map<?, ?> root)) {
+                return null;
+            }
+            return parseDeploy(root.get("deploy"));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static List<StageDef> parseStages(Object raw, String field) {

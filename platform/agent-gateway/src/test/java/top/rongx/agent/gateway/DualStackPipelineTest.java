@@ -92,10 +92,12 @@ class DualStackPipelineTest {
                     "缺少本地镜像 " + image);
         }
 
-        Path repo = workspaces.resolve("RY/repo");
+        Path repo = workspaces.resolve("RY-repo");
         Files.createDirectories(repo.resolve("ci"));
         writeRepo(repo);
         goodSha = git(repo, "init", "-q") != null ? commit(repo, "dual stack release") : null;
+        // v2 收编：repo → 平台 bare（引擎从 bare 建 worktree）
+        new top.rongx.agent.infra.git.GitWorktreeManager(workspaces).linkLocal("RY", repo, false);
         engine = newEngine();
     }
 
@@ -125,8 +127,8 @@ class DualStackPipelineTest {
         assertTrue(ids.indexOf("backend") < ids.indexOf("frontend"),
                 "后端应先于前端（Release Train 顺序）");
 
-        // 真实产物落回宿主
-        Path runDir = workspaces.resolve("RY/runs").resolve(runId);
+        // 真实产物落回宿主：成功构建的 worktree 保留产物
+        Path runDir = workspaces.resolve("RY/worktrees").resolve("wt-build-" + runId);
         assertTrue(Files.exists(runDir.resolve("backend/target/app-1.0.jar")),
                 "容器内的 mvn package 应产出 jar 并回流到宿主");
         assertTrue(Files.exists(runDir.resolve("frontend/dist/index.html")),

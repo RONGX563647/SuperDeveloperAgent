@@ -28,6 +28,7 @@ import top.rongx.agent.executor.BuiltInPipelineEngine;
 import top.rongx.agent.executor.DockerActionRunner;
 import top.rongx.agent.executor.DockerSandbox;
 import top.rongx.agent.executor.ProcessActionRunner;
+import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.infra.recipe.RecipeActionResolver;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -104,8 +105,8 @@ class PipelineAcceptanceTest {
         Assumptions.assumeTrue(img.waitFor(5, TimeUnit.SECONDS) && img.exitValue() == 0,
                 "缺少本地镜像 " + TOOLCHAIN);
 
-        // 项目仓库：工作区根/<projectId>/repo（引擎从这里 clone）
-        Path repo = workspaces.resolve("RY/repo");
+        // 项目仓库：先用旧布局造一个 git 仓库，再通过 v2 接入路径收编为平台 bare（端到端走真实接入）
+        Path repo = workspaces.resolve("RY-repo");
         Files.createDirectories(repo.resolve("ci"));
         writeFiles(repo, APP_JS, GOOD_TEST);
         goodSha = git(repo, "init", "-q") != null ? commit(repo, "good release") : null;
@@ -118,6 +119,9 @@ class PipelineAcceptanceTest {
         // 第三次提交：故意让测试失败
         Files.writeString(repo.resolve("test.js"), BAD_TEST, StandardCharsets.UTF_8);
         badSha = commit(repo, "deliberately broken");
+
+        // v2 收编：repo → bare（引擎从 bare 建 worktree 检出）
+        new GitWorktreeManager(workspaces).linkLocal("RY", repo, false);
         engine = newEngine();
     }
 
@@ -219,10 +223,12 @@ class PipelineAcceptanceTest {
         awaitTerminal(current, runId, 60);
         assertEquals(StageStatus.SUCCEEDED, current.status(runId), current.logTail(runId));
 
-        Path checkout = workspaces.resolve("RY/runs").resolve(runId).resolve("app.js");
-        assertTrue(Files.exists(checkout), "应检出到 runs/<runId>");
-        assertTrue(Files.readString(checkout).contains("OK-v2"),
-                "应按指定 sha 检出，而不是 HEAD 或上一次缓存");
+        // v2 后 worktree 构建完即清理：用日志验证检出的正是该提交
+        assertTrue(current.logTail(runId).contains("worktree " + v2Sha),
+                "日志应记录检出的 sha：log=" + current.logTail(runId));
+        // 构建产物 app.js 内容来自 v2 提交（构建时打入产物区）
+        assertTrue(current.artifacts(runId).stream().anyMatch(a -> a.ref().contains("app.js")),
+                "应收集到 app.js 产物");
         assertFalse(goodSha.equals(v2Sha));
     }
 

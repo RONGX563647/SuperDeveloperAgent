@@ -7,17 +7,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectEnv;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.stereotype.Repository;
 
 /**
- * 项目仓储的内存实现（数据来自配置 {@code agent.projects}，不在代码里写死任何项目）。
+ * 预置项目源（application.yml 的 {@code agent.projects}）：只读，作为两源合并中的"配置预置"层。
  *
- * <p>骨架阶段的占位实现：只读配置、常驻内存；接入数据库时替换为本类的 JPA/MyBatis 版本，
- * domain 侧无需改动。重启后项目清单从配置恢复（不再是"重启即丢"）。
+ * <p>对外唯一视图见 {@link CompositeProjectRepository}（预置 ∪ SQLite 接入项）。
+ * Bean 装配在 {@link ProjectStoreConfig}。
  */
-@Repository
-@EnableConfigurationProperties(ProjectsProperties.class)
 public class InMemoryProjectRepository implements ProjectRepository {
 
     private final Map<String, Project> projects = new ConcurrentHashMap<>();

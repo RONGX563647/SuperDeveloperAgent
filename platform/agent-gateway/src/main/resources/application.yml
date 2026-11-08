@@ -58,6 +58,19 @@ agent:
           - env: prod
             app-url: ${RY_PROD_URL:http://127.0.0.1:80}
             compose-dir: ${RY_COMPOSE_DIR:/opt/apps/ry}
+  # 项目接入
+  intake:
+    # 工作区边界（shared-root 模式）：配置后目录浏览限制在此边界内，
+    # 边界内的项目目录选中即接入；留空 = 自由浏览全盘
+    shared-root: ${AGENT_INTAKE_SHARED_ROOT:}
+    # 平台兜底 Gitee token（私有库 clone；用户绑定 token 优先）
+    gitee-token: ${AGENT_GITEE_TOKEN:}
+  # Gitee OAuth 网页授权（推荐）：gitee.com → 设置 → 第三方应用 创建应用，
+  # 回调地址填 http://localhost:8090/api/v1/gitee/oauth/callback
+  gitee:
+    client-id: ${GITEE_CLIENT_ID:}
+    client-secret: ${GITEE_CLIENT_SECRET:}
+    redirect-uri: ${GITEE_REDIRECT_URI:http://localhost:8090/api/v1/gitee/oauth/callback}
   # 动作执行沙箱：auto=Docker 可用就用容器，否则退回宿主进程
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:auto}          # auto | docker | process

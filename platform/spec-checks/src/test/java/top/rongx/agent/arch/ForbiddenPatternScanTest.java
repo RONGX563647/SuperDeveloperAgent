@@ -111,6 +111,8 @@ class ForbiddenPatternScanTest {
                     .filter(p -> !p.toString().contains("target"))
                     .filter(p -> !p.toString().replace('\\', '/').contains("/.git/"))
                     .filter(p -> !p.toString().replace('\\', '/').contains("/spec-checks/"))
+                    // 工作区（data/）存放的是"接入的第三方项目"，不是平台生产代码
+                    .filter(p -> !p.toString().replace('\\', '/').matches(".*(\\\\|/)data(\\\\|/).*"))
                     .filter(p -> {
                         String p2 = p.toString().replace('\\', '/');
                         String name = p.getFileName().toString();

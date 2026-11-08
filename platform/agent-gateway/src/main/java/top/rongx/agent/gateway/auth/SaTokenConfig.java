@@ -25,6 +25,8 @@ public class SaTokenConfig {
     private static final String[] WHITELIST = {
             "/api/v1/auth/login",
             "/actuator/health",
+            // OAuth 回调是浏览器 302 跳转（无 Authorization 头）；安全性由 state 防 CSRF 保证
+            "/api/v1/gitee/oauth/callback",
             "/error"
     };
 

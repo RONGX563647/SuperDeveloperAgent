@@ -1,4 +1,4 @@
-﻿package top.rongx.agent.infra.git;
+package top.rongx.agent.infra.git;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,7 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * GitWorktreeManager 鐪熷疄闆嗘垚娴嬭瘯锛氬叏閮ㄧ敤鏈湴鐩綍 + 鏈湴 bare 妯℃嫙锛堟棤缃戠粶銆佹棤鐪熷疄杩滅锛夈€? */
+ * GitWorktreeManager 真实集成测试：全部用本地目录 + 本地 bare 模拟（无网络、无真实远端）。
+ */
 class GitWorktreeManagerTest {
 
     @TempDir
@@ -23,11 +24,7 @@ class GitWorktreeManagerTest {
     @TempDir
     Path userSpace;
 
-    private GitWorktreeManager newManager() {
-        return new GitWorktreeManager(ws);
-    }
-
-    /** 鍦ㄧ敤鎴风┖闂撮€犱竴涓?鐪熷疄寮€鍙戜腑鐨勯」鐩?锛歡it init + 涓€娆℃彁浜ゃ€傝繑鍥?HEAD銆?*/
+    /** 在用户空间造一个真实开发中的项目：git init + 一次提交。返回 HEAD。 */
     private String makeUserRepo(String name) throws Exception {
         Path dir = userSpace.resolve(name);
         Files.createDirectories(dir);
@@ -38,20 +35,24 @@ class GitWorktreeManagerTest {
         return manager().revParse(dir, "HEAD");
     }
 
-    /** 璺戜竴鏉″懡浠ゅ苟绛夊緟瀹屾垚锛屽け璐ユ姏閿欍€?*/
+    private GitWorktreeManager manager() {
+        return new GitWorktreeManager(ws);
+    }
+
+    /** 跑一条命令并等待完成，失败抛错。 */
     private void exec(Path dir, String... args) throws Exception {
         Process p = new ProcessBuilder(args).directory(dir.toFile())
                 .redirectErrorStream(true).start();
         String out = new String(p.getInputStream().readAllBytes());
         if (!p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS) || p.exitValue() != 0) {
-            throw new IllegalStateException("git " + String.join(" ", args) + " 澶辫触锛? + out);
+            throw new IllegalStateException("git " + String.join(" ", args) + " failed: " + out);
         }
     }
 
-    // ---------------------------------------------------------------- 鏀剁紪
+    // ---------------------------------------------------------------- 收编
 
     @Test
-    @DisplayName("L1 鏈湴鐩綍鏀剁紪锛歜are 寤恒€佺敤鎴风洰褰曟垚涓?worktree銆丠EAD 涓€鑷?)
+    @DisplayName("L1 本地目录收编：bare 建成、agent remote 关联、HEAD 进 bare")
     void linkLocal() throws Exception {
         String head = makeUserRepo("shop-mall");
         GitWorktreeManager m = manager();
@@ -60,13 +61,19 @@ class GitWorktreeManagerTest {
         String linked = m.linkLocal("SHOP", userDir, false);
 
         assertEquals(head, linked);
-        assertTrue(Files.isDirectory(m.bareDir("SHOP").resolve("objects")), "bare 宸插缓");
-        List<GitWorktreeManager.WorktreeInfo> wts = m.listWorktrees("SHOP");
-        assertTrue(wts.stream().anyMatch(w -> w.role().equals("USER")), "鐢ㄦ埛鐩綍鐧昏涓?USER worktree锛? + wts);
+        assertTrue(Files.isDirectory(m.bareDir("SHOP").resolve("objects")), "bare 已建");
+        // 用户目录已关联 agent remote
+        Process p = new ProcessBuilder("git", "remote").directory(userDir.toFile())
+                .redirectErrorStream(true).start();
+        String remotes = new String(p.getInputStream().readAllBytes());
+        p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+        assertTrue(remotes.contains("agent"), "用户目录已有 agent remote: " + remotes);
+        // HEAD 对象已进 bare（能被 rev-parse）
+        assertEquals(head, m.revParse(m.bareDir("SHOP"), head));
     }
 
     @Test
-    @DisplayName("L2 鏃?.git 鐩綍 + gitInitIfMissing=false 鈫?鏄庣‘鎶ラ敊")
+    @DisplayName("L2 无 .git 目录且不允许 init → 明确报错")
     void linkLocalNoGitRefused() throws Exception {
         Path dir = userSpace.resolve("plain");
         Files.createDirectories(dir);
@@ -78,7 +85,7 @@ class GitWorktreeManagerTest {
     }
 
     @Test
-    @DisplayName("L3 鏃?.git 鐩綍 + gitInitIfMissing=true 鈫?鑷姩 init 骞舵敹缂?)
+    @DisplayName("L3 无 .git 目录 + 允许 init → 自动 init 并收编")
     void linkLocalAutoInit() throws Exception {
         Path dir = userSpace.resolve("plain2");
         Files.createDirectories(dir);
@@ -88,61 +95,61 @@ class GitWorktreeManagerTest {
         String head = m.linkLocal("PLAIN2", dir, true);
 
         assertNotNull(head);
-        assertTrue(Files.isDirectory(dir.resolve(".git")), "宸?init");
+        assertTrue(Files.isDirectory(dir.resolve(".git")), "已 init");
         assertTrue(Files.isDirectory(m.bareDir("PLAIN2").resolve("objects")));
     }
 
     @Test
-    @DisplayName("L4 鐢ㄦ埛鐩綍鏂板鎻愪氦鍚?fetchLocal 鑳藉悓姝ュ埌 bare")
+    @DisplayName("L4 用户目录新增提交后 fetchLocal 同步到 bare")
     void fetchLocalPicksUpNewCommits() throws Exception {
         String head1 = makeUserRepo("app");
         Path userDir = userSpace.resolve("app");
         GitWorktreeManager m = manager();
         m.linkLocal("APP", userDir, false);
 
-        // 鐢ㄦ埛缁х画寮€鍙戯細绗簩娆℃彁浜?        Files.writeString(userDir.resolve("new.txt"), "v2\n");
+        // 用户继续开发：第二次提交
+        Files.writeString(userDir.resolve("new.txt"), "v2\n");
         exec(userDir, "git", "add", "-A");
         exec(userDir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v2");
         String head2 = m.revParse(userDir, "HEAD");
         assertFalse(head1.equals(head2));
 
-        // 骞冲彴鍚屾
+        // 平台同步
         m.fetchLocal("APP", userDir);
 
-        // bare 閲岃兘 rev-parse 鍒版柊鎻愪氦
+        // bare 里能解析到新提交
         assertEquals(head2, m.revParse(m.bareDir("APP"), head2));
     }
 
     // ---------------------------------------------------------------- worktree
 
     @Test
-    @DisplayName("W1 add/remove worktree锛氭瀯寤?worktree 鐢熷懡鍛ㄦ湡")
+    @DisplayName("W1 worktree 生命周期：add / list / remove")
     void worktreeLifecycle() throws Exception {
-        makeUserRepo("wl");
+        String head = makeUserRepo("wl");
         Path userDir = userSpace.resolve("wl");
         GitWorktreeManager m = manager();
         m.linkLocal("WL", userDir, false);
 
-        Path wt = m.addWorktree("WL", "wt-build-run1", m.revParse(m.bareDir("WL"), "HEAD"));
-        assertTrue(Files.isDirectory(wt), "worktree 宸插垱寤?);
-        assertTrue(Files.exists(wt.resolve("README.md")), "鏂囦欢宸叉鍑?);
+        // 直接用收编返回的 HEAD（bare HEAD 可能指向 unborn 分支）
+        Path wt = m.addWorktree("WL", "wt-build-run1", head);
+        assertTrue(Files.isDirectory(wt), "worktree 已创建");
+        assertTrue(Files.exists(wt.resolve("README.md")), "文件已检出");
 
         List<GitWorktreeManager.WorktreeInfo> wts = m.listWorktrees("WL");
         assertTrue(wts.stream().anyMatch(w -> w.name().equals("wt-build-run1") && w.role().equals("BUILD")));
 
         m.removeWorktree("WL", "wt-build-run1");
-        assertFalse(Files.exists(wt), "宸叉竻鐞?);
+        assertFalse(Files.exists(wt), "已清理");
         assertTrue(m.listWorktrees("WL").stream().noneMatch(w -> w.name().equals("wt-build-run1")));
     }
 
     @Test
-    @DisplayName("W2 cloneRemote 鍒版湰鍦?bare 浠撳簱锛堟ā鎷熻繙绔級")
+    @DisplayName("W2 cloneRemote（本地 bare 模拟远端）+ 从 clone 建 worktree")
     void cloneFromLocalBare() throws Exception {
-        // 鍏堥€犱竴涓?杩滅"bare
         Path remoteBare = userSpace.resolve("hutool.git");
         Files.createDirectories(remoteBare);
         exec(remoteBare, "git", "init", "--bare", "-q");
-        // 閫犱竴涓簮浠撳簱骞舵帹鍒?杩滅"
         Path src = userSpace.resolve("hutool-src");
         Files.createDirectories(src);
         exec(src, "git", "init", "-q");
@@ -158,13 +165,12 @@ class GitWorktreeManagerTest {
         String head = m.revParse(m.bareDir("HUT"), "HEAD");
         assertFalse(head.isBlank());
 
-        // 浠?clone 寤?worktree
         Path wt = m.addWorktree("HUT", "wt-verify", head);
         assertTrue(Files.exists(wt.resolve("x.txt")));
     }
 
     @Test
-    @DisplayName("W3 閲嶅 clone 鍚屼竴椤圭洰 鈫?鎷掔粷")
+    @DisplayName("W3 重复 clone 同一项目 → 拒绝")
     void cloneDuplicateRefused() throws Exception {
         Path remoteBare = userSpace.resolve("dup.git");
         Files.createDirectories(remoteBare);
@@ -182,7 +188,7 @@ class GitWorktreeManagerTest {
         GitWorktreeManager.GitIntakeException ex = assertThrows(
                 GitWorktreeManager.GitIntakeException.class,
                 () -> m.cloneRemote("DUP", posix(remoteBare)));
-        assertTrue(ex.getMessage().contains("宸插瓨鍦?), ex.getMessage());
+        assertTrue(ex.getMessage().contains("已存在"), ex.getMessage());
     }
 
     private String posix(Path p) {

@@ -11,6 +11,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.port.ProjectScaffolder;
+import top.rongx.agent.domain.scaffold.ScaffoldPlan;
+import top.rongx.agent.infra.persistence.IntakeProjectStore;
+import top.rongx.agent.infra.scaffold.RecipeScaffolder;
 
 /**
  * 项目接入服务（v2）：本地收编 / 远程 clone + 配方自检 + 状态机。
@@ -28,13 +33,28 @@ public class ProjectIntakeService {
 
     private final GitWorktreeManager git;
     private final Path workspaceRoot;
-    /** 接入状态表（内存态；REGISTERED 后由项目存储接管）。 */
+    private final IntakeProjectStore store;
+    /** 流水线脚本生成器：接入时按仓库结构自动产出 ci/ 脚本。 */
+    private final ProjectScaffolder scaffolder;
+    /** 接入状态表（内存态；REGISTERED 后落 SQLite）。 */
     private final Map<String, IntakeState> intakes = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ProjectIntakeService(GitWorktreeManager git,
-                                @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+                                IntakeProjectStore store,
+                                @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
+                                ProjectScaffolder scaffolder) {
         this.git = git;
+        this.store = store;
         this.workspaceRoot = Path.of(workspaceRoot).toAbsolutePath().normalize();
+        this.scaffolder = scaffolder;
+    }
+
+    /** 兼容旧构造（测试/手工装配）：使用默认脚手架实现。 */
+    public ProjectIntakeService(GitWorktreeManager git,
+                                IntakeProjectStore store,
+                                String workspaceRoot) {
+        this(git, store, workspaceRoot, new RecipeScaffolder());
     }
 
     /** 一次接入任务的状态。 */
@@ -43,7 +63,16 @@ public class ProjectIntakeService {
     }
 
     public record IntakeRequest(String projectId, String localPath, String repoUrl,
-                                String type, boolean gitInitIfMissing) {
+                                String type, boolean gitInitIfMissing,
+                                /** DIRECT（默认，仓库留在用户目录）/ MANAGED（平台托管 bare）。 */
+                                String storageMode,
+                                /** DIRECT/REMOTE 时：clone 到用户选择的本地目录。 */
+                                String cloneTargetDir) {
+        /** 兼容旧构造（测试用）。 */
+        public IntakeRequest(String projectId, String localPath, String repoUrl,
+                             String type, boolean gitInitIfMissing) {
+            this(projectId, localPath, repoUrl, type, gitInitIfMissing, "DIRECT", null);
+        }
     }
 
     // ---------------------------------------------------------------- 校验
@@ -79,7 +108,9 @@ public class ProjectIntakeService {
         }
         String id = req.projectId();
         IntakeState existing = intakes.get(id);
-        if (existing != null && !"REGISTERED".equals(existing.phase()) && !"INTAKE_FAILED".equals(existing.phase())) {
+        // 只有"正在跑"的接入才拦截；REGISTERED / INTAKE_FAILED 都允许重提交
+        // （FAILED=重试；REGISTERED=重新收编，覆盖语义）
+        if (existing != null && isRunning(existing.phase())) {
             throw new IllegalStateException("项目 " + id + " 正在接入中（" + existing.phase() + "）");
         }
         IntakeState start = new IntakeState(id, "VALIDATING", "校验中", Map.of(), System.currentTimeMillis());
@@ -97,6 +128,33 @@ public class ProjectIntakeService {
         return s;
     }
 
+    /** 是否属于"任务还在跑"的 phase（拦截重复提交）。 */
+    private boolean isRunning(String phase) {
+        return "VALIDATING".equals(phase) || "LINKING".equals(phase) || "RECIPE_CHECK".equals(phase);
+    }
+
+    /** 登记到 SQLite（重启恢复）；DIRECT 模式仓库留在用户目录。 */
+    private void persistProject(IntakeRequest req, String head, String storageMode) {
+        String id = req.projectId();
+        boolean local = req.localPath() != null && !req.localPath().isBlank();
+        // DIRECT/REMOTE 的 localPath = clone 目标目录
+        String localPath = local ? req.localPath()
+                : ("DIRECT".equals(storageMode) ? req.cloneTargetDir() : null);
+        IntakeProjectStore.IntakeProject p = new IntakeProjectStore.IntakeProject(
+                id,
+                id,
+                local ? null : req.repoUrl(),
+                local ? "local" : "gitee",
+                req.type() == null || req.type().isBlank() ? "generic-java" : req.type(),
+                8100, 8199,
+                local ? "LOCAL" : "REMOTE",
+                localPath,
+                storageMode);
+        store.upsert(p, List.of(
+                new top.rongx.agent.domain.project.ProjectEnv(id, "test", "http://127.0.0.1:8180", "/opt/apps/" + id.toLowerCase()),
+                new top.rongx.agent.domain.project.ProjectEnv(id, "prod", "http://127.0.0.1:8181", "/opt/apps/" + id.toLowerCase())));
+    }
+
     private void update(String projectId, String phase, String message, Map<String, Object> report) {
         intakes.put(projectId, new IntakeState(projectId, phase, message,
                 report == null ? Map.of() : report, System.currentTimeMillis()));
@@ -105,27 +163,80 @@ public class ProjectIntakeService {
     private void runIntake(IntakeRequest req) {
         String id = req.projectId();
         try {
-            // 1. LINKING：收编 / clone
-            update(id, "LINKING", req.localPath() != null ? "正在收编本地目录…" : "正在 clone 远程仓库…", null);
+            boolean direct = req.storageMode() == null || req.storageMode().isBlank()
+                    || "DIRECT".equalsIgnoreCase(req.storageMode());
+            // 1. LINKING：直接登记 / clone 到指定目录（DIRECT）或平台托管（MANAGED）
             String head;
             if (req.localPath() != null && !req.localPath().isBlank()) {
-                head = git.linkLocal(id, Path.of(req.localPath()), req.gitInitIfMissing());
+                if (direct) {
+                    // v2 直接模式：仓库留在用户目录，不收编；wt-verify 也建在用户目录下
+                    update(id, "LINKING", "正在登记本地目录（就地模式）…", null);
+                    Path local = Path.of(req.localPath()).toAbsolutePath().normalize();
+                    if (!Files.isDirectory(local.resolve(".git"))) {
+                        if (!req.gitInitIfMissing()) {
+                            throw new GitWorktreeManager.GitIntakeException(
+                                    "目录不是 git 仓库（无 .git）：" + local + "；如需自动 git init 请勾选确认");
+                        }
+                        git.initBareless(local);
+                    }
+                    head = git.revParse(local, "HEAD");
+                    // wt-verify 用 worktree 挂在用户目录旁（.agent/worktrees/wt-verify）
+                    git.addWorktreeAt(local, "wt-verify", head);
+                } else {
+                    update(id, "LINKING", "正在收编本地目录（托管模式）…", null);
+                    head = git.linkLocal(id, Path.of(req.localPath()), req.gitInitIfMissing());
+                    git.addWorktree(id, "wt-verify", head);
+                }
             } else {
-                git.cloneRemote(id, req.repoUrl());
-                head = git.revParse(git.bareDir(id), "HEAD");
+                if (direct) {
+                    // DIRECT/REMOTE：clone 到用户选择的目录
+                    update(id, "LINKING", "正在 clone 到 " + req.cloneTargetDir() + "…", null);
+                    Path target = Path.of(req.cloneTargetDir());
+                    git.cloneTo(req.repoUrl(), target);
+                    head = git.revParse(target, "HEAD");
+                    git.addWorktreeAt(target, "wt-verify", head);
+                } else {
+                    update(id, "LINKING", "正在 clone 远程仓库（托管模式）…", null);
+                    git.cloneRemote(id, req.repoUrl());
+                    head = git.revParse(git.bareDir(id), "HEAD");
+                    git.addWorktree(id, "wt-verify", head);
+                }
             }
 
-            // 2. 建 wt-verify（自检 + 后续代码检索用）
-            git.addWorktree(id, "wt-verify", head);
-
-            // 3. RECIPE_CHECK：在 wt-verify 上做配方自检
+            // 2. RECIPE_CHECK：在 wt-verify（或 DIRECT 的用户目录本身）上做配方自检
             update(id, "RECIPE_CHECK", "正在检查动作配方与流水线定义…", null);
-            Map<String, Object> report = recipeCheck(git.verifyWorktree(id));
+            Path checkRoot = direct
+                    ? Path.of(req.localPath() != null ? req.localPath() : req.cloneTargetDir())
+                    : git.verifyWorktree(id);
+            Map<String, Object> report = recipeCheck(checkRoot);
             boolean ready = Boolean.TRUE.equals(report.get("ready"));
 
-            // 4. REGISTERED
-            update(id, "REGISTERED", ready ? "接入完成" : "接入完成（自检有警告，见报告）", report);
-            log.info("项目 {} 接入完成 head={} ready={}", id, head, ready);
+            // 2.5 自动生成流水线脚本（缺 ci/ 时；不覆盖已有文件）
+            String generatedNote = "";
+            if (!Files.isRegularFile(checkRoot.resolve("ci/pipeline.yml"))) {
+                try {
+                    ScaffoldPlan plan = scaffolder.plan(id, checkRoot, DeployTarget.DOCKER);
+                    List<String> written = scaffolder.apply(id, checkRoot, plan, false);
+                    report.put("scaffoldWritten", written);
+                    generatedNote = written.isEmpty()
+                            ? "（脚本已存在，未覆盖）"
+                            : "（已自动生成 " + String.join("、", written) + "，提交后即可在流水线页运行）";
+                    log.info("项目 {} 自动生成流水线脚本：{}", id, written);
+                } catch (Exception e) {
+                    log.warn("项目 {} 自动生成流水线脚本失败：{}", id, e.getMessage());
+                    @SuppressWarnings("unchecked")
+                    List<String> warnings = (List<String>) report.get("warnings");
+                    warnings.add("自动生成流水线脚本失败：" + e.getMessage()
+                            + "；可在项目页「生成流水线脚本」手动重试");
+                }
+            }
+
+            // 3. 落库（SQLite：重启不丢）+ REGISTERED
+            persistProject(req, head, direct ? "DIRECT" : "MANAGED");
+            String baseMessage = ready ? "接入完成" : "接入完成（自检有警告，见报告）";
+            update(id, "REGISTERED", baseMessage + generatedNote, report);
+            log.info("项目 {} 接入完成 head={} mode={} ready={}", id, head,
+                    direct ? "DIRECT" : "MANAGED", ready);
         } catch (Exception e) {
             log.warn("项目 {} 接入失败：{}", id, e.getMessage());
             update(id, "INTAKE_FAILED", String.valueOf(e.getMessage()), Map.of());
@@ -136,18 +247,21 @@ public class ProjectIntakeService {
 
     /**
      * 配方自检（在 worktree/仓库根上跑）：
-     * 动作配方覆盖、pipeline.yml、类型必备项。产出结构化报告。
+     * <ul>
+     *   <li>动作配方：只检查流水线会用到的构建/打包动作——deploy/rollback 已由<b>平台部署器</b>承担，
+     *       不再要求仓库提供 stack_deploy 配方；</li>
+     *   <li>流水线：缺失时用 {@link ProjectScaffolder} 按仓库结构生成（真实内容，不再是 PORT 占位模板）；</li>
+     *   <li>Dockerfile：只影响镜像 stage，不阻塞接入。</li>
+     * </ul>
      */
     public Map<String, Object> recipeCheck(Path repoRoot) {
         List<String> warnings = new ArrayList<>();
         Map<String, Object> report = new LinkedHashMap<>();
 
-        // 1. 动作配方覆盖（6 个 wireName）；仅 verify 必需项影响 ready
+        // 1. 动作配方（只关心构建类；部署阶段的配方不再需要）
         Map<String, String> actions = new LinkedHashMap<>();
-        boolean verifyReady = true;
         Path actionsYml = repoRoot.resolve("ci/actions.yml");
-        for (String wire : List.of("backend_build", "backend_test", "frontend_build",
-                "image_package", "stack_deploy", "stack_rollback")) {
+        for (String wire : List.of("backend_build", "backend_test", "frontend_build", "image_package")) {
             if (Files.isRegularFile(actionsYml) && yamlHasAction(actionsYml, wire)) {
                 actions.put(wire, "ci/actions.yml#" + wire);
             } else if (makefileHasTarget(repoRoot, wire)) {
@@ -156,65 +270,52 @@ public class ProjectIntakeService {
                 actions.put(wire, "内置默认（mvn / pnpm）");
             } else {
                 actions.put(wire, null);
-                if ("backend_build".equals(wire) || "backend_test".equals(wire)) {
-                    verifyReady = false;
-                    warnings.add("动作 " + wire + " 无配方：verify 流水线无法执行，请在 ci/actions.yml 声明");
-                } else {
-                    warnings.add("动作 " + wire + " 无配方：发布（release）流水线会跳过该步，"
-                            + "需要发布时先在 ci/actions.yml 声明");
-                }
+                warnings.add("动作 " + wire + " 无配方：对应 stage 会被跳过（不阻塞接入）");
             }
         }
         report.put("actions", actions);
 
-        // 2. pipeline.yml
+        // 2. 流水线：缺失时直接生成（与「生成流水线脚本」同一套规则）
         boolean hasPipeline = Files.isRegularFile(repoRoot.resolve("ci/pipeline.yml"));
         report.put("pipeline", hasPipeline ? "ci/pipeline.yml" : null);
         if (!hasPipeline) {
-            warnings.add("缺 ci/pipeline.yml：请在仓库按模板创建（模板见报告 pipelineTemplate 字段）");
-            report.put("pipelineTemplate", """
-                    name: release
-                    stages:
-                      - id: build
-                        type: action
-                        action: backend_build
-                        runner: container
-                      - id: test
-                        type: action
-                        action: backend_test
-                        runner: container
-                      - id: image
-                        type: action
-                        action: image_package
-                        runner: host
-                      - id: deploy
-                        type: action
-                        action: stack_deploy
-                        runner: host
-                      - id: health
-                        type: health
-                        url: http://127.0.0.1:PORT/healthz
-                        expected: 200
-                    on-failure:
-                      - id: rollback
-                        type: action
-                        action: stack_rollback
-                        runner: host
-                    """);
+            try {
+                ScaffoldPlan plan = scaffolder.plan(projectIdOf(repoRoot), repoRoot, DeployTarget.DOCKER);
+                report.put("stack", plan.stack());
+                report.put("scaffoldFiles", plan.files().stream()
+                        .map(f -> Map.of("path", f.path(), "content", f.content()))
+                        .toList());
+                plan.files().stream()
+                        .filter(f -> f.path().equals("ci/pipeline.yml"))
+                        .findFirst()
+                        .ifPresent(f -> report.put("pipelineTemplate", f.content()));
+                warnings.add("缺 ci/pipeline.yml：接入时已按仓库结构自动生成（见「生成的 ci/ 脚本」）");
+                warnings.addAll(plan.notes());
+            } catch (Exception e) {
+                warnings.add("自动生成流水线脚本失败：" + e.getMessage()
+                        + "；可在项目页「生成流水线脚本」重试");
+            }
         }
 
-        // 3. Dockerfile（image_package 需要）
+        // 3. Dockerfile（只影响镜像 stage）
         boolean hasDockerfile = Files.isRegularFile(repoRoot.resolve("Dockerfile"));
         report.put("dockerfile", hasDockerfile);
         if (!hasDockerfile) {
-            verifyReady = false;
-            warnings.add("缺 Dockerfile：image_package（镜像打包）将无法执行");
+            warnings.add("缺 Dockerfile：DOCKER 目标无法打镜像；Java 项目可改用 HOST 目标，"
+                    + "或补 Dockerfile 后重新生成脚本");
         }
 
-        boolean ready = verifyReady;
+        // 4. 可接入：已有流水线，或已能自动生成
+        boolean ready = hasPipeline || report.containsKey("pipelineTemplate");
         report.put("ready", ready);
         report.put("warnings", warnings);
         return report;
+    }
+
+    /** 自检报告里的项目标识（目录名即可，仅用于展示）。 */
+    private String projectIdOf(Path repoRoot) {
+        Path name = repoRoot.getFileName();
+        return name == null ? "PROJECT" : name.toString();
     }
 
     /** 轻量 YAML 检查：actions: 下是否有该 key（不引库，缩进两层判断）。 */

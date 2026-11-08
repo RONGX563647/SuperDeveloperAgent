@@ -17,8 +17,8 @@
             <artifactId>agent-domain</artifactId>
         </dependency>
         <dependency>
-            <groupId>top.rongx</groupId>
-            <artifactId>agent-executor</artifactId>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
