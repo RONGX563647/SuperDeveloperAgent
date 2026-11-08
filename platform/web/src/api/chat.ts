@@ -2,10 +2,8 @@ import type { AgentEventDto, ChatRequest } from '../types'
 import { getToken } from './auth'
 
 /**
- * 发起对话并按 SSE 事件流消费。
- *
- * 用 fetch + ReadableStream 而不是 EventSource：EventSource 只支持 GET，而我们需要 POST 传上下文。
- * 回调收到的 event.type 是 SSE 的 event: 行（"agent" / "error"），payload 是 data JSON。
+ * @deprecated 已被 api/sse.ts（streamChatOnce/streamEvents）+ useAgentChat 取代。
+ * 保留一个迁移期供参考，下个版本删除。
  */
 export async function streamChat(
   req: ChatRequest,

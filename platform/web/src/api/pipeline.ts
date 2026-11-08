@@ -53,21 +53,51 @@ export function listPipelines(projectId: string): Promise<PipelineListView> {
   return apiFetch<PipelineListView>(`/api/v1/ci/pipelines?projectId=${encodeURIComponent(projectId)}`)
 }
 
-/** 按指定提交触发一条流水线；gitSha 需为 7-40 位小写十六进制。 */
+/** 按指定提交触发一条流水线；gitSha 需为 7-40 位小写十六进制。deployTarget 可选：docker / host / server。 */
 export function triggerPipeline(
   pipelineId: string,
   projectId: string,
-  gitSha: string
+  gitSha: string,
+  deployTarget?: string
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
-    body: JSON.stringify({ projectId, gitSha })
+    body: JSON.stringify({ projectId, gitSha, deployTarget: deployTarget ?? null })
   })
 }
 
-/** 查询一次运行的状态 / stage / 产物 / 日志，供轮询使用。 */
-export function getRun(runId: string): Promise<RunView> {
-  return apiFetch<RunView>(`/api/v1/ci/runs/${encodeURIComponent(runId)}`)
+/** 可选部署目标（平台部署器）。 */
+export interface DeployTargetOption {
+  target: string
+  label: string
+  available: boolean
+  detail: string
+}
+
+export function listDeployTargets(): Promise<DeployTargetOption[]> {
+  return apiFetch<DeployTargetOption[]>('/api/v1/ci/deploy/targets')
+}
+
+/** 查询一次运行的状态 / stage / 产物；withLog=false 时不传输整段日志（配合增量日志端点）。 */
+export function getRun(runId: string, withLog = true): Promise<RunView> {
+  const q = withLog ? '' : '?withLog=false'
+  return apiFetch<RunView>(`/api/v1/ci/runs/${encodeURIComponent(runId)}${q}`)
+}
+
+/** 增量日志片段。[offset, end) 为已读区间；complete 表示终态且已读到末尾。 */
+export interface RunLogSlice {
+  offset: number
+  end: number
+  text: string
+  complete: boolean
+}
+
+/** 拉取增量日志（从 offset 起的新增文本），供追加式渲染。 */
+export function fetchRunLog(runId: string, offset: number): Promise<RunLogSlice> {
+  const q = new URLSearchParams({ offset: String(offset) })
+  return apiFetch<RunLogSlice>(
+    `/api/v1/ci/runs/${encodeURIComponent(runId)}/log?${q}`
+  )
 }
 
 /** 取消一次运行（只对未终态生效）。 */

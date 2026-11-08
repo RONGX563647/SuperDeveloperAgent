@@ -1,0 +1,446 @@
+/* 接入向导与相关页面的共享样式（对齐 ChatView 设计语言） */
+.intake-page {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 24px;
+  overflow-y: auto;
+}
+.intake-column {
+  max-width: 46rem;
+  margin: 0 auto;
+}
+.page-title {
+  margin: 8px 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.fail-tag {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--danger);
+}
+.page-sub {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+/* Gitee 账号卡 */
+.account-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+}
+.acct-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.acct-icon {
+  flex: none;
+  font-size: 22px;
+  color: var(--accent-ink);
+}
+.acct-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.acct-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.acct-sub {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.acct-token {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.acct-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.pat-input {
+  width: 180px;
+}
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.mini-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.mini-btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.tab.active {
+  color: var(--accent-ink);
+  background: var(--surface-hover);
+  border-color: rgb(77 130 247 / 40%);
+}
+.form-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field-label {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.field-hint {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+.warn-text {
+  color: var(--warn);
+}
+.check-field {
+  font-size: 12.5px;
+}
+.dir-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease;
+}
+.dir-pick:hover {
+  border-color: rgb(77 130 247 / 45%);
+}
+.dir-pick.busy {
+  cursor: progress;
+  border-color: rgb(77 130 247 / 55%);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-sunken));
+}
+.placeholder {
+  color: var(--ink-faint);
+}
+.git-tag {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 8px;
+  font-size: 10.5px;
+  border-radius: var(--radius-pill);
+}
+.git-tag.ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+.git-tag.warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.primary-btn {
+  height: 34px;
+  padding: 0 18px;
+  font-family: inherit;
+  font-size: 13px;
+  color: #fff;
+  cursor: pointer;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius-md);
+}
+.primary-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.ghost-btn {
+  height: 32px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+/* 时间线 */
+.timeline {
+  margin: 18px 0;
+  padding: 0;
+  list-style: none;
+}
+.tl-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 13.5px;
+  color: var(--ink-faint);
+}
+.tl-step.done {
+  color: var(--ok);
+}
+.tl-step.active {
+  color: var(--accent-ink);
+}
+.tl-dot {
+  display: inline-flex;
+  width: 20px;
+  justify-content: center;
+}
+.tl-name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.tl-msg {
+  color: var(--ink-muted);
+}
+.error-box {
+  padding: 14px;
+  background: var(--danger-soft);
+  border-left: 2px solid var(--danger);
+  border-radius: var(--radius-md);
+}
+.err-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--danger);
+}
+.err-body {
+  margin: 10px 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.err-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.hint {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+/* 报告 */
+.report-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+}
+.report-line {
+  display: flex;
+  gap: 14px;
+  font-size: 13px;
+}
+.report-line > span:first-child {
+  flex: none;
+  width: 80px;
+  color: var(--ink-muted);
+}
+.badge {
+  padding: 1px 10px;
+  font-size: 11.5px;
+  border-radius: var(--radius-pill);
+}
+.badge.ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+.badge.warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.actions-detail summary,
+.warn-detail summary,
+.tpl-detail summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+.action-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0 3px 14px;
+  font-size: 12px;
+}
+.src-ok {
+  color: var(--ink-soft);
+}
+.src-miss {
+  color: var(--warn);
+}
+.warn-row {
+  padding: 3px 0 3px 14px;
+  color: var(--warn);
+  font-size: 12px;
+}
+.tpl-body {
+  max-height: 300px;
+  margin: 8px 0 0;
+  padding: 12px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.7;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+/* 自动生成的 ci/ 脚本 */
+.gen-ok {
+  color: var(--ok);
+}
+.gen-file + .gen-file {
+  margin-top: 6px;
+}
+.gen-file-head {
+  margin-top: 8px;
+  padding: 2px 0;
+  font-size: 11px;
+  color: var(--accent-ink);
+}
+/* 弹窗文件/仓库浏览器 */
+.fs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.fs-cur {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-filter {
+  width: 150px;
+}
+.fs-list {
+  max-height: 380px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.fs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+.fs-row:hover {
+  background: var(--surface-hover);
+}
+.fs-row:last-child {
+  border-bottom: 0;
+}
+.fs-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-row.repo {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.repo-desc {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-picked {
+  flex: 1;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gitee-user {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}

@@ -24,7 +24,7 @@
   /* ---- 表面（浅灰底 + 纯白卡，层级靠白度差） ---- */
   --bg: #f3f4f6; /* 页面底：浅灰 */
   --sidebar-background-color: #f5f6f8; /* 侧栏比主区略亮，靠发丝线分界 */
-  --panel: #ffffff; /* 卡片 / 输入区：纯白浮起 */
+  --panel: #fbfbfb; /* 卡片 / 输入区：纯白浮起 */
   --surface-raised: #ffffff; /* 浮层 / 用户块 */
   --surface-hover: rgb(0 0 0 / 4%);
   --surface-active: rgb(0 0 0 / 7%);
@@ -41,7 +41,7 @@
   --brand-mark-ink: #ffffff;
 
   /* ---- 强调色（唯一彩色主体） ---- */
-  --accent: #4d82f7;
+  --accent: #495878;
   --accent-hover: #3d68c5;
   --accent-soft: rgb(77 130 247 / 12%);
   --accent-ink: #2f5fcc; /* 浅底蓝字，对比 4.9:1 */

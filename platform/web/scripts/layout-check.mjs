@@ -4,7 +4,7 @@
 import { existsSync } from 'node:fs'
 import puppeteer from 'puppeteer-core'
 
-const TARGET_URL = process.argv[2] ?? 'http://127.0.0.1:5173/chat'
+const TARGET_URL = process.argv[2] ?? 'http://localhost:5173/chat'
 const ORIGIN = new URL(TARGET_URL).origin
 const EDGE_CANDIDATES = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',

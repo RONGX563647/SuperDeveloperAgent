@@ -1,0 +1,447 @@
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import {
+  Connection, Folder, Loading, Select, UserFilled, WarningFilled
+} from '@element-plus/icons-vue'
+import {
+  giteeBind, giteeBindStatus, giteeOauthStart, giteeUnbind,
+  intakeLocal, intakeRemote, intakeStatus,
+  type GiteeBinding, type GiteeRepo,
+  type IntakeStatus, type RecipeReport
+} from '../api/project'
+import DirPickerDialog from '../components/DirPickerDialog.vue'
+import GiteeRepoPicker from '../components/GiteeRepoPicker.vue'
+
+/**
+ * 项目接入向导：
+ * - Gitee 账号：OAuth 网页授权（推荐）/ 私人令牌，绑定态持久（加密落库），状态卡展示；
+ * - 本地目录：现代选择器（快捷位置 + 面包屑 + 搜索 + 键盘）；
+ * - Gitee 仓库：卡片式列表选择（支持私有库标记与键盘导航）。
+ */
+const source = ref<'local' | 'remote'>('local')
+const projectId = ref('')
+const gitInitIfMissing = ref(false)
+
+// Gitee 账号
+const binding = ref<GiteeBinding | null>(null)
+const patToken = ref('')
+const patBusy = ref(false)
+const giteeDialog = ref(false)
+const selectedRepo = ref<GiteeRepo | null>(null)
+const cloneTarget = ref('')
+
+// 本地目录选择
+const dirBrowser = ref(false)
+const selectedDir = ref('')
+const selectedIsGit = ref(false)
+
+// 状态机
+const phase = ref<'FORM' | 'RUNNING' | 'DONE' | 'FAILED'>('FORM')
+const status = ref<IntakeStatus | null>(null)
+const report = ref<RecipeReport | null>(null)
+let timer: ReturnType<typeof setInterval> | null = null
+
+const steps = ['VALIDATING', 'LINKING', 'RECIPE_CHECK', 'REGISTERED'] as const
+const stepIndex = computed(() => {
+  if (!status.value) return -1
+  if (status.value.phase === 'INTAKE_FAILED') return -2
+  const i = steps.indexOf(status.value.phase as (typeof steps)[number])
+  return i < 0 ? steps.length - 1 : i
+})
+
+const idOk = computed(() => /^[A-Z][A-Z0-9_]{1,15}$/.test(projectId.value))
+const canSubmit = computed(() => {
+  if (!idOk.value) return false
+  if (source.value === 'local') return !!selectedDir.value
+  return !!selectedRepo.value && !!cloneTarget.value
+})
+
+// ---------------------------------------------------------------- 账号
+
+async function loadBinding() {
+  try {
+    binding.value = await giteeBindStatus()
+  } catch { /* 未登录态由路由守卫处理 */ }
+}
+
+async function bindPat() {
+  patBusy.value = true
+  try {
+    const r = await giteeBind(patToken.value.trim())
+    ElMessage.success(`已绑定 Gitee 账号：${r.giteeLogin}`)
+    patToken.value = ''
+    await loadBinding()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '绑定失败')
+  } finally {
+    patBusy.value = false
+  }
+}
+
+async function unbind() {
+  try {
+    await giteeUnbind()
+    ElMessage.success('已解绑')
+    await loadBinding()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '解绑失败')
+  }
+}
+
+/** OAuth 网页授权：跳 Gitee 授权页；回跳页绑定成功后用户手动回本页刷新。 */
+async function oauthStart() {
+  try {
+    const r = await giteeOauthStart()
+    window.open(r.authorizeUrl, '_blank')
+    ElMessage.info('已打开 Gitee 授权页；授权成功后回到本页，绑定状态会自动生效')
+  } catch (e) {
+    ElMessage.warning(e instanceof Error ? e.message : 'OAuth 未配置，请使用私人令牌')
+  }
+}
+
+// ---------------------------------------------------------------- Gitee 仓库选择
+
+function openGitee() {
+  giteeDialog.value = true
+}
+
+function pickRepo(r: GiteeRepo) {
+  selectedRepo.value = r
+  giteeDialog.value = false
+  suggestId()
+}
+
+// ---------------------------------------------------------------- 目录选择（现代选择器）
+
+/** 点"浏览"：打开内置的现代目录选择器（快捷位置 + 面包屑 + 搜索 + 键盘）。 */
+function chooseDir(target: 'project' | 'clone') {
+  dirPickTarget.value = target
+  pickerInitial.value = target === 'clone'
+    ? (cloneTarget.value || selectedDir.value)
+    : selectedDir.value
+  dirBrowser.value = true
+}
+
+/** 文件夹选择目标：本地项目目录 or Gitee 克隆目标目录。 */
+const dirPickTarget = ref<'project' | 'clone'>('project')
+const pickerInitial = ref('')
+
+function onDirPicked(payload: { path: string; git: boolean }) {
+  applyPickedDir(dirPickTarget.value, payload.path, payload.git)
+}
+
+function applyPickedDir(target: 'project' | 'clone', path: string, isGit: boolean) {
+  if (target === 'clone') {
+    cloneTarget.value = path
+    if (!selectedIsGit.value) selectedIsGit.value = isGit
+  } else {
+    selectedDir.value = path
+    selectedIsGit.value = isGit
+    gitInitIfMissing.value = !isGit
+  }
+  suggestId()
+}
+
+function openDirBrowser() {
+  chooseDir('project')
+}
+
+function suggestId() {
+  if (projectId.value) return
+  const name = selectedRepo.value?.fullName.split('/')[1]
+    ?? selectedDir.value.split(/[\\/]/).filter(Boolean).pop() ?? ''
+  const id = name.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 16)
+  if (/^[A-Z]/.test(id)) projectId.value = id
+}
+
+// ---------------------------------------------------------------- 提交与轮询
+
+async function submit() {
+  if (!idOk.value) {
+    ElMessage.warning('项目 ID：大写字母开头，2-16 位大写字母/数字/下划线')
+    return
+  }
+  if (source.value === 'remote' && !cloneTarget.value) {
+    ElMessage.warning('请选择克隆目标目录（仓库将 clone 到你选的本地目录）')
+    return
+  }
+  try {
+    status.value = source.value === 'local'
+      ? await intakeLocal({
+          projectId: projectId.value,
+          localPath: selectedDir.value,
+          gitInitIfMissing: gitInitIfMissing.value,
+          storageMode: 'DIRECT'
+        })
+      : await intakeRemote({
+          projectId: projectId.value,
+          repoUrl: selectedRepo.value!.cloneUrl,
+          storageMode: 'DIRECT',
+          cloneTargetDir: cloneTarget.value
+        })
+    phase.value = 'RUNNING'
+    timer = setInterval(poll, 2000)
+    void poll()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '提交失败')
+  }
+}
+
+async function poll() {
+  if (!status.value) return
+  try {
+    status.value = await intakeStatus(status.value.projectId)
+    if (status.value.phase === 'REGISTERED') {
+      stopPoll()
+      phase.value = 'DONE'
+      report.value = status.value.report as unknown as RecipeReport
+    } else if (status.value.phase === 'INTAKE_FAILED') {
+      stopPoll()
+      phase.value = 'FAILED'
+    }
+  } catch { /* 下轮再试 */ }
+}
+
+function stopPoll() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+function retry() {
+  stopPoll()
+  phase.value = 'FORM'
+  status.value = null
+}
+
+onMounted(loadBinding)
+onUnmounted(stopPoll)
+</script>
+
+<template>
+  <div class="intake-page">
+    <div class="intake-column">
+      <!-- Gitee 账号卡 -->
+      <section class="account-card">
+        <div class="acct-left">
+          <el-icon class="acct-icon"><UserFilled /></el-icon>
+          <div class="acct-info">
+            <template v-if="binding?.bound">
+              <span class="acct-name">Gitee：{{ binding.giteeLogin }}</span>
+              <span class="mono acct-token">{{ binding.tokenMasked }}</span>
+            </template>
+            <template v-else>
+              <span class="acct-name">未绑定 Gitee 账号</span>
+              <span class="acct-sub">绑定后可直接从你的仓库列表选择项目（token 加密存储，永不回显明文）</span>
+            </template>
+          </div>
+        </div>
+        <div class="acct-actions">
+          <template v-if="binding?.bound">
+            <button type="button" class="mini-btn" @click="openGitee()">
+              浏览仓库
+            </button>
+            <button type="button" class="mini-btn danger" @click="unbind">解绑</button>
+          </template>
+          <template v-else>
+            <button type="button" class="mini-btn" @click="oauthStart">Gitee 授权登录</button>
+            <el-input
+              v-model="patToken"
+              type="password"
+              show-password
+              size="small"
+              class="pat-input mono"
+              placeholder="或粘贴私人令牌"
+              @keydown.enter="bindPat"
+            />
+            <button type="button" class="mini-btn" :disabled="!patToken.trim() || patBusy" @click="bindPat">
+              {{ patBusy ? '验证中…' : '绑定' }}
+            </button>
+          </template>
+        </div>
+      </section>
+
+      <!-- Step 1: 表单 -->
+      <template v-if="phase === 'FORM'">
+        <h1 class="page-title">接入项目</h1>
+        <p class="page-sub">本地目录就地收编（平台只读你的目录），或从 Gitee 选择仓库 clone。</p>
+
+        <div class="tabs">
+          <button type="button" class="tab" :class="{ active: source === 'local' }" @click="source = 'local'">
+            <el-icon><Folder /></el-icon> 本地目录
+          </button>
+          <button type="button" class="tab" :class="{ active: source === 'remote' }" @click="source = 'remote'">
+            <el-icon><Connection /></el-icon> Gitee 仓库
+          </button>
+        </div>
+
+        <div class="form-card">
+          <template v-if="source === 'local'">
+            <div class="field">
+              <span class="field-label">选择项目目录</span>
+              <div class="dir-pick" @click="chooseDir('project')">
+                <el-icon><Folder /></el-icon>
+                <span class="mono" :class="{ placeholder: !selectedDir }">
+                  {{ selectedDir || '点击浏览文件夹…' }}
+                </span>
+                <span v-if="selectedDir" class="git-tag" :class="selectedIsGit ? 'ok' : 'warn'">
+                  {{ selectedIsGit ? 'git 仓库' : '非 git（将自动 init）' }}
+                </span>
+              </div>
+              <span class="field-hint">
+                点击会弹出系统文件夹选择框；平台只读你的目录并同步提交，<b>不修改任何文件</b>。
+              </span>
+            </div>
+            <label v-if="selectedDir && !selectedIsGit" class="check-field">
+              <el-checkbox v-model="gitInitIfMissing">
+                允许平台自动 <code class="mono">git init</code>（只加 .git，不改任何文件）
+              </el-checkbox>
+            </label>
+          </template>
+
+          <template v-else>
+            <div class="field">
+              <span class="field-label">选择 Gitee 仓库</span>
+              <div class="dir-pick" @click="openGitee">
+                <el-icon><Connection /></el-icon>
+                <span class="mono" :class="{ placeholder: !selectedRepo }">
+                  {{ selectedRepo ? selectedRepo.fullName : '从你的 Gitee 仓库列表选择…' }}
+                </span>
+                <span v-if="selectedRepo?.privateRepo" class="git-tag warn">私有</span>
+              </div>
+              <span v-if="!binding?.bound" class="field-hint warn-text">
+                尚未绑定 Gitee 账号——请先在上方绑定（或配置平台兜底 token）。
+              </span>
+            </div>
+            <div class="field">
+              <span class="field-label">克隆到哪里</span>
+              <div class="dir-pick" @click="chooseDir('clone')">
+                <el-icon><Folder /></el-icon>
+                <span class="mono" :class="{ placeholder: !cloneTarget }">
+                  {{ cloneTarget || '点击浏览文件夹（仓库将 clone 到这里）…' }}
+                </span>
+              </div>
+              <span class="field-hint">
+                仓库 clone 到你选的本地目录，平台直接在该目录上构建（不复制到平台工作区）。
+              </span>
+            </div>
+          </template>
+
+          <label class="field">
+            <span class="field-label">项目 ID</span>
+            <el-input v-model="projectId" class="mono" placeholder="如 SHOP（大写字母开头）" />
+          </label>
+
+          <div class="form-actions">
+            <button type="button" class="primary-btn" :disabled="!canSubmit" @click="submit">
+              校验并接入
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- Step 2 -->
+      <template v-else-if="phase === 'RUNNING' || phase === 'FAILED'">
+        <h1 class="page-title">
+          正在接入 {{ status?.projectId }}
+          <span v-if="phase === 'FAILED'" class="fail-tag">失败</span>
+        </h1>
+        <ol class="timeline">
+          <li
+            v-for="(s, i) in steps"
+            :key="s"
+            class="tl-step"
+            :class="{ done: stepIndex > i, active: phase === 'RUNNING' && stepIndex === i }"
+          >
+            <span class="tl-dot">
+              <el-icon v-if="phase === 'RUNNING' && stepIndex === i" class="is-loading"><Loading /></el-icon>
+              <el-icon v-else-if="stepIndex > i"><Select /></el-icon>
+            </span>
+            <span class="tl-name">{{ s }}</span>
+            <span v-if="phase === 'RUNNING' && stepIndex === i" class="tl-msg">{{ status?.message }}</span>
+          </li>
+        </ol>
+        <div v-if="phase === 'FAILED'" class="error-box">
+          <div class="err-head"><el-icon><WarningFilled /></el-icon> 接入失败</div>
+          <pre class="mono err-body">{{ status?.message }}</pre>
+          <div class="err-actions">
+            <button type="button" class="ghost-btn" @click="retry">重试</button>
+          </div>
+        </div>
+        <p v-else class="hint">大仓库可能需要 1-3 分钟，可安全离开此页。</p>
+      </template>
+
+      <!-- Step 3 -->
+      <template v-else>
+        <h1 class="page-title">接入完成</h1>
+        <div class="report-card" v-if="report">
+          <div class="report-line">
+            <span>自检</span>
+            <span class="badge" :class="report.ready ? 'ok' : 'warn'">
+              {{ report.ready ? '就绪' : '有警告' }}
+            </span>
+          </div>
+          <div class="report-line">
+            <span>流水线</span>
+            <span class="mono">
+              {{ report.pipeline ?? (report.scaffoldWritten?.length ? '已自动生成' : '缺失（可一键生成）') }}
+            </span>
+          </div>
+          <div v-if="report.stack" class="report-line">
+            <span>识别</span>
+            <span class="mono">{{ report.stack }}</span>
+          </div>
+          <div class="report-line">
+            <span>Dockerfile</span>
+            <span>{{ report.dockerfile ? '✓ 已声明' : '✗ 缺失（DOCKER 目标不可用，可用 HOST）' }}</span>
+          </div>
+          <details class="actions-detail">
+            <summary>动作配方（{{ Object.keys(report.actions).length }}）</summary>
+            <div v-for="(src, name) in report.actions" :key="name" class="action-row">
+              <span class="mono">{{ name }}</span>
+              <span :class="src ? 'src-ok' : 'src-miss'">{{ src ?? '无配方（stage 跳过）' }}</span>
+            </div>
+          </details>
+          <details v-if="report.warnings?.length" class="warn-detail" :open="!report.ready">
+            <summary>提示（{{ report.warnings.length }}）</summary>
+            <div v-for="(w, i) in report.warnings" :key="i" class="warn-row">{{ w }}</div>
+          </details>
+          <details v-if="report.scaffoldFiles?.length" class="tpl-detail" open>
+            <summary>
+              已生成的 ci/ 脚本
+              <span v-if="report.scaffoldWritten?.length" class="gen-ok">
+                · 已写入 {{ report.scaffoldWritten.join('、') }}
+              </span>
+            </summary>
+            <div v-for="f in report.scaffoldFiles" :key="f.path" class="gen-file">
+              <div class="gen-file-head mono">{{ f.path }}</div>
+              <pre class="mono tpl-body">{{ f.content }}</pre>
+            </div>
+          </details>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="ghost-btn" @click="retry">再接一个</button>
+        </div>
+      </template>
+    </div>
+
+    <!-- 目录选择器（现代：快捷位置 + 面包屑 + 搜索 + 键盘） -->
+    <DirPickerDialog
+      v-model="dirBrowser"
+      :initial-path="pickerInitial"
+      :title="dirPickTarget === 'clone' ? '选择克隆目标目录' : '选择项目目录'"
+      @pick="onDirPicked"
+    />
+
+    <!-- Gitee 仓库选择（卡片式列表 + 键盘导航） -->
+    <GiteeRepoPicker
+      v-model="giteeDialog"
+      :account="binding?.giteeLogin ?? ''"
+      @pick="pickRepo"
+    />
+  </div>
+</template>
+
+<style scoped src="./intake-shared.css"></style>

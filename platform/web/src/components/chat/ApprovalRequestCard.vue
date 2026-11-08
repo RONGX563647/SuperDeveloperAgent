@@ -1,0 +1,174 @@
+<script setup lang="ts">
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { getChange, confirmChange, applyChange } from '../../api/change'
+import type { ChangeView } from '../../types'
+
+/**
+ * 变更确认卡（信息结构对齐 ruoyi-copilot 的 ApprovalRequestCard + 本项目 ConfirmTokenService）：
+ * 加载变更单 → 确认（高危需密码）→ 带令牌执行，全部状态内聚在本组件。
+ */
+interface Props {
+  changeId: string
+}
+
+const props = defineProps<Props>()
+
+const emit = defineEmits<{
+  (e: 'applied', result: { action: string, status: string, durationMs: number }): void
+  (e: 'dismiss'): void
+}>()
+
+const change = ref<ChangeView | null>(null)
+const password = ref('')
+const confirmToken = ref<string | null>(null)
+const applyResult = ref<string | null>(null)
+const applyBusy = ref(false)
+
+async function load(): Promise<void> {
+  try {
+    change.value = await getChange(props.changeId)
+    confirmToken.value = null
+    applyResult.value = null
+    password.value = ''
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载变更失败')
+  }
+}
+
+async function doConfirm(): Promise<void> {
+  if (!change.value) return
+  try {
+    const result = await confirmChange(change.value.changeId, change.value.highRisk ? password.value : undefined)
+    confirmToken.value = result.confirmToken
+    ElMessage.success('已确认，令牌 5 分钟内有效')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '确认失败')
+  }
+}
+
+async function doApply(): Promise<void> {
+  if (!change.value || !confirmToken.value) return
+  applyBusy.value = true
+  try {
+    const result = await applyChange(change.value.changeId, confirmToken.value)
+    applyResult.value = `${result.action} → ${result.status}（${result.durationMs} ms）`
+    ElMessage.success(`变更执行完毕：${result.status}`)
+    emit('applied', result)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '执行失败')
+  } finally {
+    applyBusy.value = false
+  }
+}
+
+defineExpose({ load })
+</script>
+
+<template>
+  <div v-if="change" class="change-card">
+    <div class="card-head">
+      <span class="head-title">变更待确认</span>
+      <code class="mono head-id">{{ change.changeId }}</code>
+      <el-tag
+        :type="change.highRisk ? 'danger' : 'success'"
+        size="small" effect="dark" round
+      >
+        {{ change.highRisk ? '高危（需二次密码）' : '常规' }}
+      </el-tag>
+    </div>
+
+    <div class="card-body">
+      <div class="line"><span>项目 / 环境</span><b>{{ change.projectId }} / {{ change.env }}</b></div>
+      <div class="line"><span>类型</span><b>{{ change.kind }}</b></div>
+      <div class="line"><span>内容</span><b>{{ change.summary }}</b></div>
+      <div class="line"><span>镜像 digest</span><b class="mono">{{ change.imageDigest ?? '—' }}</b></div>
+      <div class="line"><span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b></div>
+    </div>
+
+    <el-input
+      v-if="change.highRisk && !confirmToken"
+      v-model="password"
+      type="password"
+      placeholder="请输入密码（账号体系接入前会失败关闭）"
+      show-password
+    />
+
+    <el-alert
+      v-if="confirmToken"
+      type="success" :closable="false" show-icon
+      title="确认令牌已签发（5 分钟内有效，一次性）"
+      :description="confirmToken"
+    />
+    <el-alert
+      v-if="applyResult"
+      type="success" :closable="false" show-icon
+      title="已带令牌执行" :description="applyResult"
+    />
+
+    <div class="card-actions">
+      <el-button size="small" @click="emit('dismiss')">忽略</el-button>
+      <el-button size="small" :disabled="!!confirmToken" @click="doConfirm">确认变更</el-button>
+      <el-button
+        size="small" type="primary"
+        :disabled="!confirmToken || applyBusy" :loading="applyBusy"
+        @click="doApply"
+      >
+        带令牌执行
+      </el-button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.change-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-top: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.head-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.head-id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.card-body .line {
+  display: flex;
+  gap: 14px;
+  font-size: 13px;
+}
+.card-body .line span {
+  flex: none;
+  width: 90px;
+  color: var(--ink-muted);
+}
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+</style>

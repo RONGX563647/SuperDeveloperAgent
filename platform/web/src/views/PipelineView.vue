@@ -1,58 +1,118 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CopyDocument, Loading, Refresh, Remove, VideoPlay } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import {
-  getActionPlan,
-  listActions,
-  requestAction,
-  runAction,
-  type ActionRunView,
-  type ActionView
-} from '../api/action'
-import { applyChange, confirmChange, getChange } from '../api/change'
-import type { ChangeView, ConfirmResponse } from '../types'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Close, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
+import ResizableSplitter from '../components/project/ResizableSplitter.vue'
+import TriggerBar from '../components/pipeline/TriggerBar.vue'
+import HistoryList from '../components/pipeline/HistoryList.vue'
+import ActionPanel from '../components/pipeline/ActionPanel.vue'
+import StageTimeline from '../components/pipeline/StageTimeline.vue'
+import RunLog from '../components/pipeline/RunLog.vue'
+import { getHistory, listDeployTargets, listPipelines, triggerPipeline,
+  type DeployTargetOption, type HistoryItem, type RunView } from '../api/pipeline'
+import { gitCommits, listProjects, type GitCommit, type ProjectRow } from '../api/project'
+import { getActionPlan, listActions, requestAction, runAction, type ActionView, type ActionRunView } from '../api/action'
+import { applyChange, confirmChange, getChange } from '../api/change'
+import type { ChangeView } from '../types'
 import { appStore } from '../stores/app'
-import {
-  cancelRun,
-  getHistory,
-  getRun,
-  isTerminalStatus,
-  listPipelines,
-  triggerPipeline,
-  type ArtifactView,
-  type HistoryItem,
-  type RunView,
-  type StageView
-} from '../api/pipeline'
+import { useRunTracker } from '../composables/useRunTracker'
+import { formatDuration, statusLabel, statusTone } from '../utils/status'
 
-/** 项目/环境与聊天页共用全局状态：切一次，两边同步。 */
+/**
+ * 流水线工作台（重构版）：
+ *
+ * 修复要点：
+ * 1. 运行详情与会话解耦——点击历史不覆盖、不消费；运行中可在列表间来回切换；
+ * 2. 日志走增量接口（offset 续传）并追加渲染，不再每秒全量重绘；
+ * 3. sha 输入自动清洗 + 禁用原因可读；
+ * 4. 历史补齐字段/筛选/键盘可达；重跑常显；
+ * 5. 状态中文化 + 统一设计令牌（无硬编码 Element 默认色）；
+ * 6. 粘性运行条（状态、耗时、取消、重跑、复制）随页面滚动始终可见；
+ * 7. 左右分栏可拖拽；空状态带引导动作。
+ */
+const route = useRoute()
+const router = useRouter()
+
 const projectId = computed(() => appStore.projectId)
 const env = computed(() => appStore.env)
 
-const pipelineList = ref<string[]>([])
+/** 环境策略：选环境即套用（流水线 + 部署目标），仍可手动覆盖。 */
+interface EnvStrategy {
+  key: string
+  label: string
+  pipeline: string
+  target: string
+  desc: string
+}
+
+const ENV_STRATEGIES: EnvStrategy[] = [
+  { key: 'dev', label: '开发环境', pipeline: 'verify', target: 'host', desc: '只构建+测试，不部署（本机直跑）' },
+  { key: 'test', label: '测试环境', pipeline: 'release', target: 'docker', desc: '构建+镜像+部署到本机 Docker' },
+  { key: 'prod', label: '生产环境', pipeline: 'release', target: 'server', desc: '构建+部署到远程服务器' },
+]
+
+const strategy = computed<EnvStrategy>(() =>
+  ENV_STRATEGIES.find((s) => s.key === env.value) ?? ENV_STRATEGIES[1])
+
+/** 流水线的人类可读名称：release / verify 不再直接暴露给用户。 */
+function pipelineLabel(id: string): string {
+  if (id === 'release') return '发布'
+  if (id === 'verify') return '检查构建'
+  return id
+}
+
+function pipelineDesc(id: string): string {
+  if (id === 'release') return '构建 → 测试 → 镜像 → 部署 → 健康检查'
+  if (id === 'verify') return '只构建 + 测试，不部署（PR 检查）'
+  return '仓库自定义流水线'
+}
+
+/** Header 副标题：反映"当前真正会怎么跑"，而不是只显示环境默认。 */
+const headerSubtitle = computed(() => {
+  const target = deployTargets.value.find((t) => t.target === deployTarget.value)
+  return `${strategy.value.label} · ${pipelineLabel(pipelineId.value)} → ${target?.label ?? deployTarget.value}`
+})
+
+const projects = ref<ProjectRow[]>([])
+/** 项目下拉选项：接口为空时至少保留当前项目，避免出现"空下拉框"。 */
+const projectChoices = computed<Array<{ id: string, name: string }>>(() =>
+  projects.value.length
+    ? projects.value.map((p) => ({ id: p.id, name: p.name }))
+    : [{ id: projectId.value, name: projectId.value }])
+const commits = ref<GitCommit[]>([])
+const commitsLoading = ref(false)
+
+const pipelines = ref<string[]>([])
 const engine = ref('')
-const selectedPipeline = ref('')
-const gitSha = ref('')
+const pipelineId = ref('')
+const sha = ref('')
+const triggerBusy = ref(false)
 const pipelinesLoading = ref(false)
-
-const actions = ref<ActionView[]>([])
-const actionsLoading = ref(false)
-const planCache = ref<Record<string, ActionView>>({})
-const actionBusy = ref('')
-const actionResult = ref<ActionRunView | null>(null)
-const requestInfo = ref('')
-
-const run = ref<RunView | null>(null)
-const runId = ref('')
-const runBusy = ref(false)
-const errorText = ref('')
-const pollCount = ref(0)
-let pollTimer: ReturnType<typeof setInterval> | null = null
+/** 部署目标（方案 C：平台部署器，运行时可覆盖 pipeline.yml 的 deploy.target）。 */
+const deployTarget = ref('docker')
+const deployTargets = ref<DeployTargetOption[]>([
+  { target: 'docker', label: '本机 Docker 容器', available: true, detail: '' },
+  { target: 'host', label: '本机直接运行', available: true, detail: '' },
+  { target: 'server', label: '远程服务器', available: false, detail: '未配置' },
+])
 
 const history = ref<HistoryItem[]>([])
 const historyLoading = ref(false)
+
+const actions = ref<ActionView[]>([])
+const actionsLoading = ref(false)
+const actionBusy = ref('')
+const actionResult = shallowRef<ActionRunView | null>(null)
+
+const leftPct = ref(34)
+const topError = ref('')
+
+const {
+  run, runId, loading: runLoading, errorText, startedAt, running,
+  open: openRun, attach, cancel, clear,
+} = useRunTracker({ onFinished: () => void loadHistory() })
 
 // L3 确认-执行闭环
 const changeDialog = ref(false)
@@ -61,102 +121,37 @@ const changePassword = ref('')
 const confirmToken = ref<string | null>(null)
 const changeBusy = ref(false)
 
-// 日志
-const followLog = ref(true)
-const logRef = ref<HTMLElement | null>(null)
+const lastGoodSha = computed(() =>
+  history.value.find((h) => h.status === 'SUCCEEDED')?.gitSha ?? '')
 
-const POLL_INTERVAL_MS = 1000
+/* ---------------------------------------------------------------- 数据加载 */
 
-const polling = computed(() => pollTimer !== null)
-const canTrigger = computed(() => !!selectedPipeline.value && /^[0-9a-f]{7,40}$/.test(gitSha.value))
-const runActive = computed(() => !!run.value && !isTerminalStatus(run.value.status))
-const logLineCount = computed(() => (run.value?.log ?? '').split('\n').filter((l) => l.trim()).length)
-/** 最近一次成功 sha：触发框的快捷项（最高频操作不该靠复制粘贴）。 */
-const lastGoodSha = computed(() => history.value.find((h) => h.status === 'SUCCEEDED')?.gitSha ?? '')
-const anyHistorySha = computed(() => history.value[0]?.gitSha ?? '')
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function shortDigest(digest: string): string {
-  const value = digest || '—'
-  if (value.length <= 20) return value
-  return `${value.slice(0, 16)}…${value.slice(-6)}`
-}
-
-type Tone = 'ok' | 'bad' | 'busy'
-
-function stageTone(status: string): Tone {
-  if (status === 'SUCCEEDED') return 'ok'
-  if (['FAILED', 'TIMEOUT', 'CANCELLED'].includes(status)) return 'bad'
-  return 'busy'
-}
-
-function elTagType(tone: Tone): 'success' | 'danger' | 'primary' {
-  return tone === 'ok' ? 'success' : tone === 'bad' ? 'danger' : 'primary'
-}
-
-function artifactKey(a: ArtifactView, i: number): string {
-  return `${a.kind}:${a.ref}:${a.digest}:${i}`
-}
-
-function stageKey(s: StageView, i: number): string {
-  return `${s.id}:${i}`
-}
-
-function formatTime(ms: number): string {
-  if (!ms) return '—'
-  const d = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
-
-function shortSha(sha: string): string {
-  return sha.length > 12 ? sha.slice(0, 12) : sha
-}
-
-async function loadPipelines() {
+async function loadPipelines(): Promise<void> {
   pipelinesLoading.value = true
-  errorText.value = ''
   try {
     const data = await listPipelines(projectId.value)
     engine.value = data.engine
-    pipelineList.value = data.pipelines ?? []
-    if (!pipelineList.value.includes(selectedPipeline.value)) {
-      selectedPipeline.value = pipelineList.value[0] ?? ''
+    pipelines.value = data.pipelines ?? []
+    if (!pipelines.value.includes(pipelineId.value)) {
+      // 优先用"环境策略"推荐的流水线（开发=检查构建，测试/生产=发布）
+      const preferred = strategy.value.pipeline
+      pipelineId.value = pipelines.value.includes(preferred)
+        ? preferred
+        : pipelines.value[0] ?? ''
     }
-  } catch (error) {
-    errorText.value = `加载流水线失败：${messageOf(error)}`
-    pipelineList.value = []
-    selectedPipeline.value = ''
+  } catch (e) {
+    topError.value = `加载流水线失败：${e instanceof Error ? e.message : String(e)}`
+    pipelines.value = []
+    pipelineId.value = ''
   } finally {
     pipelinesLoading.value = false
   }
 }
 
-async function loadActions() {
-  actionsLoading.value = true
-  errorText.value = ''
-  planCache.value = {}
-  try {
-    actions.value = await listActions(projectId.value, env.value)
-  } catch (error) {
-    errorText.value = `加载动作失败：${messageOf(error)}`
-    actions.value = []
-  } finally {
-    actionsLoading.value = false
-  }
-}
-
-async function loadHistory() {
+async function loadHistory(): Promise<void> {
   historyLoading.value = true
   try {
     history.value = await getHistory(projectId.value)
-    // 空输入时自动预填最近一次构建的 sha，少一步复制粘贴
-    if (!gitSha.value && history.value.length) {
-      gitSha.value = history.value[0].gitSha.slice(0, 7)
-    }
   } catch {
     history.value = []
   } finally {
@@ -164,408 +159,447 @@ async function loadHistory() {
   }
 }
 
-async function openHistory(item: HistoryItem) {
-  stopPolling()
-  errorText.value = ''
+async function loadActions(): Promise<void> {
+  actionsLoading.value = true
   try {
-    run.value = await getRun(item.runId)
-    runId.value = item.runId
-    gitSha.value = item.gitSha.slice(0, 7)
-    if (!isTerminalStatus(run.value.status)) startPolling(item.runId)
-  } catch (error) {
-    ElMessage.error(`加载运行失败：${messageOf(error)}`)
-  }
-}
-
-async function showPlan(action: string) {
-  if (planCache.value[action]) return
-  actionBusy.value = action
-  try {
-    planCache.value[action] = await getActionPlan(projectId.value, action)
-  } catch (error) {
-    ElMessage.error(`加载计划失败：${messageOf(error)}`)
-  } finally {
-    actionBusy.value = ''
-  }
-}
-
-async function doRunAction(action: string) {
-  actionBusy.value = action
-  actionResult.value = null
-  requestInfo.value = ''
-  try {
-    actionResult.value = await runAction(projectId.value, env.value, action)
-    ElMessage.success(`${action} 执行完毕：${actionResult.value.status}`)
-  } catch (error) {
-    ElMessage.error(`执行失败：${messageOf(error)}`)
-  } finally {
-    actionBusy.value = ''
-  }
-}
-
-async function doRequestAction(action: string) {
-  actionBusy.value = action
-  actionResult.value = null
-  requestInfo.value = ''
-  confirmToken.value = null
-  changePassword.value = ''
-  try {
-    const result = await requestAction(projectId.value, env.value, action)
-    requestInfo.value = `${result.changeId} · planHash ${result.planHash.slice(0, 24)}…`
-    change.value = await getChange(result.changeId)
-    changeDialog.value = true
-  } catch (error) {
-    ElMessage.error(`登记失败：${messageOf(error)}`)
-  } finally {
-    actionBusy.value = ''
-  }
-}
-
-async function doConfirmChange() {
-  if (!change.value || confirmToken.value) return
-  changeBusy.value = true
-  try {
-    const result: ConfirmResponse = await confirmChange(
-      change.value.changeId,
-      change.value.highRisk ? changePassword.value : undefined
-    )
-    confirmToken.value = result.confirmToken
-    ElMessage.success('已确认，令牌 5 分钟内有效')
-  } catch (error) {
-    ElMessage.error(`确认失败：${messageOf(error)}`)
-  } finally {
-    changeBusy.value = false
-  }
-}
-
-async function doApplyChange() {
-  if (!change.value || !confirmToken.value) return
-  changeBusy.value = true
-  try {
-    const result = await applyChange(change.value.changeId, confirmToken.value)
-    run.value = {
-      runId: `${change.value.changeId}（动作 ${result.action}）`,
-      status: result.status,
-      stages: [],
-      artifacts: result.artifacts,
-      log: result.logTail
-    }
-    runId.value = ''
-    ElMessage.success(`变更执行完毕：${result.status}`)
-    changeDialog.value = false
-    void loadHistory()
-  } catch (error) {
-    ElMessage.error(`执行失败：${messageOf(error)}`)
-  } finally {
-    changeBusy.value = false
-  }
-}
-
-async function doCancel() {
-  if (!run.value || !runActive.value) return
-  try {
-    run.value = await cancelRun(run.value.runId)
-    if (isTerminalStatus(run.value.status)) stopPolling()
-    ElMessage.warning('已请求取消')
-    void loadHistory()
-  } catch (error) {
-    ElMessage.error(`取消失败：${messageOf(error)}`)
-  }
-}
-
-async function copyLog() {
-  const text = run.value?.log ?? ''
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('日志已复制')
+    actions.value = await listActions(projectId.value, env.value)
   } catch {
-    ElMessage.error('复制失败（浏览器未授权剪贴板）')
-  }
-}
-
-function stopPolling() {
-  if (pollTimer !== null) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-function clearRunView() {
-  run.value = null
-  runId.value = ''
-  actionResult.value = null
-  requestInfo.value = ''
-  pollCount.value = 0
-}
-
-function startPolling(id: string) {
-  stopPolling()
-  pollCount.value = 0
-  pollTimer = setInterval(async () => {
-    pollCount.value += 1
-    try {
-      const data = await getRun(id)
-      run.value = data
-      errorText.value = ''
-      if (isTerminalStatus(data.status)) {
-        stopPolling()
-        void loadHistory()
-      }
-    } catch (error) {
-      errorText.value = `轮询运行状态失败：${messageOf(error)}`
-      stopPolling()
-    }
-  }, POLL_INTERVAL_MS)
-}
-
-async function doTrigger() {
-  if (!canTrigger.value || runBusy.value) return
-  runBusy.value = true
-  errorText.value = ''
-  stopPolling()
-  clearRunView()
-  try {
-    const result = await triggerPipeline(selectedPipeline.value, projectId.value, gitSha.value)
-    runId.value = result.runId
-    run.value = await getRun(result.runId)
-    if (!isTerminalStatus(run.value.status)) startPolling(result.runId)
-    void loadHistory()
-  } catch (error) {
-    errorText.value = `触发流水线失败：${messageOf(error)}`
+    actions.value = []
   } finally {
-    runBusy.value = false
+    actionsLoading.value = false
   }
 }
 
-/** 一键重跑：用历史条目里的 sha 重新触发同一条流水线。 */
-async function rerun(item: HistoryItem) {
-  gitSha.value = item.gitSha.slice(0, 7)
-  selectedPipeline.value = item.pipelineId
-  await doTrigger()
+async function loadDeployTargets(): Promise<void> {
+  try {
+    const list = await listDeployTargets()
+    if (list.length) {
+      deployTargets.value = list
+      const preferred = list.find((t) => t.target === strategy.value.target && t.available)
+      const current = list.find((t) => t.target === deployTarget.value && t.available)
+      deployTarget.value = (preferred ?? current ?? list.find((t) => t.available))?.target ?? 'docker'
+    }
+  } catch {
+    // 端点不可用时保留本地默认（docker）
+  }
 }
 
-watch(
-  () => run.value?.log,
-  async () => {
-    if (!followLog.value) return
-    await nextTick()
-    const el = logRef.value
-    if (el) el.scrollTop = el.scrollHeight
+/** 项目列表（Header 选择器）；当前项目不在列表时保留全局值。 */
+async function loadProjects(): Promise<void> {
+  try {
+    projects.value = await listProjects()
+    if (!projects.value.some((p) => p.id === projectId.value) && projects.value.length) {
+      appStore.projectId = projects.value[0].id
+    }
+  } catch {
+    projects.value = []
   }
-)
+}
+
+/** 提交列表：用 git 选提交，而不是让用户手敲 sha。 */
+async function loadCommits(): Promise<void> {
+  commitsLoading.value = true
+  try {
+    const page = await gitCommits(projectId.value, 30)
+    commits.value = page.commits
+    // 当前 sha 不在最近提交里（或为空）时，默认选最新一条
+    if (page.commits.length && !page.commits.some((c) => c.sha === sha.value)) {
+      sha.value = page.commits[0].sha
+    }
+  } catch {
+    commits.value = []
+  } finally {
+    commitsLoading.value = false
+  }
+}
+
+/** 切换环境：套用该环境的流水线 + 部署目标策略。 */
+function applyEnv(key: string): void {
+  if (!ENV_STRATEGIES.some((s) => s.key === key)) return
+  appStore.env = key
+  const s = ENV_STRATEGIES.find((x) => x.key === key)!
+  if (pipelines.value.includes(s.pipeline)) {
+    pipelineId.value = s.pipeline
+  }
+  const target = deployTargets.value.find((t) => t.target === s.target)
+  if (!target || target.available) {
+    deployTarget.value = s.target
+  }
+}
+
+function applyProject(id: string): void {
+  appStore.projectId = id
+  sha.value = ''
+  // 项目写进 URL：刷新/分享链接不会掉回默认项目
+  void router.replace({ query: { ...route.query, projectId: id } })
+}
 
 watch([projectId, env], () => {
   void loadPipelines()
   void loadActions()
   void loadHistory()
+  void loadDeployTargets()
+  void loadCommits()
 })
 
-onMounted(() => {
-  void loadPipelines()
-  void loadActions()
-  void loadHistory()
+onMounted(async () => {
+  // ?projectId= 优先：从项目页/书签/分享链接进来时按 URL 定位项目
+  const fromQuery = typeof route.query.projectId === 'string' ? route.query.projectId : ''
+  if (fromQuery) {
+    appStore.projectId = fromQuery
+  }
+  await loadProjects()
+  await Promise.all([loadPipelines(), loadActions(), loadHistory(), loadDeployTargets(), loadCommits()])
+  const fromUrl = typeof route.query.runId === 'string' ? route.query.runId : ''
+  if (fromUrl) void openRun(fromUrl)
 })
 
-onBeforeUnmount(stopPolling)
+/* ---------------------------------------------------------------- 触发 / 查阅 */
+
+async function doTrigger(): Promise<void> {
+  if (!pipelineId.value || !/^[0-9a-f]{7,40}$/.test(sha.value) || triggerBusy.value) return
+  triggerBusy.value = true
+  topError.value = ''
+  try {
+    const result = await triggerPipeline(
+      pipelineId.value, projectId.value, sha.value, deployTarget.value)
+    const initial: RunView = {
+      runId: result.runId,
+      status: result.status,
+      stages: [],
+      artifacts: [],
+      log: '',
+    }
+    attach(result.runId, initial)
+    syncUrl(result.runId)
+    ElMessage.success('已触发运行')
+    void loadHistory()
+  } catch (e) {
+    topError.value = `触发流水线失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    triggerBusy.value = false
+  }
+}
+
+function openedRun(item: HistoryItem): void {
+  void openRun(item.runId, { startedAt: item.createdAt })
+  sha.value = item.gitSha.slice(0, 8)
+  pipelineId.value = item.pipelineId
+  syncUrl(item.runId)
+}
+
+async function rerun(item: HistoryItem): Promise<void> {
+  sha.value = item.gitSha.slice(0, 8)
+  pipelineId.value = item.pipelineId
+  await doTrigger()
+}
+
+async function doCancel(): Promise<void> {
+  if (await cancel()) ElMessage.warning('已请求取消')
+}
+
+function closeRun(): void {
+  clear()
+  syncUrl('')
+}
+
+/** 运行 id 同步到 URL，刷新/分享可恢复（替代"运行状态只活在内存里"）。 */
+function syncUrl(id: string): void {
+  const query = { ...route.query }
+  if (id) query.runId = id
+  else delete query.runId
+  void router.replace({ query })
+}
+
+/* ---------------------------------------------------------------- 动作 */
+
+async function runActionNow(action: string): Promise<void> {
+  actionBusy.value = action
+  actionResult.value = null
+  try {
+    const plan = await getActionPlan(projectId.value, action)
+    const commands = plan.commands.length ? plan.commands.join('\n') : '（无命令）'
+    const ok = await ElMessageBox.confirm(
+      `将执行：\n${commands}`,
+      '执行确认',
+      { confirmButtonText: '执行', cancelButtonText: '取消', type: 'warning' },
+    ).then(() => true).catch(() => false)
+    if (!ok) return
+    const result = await runAction(projectId.value, env.value, action)
+    actionResult.value = result
+    ElMessage.success(`${action} 执行完毕：${statusLabel(result.status)}`)
+  } catch (e) {
+    ElMessage.error(`执行失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    actionBusy.value = ''
+  }
+}
+
+async function requestActionChange(action: string): Promise<void> {
+  actionBusy.value = action
+  try {
+    const result = await requestAction(projectId.value, env.value, action)
+    change.value = await getChange(result.changeId)
+    changePassword.value = ''
+    confirmToken.value = null
+    changeDialog.value = true
+  } catch (e) {
+    ElMessage.error(`登记失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    actionBusy.value = ''
+  }
+}
+
+async function doConfirmChange(): Promise<void> {
+  if (!change.value || confirmToken.value) return
+  changeBusy.value = true
+  try {
+    const result = await confirmChange(
+      change.value.changeId,
+      change.value.highRisk ? changePassword.value : undefined,
+    )
+    confirmToken.value = result.confirmToken
+    ElMessage.success('已确认，令牌 5 分钟内有效')
+  } catch (e) {
+    ElMessage.error(`确认失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    changeBusy.value = false
+  }
+}
+
+async function doApplyChange(): Promise<void> {
+  if (!change.value || !confirmToken.value) return
+  changeBusy.value = true
+  try {
+    const result = await applyChange(change.value.changeId, confirmToken.value)
+    ElMessage.success(`变更执行完毕：${statusLabel(result.status)}`)
+    changeDialog.value = false
+    void loadHistory()
+  } catch (e) {
+    ElMessage.error(`执行失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    changeBusy.value = false
+  }
+}
+
+/* ---------------------------------------------------------------- 生命周期 */
+
+/** 运行计时：运行中每秒刷新（否则 "运行中 3.2s" 会定格）。 */
+const nowTick = ref(Date.now())
+let tickTimer: ReturnType<typeof setInterval> | null = null
+
+watch(running, (value) => {
+  if (value && tickTimer === null) {
+    tickTimer = setInterval(() => (nowTick.value = Date.now()), 1000)
+  } else if (!value && tickTimer !== null) {
+    clearInterval(tickTimer)
+    tickTimer = null
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (tickTimer !== null) clearInterval(tickTimer)
+})
+
+const runDuration = computed(() => {
+  if (!run.value) return ''
+  if (!running.value) {
+    return formatDuration(run.value.stages.reduce((sum, s) => sum + s.durationMs, 0))
+  }
+  // 依赖 nowTick 触发重算
+  return formatDuration(Math.max(0, nowTick.value - startedAt.value))
+})
 </script>
 
 <template>
   <div class="pipeline-page">
-    <PageHeader title="流水线工作台" :subtitle="`${projectId} · ${env} · 引擎 ${engine || '—'}`">
+    <PageHeader title="流水线工作台" :subtitle="headerSubtitle">
       <template #actions>
-        <span v-if="polling" class="polling-chip">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          运行中
+        <span v-if="running" class="run-chip busy">
+          <span class="dot" /> 运行中 · {{ runDuration }}
         </span>
-        <el-button v-if="runActive" size="small" type="warning" plain @click="doCancel">取消</el-button>
+        <span v-else-if="run" class="run-chip" :class="statusTone(run.status)">
+          <span class="dot" /> {{ statusLabel(run.status) }}
+        </span>
       </template>
     </PageHeader>
 
-    <div class="page-scroll">
-      <!-- 触发：一行搞定（默认已预填最近提交，通常只需点一次） -->
-      <div class="trigger-bar">
-        <el-select v-model="selectedPipeline" class="t-pipeline" size="default">
-          <el-option v-for="p in pipelineList" :key="p" :label="p" :value="p" />
-        </el-select>
-        <el-input
-          v-model="gitSha"
-          class="t-sha mono"
-          size="default"
-          placeholder="commit sha（已自动预填最近一次）"
-          clearable
-        />
-        <el-button
-          type="primary"
-          :icon="VideoPlay"
-          :loading="runBusy"
-          :disabled="!canTrigger"
-          @click="doTrigger"
-        >
-          运行
-        </el-button>
-        <span v-if="lastGoodSha" class="t-quick mono" title="最近一次成功构建的提交">
-          上次成功：<a class="t-quick-sha" @click.prevent="gitSha = lastGoodSha.slice(0, 7)">{{ lastGoodSha.slice(0, 7) }}</a>
-        </span>
-      </div>
-
-      <el-alert v-if="errorText" class="block-alert" type="error" :closable="false" :title="errorText" show-icon />
-
-      <div class="grid">
-        <!-- 左：构建历史为主，动作收进下拉 -->
-        <div class="col-left">
-          <section class="panel" aria-label="构建历史">
-            <div class="panel-heading">
-              <h2 class="section-title">构建历史</h2>
-              <span class="panel-count">{{ history.length }} 条</span>
-              <el-button size="small" text :icon="Refresh" :loading="historyLoading" @click="loadHistory" />
-            </div>
-            <div v-loading="historyLoading" class="panel-body history-body">
-              <div
-                v-for="h in history"
-                :key="h.runId"
-                class="history-item"
-                :class="{ active: h.runId === runId }"
-                role="button"
-                tabindex="0"
-                @click="openHistory(h)"
-                @keydown.enter="openHistory(h)"
+    <div class="wp-body">
+      <!-- 左：触发 + 历史 + 动作 -->
+      <div class="wp-left" :style="{ width: `${leftPct}%` }">
+        <div class="wp-left-inner">
+          <!-- 上下文：项目 + 环境（环境决定默认策略，可再手动覆盖） -->
+          <div class="ctx-bar">
+            <label class="ctx-field">
+              <span class="ctx-label">项目</span>
+              <el-select
+                :model-value="projectId" size="default" class="ctx-select"
+                placeholder="选择项目" filterable
+                @update:model-value="applyProject"
               >
-                <span class="hist-dot" :class="stageTone(h.status)" />
-                <div class="hist-main">
-                  <div class="hist-line1">
-                    <span class="hist-pipeline">{{ h.pipelineId }}</span>
-                    <span class="hist-status" :class="stageTone(h.status)">{{ h.status }}</span>
-                  </div>
-                  <div class="hist-line2 mono">
-                    <span :title="h.gitSha">{{ shortSha(h.gitSha) }}</span>
-                    <span class="hist-time">{{ formatTime(h.createdAt) }}</span>
-                  </div>
-                </div>
-                <el-button
-                  class="hist-rerun"
-                  size="small"
-                  text
-                  :icon="Refresh"
-                  title="用该提交重跑"
-                  @click.stop="rerun(h)"
+                <el-option
+                  v-for="p in projectChoices" :key="p.id"
+                  :label="`${p.name}（${p.id}）`" :value="p.id"
                 />
-              </div>
-              <el-empty v-if="!historyLoading && !history.length" description="暂无构建历史" :image-size="60" />
-            </div>
-          </section>
+              </el-select>
+            </label>
+            <label class="ctx-field">
+              <span class="ctx-label">环境</span>
+              <el-select
+                :model-value="env" size="default" class="ctx-select env"
+                @update:model-value="applyEnv"
+              >
+                <el-option
+                  v-for="s in ENV_STRATEGIES" :key="s.key"
+                  :label="s.label" :value="s.key"
+                >
+                  <span class="ctx-opt-main">{{ s.label }}</span>
+                  <span class="ctx-opt-desc">{{ s.pipeline === 'verify' ? '只构建+测试' : '构建+部署' }} · {{ s.desc }}</span>
+                </el-option>
+              </el-select>
+            </label>
+          </div>
 
-          <section class="panel" aria-label="快捷动作">
-            <div class="panel-heading">
-              <h2 class="section-title">快捷动作</h2>
-              <span class="panel-count">单项执行 · 生产受限</span>
+          <TriggerBar
+            v-model:pipeline-id="pipelineId"
+            v-model:sha="sha"
+            v-model:deploy-target="deployTarget"
+            :pipelines="pipelines"
+            :engine="engine"
+            :busy="triggerBusy || pipelinesLoading"
+            :last-good-sha="lastGoodSha"
+            :deploy-targets="deployTargets"
+            :commits="commits"
+            :commits-loading="commitsLoading"
+            @run="doTrigger"
+            @refresh-commits="loadCommits"
+          />
+
+          <HistoryList
+            class="fill"
+            :items="history"
+            :active-run-id="runId"
+            :loading="historyLoading"
+            @open="openedRun"
+            @rerun="rerun"
+            @refresh="loadHistory"
+          />
+
+          <ActionPanel
+            :actions="actions"
+            :busy-action="actionBusy"
+            :loading="actionsLoading"
+            @run="runActionNow"
+            @request="requestActionChange"
+          />
+
+          <!-- 动作执行结果（状态 + 日志尾部），不再只在 toast 里一闪而过 -->
+          <section v-if="actionResult" class="action-result">
+            <div class="ar-head">
+              <span class="ar-title mono">{{ actionResult.action }}</span>
+              <span class="ar-status" :class="statusTone(actionResult.status)">
+                {{ statusLabel(actionResult.status) }}
+              </span>
+              <span class="ar-meta mono">
+                exit={{ actionResult.exitCode }} · {{ formatDuration(actionResult.durationMs) }}
+              </span>
+              <button type="button" class="ar-close" title="关闭" @click="actionResult = null">
+                <el-icon><Close /></el-icon>
+              </button>
             </div>
-            <div v-loading="actionsLoading" class="panel-body actions-body">
-              <div v-for="a in actions" :key="a.action" class="action-row">
-                <div class="action-main">
-                  <span class="mono action-name">{{ a.action }}</span>
-                  <el-tag size="small" :type="a.level.startsWith('L3') ? 'warning' : 'info'" effect="light" round>
-                    {{ a.level.startsWith('L3') ? '需确认' : '可直接执行' }}
-                  </el-tag>
-                </div>
-                <div class="action-ops">
-                  <el-dropdown trigger="click" @command="(cmd: string) => cmd === 'plan' ? showPlan(a.action) : cmd === 'run' ? doRunAction(a.action) : doRequestAction(a.action)">
-                    <el-button size="small" text :loading="actionBusy === a.action">
-                      操作<el-icon class="el-icon--right"><Remove /></el-icon>
-                    </el-button>
-                    <template #dropdown>
-                      <el-dropdown-menu>
-                        <el-dropdown-item command="plan">查看命令原文</el-dropdown-item>
-                        <el-dropdown-item v-if="!a.level.startsWith('L3')" command="run" divided>执行</el-dropdown-item>
-                        <el-dropdown-item v-else command="req" divided>登记变更…</el-dropdown-item>
-                      </el-dropdown-menu>
-                    </template>
-                  </el-dropdown>
-                </div>
-                <pre v-if="planCache[a.action]" class="action-cmd mono">{{ planCache[a.action].commands.join('\n') }}</pre>
-              </div>
-              <el-empty v-if="!actionsLoading && !actions.length" description="暂无动作" :image-size="60" />
-            </div>
+            <pre v-if="actionResult.logTail" class="ar-log mono">{{ actionResult.logTail }}</pre>
+            <p v-else class="ar-meta">（无输出）</p>
           </section>
         </div>
+      </div>
 
-        <!-- 右：运行详情（无 run 时不占一整块，改为轻量引导） -->
-        <section class="panel detail-panel" aria-label="运行详情">
-          <div class="panel-heading">
-            <h2 class="section-title">运行详情</h2>
-            <span v-if="runId" class="mono panel-count">{{ runId }}</span>
-            <el-checkbox v-model="followLog" size="small" class="follow">
-              跟随日志
-            </el-checkbox>
+      <ResizableSplitter v-model="leftPct" :min="22" :max="55" />
+
+      <!-- 右：运行详情 -->
+      <div class="wp-right">
+        <el-alert
+          v-if="topError" class="top-alert" type="error" :closable="true" show-icon
+          :title="topError" @close="topError = ''"
+        />
+
+        <div v-if="!run && !runLoading" class="run-empty">
+          <div class="re-illus" aria-hidden="true">
+            <svg width="88" height="60" viewBox="0 0 88 60" fill="none">
+              <rect x="6" y="8" width="76" height="44" rx="6" fill="var(--surface-sunken)" />
+              <rect x="14" y="18" width="22" height="4" rx="2" fill="var(--accent)" opacity="0.5" />
+              <rect x="42" y="18" width="22" height="4" rx="2" fill="var(--ink-faint)" opacity="0.35" />
+              <rect x="14" y="28" width="50" height="3" rx="1.5" fill="var(--ink-faint)" opacity="0.25" />
+              <rect x="14" y="36" width="30" height="3" rx="1.5" fill="var(--ink-faint)" opacity="0.2" />
+            </svg>
           </div>
-          <div class="panel-body detail-body">
-            <div v-if="!run" class="empty-state">
-              <p>触发运行，或从左侧历史点开一条查看 stage、产物与日志。</p>
+          <p class="re-title">还没有选中运行</p>
+          <p class="re-sub">
+            {{ pipelines.length
+              ? '在上方填入提交 sha 触发一次，或从左侧历史点开某次运行'
+              : '该仓库还没提交 ci/pipeline.yml——生成并提交后再回来运行' }}
+          </p>
+          <button
+            type="button" class="re-btn"
+            :disabled="!pipelines.length || (!lastGoodSha && !sha)"
+            @click="sha = sha || lastGoodSha.slice(0, 8); doTrigger()"
+          >
+            <el-icon><VideoPlay /></el-icon> 运行最近提交
+          </button>
+        </div>
+
+        <template v-else>
+          <!-- 粘性运行条 -->
+          <div class="run-bar" :class="statusTone(run?.status ?? '')">
+            <span class="rb-status">
+              <span class="rb-dot" /> {{ run ? statusLabel(run.status) : '加载中' }}
+            </span>
+            <span class="rb-id mono" :title="runId">{{ runId.slice(0, 12) }}</span>
+            <span v-if="run" class="rb-meta">{{ run.stages.length }} 阶段 · {{ run.artifacts.length }} 产物 · {{ runDuration }}</span>
+            <span v-if="errorText" class="rb-err">{{ errorText }}</span>
+            <div class="rb-actions">
+              <button v-if="running" type="button" class="rb-btn warn" @click="doCancel">取消运行</button>
+              <button type="button" class="rb-btn" :disabled="running || !sha" @click="doTrigger">
+                <el-icon><RefreshRight /></el-icon> 重跑
+              </button>
+              <button type="button" class="rb-btn icon" title="关闭详情" @click="closeRun">
+                <el-icon><Close /></el-icon>
+              </button>
             </div>
-
-            <template v-else>
-              <div class="run-summary">
-                <el-tag :type="elTagType(stageTone(run.status))" effect="light" round>{{ run.status }}</el-tag>
-                <span class="hint">{{ run.stages.length }} 个 stage · {{ run.artifacts.length }} 个产物</span>
-              </div>
-
-              <div v-if="run.stages.length" class="sub-title">
-                Stage
-              </div>
-              <div class="timeline">
-                <div v-for="(s, i) in run.stages" :key="stageKey(s, i)" class="stage" :class="stageTone(s.status)">
-                  <span class="dot" />
-                  <div class="stage-body">
-                    <div class="stage-head">
-                      <b class="mono">{{ s.id }}</b>
-                      <span class="status-label">{{ s.status }}</span>
-                      <span class="mono duration">{{ s.durationMs }} ms</span>
-                    </div>
-                    <div v-if="s.errorCode || s.summary" class="stage-meta mono">
-                      <template v-if="s.errorCode">errorCode={{ s.errorCode }} · </template>
-                      <template v-if="s.summary">{{ s.summary }}</template>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <template v-if="run.artifacts.length">
-                <div class="sub-title">
-                  产物
-                </div>
-                <div class="artifacts">
-                  <div v-for="(a, i) in run.artifacts" :key="artifactKey(a, i)" class="artifact mono">
-                    <span class="kind">{{ a.kind }}</span>
-                    <span class="ref" :title="a.ref">{{ a.ref }}</span>
-                    <span class="digest" :title="a.digest">{{ shortDigest(a.digest) }}</span>
-                    <span class="size">{{ a.sizeBytes }} B</span>
-                  </div>
-                </div>
-              </template>
-
-              <div class="log-heading">
-                <span class="sub-title">日志</span>
-                <span class="hint">{{ logLineCount }} 行</span>
-                <el-button size="small" text :icon="CopyDocument" @click="copyLog">复制</el-button>
-              </div>
-              <pre ref="logRef" class="log mono">{{ run.log || '（暂无日志）' }}</pre>
-            </template>
-
-            <div v-if="actionResult" class="action-result">
-              <div class="sub-title">动作执行结果 · {{ actionResult.action }}</div>
-              <div class="kv mono">
-                status={{ actionResult.status }} exitCode={{ actionResult.exitCode }}
-                <template v-if="actionResult.errorCode"> errorCode={{ actionResult.errorCode }}</template>
-                · {{ actionResult.durationMs }} ms
-              </div>
-              <pre class="log mono">{{ actionResult.logTail || '（无日志）' }}</pre>
-            </div>
-            <div v-if="requestInfo" class="request-info mono">变更已登记：{{ requestInfo }}</div>
           </div>
-        </section>
+
+          <div class="run-detail">
+            <StageTimeline
+              v-if="run"
+              :stages="run.stages"
+              :running="running"
+              :started-at="startedAt"
+            />
+
+            <section v-if="run?.artifacts.length" class="artifact-panel">
+              <h3 class="ap-title">产物</h3>
+              <div
+                v-for="(a, i) in run.artifacts" :key="`${a.kind}-${a.ref}-${i}`"
+                class="artifact-row"
+              >
+                <span class="art-kind">{{ a.kind }}</span>
+                <code class="art-ref mono" :title="a.ref">{{ a.ref }}</code>
+                <code class="art-digest mono" :title="a.digest">{{ a.digest ? `${a.digest.slice(0, 12)}…` : '—' }}</code>
+                <span class="art-size">{{ a.sizeBytes }} B</span>
+              </div>
+            </section>
+
+            <RunLog
+              v-if="run"
+              :run-id="run.runId"
+              :running="running"
+              class="grow"
+            />
+          </div>
+        </template>
       </div>
     </div>
 
+    <!-- L3 变更确认（合并为一次弹窗流程，语义明确） -->
     <el-dialog v-model="changeDialog" title="L3 变更确认" width="560px">
       <div v-if="change" class="confirm-card">
         <div class="line"><span>变更单</span><b class="mono">{{ change.changeId }}</b></div>
@@ -581,36 +615,29 @@ onBeforeUnmount(stopPolling)
         </div>
         <el-input
           v-if="change.highRisk && !confirmToken"
-          v-model="changePassword"
-          type="password"
-          placeholder="请输入密码（账号体系接入前会失败关闭）"
-          show-password
+          v-model="changePassword" type="password"
+          placeholder="账号体系接入前无法通过，仅验证流程连通" show-password
         />
         <el-alert
-          v-if="confirmToken"
-          type="success"
-          :closable="false"
-          show-icon
-          title="确认令牌已签发（5 分钟内有效，一次性）"
+          v-if="confirmToken" type="success" :closable="false" show-icon
+          title="确认令牌已签发（5 分钟有效、一次性、绑定当前配方）"
           :description="confirmToken"
-        />
-        <el-alert
-          type="info"
-          :closable="false"
-          show-icon
-          title="执行前会再次校验：令牌绑定的是当前配方，配方被改动则拒绝"
         />
       </div>
       <template #footer>
         <el-button @click="changeDialog = false">关闭</el-button>
-        <el-button :disabled="!!confirmToken" :loading="changeBusy" @click="doConfirmChange">确认变更</el-button>
-        <el-button type="primary" :disabled="!confirmToken || changeBusy" :loading="changeBusy" @click="doApplyChange">带令牌执行</el-button>
+        <el-button v-if="!confirmToken" :loading="changeBusy" @click="doConfirmChange">
+          1. 确认变更
+        </el-button>
+        <el-button v-else type="primary" :loading="changeBusy" @click="doApplyChange">
+          2. 执行变更
+        </el-button>
       </template>
     </el-dialog>
   </div>
 </template>
+
 <style scoped>
-/* 页面骨架：撑满主区，自身不滚动；滚动交给 .page-scroll */
 .pipeline-page {
   display: flex;
   flex: 1 1 0;
@@ -619,405 +646,359 @@ onBeforeUnmount(stopPolling)
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  color: var(--ink);
 }
-.page-scroll {
+.wp-body {
+  display: flex;
   flex: 1 1 0;
   min-height: 0;
-  padding: 16px 20px 24px;
+  overflow: hidden;
+}
+.wp-left {
+  flex: none;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
+}
+.wp-left-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 12px 12px 12px 14px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.polling-chip {
+.wp-left-inner .fill {
+  flex: 1 1 260px;
+  min-height: 200px;
+}
+.wp-right {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.top-alert {
+  margin: 12px 14px 0;
+}
+.grow {
+  flex: 1 1 240px;
+  min-height: 200px;
+}
+
+/* 运行条 */
+.run-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line-soft);
+}
+.rb-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--accent);
-}
-.block-alert {
-  margin-bottom: 14px;
-}
-
-/* 触发条：一行式，替代原四字段表单 */
-.trigger-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  margin-bottom: 16px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-}
-.t-pipeline {
-  width: 180px;
-}
-.t-sha {
-  flex: 1 1 220px;
-  min-width: 0;
-}
-.t-quick {
-  flex: none;
-  font-size: 11px;
-  color: #a0a6ad;
-}
-.t-quick-sha {
-  color: var(--accent);
-  cursor: pointer;
-  text-decoration: underline dotted;
-}
-
-/* 双栏 */
-.grid {
-  display: grid;
-  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-  align-items: start;
-  gap: 16px;
-}
-.col-left {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-}
-.panel {
-  min-width: 0;
-  overflow: hidden;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-}
-.panel-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 16px 0;
-}
-.section-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-.panel-count {
-  font-size: 12px;
-  font-weight: 400;
-  color: #a0a6ad;
-}
-.panel-heading .el-button {
-  margin-left: auto;
-}
-.panel-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 16px 16px;
-}
-.follow {
-  margin-left: auto;
-  font-weight: 400;
-}
-
-/* 历史 */
-.history-body {
   gap: 6px;
-}
-.history-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
-  cursor: pointer;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-.history-item:hover,
-.history-item.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-.hist-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  background: #c0c4cc;
-  border-radius: 50%;
-}
-.hist-dot.ok {
-  background: #67c23a;
-}
-.hist-dot.bad {
-  background: #f56c6c;
-}
-.hist-dot.busy {
-  background: var(--accent);
-}
-.hist-main {
-  flex: 1;
-  min-width: 0;
-}
-.hist-line1,
-.hist-line2 {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.hist-pipeline {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-}
-.hist-status {
-  font-size: 11px;
-  color: #a0a6ad;
-}
-.hist-status.ok {
-  color: #67c23a;
-}
-.hist-status.bad {
-  color: #f56c6c;
-}
-.hist-line2 {
-  margin-top: 3px;
-  font-size: 11px;
-  color: #a0a6ad;
-}
-.hist-rerun {
-  flex: none;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.history-item:hover .hist-rerun {
-  opacity: 1;
-}
-
-/* 动作（下拉操作，信息收敛） */
-.actions-body {
-  gap: 6px;
-}
-.action-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.action-main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.action-name {
-  font-size: 13px;
-  font-weight: 600;
-}
-.action-ops {
-  display: flex;
-  flex: none;
-}
-.action-cmd {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 11px;
-  line-height: 1.6;
   color: var(--ink);
-  white-space: pre-wrap;
-  word-break: break-all;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  max-height: 120px;
-  overflow-y: auto;
 }
-
-/* 详情 */
-.detail-body {
-  gap: 10px;
-}
-.empty-state {
-  display: grid;
-  min-height: 120px;
-  place-items: center;
-  font-size: 13px;
-  color: #a0a6ad;
-  text-align: center;
-  background-image: radial-gradient(var(--line) 0.8px, transparent 0.8px);
-  background-size: 18px 18px;
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-}
-.empty-state p {
-  margin: 0;
-  padding: 14px;
-}
-.run-summary {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.sub-title {
-  margin-top: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-soft);
-}
-.timeline {
-  display: flex;
-  flex-direction: column;
-  margin-left: 6px;
-  border-left: 2px solid var(--line);
-}
-.stage {
-  display: flex;
-  gap: 10px;
-  margin-left: -7px;
-  padding: 3px 0 8px;
-}
-.dot {
-  flex: none;
-  width: 12px;
-  height: 12px;
-  margin-top: 4px;
-  background: #c0c4cc;
-  border: 2px solid var(--panel);
+.rb-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--ink-faint);
   border-radius: 50%;
 }
-.stage.ok .dot {
-  background: #67c23a;
-}
-.stage.bad .dot {
-  background: #f56c6c;
-}
-.stage.busy .dot {
+.run-bar.ok .rb-dot { background: var(--ok); }
+.run-bar.bad .rb-dot { background: var(--danger); }
+.run-bar.busy .rb-dot {
   background: var(--accent);
+  animation: dot-pulse 1.4s ease-in-out infinite;
 }
-.stage-body {
-  min-width: 0;
-  flex: 1;
-  padding: 7px 11px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-left: 3px solid #c0c4cc;
-  border-radius: 10px;
+@keyframes dot-pulse { 50% { opacity: 0.3; } }
+.rb-id {
+  padding: 1px 7px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
 }
-.stage.ok .stage-body {
-  background: #f0f9eb;
-  border-left-color: #67c23a;
+.rb-meta {
+  font-size: 11.5px;
+  color: var(--ink-faint);
 }
-.stage.bad .stage-body {
-  background: #fef0f0;
-  border-left-color: #f56c6c;
+.rb-err {
+  font-size: 11.5px;
+  color: var(--danger);
 }
-.stage.busy .stage-body {
-  background: var(--accent-soft);
-  border-left-color: var(--accent);
-}
-.stage-head {
+.rb-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+  margin-left: auto;
 }
-.status-label {
+.rb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  font-family: inherit;
   font-size: 12px;
   color: var(--ink-soft);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
 }
-.stage.ok .status-label {
-  color: #529b2e;
+.rb-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-hover);
 }
-.stage.bad .status-label {
-  color: #c45656;
+.rb-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
-.duration {
-  margin-left: auto;
-  color: #a0a6ad;
+.rb-btn.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
 }
-.stage-meta {
-  margin-top: 3px;
-  font-size: 11px;
-  color: var(--ink-soft);
-  word-break: break-all;
+.rb-btn.icon {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
 }
-.artifacts {
+
+.run-detail {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
-  gap: 4px;
-}
-.artifact {
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr) 150px 80px;
   gap: 10px;
-  padding: 7px 11px;
-  font-size: 11px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-.kind {
-  color: var(--accent);
-}
-.ref,
-.digest {
+  min-height: 0;
+  padding: 12px 14px 14px;
   overflow: hidden;
+}
+
+/* 产物 */
+.artifact-panel {
+  flex: none;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.ap-title {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.artifact-row {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) 150px 76px;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 11.5px;
+  border-top: 1px solid var(--line-soft);
+}
+.art-kind {
+  color: var(--accent-ink);
+}
+.art-ref,
+.art-digest {
+  overflow: hidden;
+  color: var(--ink-soft);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.digest {
-  color: var(--ink-soft);
+.art-digest {
+  color: var(--ink-muted);
 }
-.size {
-  color: #a0a6ad;
+.art-size {
+  color: var(--ink-faint);
   text-align: right;
 }
-.log-heading {
+
+/* 动作执行结果 */
+.action-result {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.ar-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 4px;
 }
-.log-heading .el-button {
-  margin-left: auto;
-}
-.log {
-  margin: 0;
-  padding: 12px 14px;
+.ar-title {
   font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.ar-status {
+  padding: 1px 7px;
+  font-size: 10.5px;
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+}
+.ar-status.ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.ar-status.bad {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.ar-meta {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.ar-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+}
+.ar-close:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.ar-log {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  font-size: 11px;
   line-height: 1.6;
-  color: #d7e4f0;
+  color: var(--ink-soft);
   white-space: pre-wrap;
   word-break: break-all;
-  background: #1e2430;
-  border-radius: 10px;
-  max-height: 300px;
-  overflow-y: auto;
+  background: var(--code-bg);
+  border-radius: var(--radius-xs);
+  max-height: 160px;
 }
-.action-result {
+
+/* 空状态 */
+.run-empty {
   display: flex;
+  flex: 1;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--line);
+  padding: 40px;
+  text-align: center;
 }
-.kv {
+.re-title {
+  margin: 10px 0 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+.re-sub {
+  margin: 0;
   font-size: 12px;
-  color: var(--ink-soft);
-  word-break: break-all;
+  color: var(--ink-faint);
 }
-.request-info {
-  padding: 9px 12px;
-  font-size: 12px;
-  color: #9a4514;
-  word-break: break-all;
-  background: #fdf6ec;
-  border: 1px solid #f5d3b8;
-  border-radius: 10px;
+.re-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 14px;
+  margin-top: 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: #fff;
+  cursor: pointer;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius-sm);
 }
+.re-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 上下文选择器（项目 / 环境） */
+.ctx-bar {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.ctx-field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ctx-label {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  letter-spacing: 0.02em;
+}
+.ctx-select {
+  width: 100%;
+}
+.ctx-opt-main {
+  margin-right: 8px;
+}
+.ctx-opt-desc {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+/* Header 状态 chip */
+.run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+}
+.run-chip .dot {
+  width: 5px;
+  height: 5px;
+  background: var(--ink-faint);
+  border-radius: 50%;
+}
+.run-chip.ok .dot { background: var(--ok); }
+.run-chip.bad .dot { background: var(--danger); }
+.run-chip.busy .dot {
+  background: var(--accent);
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* 确认卡 */
 .confirm-card {
   display: flex;
   flex-direction: column;
@@ -1031,22 +1012,19 @@ onBeforeUnmount(stopPolling)
 .confirm-card .line span {
   flex: none;
   width: 90px;
-  color: var(--ink-soft);
-}
-.hint {
-  font-size: 12px;
-  color: #a0a6ad;
+  color: var(--ink-muted);
 }
 
-@media (max-width: 1000px) {
-  .grid {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 900px) {
+  .wp-body {
+    flex-direction: column;
   }
-  .artifact {
-    grid-template-columns: 56px minmax(0, 1fr) 120px;
-  }
-  .artifact .size {
-    display: none;
+  .wp-left {
+    width: 100% !important;
+    height: auto;
+    max-height: 45%;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
   }
 }
 </style>

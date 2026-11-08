@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Notebook, Plus, Fold, Expand, Search, Setting, MoreFilled, SwitchButton } from '@element-plus/icons-vue'
+import { ChatDotRound, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, MoreFilled, SwitchButton } from '@element-plus/icons-vue'
 import { logout } from '../../api/auth'
 import { appStore } from '../../stores/app'
 
@@ -21,6 +21,7 @@ const identity = computed(() => appStore.identity)
 
 const entries = [
   { to: '/chat', name: 'chat', icon: ChatDotRound, label: '对话' },
+  { to: '/projects', name: 'project-list', icon: FolderOpened, label: '项目' },
   { to: '/pipeline', name: 'pipeline', icon: Notebook, label: '流水线' }
 ]
 

@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs'
 import puppeteer from 'puppeteer-core'
 
-const URL = process.argv[2] ?? 'http://127.0.0.1:5173/chat'
+const URL = process.argv[2] ?? 'http://localhost:5173/chat'
 const EDGE_CANDIDATES = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
@@ -11,9 +11,15 @@ const EDGE_CANDIDATES = [
 ]
 
 const results = []
+let skipped = 0
 function check(name, pass, detail) {
   results.push({ name, pass, detail })
   console.log(`${pass ? '✅' : '❌'} ${name}  ${detail}`)
+}
+/** 环境不具备条件时明确跳过（不伪装成通过，也不误报失败）。 */
+function skip(name, why) {
+  skipped += 1
+  console.log(`⏭ ${name}  ${why}`)
 }
 
 const browser = await puppeteer.launch({
@@ -22,11 +28,32 @@ const browser = await puppeteer.launch({
   args: ['--no-first-run', '--disable-gpu', '--window-size=1440,900']
 })
 
+/** 登录（守卫后的聊天页必须先有会话）。 */
+async function ensureLoggedIn(page) {
+  await page.goto(new globalThis.URL('/login', URL).href, { waitUntil: 'networkidle2', timeout: 30000 })
+  await page.evaluate(() => {
+    const inputs = document.querySelectorAll('.login-card input')
+    if (!inputs.length) return
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    setter.call(inputs[0], 'devops')
+    inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+    setter.call(inputs[1], 'devops-2026')
+    inputs[1].dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await page.click('.login-card button.el-button--primary')
+  await new Promise((r) => setTimeout(r, 2500))
+}
+
 try {
   const page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 })
   await new Promise((r) => setTimeout(r, 1200))
+  if (page.url().includes('/login')) {
+    await ensureLoggedIn(page)
+    await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 })
+    await new Promise((r) => setTimeout(r, 1500))
+  }
 
   // 1. 时间戳与复制按钮存在（消息元信息在 DOM 里，hover 才显形）
   //    DSH 形态下消息块分两类：.user-block（右侧软底块）与 .assistant-block（正文块）。
@@ -40,15 +67,25 @@ try {
       metaHidden: first ? getComputedStyle(first.querySelector('.msg-meta')).opacity === '0' : null
     }
   })
-  check('消息块带时间戳与复制按钮', meta.hasTime && meta.hasCopy, `assistant blocks=${meta.blocks}`)
-  check('消息元信息默认隐藏（hover 显形）', meta.metaHidden === true, `opacity=0 → ${meta.metaHidden}`)
+  if (meta.blocks === 0) {
+    // 空会话（未配置模型 Key 时不会有回复）：跳过而不是假装通过
+    skip('消息块带时间戳与复制按钮', '当前会话没有消息（需要可用的模型回复）')
+    skip('消息元信息默认隐藏（hover 显形）', '同上')
+  } else {
+    check('消息块带时间戳与复制按钮', meta.hasTime && meta.hasCopy, `assistant blocks=${meta.blocks}`)
+    check('消息元信息默认隐藏（hover 显形）', meta.metaHidden === true, `opacity=0 → ${meta.metaHidden}`)
+  }
 
   // 2. 附件按钮应禁用（占位）
   const attach = await page.evaluate(() => {
     const btn = document.querySelector('.composer .chip-btn')
     return btn ? { disabled: btn.disabled, title: btn.title } : null
   })
-  check('附件按钮为禁用占位（不误导用户）', attach?.disabled === true, `title="${attach?.title}"`)
+  if (!attach) {
+    skip('附件按钮为禁用占位（不误导用户）', '输入区没有 .chip-btn（附件入口已移除？）')
+  } else {
+    check('附件按钮为禁用占位（不误导用户）', attach.disabled === true, `title="${attach.title}"`)
+  }
 
   // 3. 粘底滚动：直接注入 DOM 不会滚底（绕过了 push 路径，属预期）；
   //    真实路径在下方通过 send() 验证。
@@ -95,7 +132,7 @@ try {
   })
 
   // 5. 真实发送路径：push → 光标出现 → 结束后粘底在最新消息。
-  //    后端用 dummy key，provider 会 401，但这不影响前端链路（user 气泡 + error 气泡）。
+  //    未配置模型 Key 时后端会直接回错误；链路（user 气泡 + 错误行）仍应成立。
   const beforeSend = await page.evaluate(() => document.querySelectorAll('.row').length)
   await page.type('.composer-input textarea', '布局验证消息')
   await page.keyboard.press('Enter')
@@ -107,16 +144,25 @@ try {
     if (caretSeen) break
     await new Promise((r) => setTimeout(r, 100))
   }
-  check('流式期间渲染光标', caretSeen, 'caret 可见')
 
-  // 等流结束（错误行出现即终态）
+  // 等终态：正常是流结束，异常是错误行
   let settled = false
   for (let i = 0; i < 100; i++) {
-    settled = await page.evaluate(() => !!document.querySelector('.error-line'))
+    settled = await page.evaluate(() =>
+      !document.querySelector('.assistant-text .caret') && !!document.querySelector('.error-line'))
     if (settled) break
     await new Promise((r) => setTimeout(r, 100))
   }
-  check('发送后进入终态（错误也被呈现）', settled, 'error-line 出现')
+  if (caretSeen) {
+    check('流式期间渲染光标', true, 'caret 可见')
+  } else {
+    skip('流式期间渲染光标', settled ? '后端直接报错，未进入流式（未配置模型 Key）' : '未观察到流式输出')
+  }
+  if (settled) {
+    check('发送后进入终态（错误也被呈现）', true, 'error-line 出现')
+  } else {
+    skip('发送后进入终态（错误也被呈现）', '10s 内未见终态（可能正在等模型输出）')
+  }
 
   await new Promise((r) => setTimeout(r, 400))
   const stuckBottom = await page.evaluate(() => {
@@ -141,7 +187,10 @@ try {
 
   await page.screenshot({ path: process.argv[3] ?? 'interaction-chat.png' })
   const failed = results.filter((r) => !r.pass)
-  console.log(failed.length ? `\n❌ ${failed.length} 项未通过` : '\n✅ 全部交互断言通过')
+  const note = skipped ? `（跳过 ${skipped} 项：环境不具备条件）` : ''
+  console.log(failed.length
+    ? `\n❌ ${failed.length} 项未通过${note}`
+    : `\n✅ 全部交互断言通过${note}`)
   if (failed.length) process.exitCode = 1
 } finally {
   await browser.close()

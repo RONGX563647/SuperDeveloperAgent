@@ -4,6 +4,9 @@ import { appStore } from './stores/app'
 import ChatView from './views/ChatView.vue'
 import PipelineView from './views/PipelineView.vue'
 import LoginView from './views/LoginView.vue'
+import ProjectIntakeView from './views/ProjectIntakeView.vue'
+import ProjectDetailView from './views/ProjectDetailView.vue'
+import ProjectListView from './views/ProjectListView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -11,7 +14,11 @@ const router = createRouter({
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     { path: '/', redirect: '/chat' },
     { path: '/chat', name: 'chat', component: ChatView },
-    { path: '/pipeline', name: 'pipeline', component: PipelineView }
+    { path: '/pipeline', name: 'pipeline', component: PipelineView },
+    { path: '/projects', name: 'project-list', component: ProjectListView },
+    { path: '/projects/intake', name: 'project-intake', component: ProjectIntakeView },
+    // 旧详情页保留为工作台内嵌跳转目标（树里未来可挂"在详情页打开"）
+    { path: '/projects/:id', name: 'project-detail', component: ProjectDetailView }
   ]
 })
 
