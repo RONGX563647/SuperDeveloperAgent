@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CopyDocument, CaretBottom, Loading, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { CopyDocument, Loading, Refresh, Remove, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
   getActionPlan,
@@ -13,6 +13,7 @@ import {
 import { applyChange, confirmChange, getChange } from '../api/change'
 import type { ChangeView, ConfirmResponse } from '../types'
 import PageHeader from '../layouts/components/PageHeader.vue'
+import { appStore } from '../stores/app'
 import {
   cancelRun,
   getHistory,
@@ -26,8 +27,9 @@ import {
   type StageView
 } from '../api/pipeline'
 
-const projectId = ref('RY')
-const env = ref('test')
+/** 项目/环境与聊天页共用全局状态：切一次，两边同步。 */
+const projectId = computed(() => appStore.projectId)
+const env = computed(() => appStore.env)
 
 const pipelineList = ref<string[]>([])
 const engine = ref('')
@@ -59,7 +61,7 @@ const changePassword = ref('')
 const confirmToken = ref<string | null>(null)
 const changeBusy = ref(false)
 
-// 日志面板
+// 日志
 const followLog = ref(true)
 const logRef = ref<HTMLElement | null>(null)
 
@@ -68,7 +70,10 @@ const POLL_INTERVAL_MS = 1000
 const polling = computed(() => pollTimer !== null)
 const canTrigger = computed(() => !!selectedPipeline.value && /^[0-9a-f]{7,40}$/.test(gitSha.value))
 const runActive = computed(() => !!run.value && !isTerminalStatus(run.value.status))
-const logLineCount = computed(() => (run.value?.log ?? '').split('\n').filter(l => l.trim()).length)
+const logLineCount = computed(() => (run.value?.log ?? '').split('\n').filter((l) => l.trim()).length)
+/** 最近一次成功 sha：触发框的快捷项（最高频操作不该靠复制粘贴）。 */
+const lastGoodSha = computed(() => history.value.find((h) => h.status === 'SUCCEEDED')?.gitSha ?? '')
+const anyHistorySha = computed(() => history.value[0]?.gitSha ?? '')
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -148,6 +153,10 @@ async function loadHistory() {
   historyLoading.value = true
   try {
     history.value = await getHistory(projectId.value)
+    // 空输入时自动预填最近一次构建的 sha，少一步复制粘贴
+    if (!gitSha.value && history.value.length) {
+      gitSha.value = history.value[0].gitSha.slice(0, 7)
+    }
   } catch {
     history.value = []
   } finally {
@@ -161,6 +170,7 @@ async function openHistory(item: HistoryItem) {
   try {
     run.value = await getRun(item.runId)
     runId.value = item.runId
+    gitSha.value = item.gitSha.slice(0, 7)
     if (!isTerminalStatus(run.value.status)) startPolling(item.runId)
   } catch (error) {
     ElMessage.error(`加载运行失败：${messageOf(error)}`)
@@ -328,6 +338,13 @@ async function doTrigger() {
   }
 }
 
+/** 一键重跑：用历史条目里的 sha 重新触发同一条流水线。 */
+async function rerun(item: HistoryItem) {
+  gitSha.value = item.gitSha.slice(0, 7)
+  selectedPipeline.value = item.pipelineId
+  await doTrigger()
+}
+
 watch(
   () => run.value?.log,
   async () => {
@@ -355,65 +372,29 @@ onBeforeUnmount(stopPolling)
 
 <template>
   <div class="pipeline-page">
-    <PageHeader title="流水线工作台" :subtitle="`引擎 ${engine || '—'} · ${projectId}/${env}`">
+    <PageHeader title="流水线工作台" :subtitle="`${projectId} · ${env} · 引擎 ${engine || '—'}`">
       <template #actions>
         <span v-if="polling" class="polling-chip">
           <el-icon class="is-loading"><Loading /></el-icon>
-          轮询中 · {{ pollCount }}
+          运行中
         </span>
-        <el-button
-          v-if="runActive"
-          type="warning"
-          plain
-          size="small"
-          @click="doCancel"
-        >
-          取消运行
-        </el-button>
-        <el-button size="small" :icon="Refresh" :loading="pipelinesLoading" @click="loadPipelines">
-          刷新
-        </el-button>
+        <el-button v-if="runActive" size="small" type="warning" plain @click="doCancel">取消</el-button>
       </template>
     </PageHeader>
 
-    <!-- 页面唯一滚动容器，外层 app-shell 永不滚动 -->
     <div class="page-scroll">
-      <p class="page-lead">
-        命令由人写在仓库配方里；平台只做解析、隔离与审批。运行结果每 1s 刷新至终态。
-      </p>
-
-      <section class="trigger-card" aria-label="触发流水线">
-        <div class="section-heading">
-          <span class="step">01</span>
-          <h2 class="section-title">
-            触发运行
-          </h2>
-        </div>
-      <div class="trigger-form">
-        <div class="tf-field">
-          <label>项目</label>
-          <el-select v-model="projectId" size="default" style="width: 100%">
-            <el-option label="RY · RuoYi-Vue-Plus" value="RY" />
-          </el-select>
-        </div>
-        <div class="tf-field">
-          <label>环境</label>
-          <el-select v-model="env" size="default" style="width: 100%">
-            <el-option label="dev" value="dev" />
-            <el-option label="test" value="test" />
-            <el-option label="prod" value="prod" />
-          </el-select>
-        </div>
-        <div class="tf-field">
-          <label>流水线</label>
-          <el-select v-model="selectedPipeline" size="default" :loading="pipelinesLoading" style="width: 100%">
-            <el-option v-for="p in pipelineList" :key="p" :label="p" :value="p" />
-          </el-select>
-        </div>
-        <div class="tf-field grow">
-          <label>gitSha（7-40 位小写十六进制）</label>
-          <el-input v-model="gitSha" class="mono" size="default" placeholder="a1b2c3d" clearable />
-        </div>
+      <!-- 触发：一行搞定（默认已预填最近提交，通常只需点一次） -->
+      <div class="trigger-bar">
+        <el-select v-model="selectedPipeline" class="t-pipeline" size="default">
+          <el-option v-for="p in pipelineList" :key="p" :label="p" :value="p" />
+        </el-select>
+        <el-input
+          v-model="gitSha"
+          class="t-sha mono"
+          size="default"
+          placeholder="commit sha（已自动预填最近一次）"
+          clearable
+        />
         <el-button
           type="primary"
           :icon="VideoPlay"
@@ -421,237 +402,183 @@ onBeforeUnmount(stopPolling)
           :disabled="!canTrigger"
           @click="doTrigger"
         >
-          触发
+          运行
         </el-button>
-      </div>
-    </section>
-
-    <el-alert v-if="errorText" class="block-alert" type="error" :closable="false" :title="errorText" show-icon />
-
-    <div class="workbench-grid">
-      <div class="left-col">
-        <section class="panel" aria-label="动作列表">
-          <div class="panel-heading">
-            <span class="step">02</span>
-            <h2 class="section-title">
-              动作
-              <span class="panel-count">{{ actions.length }} 项 · {{ projectId }}/{{ env }}</span>
-            </h2>
-          </div>
-          <div v-loading="actionsLoading" class="panel-body">
-            <div v-for="a in actions" :key="a.action" class="action-card">
-              <div class="action-head">
-                <b class="mono action-name">{{ a.action }}</b>
-                <el-tag size="small" :type="a.level.startsWith('L3') ? 'warning' : 'info'" effect="light" round>
-                  {{ a.level.replace('_EXECUTE_ISOLATED', '').replace('_EXECUTE_PROD', '') }}
-                </el-tag>
-                <el-tag v-if="a.humanAuthored" size="small" type="success" effect="light" round>
-                  人写配方
-                </el-tag>
-              </div>
-              <div class="kv">
-                <span class="kv-label">来源</span>
-                <span class="mono kv-value" :title="a.source">{{ a.source }}</span>
-              </div>
-              <div class="kv">
-                <span class="kv-label">产物</span>
-                <span class="mono kv-value">{{ a.produce.join(', ') || '—' }}</span>
-              </div>
-              <div class="kv">
-                <span class="kv-label">超时</span>
-                <span class="mono kv-value">{{ a.timeoutMinutes }} 分钟</span>
-              </div>
-
-              <details class="cmd-fold" :open="a.commands.length > 0">
-                <summary>命令原文</summary>
-                <pre class="commands mono">{{ a.commands.length ? a.commands.join('\n') : (planCache[a.action]?.commands.join('\n') ?? '（列表未返回命令，点「查看计划」读取）') }}</pre>
-              </details>
-
-              <div class="action-buttons">
-                <el-button size="small" :loading="actionBusy === a.action" @click="showPlan(a.action)">
-                  查看计划
-                </el-button>
-                <el-button
-                  v-if="!a.level.startsWith('L3')"
-                  size="small"
-                  type="primary"
-                  plain
-                  :loading="actionBusy === a.action"
-                  @click="doRunAction(a.action)"
-                >
-                  执行
-                </el-button>
-                <el-button
-                  v-else
-                  size="small"
-                  type="warning"
-                  plain
-                  :loading="actionBusy === a.action"
-                  @click="doRequestAction(a.action)"
-                >
-                  登记变更
-                </el-button>
-              </div>
-            </div>
-            <el-empty v-if="!actionsLoading && !actions.length" description="暂无动作" :image-size="60" />
-          </div>
-        </section>
-
-        <section class="panel" aria-label="构建历史">
-          <div class="panel-heading">
-            <span class="step">03</span>
-            <h2 class="section-title">
-              构建历史
-              <span class="panel-count">{{ history.length }} 条 · 最新在前</span>
-            </h2>
-            <el-button size="small" text :icon="Refresh" :loading="historyLoading" @click="loadHistory" />
-          </div>
-          <div v-loading="historyLoading" class="panel-body history-body">
-            <button
-              v-for="h in history"
-              :key="h.runId"
-              type="button"
-              class="history-item"
-              :class="{ active: h.runId === runId }"
-              :aria-pressed="h.runId === runId"
-              @click="openHistory(h)"
-            >
-              <span class="hist-dot" :class="stageTone(h.status)" />
-              <span class="hist-pipeline">{{ h.pipelineId }}</span>
-              <span class="mono hist-sha" :title="h.gitSha">{{ shortSha(h.gitSha) }}</span>
-              <span class="hist-status" :class="stageTone(h.status)">{{ h.status }}</span>
-              <time class="hist-time mono">{{ formatTime(h.createdAt) }}</time>
-            </button>
-            <el-empty v-if="!historyLoading && !history.length" description="暂无构建历史" :image-size="60" />
-          </div>
-        </section>
+        <span v-if="lastGoodSha" class="t-quick mono" title="最近一次成功构建的提交">
+          上次成功：<a class="t-quick-sha" @click.prevent="gitSha = lastGoodSha.slice(0, 7)">{{ lastGoodSha.slice(0, 7) }}</a>
+        </span>
       </div>
 
-      <section class="panel run-panel" aria-label="运行详情">
-        <div class="panel-heading">
-          <span class="step">04</span>
-          <h2 class="section-title">
-            运行详情
-            <span v-if="runId" class="mono panel-count">{{ runId }}</span>
-          </h2>
-          <span v-if="polling" class="polling-chip">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            轮询中 · {{ pollCount }}
-          </span>
-          <el-checkbox v-model="followLog" size="small" class="follow">
-            <el-icon><CaretBottom /></el-icon>
-            跟随
-          </el-checkbox>
-        </div>
-        <div class="panel-body">
-          <div v-if="!run" class="empty-state">
-            <p>选择流水线并填入 gitSha 后触发运行；也可以从左侧构建历史点开一条。</p>
-          </div>
+      <el-alert v-if="errorText" class="block-alert" type="error" :closable="false" :title="errorText" show-icon />
 
-          <template v-else>
-            <div class="run-summary">
-              <el-tag :type="elTagType(stageTone(run.status))" effect="light" round>
-                {{ run.status }}
-              </el-tag>
-              <span class="hint">{{ run.stages.length }} 个 stage · {{ run.artifacts.length }} 个产物</span>
+      <div class="grid">
+        <!-- 左：构建历史为主，动作收进下拉 -->
+        <div class="col-left">
+          <section class="panel" aria-label="构建历史">
+            <div class="panel-heading">
+              <h2 class="section-title">构建历史</h2>
+              <span class="panel-count">{{ history.length }} 条</span>
+              <el-button size="small" text :icon="Refresh" :loading="historyLoading" @click="loadHistory" />
             </div>
-
-            <div class="sub-title">
-              Stage 时间线
-            </div>
-            <div class="timeline">
-              <div v-for="(s, i) in run.stages" :key="stageKey(s, i)" class="stage" :class="stageTone(s.status)">
-                <span class="dot" />
-                <div class="stage-body">
-                  <div class="stage-head">
-                    <b class="mono">{{ s.id }}</b>
-                    <span class="status-label">{{ s.status }}</span>
-                    <span class="mono duration">{{ s.durationMs }} ms</span>
+            <div v-loading="historyLoading" class="panel-body history-body">
+              <div
+                v-for="h in history"
+                :key="h.runId"
+                class="history-item"
+                :class="{ active: h.runId === runId }"
+                role="button"
+                tabindex="0"
+                @click="openHistory(h)"
+                @keydown.enter="openHistory(h)"
+              >
+                <span class="hist-dot" :class="stageTone(h.status)" />
+                <div class="hist-main">
+                  <div class="hist-line1">
+                    <span class="hist-pipeline">{{ h.pipelineId }}</span>
+                    <span class="hist-status" :class="stageTone(h.status)">{{ h.status }}</span>
                   </div>
-                  <div class="stage-meta mono">
-                    exitCode={{ s.exitCode }}
-                    <template v-if="s.errorCode"> · errorCode={{ s.errorCode }}</template>
-                    <template v-if="s.summary"> · {{ s.summary }}</template>
-                    <template v-if="s.artifacts"> · artifacts={{ s.artifacts }}</template>
+                  <div class="hist-line2 mono">
+                    <span :title="h.gitSha">{{ shortSha(h.gitSha) }}</span>
+                    <span class="hist-time">{{ formatTime(h.createdAt) }}</span>
+                  </div>
+                </div>
+                <el-button
+                  class="hist-rerun"
+                  size="small"
+                  text
+                  :icon="Refresh"
+                  title="用该提交重跑"
+                  @click.stop="rerun(h)"
+                />
+              </div>
+              <el-empty v-if="!historyLoading && !history.length" description="暂无构建历史" :image-size="60" />
+            </div>
+          </section>
+
+          <section class="panel" aria-label="快捷动作">
+            <div class="panel-heading">
+              <h2 class="section-title">快捷动作</h2>
+              <span class="panel-count">单项执行 · 生产受限</span>
+            </div>
+            <div v-loading="actionsLoading" class="panel-body actions-body">
+              <div v-for="a in actions" :key="a.action" class="action-row">
+                <div class="action-main">
+                  <span class="mono action-name">{{ a.action }}</span>
+                  <el-tag size="small" :type="a.level.startsWith('L3') ? 'warning' : 'info'" effect="light" round>
+                    {{ a.level.startsWith('L3') ? '需确认' : '可直接执行' }}
+                  </el-tag>
+                </div>
+                <div class="action-ops">
+                  <el-dropdown trigger="click" @command="(cmd: string) => cmd === 'plan' ? showPlan(a.action) : cmd === 'run' ? doRunAction(a.action) : doRequestAction(a.action)">
+                    <el-button size="small" text :loading="actionBusy === a.action">
+                      操作<el-icon class="el-icon--right"><Remove /></el-icon>
+                    </el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="plan">查看命令原文</el-dropdown-item>
+                        <el-dropdown-item v-if="!a.level.startsWith('L3')" command="run" divided>执行</el-dropdown-item>
+                        <el-dropdown-item v-else command="req" divided>登记变更…</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
+                <pre v-if="planCache[a.action]" class="action-cmd mono">{{ planCache[a.action].commands.join('\n') }}</pre>
+              </div>
+              <el-empty v-if="!actionsLoading && !actions.length" description="暂无动作" :image-size="60" />
+            </div>
+          </section>
+        </div>
+
+        <!-- 右：运行详情（无 run 时不占一整块，改为轻量引导） -->
+        <section class="panel detail-panel" aria-label="运行详情">
+          <div class="panel-heading">
+            <h2 class="section-title">运行详情</h2>
+            <span v-if="runId" class="mono panel-count">{{ runId }}</span>
+            <el-checkbox v-model="followLog" size="small" class="follow">
+              跟随日志
+            </el-checkbox>
+          </div>
+          <div class="panel-body detail-body">
+            <div v-if="!run" class="empty-state">
+              <p>触发运行，或从左侧历史点开一条查看 stage、产物与日志。</p>
+            </div>
+
+            <template v-else>
+              <div class="run-summary">
+                <el-tag :type="elTagType(stageTone(run.status))" effect="light" round>{{ run.status }}</el-tag>
+                <span class="hint">{{ run.stages.length }} 个 stage · {{ run.artifacts.length }} 个产物</span>
+              </div>
+
+              <div v-if="run.stages.length" class="sub-title">
+                Stage
+              </div>
+              <div class="timeline">
+                <div v-for="(s, i) in run.stages" :key="stageKey(s, i)" class="stage" :class="stageTone(s.status)">
+                  <span class="dot" />
+                  <div class="stage-body">
+                    <div class="stage-head">
+                      <b class="mono">{{ s.id }}</b>
+                      <span class="status-label">{{ s.status }}</span>
+                      <span class="mono duration">{{ s.durationMs }} ms</span>
+                    </div>
+                    <div v-if="s.errorCode || s.summary" class="stage-meta mono">
+                      <template v-if="s.errorCode">errorCode={{ s.errorCode }} · </template>
+                      <template v-if="s.summary">{{ s.summary }}</template>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div v-if="!run.stages.length" class="empty-hint">
-                尚无 stage 结果。
-              </div>
-            </div>
 
-            <div class="sub-title">
-              产物
-            </div>
-            <div class="artifacts">
-              <div v-for="(a, i) in run.artifacts" :key="artifactKey(a, i)" class="artifact mono">
-                <span class="kind">{{ a.kind }}</span>
-                <span class="ref" :title="a.ref">{{ a.ref }}</span>
-                <span class="digest" :title="a.digest">{{ shortDigest(a.digest) }}</span>
-                <span class="size">{{ a.sizeBytes }} B</span>
-              </div>
-              <div v-if="!run.artifacts.length" class="empty-hint">
-                尚无产物。
-              </div>
-            </div>
+              <template v-if="run.artifacts.length">
+                <div class="sub-title">
+                  产物
+                </div>
+                <div class="artifacts">
+                  <div v-for="(a, i) in run.artifacts" :key="artifactKey(a, i)" class="artifact mono">
+                    <span class="kind">{{ a.kind }}</span>
+                    <span class="ref" :title="a.ref">{{ a.ref }}</span>
+                    <span class="digest" :title="a.digest">{{ shortDigest(a.digest) }}</span>
+                    <span class="size">{{ a.sizeBytes }} B</span>
+                  </div>
+                </div>
+              </template>
 
-            <div class="log-heading">
-              <span class="sub-title">日志</span>
-              <span class="hint">{{ logLineCount }} 行</span>
-              <el-button size="small" text :icon="CopyDocument" @click="copyLog">
-                复制
-              </el-button>
-            </div>
-            <pre ref="logRef" class="log mono">{{ run.log || '（暂无日志）' }}</pre>
-          </template>
+              <div class="log-heading">
+                <span class="sub-title">日志</span>
+                <span class="hint">{{ logLineCount }} 行</span>
+                <el-button size="small" text :icon="CopyDocument" @click="copyLog">复制</el-button>
+              </div>
+              <pre ref="logRef" class="log mono">{{ run.log || '（暂无日志）' }}</pre>
+            </template>
 
-          <div v-if="actionResult" class="action-result">
-            <div class="sub-title">
-              动作执行结果 · {{ actionResult.action }}
+            <div v-if="actionResult" class="action-result">
+              <div class="sub-title">动作执行结果 · {{ actionResult.action }}</div>
+              <div class="kv mono">
+                status={{ actionResult.status }} exitCode={{ actionResult.exitCode }}
+                <template v-if="actionResult.errorCode"> errorCode={{ actionResult.errorCode }}</template>
+                · {{ actionResult.durationMs }} ms
+              </div>
+              <pre class="log mono">{{ actionResult.logTail || '（无日志）' }}</pre>
             </div>
-            <div class="kv mono">
-              status={{ actionResult.status }} exitCode={{ actionResult.exitCode }}
-              <template v-if="actionResult.errorCode"> errorCode={{ actionResult.errorCode }}</template>
-              · {{ actionResult.durationMs }} ms
-            </div>
-            <div v-if="actionResult.summary" class="kv">
-              {{ actionResult.summary }}
-            </div>
-            <pre class="log mono">{{ actionResult.logTail || '（无日志）' }}</pre>
+            <div v-if="requestInfo" class="request-info mono">变更已登记：{{ requestInfo }}</div>
           </div>
-          <div v-if="requestInfo" class="request-info mono">
-            变更已登记：{{ requestInfo }}
-          </div>
-        </div>
-      </section>
+        </section>
       </div>
     </div>
 
     <el-dialog v-model="changeDialog" title="L3 变更确认" width="560px">
       <div v-if="change" class="confirm-card">
-        <div class="line">
-          <span>变更单</span><b class="mono">{{ change.changeId }}</b>
-        </div>
-        <div class="line">
-          <span>项目 / 环境</span><b>{{ change.projectId }} / {{ change.env }}</b>
-        </div>
-        <div class="line">
-          <span>类型</span><b>{{ change.kind }}</b>
-        </div>
-        <div class="line">
-          <span>内容</span><b>{{ change.summary }}</b>
-        </div>
-        <div class="line">
-          <span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b>
-        </div>
+        <div class="line"><span>变更单</span><b class="mono">{{ change.changeId }}</b></div>
+        <div class="line"><span>项目 / 环境</span><b>{{ change.projectId }} / {{ change.env }}</b></div>
+        <div class="line"><span>类型</span><b>{{ change.kind }}</b></div>
+        <div class="line"><span>内容</span><b>{{ change.summary }}</b></div>
+        <div class="line"><span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b></div>
         <div class="line">
           <span>风险</span>
           <el-tag :type="change.highRisk ? 'danger' : 'success'" size="small" effect="light" round>
             {{ change.highRisk ? '高危（需二次密码）' : '常规' }}
           </el-tag>
         </div>
-
         <el-input
           v-if="change.highRisk && !confirmToken"
           v-model="changePassword"
@@ -659,7 +586,6 @@ onBeforeUnmount(stopPolling)
           placeholder="请输入密码（账号体系接入前会失败关闭）"
           show-password
         />
-
         <el-alert
           v-if="confirmToken"
           type="success"
@@ -668,7 +594,6 @@ onBeforeUnmount(stopPolling)
           title="确认令牌已签发（5 分钟内有效，一次性）"
           :description="confirmToken"
         />
-
         <el-alert
           type="info"
           :closable="false"
@@ -676,27 +601,14 @@ onBeforeUnmount(stopPolling)
           title="执行前会再次校验：令牌绑定的是当前配方，配方被改动则拒绝"
         />
       </div>
-
       <template #footer>
-        <el-button @click="changeDialog = false">
-          关闭
-        </el-button>
-        <el-button :disabled="!!confirmToken" :loading="changeBusy" @click="doConfirmChange">
-          确认变更
-        </el-button>
-        <el-button
-          type="primary"
-          :disabled="!confirmToken || changeBusy"
-          :loading="changeBusy"
-          @click="doApplyChange"
-        >
-          带令牌执行
-        </el-button>
+        <el-button @click="changeDialog = false">关闭</el-button>
+        <el-button :disabled="!!confirmToken" :loading="changeBusy" @click="doConfirmChange">确认变更</el-button>
+        <el-button type="primary" :disabled="!confirmToken || changeBusy" :loading="changeBusy" @click="doApplyChange">带令牌执行</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
-
 <style scoped>
 /* 页面骨架：撑满主区，自身不滚动；滚动交给 .page-scroll */
 .pipeline-page {
@@ -712,103 +624,9 @@ onBeforeUnmount(stopPolling)
 .page-scroll {
   flex: 1 1 0;
   min-height: 0;
-  padding: 18px 20px 24px;
+  padding: 16px 20px 24px;
   overflow-y: auto;
   overscroll-behavior: contain;
-}
-.page-lead {
-  max-width: 70ch;
-  margin: 0 0 16px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--ink-soft);
-}
-
-/* 触发卡片 */
-.trigger-card {
-  padding: var(--workspace-panel-padding, 20px);
-  margin-bottom: 20px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-}
-.section-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-.step {
-  font: 600 11px/24px monospace;
-  color: var(--accent);
-}
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-.panel-count {
-  font-size: 12px;
-  font-weight: 400;
-  color: #a0a6ad;
-}
-.trigger-form {
-  display: grid;
-  grid-template-columns: 180px 120px 200px minmax(220px, 1fr) auto;
-  align-items: flex-end;
-  gap: 12px;
-}
-.tf-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-.tf-field label {
-  font-size: 12px;
-  color: var(--ink-soft);
-}
-.block-alert {
-  margin-bottom: 20px;
-}
-
-/* 双栏 */
-.workbench-grid {
-  display: grid;
-  grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
-  align-items: start;
-  gap: 20px;
-}
-.left-col {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  min-width: 0;
-}
-.panel {
-  min-width: 0;
-  overflow: hidden;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-}
-.panel-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--workspace-panel-padding, 20px) var(--workspace-panel-padding, 20px) 0;
-}
-.panel-heading .el-button {
-  margin-left: auto;
-}
-.panel-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px var(--workspace-panel-padding, 20px) var(--workspace-panel-padding, 20px);
 }
 .polling-chip {
   display: inline-flex;
@@ -817,74 +635,88 @@ onBeforeUnmount(stopPolling)
   font-size: 12px;
   color: var(--accent);
 }
-.follow {
-  margin-left: auto;
-  font-weight: 400;
+.block-alert {
+  margin-bottom: 14px;
 }
 
-/* 动作卡 */
-.action-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  transition: border-color 0.15s ease;
-}
-.action-card:hover {
-  border-color: var(--accent);
-}
-.action-head {
+/* 触发条：一行式，替代原四字段表单 */
+.trigger-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
 }
-.action-name {
-  font-size: 13px;
-  font-weight: 600;
+.t-pipeline {
+  width: 180px;
 }
-.kv {
-  display: flex;
-  gap: 8px;
-  font-size: 12px;
+.t-sha {
+  flex: 1 1 220px;
+  min-width: 0;
 }
-.kv-label {
+.t-quick {
   flex: none;
+  font-size: 11px;
   color: #a0a6ad;
 }
-.kv-value {
+.t-quick-sha {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
+/* 双栏 */
+.grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+.col-left {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.panel {
   min-width: 0;
   overflow: hidden;
-  color: var(--ink-soft);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cmd-fold summary {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-soft);
-  cursor: pointer;
-}
-.commands {
-  margin: 6px 0 0;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ink);
-  white-space: pre-wrap;
-  word-break: break-all;
-  background: var(--bg);
+  background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  max-height: 150px;
-  overflow-y: auto;
+  border-radius: 14px;
 }
-.action-buttons {
+.panel-heading {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 0;
+}
+.section-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.panel-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: #a0a6ad;
+}
+.panel-heading .el-button {
+  margin-left: auto;
+}
+.panel-body {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  padding: 12px 16px 16px;
+}
+.follow {
+  margin-left: auto;
+  font-weight: 400;
 }
 
 /* 历史 */
@@ -892,16 +724,11 @@ onBeforeUnmount(stopPolling)
   gap: 6px;
 }
 .history-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 96px 84px auto;
+  display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 11px 14px;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--ink);
-  text-align: left;
+  padding: 10px 12px;
   cursor: pointer;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -914,11 +741,11 @@ onBeforeUnmount(stopPolling)
   border-color: var(--accent);
 }
 .hist-dot {
+  flex: none;
   width: 8px;
   height: 8px;
-  flex: none;
-  border-radius: 50%;
   background: #c0c4cc;
+  border-radius: 50%;
 }
 .hist-dot.ok {
   background: #67c23a;
@@ -929,16 +756,20 @@ onBeforeUnmount(stopPolling)
 .hist-dot.busy {
   background: var(--accent);
 }
-.hist-pipeline {
+.hist-main {
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.hist-sha {
-  color: #a0a6ad;
-  text-align: right;
+.hist-line1,
+.hist-line2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hist-pipeline {
+  font-size: 13px;
+  font-weight: 600;
 }
 .hist-status {
   font-size: 11px;
@@ -950,15 +781,68 @@ onBeforeUnmount(stopPolling)
 .hist-status.bad {
   color: #f56c6c;
 }
-.hist-time {
+.hist-line2 {
+  margin-top: 3px;
   font-size: 11px;
   color: #a0a6ad;
 }
+.hist-rerun {
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.history-item:hover .hist-rerun {
+  opacity: 1;
+}
 
-/* 运行详情 */
+/* 动作（下拉操作，信息收敛） */
+.actions-body {
+  gap: 6px;
+}
+.action-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.action-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.action-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.action-ops {
+  display: flex;
+  flex: none;
+}
+.action-cmd {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* 详情 */
+.detail-body {
+  gap: 10px;
+}
 .empty-state {
   display: grid;
-  min-height: 160px;
+  min-height: 120px;
   place-items: center;
   font-size: 13px;
   color: #a0a6ad;
@@ -970,7 +854,7 @@ onBeforeUnmount(stopPolling)
 }
 .empty-state p {
   margin: 0;
-  padding: 16px;
+  padding: 14px;
 }
 .run-summary {
   display: flex;
@@ -978,7 +862,7 @@ onBeforeUnmount(stopPolling)
   gap: 10px;
 }
 .sub-title {
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-soft);
@@ -993,12 +877,12 @@ onBeforeUnmount(stopPolling)
   display: flex;
   gap: 10px;
   margin-left: -7px;
-  padding: 4px 0 10px;
+  padding: 3px 0 8px;
 }
 .dot {
+  flex: none;
   width: 12px;
   height: 12px;
-  flex: none;
   margin-top: 4px;
   background: #c0c4cc;
   border: 2px solid var(--panel);
@@ -1016,7 +900,7 @@ onBeforeUnmount(stopPolling)
 .stage-body {
   min-width: 0;
   flex: 1;
-  padding: 8px 12px;
+  padding: 7px 11px;
   background: var(--bg);
   border: 1px solid var(--line);
   border-left: 3px solid #c0c4cc;
@@ -1055,12 +939,11 @@ onBeforeUnmount(stopPolling)
   color: #a0a6ad;
 }
 .stage-meta {
-  margin-top: 4px;
+  margin-top: 3px;
+  font-size: 11px;
   color: var(--ink-soft);
   word-break: break-all;
 }
-
-/* 产物 */
 .artifacts {
   display: flex;
   flex-direction: column;
@@ -1068,9 +951,10 @@ onBeforeUnmount(stopPolling)
 }
 .artifact {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 170px 80px;
+  grid-template-columns: 56px minmax(0, 1fr) 150px 80px;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 7px 11px;
+  font-size: 11px;
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1091,13 +975,11 @@ onBeforeUnmount(stopPolling)
   color: #a0a6ad;
   text-align: right;
 }
-
-/* 日志 */
 .log-heading {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 .log-heading .el-button {
   margin-left: auto;
@@ -1119,24 +1001,23 @@ onBeforeUnmount(stopPolling)
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-top: 12px;
+  padding-top: 10px;
   border-top: 1px dashed var(--line);
 }
+.kv {
+  font-size: 12px;
+  color: var(--ink-soft);
+  word-break: break-all;
+}
 .request-info {
-  padding: 10px 12px;
+  padding: 9px 12px;
+  font-size: 12px;
   color: #9a4514;
   word-break: break-all;
   background: #fdf6ec;
   border: 1px solid #f5d3b8;
   border-radius: 10px;
 }
-.empty-hint {
-  padding: 4px 0;
-  font-size: 12px;
-  color: #a0a6ad;
-}
-
-/* L3 确认卡片 */
 .confirm-card {
   display: flex;
   flex-direction: column;
@@ -1152,22 +1033,13 @@ onBeforeUnmount(stopPolling)
   width: 90px;
   color: var(--ink-soft);
 }
-
-/* 自适应（对齐参考项目的 container query 思路） */
-@media (max-width: 1100px) {
-  .trigger-form {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .workbench-grid {
-    grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.1fr);
-    gap: 16px;
-  }
+.hint {
+  font-size: 12px;
+  color: #a0a6ad;
 }
-@media (max-width: 820px) {
-  .workbench-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .trigger-form {
+
+@media (max-width: 1000px) {
+  .grid {
     grid-template-columns: minmax(0, 1fr);
   }
   .artifact {

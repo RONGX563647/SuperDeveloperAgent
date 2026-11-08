@@ -73,7 +73,8 @@ try {
     `aside ${m.aside?.h}`)
   check('主区在侧栏右侧', m.main && m.aside && m.main.w > 0 && m.aside.w + m.main.w <= vp.w + 2,
     `aside ${m.aside?.w} + main ${m.main?.w} <= ${vp.w}`)
-  check('主区 Header 高度 ≈ 60px', m.header && Math.abs(m.header.h - 60) <= 1, `header ${m.header?.h}`)
+  // DSH 形态把顶栏从 60px 收到 52px（对齐 --header-height），断言跟随新基准
+  check('主区 Header 高度 ≈ 52px', m.header && Math.abs(m.header.h - 52) <= 1, `header ${m.header?.h}`)
   check('Header 在主区顶部', m.header && m.header.top <= 1, `top ${m.header?.top}`)
 
   if (m.list) {

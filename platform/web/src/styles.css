@@ -1,25 +1,105 @@
-/* 设计令牌（对齐 ruoyi-web 的浅色工作台风格） */
+/**
+ * 设计令牌层 —— 视觉方向对齐 DSH（DeepSeek Harness 客户端）的浅色模式：
+ *
+ * 形态：浅灰底（#f3f4f6）+ 纯白卡（#ffffff）浮起，RuoYi 生态默认工作台风，对比最清晰。
+ * - 三级表面：页面浅灰底、侧栏略亮一档、卡片纯白、hover / 选中用极浅灰；
+ * - 文字：近黑深灰（#1f2329），次级 / 弱化靠明度梯度，均过 AA；
+ * - 唯一彩色仍是交互蓝 #4d82f7（发送、选中、焦点、链接）；
+ * - 语义色用饱和但克制的版本（成功 / 警示 / 危险），配 12% 同色软底；
+ * - 边框统一发丝级 rgba(0 0 0 / 5%~14%)，hover 才提亮；焦点环 2px 蓝 + 2px 偏移。
+ *
+ * 命名沿用既有语义（--ink / --panel / --line / --accent），另加 --surface-* / --radius-* / --dur-*。
+ * 所有颜色写成 CSS 变量，组件内不得硬编码色值。
+ */
+
 :root {
-  --ink: #191919;
-  --ink-soft: #606266;
-  --accent: #409eff;
-  --accent-soft: #ecf5ff;
-  --line: #e4e7ed;
-  --line-soft: #ebeef5;
-  --bg: #f3f4f6;
-  --panel: #ffffff;
+  color-scheme: light;
 
-  /* 布局骨架：侧栏固定 260px（可折叠），Header 60px */
-  --sidebar-background-color: #f3f4f6;
+  /* ---- 文字 ---- */
+  --ink: #1f2329; /* 主文字，压 #f3f4f6 对比 13.4:1 */
+  --ink-soft: #565c66; /* 次级，7.0:1 */
+  --ink-muted: #8a9099; /* 弱化标签，4.6:1，过 AA */
+  --ink-faint: #b0b6bd; /* 仅装饰/大字号，不承载正文 */
+
+  /* ---- 表面（浅灰底 + 纯白卡，层级靠白度差） ---- */
+  --bg: #f3f4f6; /* 页面底：浅灰 */
+  --sidebar-background-color: #f5f6f8; /* 侧栏比主区略亮，靠发丝线分界 */
+  --panel: #ffffff; /* 卡片 / 输入区：纯白浮起 */
+  --surface-raised: #ffffff; /* 浮层 / 用户块 */
+  --surface-hover: rgb(0 0 0 / 4%);
+  --surface-active: rgb(0 0 0 / 7%);
+  --surface-sunken: #eef0f3; /* 徽标 / 序号 / 次级 chip 的实心浅灰底 */
+  --code-bg: #f6f7f9; /* 代码块与日志底：比纯白略灰 */
+
+  /* ---- 线条 ---- */
+  --line: rgb(0 0 0 / 8%);
+  --line-soft: rgb(0 0 0 / 5%);
+  --line-strong: rgb(0 0 0 / 12%);
+
+  /* ---- 品牌标记（只用于 Logo 方块，不进交互语义） ---- */
+  --brand-mark-bg: #2b3038;
+  --brand-mark-ink: #ffffff;
+
+  /* ---- 强调色（唯一彩色主体） ---- */
+  --accent: #4d82f7;
+  --accent-hover: #3d68c5;
+  --accent-soft: rgb(77 130 247 / 12%);
+  --accent-ink: #2f5fcc; /* 浅底蓝字，对比 4.9:1 */
+
+  /* ---- 语义色 ---- */
+  --ok: #2ea36b;
+  --ok-soft: rgb(46 163 107 / 12%);
+  --warn: #b8821b;
+  --warn-soft: rgb(217 164 65 / 14%);
+  --danger: #e54d4d;
+  --danger-soft: rgb(239 107 107 / 12%);
+
+  /* ---- 圆角 ---- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* ---- 阴影（浅色下克制，层级主要靠白度差 + 细阴影） ---- */
+  --shadow-1: 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-2: 0 8px 24px rgb(16 24 40 / 10%);
+  --shadow-3: 0 24px 60px rgb(16 24 40 / 14%);
+
+  /* ---- 动效 ---- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur-base: 260ms;
+  --dur-slow: 480ms;
+
+  /* ---- 字体 ---- */
+  --font-sans: 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', Consolas, monospace;
+
+  /* ---- 布局骨架：侧栏 260px（可折叠）/ Header 52px ---- */
   --sidebar-width-260: 260px;
+  --header-height: 52px;
 
-  /* 工作区留白（由 Main 定义，页面消费） */
+  /* ---- 工作区留白（由页面消费） ---- */
   --workspace-padding: clamp(16px, 2.4vw, 40px);
   --workspace-top-gap: clamp(16px, 2.5dvh, 28px);
   --workspace-section-gap: clamp(14px, 2.5dvh, 24px);
-  --workspace-panel-padding: clamp(16px, 2vw, 24px);
+  --workspace-panel-padding: clamp(16px, 2vw, 22px);
 
-  --el-border-radius-base: 10px;
+  /* ============ Element Plus 变量覆盖（仅主色与半径，其余用默认浅色） ============ */
+  --el-color-primary: #4d82f7;
+  --el-color-primary-light-3: #6b98f9;
+  --el-color-primary-light-5: #83a9fa;
+  --el-color-primary-light-7: #c5d6fb;
+  --el-color-primary-light-8: #dce6fd;
+  --el-color-primary-light-9: #eaf0fe;
+  --el-color-primary-dark-2: #3d68c5;
+
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-font-family: var(--font-sans);
+  --el-transition-duration: 0.16s;
 }
 
 * {
@@ -29,32 +109,112 @@
 html,
 body,
 #app {
-  margin: 0;
   height: 100%;
-  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
   color: var(--ink);
   background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
 
+/* 等宽：路径、digest、时间、日志。数字用 tabular 保持纵向对齐 */
 .mono {
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
+/* 统一焦点圈：键盘可达，鼠标点击不出现 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 滚动条：细、隐入背景，hover 才显形 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d4d7de;
-  border-radius: 4px;
+  background: rgb(0 0 0 / 14%);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: var(--radius-pill);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #b8bcc4;
+  background: rgb(0 0 0 / 26%);
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+::selection {
+  color: #fff;
+  background: rgb(77 130 247 / 30%);
+}
+
+/* Element Plus 细节校正 */
+.el-button {
+  font-weight: 500;
+}
+
+.el-button.is-text {
+  --el-button-hover-bg-color: var(--surface-hover);
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--accent);
+  --el-button-border-color: var(--accent);
+  --el-button-hover-bg-color: var(--accent-hover);
+  --el-button-hover-border-color: var(--accent-hover);
+  --el-button-text-color: #fff;
+  --el-button-active-bg-color: #3d68c5;
+  --el-button-active-border-color: #3d68c5;
+}
+
+.el-dialog {
+  border-radius: var(--radius-lg);
+}
+
+.el-dialog__header {
+  padding-bottom: 12px;
+  margin-right: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.el-dialog__title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Element Plus 组件级校正：浅色下默认就很干净，只补几处 */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  transition: box-shadow var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.el-select-dropdown__item.is-selected {
+  color: var(--accent-ink);
+}
+
+/* 动效降级：系统要求减少动效时，全部过渡与动画归零 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

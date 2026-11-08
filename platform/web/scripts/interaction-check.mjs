@@ -28,23 +28,24 @@ try {
   await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 })
   await new Promise((r) => setTimeout(r, 1200))
 
-  // 1. 时间戳与复制按钮存在（气泡元信息在 DOM 里，hover 才显形）
+  // 1. 时间戳与复制按钮存在（消息元信息在 DOM 里，hover 才显形）
+  //    DSH 形态下消息块分两类：.user-block（右侧软底块）与 .assistant-block（正文块）。
   const meta = await page.evaluate(() => {
-    const groups = document.querySelectorAll('.bubble-group')
-    const first = groups[0]
+    const blocks = document.querySelectorAll('.assistant-block')
+    const first = blocks[0]
     return {
-      groups: groups.length,
+      blocks: blocks.length,
       hasTime: !!first?.querySelector('.meta-time'),
-      hasCopy: !!first?.querySelector('.meta-copy'),
-      metaHidden: first ? getComputedStyle(first.querySelector('.bubble-meta')).opacity === '0' : null
+      hasCopy: !!first?.querySelector('.meta-btn'),
+      metaHidden: first ? getComputedStyle(first.querySelector('.msg-meta')).opacity === '0' : null
     }
   })
-  check('气泡带时间戳与复制按钮', meta.hasTime && meta.hasCopy, `groups=${meta.groups}`)
-  check('气泡元信息默认隐藏（hover 显形）', meta.metaHidden === true, `opacity=0 → ${meta.metaHidden}`)
+  check('消息块带时间戳与复制按钮', meta.hasTime && meta.hasCopy, `assistant blocks=${meta.blocks}`)
+  check('消息元信息默认隐藏（hover 显形）', meta.metaHidden === true, `opacity=0 → ${meta.metaHidden}`)
 
   // 2. 附件按钮应禁用（占位）
   const attach = await page.evaluate(() => {
-    const btn = document.querySelector('.composer .icon-btn')
+    const btn = document.querySelector('.composer .chip-btn')
     return btn ? { disabled: btn.disabled, title: btn.title } : null
   })
   check('附件按钮为禁用占位（不误导用户）', attach?.disabled === true, `title="${attach?.title}"`)
@@ -57,8 +58,8 @@ try {
       const row = document.createElement('div')
       row.className = 'row assistant'
       const b = document.createElement('div')
-      b.className = 'bubble-group'
-      b.innerHTML = `<div class="bubble"><span class="bubble-text">填充消息 ${i} —— 用于把列表撑长。</span></div><div class="bubble-meta"><span class="mono meta-time">10:00</span><button class="meta-copy">c</button></div>`
+      b.className = 'assistant-block'
+      b.innerHTML = `<div class="assistant-text"><span class="text">填充消息 ${i} —— 用于把列表撑长。</span></div><div class="msg-meta"><span class="mono meta-time">10:00</span><button class="meta-btn">c</button></div>`
       row.appendChild(b)
       col.appendChild(row)
     }
@@ -102,20 +103,20 @@ try {
   // 流式期间应出现光标（轮询最多 2s）
   let caretSeen = false
   for (let i = 0; i < 20; i++) {
-    caretSeen = await page.evaluate(() => !!document.querySelector('.bubble .caret'))
+    caretSeen = await page.evaluate(() => !!document.querySelector('.assistant-text .caret'))
     if (caretSeen) break
     await new Promise((r) => setTimeout(r, 100))
   }
   check('流式期间渲染光标', caretSeen, 'caret 可见')
 
-  // 等流结束（error 气泡出现即终态）
+  // 等流结束（错误行出现即终态）
   let settled = false
   for (let i = 0; i < 100; i++) {
-    settled = await page.evaluate(() => !!document.querySelector('.bubble.error'))
+    settled = await page.evaluate(() => !!document.querySelector('.error-line'))
     if (settled) break
     await new Promise((r) => setTimeout(r, 100))
   }
-  check('发送后进入终态（错误也被呈现）', settled, 'error 气泡出现')
+  check('发送后进入终态（错误也被呈现）', settled, 'error-line 出现')
 
   await new Promise((r) => setTimeout(r, 400))
   const stuckBottom = await page.evaluate(() => {

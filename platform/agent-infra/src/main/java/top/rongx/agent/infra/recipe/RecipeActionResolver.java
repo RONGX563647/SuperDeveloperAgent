@@ -113,15 +113,20 @@ public class RecipeActionResolver implements ActionResolver {
         return fromBuiltin(action);
     }
 
-    /** 缓存键：仓库根 + 各配方源文件的 mtime。非 git 仓库或不可读时返回 null（不缓存）。 */
+    /** 缓存键：仓库根 + 各配方源文件的 mtime 与大小（mtime 粒度粗时大小兜底）。 */
     private String cacheKey(Path repoRoot, ActionId action) {
         try {
             StringBuilder sb = new StringBuilder(repoRoot.toAbsolutePath().normalize().toString())
                     .append('#').append(action.wireName());
             for (String name : List.of(CI_ACTIONS, TASKFILE, MAKEFILE)) {
                 Path f = repoRoot.resolve(name);
-                sb.append('|').append(name).append('=')
-                        .append(Files.isRegularFile(f) ? Files.getLastModifiedTime(f).toMillis() : -1);
+                if (Files.isRegularFile(f)) {
+                    sb.append('|').append(name).append('=')
+                            .append(Files.getLastModifiedTime(f).toMillis())
+                            .append(':').append(Files.size(f));
+                } else {
+                    sb.append('|').append(name).append("=absent");
+                }
             }
             return sb.toString();
         } catch (IOException e) {

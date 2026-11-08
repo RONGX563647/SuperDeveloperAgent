@@ -1,14 +1,32 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Paperclip, Promotion, Setting, Cpu } from '@element-plus/icons-vue'
+import {
+  CaretRight,
+  CopyDocument,
+  Cpu,
+  Loading,
+  Paperclip,
+  Promotion,
+  Setting,
+  Select
+} from '@element-plus/icons-vue'
 import { extractText, findChangeId, streamChat } from '../api/chat'
 import { applyChange, confirmChange, getChange } from '../api/change'
 import type { ChangeView, ChatMessage } from '../types'
 import { appStore } from '../stores/app'
 import PageHeader from '../layouts/components/PageHeader.vue'
 
-/** 项目/环境/会话走全局 store，与侧栏共用同一份状态。 */
+/**
+ * 对话页 —— 视觉形态对齐 DSH：
+ *
+ * - assistant 不做气泡，直接是页面上的文本块（14px/1.85），最大宽度 46rem 居中偏左；
+ * - 工具调用折叠成一行：`>_` 前缀 + 深色命令胶囊 + 状态标（已完成 / 进行中 / 失败）；
+ * - user 消息是右侧的浅色软底块，不描边、不加重阴影；
+ * - 底部输入是悬浮胶囊：上边框 + 内阴影，聚焦时蓝色 3px 环，DSH 的"桌面级输入"质感。
+ *
+ * 交互逻辑（SSE、IME 组合、粘底滚动、变更确认）与改造前完全一致，只换了皮。
+ */
 const projectId = computed(() => appStore.projectId)
 const env = computed(() => appStore.env)
 const sessionId = computed(() => appStore.sessionId)
@@ -33,7 +51,7 @@ const applyResult = ref<string | null>(null)
 const placeholder = computed(() =>
   env.value === 'prod'
     ? '生产环境：只能只读诊断；任何变更都需要在确认卡片上确认'
-    : '输入问题，例如：这个项目的流水线有哪些？/ 帮我看看 test 环境为什么起不来'
+    : '发消息或描述任务，Enter 发送，Shift+Enter 换行'
 )
 
 const tokens = ref(0)
@@ -48,6 +66,9 @@ const lastAssistantId = computed(() => {
   }
   return ''
 })
+
+/** 输入框是否为空 —— 决定发送键是蓝色的实心还是灰化的暗色。 */
+const canSend = computed(() => !!input.value.trim() && !streaming.value)
 
 function push(role: ChatMessage['role'], text: string, label?: string) {
   messages.value.push({
@@ -90,6 +111,19 @@ function formatTime(at: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/**
+ * 工具调用行是否仍在跑。
+ *
+ * <p>判定条件：整体在流式，且该行之后还没有任何正文增量 —— 一旦后面跟了新的
+ * assistant 正文，就说明这条命令已经返回并开始输出结果了。
+ */
+function stepRunning(message: ChatMessage): boolean {
+  if (!streaming.value) return false
+  const idx = messages.value.findIndex((m) => m.id === message.id)
+  if (idx < 0) return false
+  return !messages.value.slice(idx + 1).some((m) => m.role === 'assistant' && m.text)
+}
+
 async function send() {
   const text = input.value.trim()
   if (!text || streaming.value) return
@@ -105,8 +139,15 @@ async function send() {
   timer = setInterval(() => (elapsedMs.value += 100), 100)
   controller = new AbortController()
 
-  const assistantId = `${Date.now()}-a`
-  messages.value.push({ id: assistantId, role: 'assistant', text: '', at: Date.now() })
+  /**
+   * 正文游标：当前这一轮回复里「正在续写」的 assistant 块 id。
+   *
+   * <p>不能靠 `reverse().find(role==='assistant')` 反查 —— 上一条历史消息（乃至开场欢迎语）
+   * 也是 assistant，反查会命中它，正文就写串到旧块里。这里显式持有游标：
+   * 遇到工具调用事件就把游标清空，下一个文本增量重新开一块，
+   * DOM 顺序天然是「命令 → 输出 → 命令 → 输出」，而不是所有命令堆在正文上方。
+   */
+  let cursorId: string | null = null
 
   try {
     await streamChat(
@@ -119,12 +160,19 @@ async function send() {
             : '对话流异常'
           throw new Error(msg)
         }
-        const target = messages.value.find((m) => m.id === assistantId)
-        if (!target) return
         const label = String(event.payload?.tool ?? '')
         const delta = extractText(event)
-        if (label) push('step', label, '工具调用')
+        if (label) {
+          push('step', label, '工具调用')
+          cursorId = null
+        }
         if (delta) {
+          let target = cursorId ? messages.value.find((m) => m.id === cursorId) : undefined
+          if (!target) {
+            cursorId = `${Date.now()}-a${messages.value.length}`
+            target = { id: cursorId, role: 'assistant', text: '', at: Date.now() }
+            messages.value.push(target)
+          }
           target.text += delta
           tokens.value += 1
         }
@@ -132,7 +180,7 @@ async function send() {
       controller.signal
     )
   } catch (error) {
-    const target = messages.value.find((m) => m.id === assistantId)
+    const target = cursorId ? messages.value.find((m) => m.id === cursorId) : undefined
     if (target && !target.text) target.text = '（连接中断）'
     push('error', error instanceof Error ? error.message : String(error))
   } finally {
@@ -213,7 +261,7 @@ watch(sessionId, () => {
   if (streaming.value) stop()
   messages.value = []
   pendingChangeId.value = null
-  void onMountedGreeting()
+  onMountedGreeting()
 })
 
 function onMountedGreeting() {
@@ -230,11 +278,16 @@ onMounted(() => {
   <div class="chat-page">
     <PageHeader title="通用对话" :subtitle="`${projectId} · ${env}`">
       <template #actions>
-        <span class="status-pill">
-          <span class="dot" :class="streaming ? 'busy' : 'ok'" />
+        <span class="run-state" :class="streaming ? 'busy' : 'ok'">
+          <span class="dot" />
           {{ streaming ? '生成中' : '就绪' }}
         </span>
-        <el-button size="small" text :icon="Setting">设置</el-button>
+        <button type="button" class="hdr-btn" title="新会话" @click="reset">
+          新会话
+        </button>
+        <button type="button" class="icon-btn" title="设置（待接入）" disabled>
+          <el-icon><Setting /></el-icon>
+        </button>
       </template>
     </PageHeader>
 
@@ -242,42 +295,61 @@ onMounted(() => {
     <div ref="listRef" class="chat-list" @scroll.passive="onListScroll">
       <div class="chat-column">
         <div v-for="m in messages" :key="m.id" class="row" :class="m.role">
-          <div v-if="m.role === 'step'" class="step-row">
-            <el-tag size="small" type="info" effect="light" round>{{ m.label }}</el-tag>
-            <span class="step-text">{{ m.text }}</span>
+          <!-- 工具调用：DSH 的单行折叠形态 -->
+          <div v-if="m.role === 'step'" class="tool-line">
+            <span class="tool-caret" aria-hidden="true">&gt;_</span>
+            <span class="tool-cmd">{{ m.text }}</span>
+            <span class="tool-state" :class="stepRunning(m) ? 'running' : 'done'">
+              <el-icon v-if="stepRunning(m)" class="is-loading"><Loading /></el-icon>
+              <el-icon v-else><Select /></el-icon>
+              {{ stepRunning(m) ? '执行中' : '已完成' }}
+            </span>
           </div>
-          <div v-else-if="m.role === 'error'" class="bubble error">
-            {{ m.text }}
+
+          <!-- 错误：整块警示，不做气泡 -->
+          <div v-else-if="m.role === 'error'" class="error-line">
+            <span class="error-tag">中断</span>
+            <span class="error-text">{{ m.text }}</span>
           </div>
-          <div v-else class="bubble-group" :class="{ user: m.role === 'user' }">
-            <div class="bubble" :class="{ user: m.role === 'user', streaming: m.role === 'assistant' && streaming && m.id === messages[messages.length - 1]?.id && !m.text }">
-              <span class="bubble-text">{{ m.text }}</span><span v-if="streaming && m.role === 'assistant' && m.id === lastAssistantId" class="caret" />
+
+          <template v-else>
+            <!-- 用户消息：右侧软底块 -->
+            <div v-if="m.role === 'user'" class="user-block">
+              <div class="user-bubble">
+                {{ m.text }}
+              </div>
+              <div class="msg-meta">
+                <time class="meta-time mono">{{ formatTime(m.at) }}</time>
+                <button type="button" class="meta-btn" title="复制" @click="copyMessage(m.text)">
+                  <el-icon><CopyDocument /></el-icon>
+                </button>
+              </div>
             </div>
-            <div class="bubble-meta">
-              <span class="mono meta-time">{{ formatTime(m.at) }}</span>
-              <button
-                v-if="m.text"
-                type="button"
-                class="meta-copy"
-                title="复制"
-                @click="copyMessage(m.text)"
-              >
-                <el-icon><CopyDocument /></el-icon>
-              </button>
+
+            <!-- 助手消息：白纸上的正文，无气泡无边框 -->
+            <div v-else class="assistant-block">
+              <div class="assistant-text">
+                <span class="text">{{ m.text }}</span><span v-if="streaming && m.id === lastAssistantId" class="caret" />
+              </div>
+              <div v-if="m.text" class="msg-meta">
+                <time class="meta-time mono">{{ formatTime(m.at) }}</time>
+                <button type="button" class="meta-btn" title="复制" @click="copyMessage(m.text)">
+                  <el-icon><CopyDocument /></el-icon>
+                </button>
+              </div>
             </div>
-          </div>
+          </template>
         </div>
 
         <div v-if="pendingChangeId" class="change-tip">
-          <div class="tip-title">
-            有变更待确认
+          <div class="tip-main">
+            <span class="tip-title">有变更待确认</span>
+            <span class="mono tip-id">{{ pendingChangeId }}</span>
           </div>
-          <div class="mono tip-id">
-            {{ pendingChangeId }}
-          </div>
-          <el-button type="warning" size="small" @click="openChange">
+          <button type="button" class="tip-btn" @click="openChange">
             查看确认卡片
-          </el-button>
+            <el-icon><CaretRight /></el-icon>
+          </button>
         </div>
       </div>
     </div>
@@ -288,7 +360,7 @@ onMounted(() => {
         <el-input
           v-model="input"
           type="textarea"
-          :autosize="{ minRows: 2, maxRows: 8 }"
+          :autosize="{ minRows: 1, maxRows: 8 }"
           resize="none"
           class="composer-input"
           :placeholder="placeholder"
@@ -298,37 +370,43 @@ onMounted(() => {
         />
         <div class="composer-bar">
           <div class="bar-left">
-            <el-tooltip content="附件功能待接入（占位）" placement="top">
-              <button type="button" class="icon-btn" disabled title="附件功能待接入">
-                <el-icon><Paperclip /></el-icon>
-              </button>
-            </el-tooltip>
-            <el-tooltip content="执行策略：会话内工具调用的门禁偏好" placement="top">
-              <el-select v-model="permission" size="small" class="permission-select">
-                <el-option label="每次确认" value="confirm" />
-                <el-option label="只读" value="readonly" />
-                <el-option label="自动执行" value="auto" />
-              </el-select>
-            </el-tooltip>
+            <button type="button" class="chip-btn" disabled title="附件功能待接入">
+              <el-icon><Paperclip /></el-icon>
+            </button>
+            <el-select v-model="permission" size="small" class="permission-select" title="执行策略">
+              <el-option label="完全权限" value="auto" />
+              <el-option label="每次确认" value="confirm" />
+              <el-option label="只读" value="readonly" />
+            </el-select>
           </div>
           <div class="bar-right">
             <span class="metric mono">
               <el-icon><Cpu /></el-icon>
-              qwen-plus · {{ (elapsedMs / 1000).toFixed(1) }}s · {{ tokens }} ev
+              qwen-plus
+              <template v-if="streaming || elapsedMs">
+                · {{ (elapsedMs / 1000).toFixed(1) }}s · {{ tokens }} ev
+              </template>
             </span>
-            <el-button v-if="streaming" size="small" @click="stop">
+            <button
+              v-if="streaming"
+              type="button"
+              class="send-btn stop"
+              title="停止生成"
+              @click="stop"
+            >
               停止
-            </el-button>
-            <el-button
-              type="primary"
-              size="small"
-              :icon="Promotion"
-              :loading="streaming"
-              :disabled="!input.trim()"
+            </button>
+            <button
+              v-else
+              type="button"
+              class="send-btn"
+              :class="{ ready: canSend }"
+              :disabled="!canSend"
+              title="发送"
               @click="send"
             >
-              发送
-            </el-button>
+              <el-icon><Promotion /></el-icon>
+            </button>
           </div>
         </div>
       </div>
@@ -347,7 +425,7 @@ onMounted(() => {
         <div class="line"><span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b></div>
         <div class="line">
           <span>风险</span>
-          <el-tag :type="change.highRisk ? 'danger' : 'success'" size="small" effect="light" round>
+          <el-tag :type="change.highRisk ? 'danger' : 'success'" size="small" effect="dark" round>
             {{ change.highRisk ? '高危（需二次密码）' : '常规' }}
           </el-tag>
         </div>
@@ -405,22 +483,84 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* 消息区：只有这里滚动 */
+/* ---- Header 右侧 ---- */
+.run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+}
+.run-state .dot {
+  width: 5px;
+  height: 5px;
+  background: var(--ok);
+  border-radius: 50%;
+}
+.run-state.busy .dot {
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.hdr-btn {
+  height: 26px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+.hdr-btn:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 14px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ---- 消息区：只有这里滚动 ---- */
 .chat-list {
   flex: 1 1 0;
   min-height: 0;
-  padding: 24px 20px 8px;
+  padding: 8px 24px 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* 内容居中收窄，避免超长行 */
+/* 内容收窄居中：正文行长控制在 46rem 内，长文本不横跨整屏 */
 .chat-column {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 6px;
   width: 100%;
-  max-width: 56rem;
-  margin: 0 auto;
+  max-width: 54rem;
+  min-height: 100%;
+  padding: 0 0 24px clamp(0px, 2vw, 24px);
 }
 .row {
   display: flex;
@@ -428,152 +568,263 @@ onMounted(() => {
 }
 .row.user {
   justify-content: flex-end;
+  margin-top: 22px;
 }
-.bubble-group {
+
+/* 工具调用行：`>_` + 命令胶囊 + 状态 */
+.tool-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 0;
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.tool-caret {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-ink);
+  opacity: 0.85;
+}
+.tool-cmd {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--surface-hover);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.tool-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+}
+.tool-state.done {
+  color: var(--ok);
+}
+.tool-state.running {
+  color: var(--accent-ink);
+}
+
+/* 错误行 */
+.error-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-left: 2px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+.error-tag {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+  letter-spacing: 0.04em;
+}
+.error-text {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 用户块：右侧软底，圆角 14px，右下角收一点 */
+.user-block {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  max-width: 78%;
-}
-.row.user .bubble-group {
   align-items: flex-end;
+  gap: 3px;
+  max-width: 80%;
+  min-width: 0;
 }
-.bubble {
-  padding: 11px 15px;
+.user-bubble {
+  max-width: 100%;
+  padding: 10px 15px;
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.75;
+  color: var(--ink);
   white-space: pre-wrap;
   word-break: break-word;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 20px;
+}
+
+/* 助手块：正文即页面 */
+.assistant-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+.assistant-text {
+  font-size: 14.5px;
+  line-height: 1.9;
   color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  word-break: break-word;
 }
-.row.user .bubble {
-  color: var(--ink);
-  background: #f2f3f5;
-  border-color: #eceef1;
-  border-bottom-right-radius: 4px;
-}
-.row.assistant .bubble {
-  border-bottom-left-radius: 4px;
-}
-.bubble.error {
-  color: #c45656;
-  background: #fef0f0;
-  border-color: #f3c2c2;
+.assistant-text .text {
+  white-space: pre-wrap;
 }
 /* 流式光标：跟随最后一条 assistant 消息 */
 .caret {
   display: inline-block;
-  width: 2px;
+  width: 6px;
   height: 1em;
   margin-left: 2px;
-  vertical-align: -0.15em;
+  vertical-align: -0.14em;
   background: var(--accent);
-  animation: caret-blink 0.9s step-end infinite;
+  border-radius: 1px;
+  animation: caret-blink 1s step-end infinite;
 }
 @keyframes caret-blink {
   50% {
     opacity: 0;
   }
 }
-/* 气泡元信息：时间 + 复制，hover 才出现，不喧宾夺主 */
-.bubble-meta {
+
+/* 元信息：hover 才出现，不喧宾夺主 */
+.msg-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   height: 18px;
-  padding: 0 4px;
+  padding: 0 2px;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) ease;
 }
-.bubble-group:hover .bubble-meta {
+.user-block:hover .msg-meta,
+.assistant-block:hover .msg-meta {
   opacity: 1;
 }
 .meta-time {
   font-size: 10px;
-  color: #b0b6bd;
+  color: var(--ink-faint);
 }
-.meta-copy {
+.meta-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   padding: 0;
-  color: #b0b6bd;
+  font-size: 11px;
+  color: var(--ink-faint);
   cursor: pointer;
   background: none;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
 }
-.meta-copy:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-.step-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-.step-text {
-  color: var(--ink-soft);
-}
-.change-tip {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  background: #fdf6ec;
-  border: 1px solid #f5d3b8;
-  border-radius: 12px;
-}
-.tip-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #9a4514;
-}
-.tip-id {
-  color: #9a4514;
-  word-break: break-all;
+.meta-btn:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
 }
 
-/* 输入区：flex 自然撑开，绝不 fixed */
+/* 变更提示：警示色块，不用黄底白字那种廉价感 */
+.change-tip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-top: 14px;
+  background: var(--warn-soft);
+  border: 1px solid rgb(217 164 65 / 26%);
+  border-radius: var(--radius-md);
+}
+.tip-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tip-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.tip-id {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tip-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--warn);
+  cursor: pointer;
+  background: rgb(217 164 65 / 10%);
+  border: 1px solid rgb(217 164 65 / 30%);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-fast) ease;
+}
+.tip-btn:hover {
+  background: rgb(217 164 65 / 18%);
+}
+
+/* ---- 输入区：悬浮胶囊 ---- */
 .composer-wrap {
   flex: none;
-  padding: 8px 20px 14px;
-  background: var(--panel);
+  padding: 0 24px 14px;
 }
 .composer {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  max-width: 56rem;
-  padding: 10px 12px 8px;
+  max-width: 54rem;
+  padding: 10px 10px 8px 14px;
   margin: 0 auto;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-2), inset 0 0 0 1px var(--line-soft);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 .composer:focus-within {
-  border-color: #b9d3f7;
-  box-shadow: 0 0 0 3px rgb(64 158 255 / 10%);
+  border-color: rgb(77 130 247 / 55%);
+  box-shadow: var(--shadow-2), 0 0 0 3px rgb(77 130 247 / 12%);
 }
 .composer-input :deep(.el-textarea__inner) {
-  padding: 2px 4px;
+  max-height: 30vh;
+  padding: 4px 2px;
+  overflow-y: auto;
+  font-family: inherit;
   font-size: 14px;
   line-height: 1.7;
+  color: var(--ink);
   background: transparent;
   border: none;
   box-shadow: none;
-  /* 自适应高度，但最多不超过屏幕的 30% */
-  max-height: 30vh;
-  overflow-y: auto;
+}
+.composer-input :deep(.el-textarea__inner::placeholder) {
+  color: var(--ink-faint);
 }
 .composer-bar {
   display: flex;
@@ -585,29 +836,40 @@ onMounted(() => {
 .bar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
-.icon-btn {
+.chip-btn {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  color: var(--ink-soft);
+  font-size: 14px;
+  color: var(--ink-muted);
   cursor: pointer;
   background: none;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
-.icon-btn:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
+.chip-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .permission-select {
-  width: 108px;
+  width: 104px;
+}
+.permission-select :deep(.el-select__wrapper) {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  background: transparent;
+  box-shadow: none;
+}
+.permission-select :deep(.el-select__wrapper:hover) {
+  background: var(--surface-hover);
 }
 .metric {
   display: flex;
@@ -615,37 +877,61 @@ onMounted(() => {
   gap: 4px;
   overflow: hidden;
   font-size: 11px;
-  color: #a0a6ad;
+  color: var(--ink-faint);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.composer-hint {
-  max-width: 56rem;
-  margin: 6px auto 0;
-  font-size: 11px;
-  color: #b0b6bd;
-  text-align: center;
-}
-.status-pill {
-  display: inline-flex;
+/* 发送键：有内容才亮成蓝，空态是安静的暗块 */
+.send-btn {
+  display: flex;
+  flex: none;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--ink-soft);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  cursor: not-allowed;
+  background: var(--surface-hover);
+  border: 0;
+  border-radius: var(--radius-md);
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
 }
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #67c23a;
-}
-.dot.busy {
+.send-btn.ready {
+  color: #fff;
+  cursor: pointer;
   background: var(--accent);
 }
+.send-btn.ready:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+.send-btn.ready:active {
+  transform: translateY(0);
+}
+.send-btn.stop {
+  width: auto;
+  padding: 0 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: var(--surface-active);
+}
+.send-btn.stop:hover {
+  color: var(--ink);
+}
+.composer-hint {
+  max-width: 54rem;
+  margin: 8px auto 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+/* 确认卡片 */
 .confirm-card {
   display: flex;
   flex-direction: column;
@@ -659,15 +945,20 @@ onMounted(() => {
 .confirm-card .line span {
   flex: none;
   width: 90px;
-  color: var(--ink-soft);
+  color: var(--ink-muted);
 }
 
-@container workspace (max-width: 720px) {
-  .bubble {
-    max-width: 88%;
+@media (max-width: 720px) {
+  .chat-list,
+  .composer-wrap {
+    padding-right: 14px;
+    padding-left: 14px;
   }
   .metric {
     display: none;
+  }
+  .user-block {
+    max-width: 88%;
   }
 }
 </style>
