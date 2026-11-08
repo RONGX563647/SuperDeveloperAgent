@@ -16,6 +16,7 @@ import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.gateway.deploy.DeployGate;
 
 /** 流水线运行查询（CI 的"构建历史/阶段视图"）。 */
 @RestController
@@ -23,12 +24,18 @@ import top.rongx.agent.domain.run.StageStatus;
 public class PipelineController {
 
     private final PipelineEngine engine;
-    private final boolean serverConfigured;
+    private final boolean legacyServerConfigured;
+    private final top.rongx.agent.domain.settings.DeployServerRepository deployServers;
+    private final DeployGate deployGate;
 
     public PipelineController(PipelineEngine engine,
-                              @Value("${agent.deploy.server.host:}") String serverHost) {
+                              @Value("${agent.deploy.server.host:}") String serverHost,
+                              top.rongx.agent.domain.settings.DeployServerRepository deployServers,
+                              DeployGate deployGate) {
         this.engine = engine;
-        this.serverConfigured = serverHost != null && !serverHost.isBlank();
+        this.legacyServerConfigured = serverHost != null && !serverHost.isBlank();
+        this.deployServers = deployServers;
+        this.deployGate = deployGate;
     }
 
     @GetMapping("/pipelines")
@@ -48,28 +55,39 @@ public class PipelineController {
         if (sha == null || sha.isBlank()) {
             throw new IllegalArgumentException("gitSha 必填");
         }
+        // 环境：缺省 test（绝不让"没传环境"落到生产）
+        String env = params.get("env");
+        String normalizedEnv = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
+        // 服务器（prod）操作：测试证据 + 一次性人工确认令牌，两个入口（这里 / deploy/replay）共用同一校验
+        deployGate.requireIfNeeded(projectId, normalizedEnv, sha, params.get("confirmToken"));
         Map<String, String> triggerParams = new LinkedHashMap<>();
         triggerParams.put("gitSha", sha);
+        triggerParams.put("env", normalizedEnv);
         // 可选：本次运行的部署目标覆盖（docker / host / server），空则由 pipeline.yml 决定
         String deployTarget = params.get("deployTarget");
         if (deployTarget != null && !deployTarget.isBlank()) {
             triggerParams.put("deployTarget", deployTarget.trim().toLowerCase());
         }
         String runId = engine.trigger(projectId, pipelineId, triggerParams);
-        return Map.of("runId", runId, "status", engine.status(runId));
+        return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId));
     }
 
     /** 可选部署目标（前端下拉用）；available=false 时给出不可用原因。 */
     @GetMapping("/deploy/targets")
     public List<Map<String, Object>> deployTargets() {
+        var defaultServer = deployServers.findDefault();
+        boolean serverReady = defaultServer.isPresent() || legacyServerConfigured;
+        String serverDetail = defaultServer
+                .map(s -> "默认服务器：" + s.name() + "（" + s.host() + "）")
+                .orElse(legacyServerConfigured
+                        ? "已通过环境变量配置" : "未配置：请到「设置 → 服务器」添加");
         return List.of(
                 Map.of("target", "docker", "label", "本机 Docker 容器", "available", true,
                         "detail", "替换式发布；需要 Dockerfile 与镜像"),
                 Map.of("target", "host", "label", "本机直接运行", "available", true,
                         "detail", "仅 Java jar；pid 文件管理"),
                 Map.of("target", "server", "label", "远程服务器", "available",
-                        serverConfigured, "detail", serverConfigured
-                                ? "已配置（部署器待实现）" : "未配置：见《发布编排与平台部署器》§4"));
+                        serverReady, "detail", serverDetail));
     }
 
     @GetMapping("/runs/{runId}")
@@ -115,6 +133,7 @@ public class PipelineController {
                 .map(h -> Map.<String, Object>of(
                         "runId", h.runId(),
                         "projectId", h.projectId(),
+                        "env", h.env(),
                         "pipelineId", h.pipelineId(),
                         "gitSha", h.gitSha(),
                         "status", h.status().name(),

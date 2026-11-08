@@ -111,7 +111,7 @@ class HostDeployerTest {
         // 回滚：回到 sha-one-1111
         DeployResult rollback = deployer.deploy(new DeployRequest(PROJECT, "run-rb", "sha-three-3333",
                 null, null, null, workspace.toString(), DeployTarget.HOST,
-                PORT, PORT, "/healthz", null, true));
+                PORT, PORT, "/healthz", null, true, null));
         assertTrue(rollback.success(), "回滚应成功：" + rollback.summary() + "\n" + rollback.log());
         assertEquals("sha-one-1111", rollback.resource(), "回滚应使用 previous 版本");
         assertEquals("OK", httpGet("http://127.0.0.1:" + PORT + "/healthz"));
@@ -124,7 +124,7 @@ class HostDeployerTest {
         Path empty = Files.createTempDirectory("host-empty");
         DeployResult result = deployer.deploy(new DeployRequest("host-empty", "run-x", "sha-x",
                 null, null, null, empty.toString(), DeployTarget.HOST,
-                PORT, PORT, "/healthz", null, false));
+                PORT, PORT, "/healthz", null, false, null));
         assertEquals(false, result.success());
         assertEquals("E-504", result.errorCode());
         assertTrue(result.summary().contains("DOCKER"), result.summary());
@@ -136,7 +136,7 @@ class HostDeployerTest {
 
     private DeployRequest request(String sha) {
         return new DeployRequest(PROJECT, "run-" + sha, sha, null, null, null,
-                workspace.toString(), DeployTarget.HOST, PORT, PORT, "/healthz", null, false);
+                workspace.toString(), DeployTarget.HOST, PORT, PORT, "/healthz", null, false, null);
     }
 
     private static String httpGet(String url) throws Exception {

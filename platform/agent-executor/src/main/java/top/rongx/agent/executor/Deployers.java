@@ -20,10 +20,10 @@ public class Deployers implements Deployer {
         this.delegates = List.copyOf(delegates);
     }
 
-    /** 默认组合：Docker + Host + Server（Server 未配置时返回 E-505）。 */
+    /** 默认组合：Docker + Host + Server（Server 未配置服务器时返回 E-505）。 */
     public static Deployers builtin() {
         return new Deployers(List.of(new DockerDeployer(), new HostDeployer(),
-                new ServerDeployer("", 22, "deploy", "", "/opt/agent/deploy")));
+                ServerDeployer.unconfigured()));
     }
 
     @Override

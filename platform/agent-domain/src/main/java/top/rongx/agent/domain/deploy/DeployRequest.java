@@ -16,6 +16,7 @@ package top.rongx.agent.domain.deploy;
  * @param healthPath    健康检查路径（如 {@code /healthz}），供后续门禁拼接 URL
  * @param previousImageRef 上一版镜像引用（回滚用；可能为空）
  * @param rollback      是否为回滚动作（true 时部署器应回到上一版，而不是当前构建产物）
+ * @param serverId      目标服务器 id（SERVER 目标用；空则用默认服务器）
  */
 public record DeployRequest(
         String projectId,
@@ -30,5 +31,6 @@ public record DeployRequest(
         int containerPort,
         String healthPath,
         String previousImageRef,
-        boolean rollback) {
+        boolean rollback,
+        String serverId) {
 }

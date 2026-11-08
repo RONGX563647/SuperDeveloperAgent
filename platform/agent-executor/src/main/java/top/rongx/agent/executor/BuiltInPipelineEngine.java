@@ -74,6 +74,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final top.rongx.agent.domain.port.ProjectRepoLocator repoLocator;
     /** 平台部署器（方案 C：部署语义归平台，不再交给仓库脚本）。 */
     private final top.rongx.agent.domain.port.Deployer deployers;
+    /** 定义解析器（仓库覆盖 → 环境脚本 → 平台定义 → 规则生成 → agent 兜底）；空 = 旧装配。 */
+    private final PipelineDefinitionResolver resolver;
+    /** 环境级可复现脚本（空 = 关闭"固化/重放/晋升校验"）。 */
+    private final top.rongx.agent.domain.port.RecipeStore recipeStore;
 
     /** 应用关闭时停掉执行线程：不再接新任务，正在跑的构建被中断（避免悬挂进程）。 */
     @Override
@@ -111,6 +115,38 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  String imagePrefix,
                                  top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
                                  top.rongx.agent.domain.port.Deployer deployers) {
+        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers, null);
+    }
+
+    /**
+     * 最完整构造：再注入定义解析器（平台侧定义 + 自动生成 + agent 兜底）。
+     *
+     * <p>{@code resolver} 为空时退化为"只认检出目录里的 ci/pipeline.yml"，
+     * 仅用于单测；生产装配必须提供。
+     */
+    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
+                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
+                                 String imagePrefix,
+                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
+                                 top.rongx.agent.domain.port.Deployer deployers,
+                                 PipelineDefinitionResolver resolver) {
+        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
+                resolver, null);
+    }
+
+    /**
+     * 最完整构造：再注入环境级可复现脚本存储（recipe）。
+     *
+     * <p>给了 recipeStore 就有了三件事：运行成功自动固化、重放优先用固化脚本、
+     * 服务器环境前置"测试机成功案例"校验。
+     */
+    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
+                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
+                                 String imagePrefix,
+                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
+                                 top.rongx.agent.domain.port.Deployer deployers,
+                                 PipelineDefinitionResolver resolver,
+                                 top.rongx.agent.domain.port.RecipeStore recipeStore) {
         this.recipes = recipes;
         this.sandboxed = sandboxed;
         this.host = host;
@@ -119,6 +155,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         this.imagePrefix = imagePrefix == null || imagePrefix.isBlank() ? "ci" : imagePrefix;
         this.repoLocator = repoLocator;
         this.deployers = deployers == null ? Deployers.builtin() : deployers;
+        this.resolver = resolver;
+        this.recipeStore = recipeStore;
         restoreHistory();
     }
 
@@ -129,67 +167,36 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return "builtin-pipeline";
     }
 
-    /** 流水线定义在仓库里的固定路径（versioned 数据；平台不猜构建命令）。 */
+    /** 流水线定义路径：仓库里可选提交这份覆盖；没有就用平台侧的自动生成定义。 */
     private static final String PIPELINE_FILE = "ci/pipeline.yml";
 
-    /** 旧布局（平台没定位到仓库目录）时的兜底名，仅用于展示；触发会由执行期给出可读错误。 */
+    /** 极旧布局（平台也定位不到仓库）时的兜底名。 */
     private static final List<String> BUILTIN_PIPELINES = List.of("release", "verify");
 
-    /** 缺 ci/pipeline.yml（提交里没有）。 */
+    /** 连平台侧定义都生成不出来（脚手架失败/仓库不可读）。 */
     private static final String E_NO_PIPELINE = "E-220";
-    /** ci/pipeline.yml 存在但解析不出来。 */
+    /** 定义存在但解析不出来（人工写坏了平台定义或仓库覆盖文件）。 */
     private static final String E_BAD_PIPELINE = "E-221";
 
     @Override
     public List<String> pipelines(String projectId) {
-        // 白名单来自仓库 ci/pipeline.yml（数据、人写、versioned）
+        // 名字优先取"这次真正会用的那份定义"：仓库提交覆盖 > 平台定义 > 规则生成
         Path repoDir = resolveRepoForRead(projectId);
-        if (repoDir == null) {
-            return BUILTIN_PIPELINES;
-        }
-        if (!hasPipelineDefinition(repoDir)) {
-            // 不提供"看起来能跑"的假流水线：仓库没有定义时白名单为空，
-            // 前端直接引导用户去生成并提交 ci/，而不是让用户点了再失败。
-            return List.of();
-        }
-        Path pipelineFile = repoDir.resolve(PIPELINE_FILE);
-        if (!Files.isRegularFile(pipelineFile)) {
-            // MANAGED（bare 无工作区）：默认分支上有定义即可，读不到自定义名时用默认名
-            return BUILTIN_PIPELINES;
-        }
         try {
-            PipelineDefinition def = PipelineDefinition.load(repoDir);
-            if (def.name() != null && !def.name().isBlank()) {
-                return List.of(def.name(), "verify");
+            PipelineDefinition def;
+            if (resolver != null) {
+                def = resolver.resolveForRead(projectId, repoDir).definition();
+            } else if (repoDir != null && Files.isRegularFile(repoDir.resolve(PIPELINE_FILE))) {
+                def = PipelineDefinition.load(repoDir);
+            } else {
+                return BUILTIN_PIPELINES;
             }
-            return BUILTIN_PIPELINES;
-        } catch (Exception e) {
-            // 定义损坏时不阻塞白名单查询：仍列出默认名，触发期会给出可读的解析错误
-            return BUILTIN_PIPELINES;
+            String name = def.name();
+            return List.of(name == null || name.isBlank() ? "release" : name, "verify");
+        } catch (RuntimeException e) {
+            // 生成/解析失败不阻塞下拉：仍给默认名，触发期会给出可读错误
+            return repoDir == null ? BUILTIN_PIPELINES : List.of("release", "verify");
         }
-    }
-
-    /**
-     * 仓库里是否已有流水线定义。
-     *
-     * <p>工作区（DIRECT = 用户目录）直接看文件；MANAGED 的仓库是 bare、没有工作区，
-     * 只能查默认分支的 blob——否则托管项目会被误判成"没有流水线"。
-     */
-    private boolean hasPipelineDefinition(Path repoDir) {
-        if (Files.isRegularFile(repoDir.resolve(PIPELINE_FILE))) {
-            return true;
-        }
-        if (!Files.isDirectory(repoDir.resolve("objects"))) {
-            return false;
-        }
-        for (String branch : defaultBranches(repoDir)) {
-            ActionResult r = host.run(repoDir, spec("pipeline-check", List.of(
-                    List.of("git", "cat-file", "-e", branch + ":" + PIPELINE_FILE))), () -> false);
-            if (r.result().status() == StageStatus.SUCCEEDED) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** 默认分支候选：bare 的 HEAD 指向的分支，再退回 main / master。 */
@@ -221,79 +228,97 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
-     * 读本次提交的流水线定义。
+     * 解析本次运行要用的定义。
      *
-     * <p>"提交里没有 ci/pipeline.yml" 和"YAML 解析不出来"都是<b>确定性失败</b>，不是引擎异常：
-     * 必须给出用户能照着做的指引，否则界面上只会剩一句"无法读取某路径"。
+     * <p>顺序：提交里的 {@code ci/pipeline.yml}（可选覆盖）→ 平台侧定义 → 平台自动生成
+     * （规则优先，识别不出技术栈时 agent 兜底）。所以"仓库没提交 ci/"只是走平台定义，
+     * 不再是一个错误。
      *
-     * @return 定义；失败时返回 {@code null}（已登记对应的失败 stage）
+     * @return 解析结果；失败时返回 {@code null}（已登记对应的失败 stage）
      */
-    private PipelineDefinition loadDefinition(Path runDir, RunState state) {
-        if (!Files.isRegularFile(runDir.resolve(PIPELINE_FILE))) {
-            String message = noPipelineMessage(state.projectId, state.gitSha);
+    private PipelineDefinitionResolver.Resolved resolveDefinition(Path runDir, RunState state) {
+        if (resolver == null) {
+            // 兼容旧装配（单测直接 new 引擎）：只认检出目录里的定义
+            if (!Files.isRegularFile(runDir.resolve(PIPELINE_FILE))) {
+                String message = "本次提交与平台都没有可用的 " + PIPELINE_FILE;
+                state.log.append('[').append(E_NO_PIPELINE).append("] ").append(message).append('\n');
+                state.stages.add(StageResult.failed("pipeline-def", 1, E_NO_PIPELINE, message, 0));
+                state.status = StageStatus.FAILED;
+                return null;
+            }
+            try {
+                return new PipelineDefinitionResolver.Resolved(runDir,
+                        PipelineDefinition.load(runDir),
+                        PipelineDefinitionResolver.Source.REPO, "定义来自本次提交");
+            } catch (IllegalArgumentException e) {
+                return badDefinition(state, e);
+            }
+        }
+        try {
+            Path repoRoot = repoLocator == null ? null : repoLocator.repoDir(state.projectId).orElse(null);
+            return resolver.resolveForRun(state.projectId, runDir, repoRoot, state.env);
+        } catch (IllegalArgumentException e) {
+            return badDefinition(state, e);
+        } catch (RuntimeException e) {
+            String message = "无法准备流水线定义（自动生成失败）：" + e.getMessage()
+                    + "。可在「项目」页点「生成流水线脚本」重试，或直接编辑平台侧定义。";
             state.log.append('[').append(E_NO_PIPELINE).append("] ").append(message).append('\n');
             state.stages.add(StageResult.failed("pipeline-def", 1, E_NO_PIPELINE, message, 0));
             state.status = StageStatus.FAILED;
             return null;
         }
-        try {
-            return PipelineDefinition.load(runDir);
-        } catch (IllegalArgumentException e) {
-            String message = "ci/pipeline.yml 有语法/结构错误，无法执行：" + e.getMessage()
-                    + "。修好并提交后再运行（stage 只能引用白名单动作，见《流水线执行器契约》）。";
-            state.log.append('[').append(E_BAD_PIPELINE).append("] ").append(message).append('\n');
-            state.stages.add(StageResult.failed("pipeline-def", 1, E_BAD_PIPELINE, message, 0));
-            state.status = StageStatus.FAILED;
-            return null;
-        }
-    }
-
-    /** 该提交里是否有流水线定义（只看存在性，不解析）。 */
-    private boolean hasPipelineAt(Path repo, String sha) {
-        ActionResult r = host.run(repo, spec("pipeline-check", List.of(
-                List.of("git", "cat-file", "-e", sha + ":" + PIPELINE_FILE))), () -> false);
-        return r.result().status() == StageStatus.SUCCEEDED;
-    }
-
-    private String noPipelineMessage(String projectId) {
-        return noPipelineMessage(projectId, null);
     }
 
     /**
-     * 缺 ci/pipeline.yml 的可执行指引。
+     * 把本次成功的定义固化成该环境的可复现脚本。
      *
-     * <p>两种成因分开说：工作区已生成但没提交，和仓库压根没有 ci/——
-     * 用户不用再猜自己踩的是哪一种。
+     * <p>只做一件事：把"刚刚证明能跑通的那份 YAML"连同证据运行 id 存下来。
+     * 已经有完全相同的脚本时不重复固化（避免每次成功都堆版本）。
      */
-    private String noPipelineMessage(String projectId, String sha) {
-        StringBuilder sb = new StringBuilder();
-        if (sha != null && !sha.isBlank()) {
-            sb.append("提交 ").append(shortSha(sha)).append(" 里没有 ").append(PIPELINE_FILE);
-        } else {
-            sb.append("仓库里没有 ").append(PIPELINE_FILE);
+    private void freezeRecipe(RunState state, Path runDir) {
+        if (recipeStore == null) {
+            return;
         }
-        sb.append("。流水线定义随代码版本化（人写、可 review），平台不猜构建命令。");
-        Path work = repoLocator == null ? null : repoLocator.repoDir(projectId).orElse(null);
-        if (work != null && Files.isRegularFile(work.resolve(PIPELINE_FILE))) {
-            sb.append("工作区已经有该文件但未提交——构建只读提交内容，请先提交")
-                    .append("（git add ci && git commit），再重新运行。");
-        } else {
-            sb.append("请到「项目」页点「生成流水线脚本」，按仓库结构生成 ci/pipeline.yml 与 ")
-                    .append("ci/actions.yml，提交后重新运行。");
+        try {
+            // 定义来源是 recipe 时无需再固化；否则把当前生效的定义存成新版本
+            Path source = state.recipeRoot != null ? state.recipeRoot : runDir;
+            Path pipelineFile = source.resolve(PIPELINE_FILE);
+            if (!Files.isRegularFile(pipelineFile)) {
+                return;
+            }
+            String yaml = Files.readString(pipelineFile);
+            Path actionsFile = source.resolve("ci/actions.yml");
+            String actions = Files.isRegularFile(actionsFile) ? Files.readString(actionsFile) : null;
+
+            var current = recipeStore.current(state.projectId, state.env);
+            if (current.isPresent() && current.get().pipelineYaml().equals(yaml)
+                    && java.util.Objects.equals(current.get().actionsYaml(), actions)) {
+                return; // 脚本没变：沿用现有版本
+            }
+            var saved = recipeStore.save(new top.rongx.agent.domain.deploy.DeployRecipe(
+                    state.projectId, state.env, 0, yaml, actions, state.runId, state.gitSha,
+                    System.currentTimeMillis(), "agent"));
+            state.log.append("[recipe] 已固化环境脚本 ").append(state.env)
+                    .append(" v").append(saved.version())
+                    .append("（证据 ").append(saved.evidenceRunId()).append("）\n");
+        } catch (Exception e) {
+            // 固化失败不能把已成功的运行判成失败：只记录，供人补
+            state.log.append("[recipe] 固化失败（运行仍算成功）：").append(e.getMessage()).append('\n');
         }
-        return sb.toString();
     }
 
-    private String shortSha(String sha) {
-        return sha.length() <= 7 ? sha : sha.substring(0, 7);
+    private PipelineDefinitionResolver.Resolved badDefinition(RunState state, IllegalArgumentException e) {
+        String message = "ci/pipeline.yml 有语法/结构错误，无法执行：" + e.getMessage()
+                + "（stage 只能引用白名单动作，见《流水线执行器契约》）。";
+        state.log.append('[').append(E_BAD_PIPELINE).append("] ").append(message).append('\n');
+        state.stages.add(StageResult.failed("pipeline-def", 1, E_BAD_PIPELINE, message, 0));
+        state.status = StageStatus.FAILED;
+        return null;
     }
 
     @Override
     public String trigger(String projectId, String pipelineId, Map<String, String> params) {
         List<String> available = pipelines(projectId);
-        if (available.isEmpty()) {
-            throw new IllegalArgumentException(noPipelineMessage(projectId));
-        }
         if (!available.contains(pipelineId)) {
             throw new IllegalArgumentException("流水线不在白名单：" + pipelineId
                     + "（可用：" + String.join(", ", available) + "）");
@@ -302,15 +327,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (sha == null || !sha.matches("[0-9a-f]{7,40}")) {
             throw new IllegalArgumentException("gitSha 非法（需 7-40 位小写十六进制）");
         }
-        // 触发前先确认该提交里确实有流水线定义：否则会先落一条必然失败的构建历史，
-        // 用户看到的是"跑完才知道缺文件"。这里直接 400，把原因说清楚。
-        Path repo = repoLocator == null ? null : repoLocator.repoDir(projectId).orElse(null);
-        if (repo != null && Files.isDirectory(repo) && !hasPipelineAt(repo, sha)) {
-            throw new IllegalArgumentException(noPipelineMessage(projectId, sha));
-        }
-        String runId = "run-" + UUID.randomUUID().toString().substring(0, 8);
-        RunState state = new RunState(runId, projectId, pipelineId, sha);
+        String env = normalizeEnv(params.get("env"));
         String deployTarget = params.get("deployTarget");
+        // 服务器操作的前置：必须已有"测试机成功案例"（测试环境跑通并固化的脚本 + 证据运行成功）
+        String problem = promotionProblem(projectId, env, sha);
+        if (problem != null) {
+            throw new IllegalArgumentException("E-601 " + problem);
+        }
+        // 不再校验"该提交里有没有 ci/pipeline.yml"：定义可以放在平台侧（默认），
+        // 仓库里那份只是可选覆盖。真正缺定义时由执行期的 pipeline-def stage 说明。
+        String runId = "run-" + UUID.randomUUID().toString().substring(0, 8);
+        RunState state = new RunState(runId, projectId, env, pipelineId, sha);
         if (deployTarget != null && !deployTarget.isBlank()) {
             state.deployTargetOverride = deployTarget.trim().toLowerCase();
         }
@@ -318,6 +345,30 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         history.save(state.snapshot());
         scheduler.submit(projectId, () -> workers.submit(() -> execute(state)));
         return runId;
+    }
+
+    /** 环境名规范化：只认 dev/test/prod，缺省按 test（绝不让"没传环境"落到生产）。 */
+    private String normalizeEnv(String env) {
+        if (env == null || env.isBlank()) {
+            return "test";
+        }
+        String normalized = env.trim().toLowerCase();
+        return List.of("dev", "test", "prod").contains(normalized) ? normalized : "test";
+    }
+
+    /**
+     * 服务器环境（prod）的前置校验：**必须有测试机成功案例**（规则见
+     * {@link top.rongx.agent.domain.deploy.EnvironmentPromotion}，与 HTTP 层共用同一份实现）。
+     *
+     * @return 不满足时的原因；满足（或非服务器环境）返回 null
+     */
+    private String promotionProblem(String projectId, String env, String sha) {
+        return top.rongx.agent.domain.deploy.EnvironmentPromotion.problem(
+                recipeStore, this::status, projectId, env, sha);
+    }
+
+    private static String shortSha(String sha) {
+        return sha == null || sha.length() <= 7 ? String.valueOf(sha) : sha.substring(0, 7);
     }
 
     @Override
@@ -387,7 +438,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     @Override
     public List<RunSummary> history() {
         return history.list().stream()
-                .map(h -> new RunSummary(h.runId(), h.projectId(), h.pipelineId(), h.gitSha(),
+                .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
                         h.status(), h.createdAt(), h.stages().size()))
                 .toList();
     }
@@ -402,7 +453,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             if (runs.containsKey(snap.runId())) {
                 continue;
             }
-            RunState restored = new RunState(snap.runId(), snap.projectId(), snap.pipelineId(), snap.gitSha());
+            RunState restored = new RunState(snap.runId(), snap.projectId(), snap.env(),
+                    snap.pipelineId(), snap.gitSha());
             restored.status = snap.status();
             restored.stages.addAll(snap.stages());
             restored.artifacts.addAll(snap.artifacts());
@@ -471,10 +523,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 state.status = StageStatus.CANCELLED;
                 return;
             }
-            definition = loadDefinition(runDir, state);
-            if (definition == null) {
-                return; // 定义缺失/非法：已登记失败 stage（E-220 / E-221），无需再跑任何动作
+            PipelineDefinitionResolver.Resolved resolved = resolveDefinition(runDir, state);
+            if (resolved == null) {
+                return; // 定义准备失败：已登记失败 stage（E-220 / E-221），无需再跑任何动作
             }
+            definition = resolved.definition();
+            state.recipeRoot = resolved.recipeRoot();
+            state.definitionSource = resolved.source();
+            state.log.append("[definition] ").append(resolved.source()).append(" · ")
+                    .append(resolved.note()).append('\n');
+            state.log.append("[env] ").append(state.env)
+                    .append(" · 提交 ").append(shortSha(state.gitSha)).append('\n');
             if ("verify".equals(state.pipelineId)) {
                 // verify = 构建与镜像，不做部署/健康检查（相当于 Jenkins 的 PR 检查）
                 // 注意：没有 Dockerfile 时跳过 image stage —— 否则 verify 会因"没有镜像配方"而红，
@@ -523,6 +582,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
 
             lastGood.put(state.projectId, tag);
+            // 环境跑通 → 固化成可复现脚本（下次重放不再探索/不再调模型）
+            freezeRecipe(state, runDir);
             state.status = StageStatus.SUCCEEDED;
         } catch (Exception e) {
             String why = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -597,7 +658,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
             ActionId action = ActionId.fromWire(stage.action()).orElseThrow(
                     () -> new IllegalArgumentException("未知动作：" + stage.action()));
-            Optional<ActionSpec> resolved = recipes.resolve(runDir, action);
+            // 配方根 = 定义所在的根：仓库定义 → 检出目录；平台定义 → 平台目录。
+            // 命令本身仍在 stageDir（检出目录 / 子目录）里执行。
+            Optional<ActionSpec> resolved = recipes.resolve(state.recipeRoot, action);
             if (resolved.isEmpty()) {
                 state.stages.add(StageResult.failed(stage.id(), 1, "E-201",
                         "动作 " + action.wireName() + " 没有配方", elapsed(start)));
@@ -674,6 +737,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private boolean deployGuard(Path bare, Path runDir, PipelineDefinition definition, RunState state) {
         if (definition.deploy() == null) {
             return true; // 纯构建流水线不受约束
+        }
+        if (state.definitionSource != null && state.definitionSource != PipelineDefinitionResolver.Source.REPO) {
+            // 定义来自平台（自动生成/人工维护），仓库里没有可比对的版本：
+            // 受审校验的对象是"仓库里的 deploy 配置"，对平台定义不适用。
+            state.log.append("[guard] 定义来源=").append(state.definitionSource)
+                    .append("，跳过'部署配置与默认分支一致'校验\n");
+            return true;
         }
         // 默认分支：先问 bare 的 HEAD 指向哪条分支，再退回 main/master
         List<String> branches = defaultBranches(bare);
@@ -752,7 +822,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 spec.containerPort(),
                 spec.healthPath(),
                 previous,
-                rollback);
+                rollback,
+                spec.serverId());
 
         DeployResult result = deployers.deploy(request);
         String label = stageId;
@@ -826,7 +897,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             if (good != null) {
                 merged.put("tag", good);
             }
-            Optional<ActionSpec> spec = recipes.resolve(runDir, action);
+            Optional<ActionSpec> spec = recipes.resolve(state.recipeRoot, action);
             if (spec.isEmpty()) {
                 continue;
             }
@@ -885,6 +956,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private static final class RunState {
         final String runId;
         final String projectId;
+        /** 目标环境（dev / test / prod）：决定用哪份固化脚本、要不要校验测试机成功案例。 */
+        final String env;
         final String pipelineId;
         final String gitSha;
         /** 触发时间（epoch millis），构建历史按它倒序展示。 */
@@ -900,16 +973,21 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile String deployTargetUsed;
         /** 本次运行加载的流水线定义（deploy 段从这里读）。 */
         volatile PipelineDefinition definition;
+        /** 定义所在的根目录（仓库检出目录 or 平台定义目录）：配方从这里解析。 */
+        volatile Path recipeRoot;
+        /** 定义来源（决定要不要做"部署配置受审"校验）。 */
+        volatile PipelineDefinitionResolver.Source definitionSource;
 
         RunSnapshot snapshot() {
-            return new RunHistoryStore.RunSnapshot(runId, projectId, pipelineId, gitSha,
+            return new RunHistoryStore.RunSnapshot(runId, projectId, env, pipelineId, gitSha,
                     status, createdAt, List.copyOf(stages), List.copyOf(artifacts),
                     ProcessExecutor.redact(log.toString()));
         }
 
-        RunState(String runId, String projectId, String pipelineId, String gitSha) {
+        RunState(String runId, String projectId, String env, String pipelineId, String gitSha) {
             this.runId = runId;
             this.projectId = projectId;
+            this.env = env;
             this.pipelineId = pipelineId;
             this.gitSha = gitSha;
         }

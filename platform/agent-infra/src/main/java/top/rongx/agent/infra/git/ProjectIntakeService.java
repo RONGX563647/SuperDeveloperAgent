@@ -34,8 +34,10 @@ public class ProjectIntakeService {
     private final GitWorktreeManager git;
     private final Path workspaceRoot;
     private final IntakeProjectStore store;
-    /** 流水线脚本生成器：接入时按仓库结构自动产出 ci/ 脚本。 */
+    /** 流水线脚本生成器：接入时按仓库结构自动产出定义（存平台侧，不写用户仓库）。 */
     private final ProjectScaffolder scaffolder;
+    /** 平台侧流水线定义存储。 */
+    private final top.rongx.agent.domain.port.PipelineDefStore defStore;
     /** 接入状态表（内存态；REGISTERED 后落 SQLite）。 */
     private final Map<String, IntakeState> intakes = new ConcurrentHashMap<>();
 
@@ -43,18 +45,30 @@ public class ProjectIntakeService {
     public ProjectIntakeService(GitWorktreeManager git,
                                 IntakeProjectStore store,
                                 @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
-                                ProjectScaffolder scaffolder) {
+                                ProjectScaffolder scaffolder,
+                                top.rongx.agent.domain.port.PipelineDefStore defStore) {
         this.git = git;
         this.store = store;
         this.workspaceRoot = Path.of(workspaceRoot).toAbsolutePath().normalize();
         this.scaffolder = scaffolder;
+        this.defStore = defStore;
     }
 
-    /** 兼容旧构造（测试/手工装配）：使用默认脚手架实现。 */
+    /** 兼容旧构造（测试/手工装配）：使用默认脚手架实现 + 按工作区根落盘。 */
     public ProjectIntakeService(GitWorktreeManager git,
                                 IntakeProjectStore store,
                                 String workspaceRoot) {
-        this(git, store, workspaceRoot, new RecipeScaffolder());
+        this(git, store, workspaceRoot, new RecipeScaffolder(),
+                new top.rongx.agent.infra.pipeline.FilePipelineDefStore(workspaceRoot));
+    }
+
+    /** 兼容旧构造：自定义脚手架，定义仍落工作区根。 */
+    public ProjectIntakeService(GitWorktreeManager git,
+                                IntakeProjectStore store,
+                                String workspaceRoot,
+                                ProjectScaffolder scaffolder) {
+        this(git, store, workspaceRoot, scaffolder,
+                new top.rongx.agent.infra.pipeline.FilePipelineDefStore(workspaceRoot));
     }
 
     /** 一次接入任务的状态。 */
@@ -211,22 +225,36 @@ public class ProjectIntakeService {
             Map<String, Object> report = recipeCheck(checkRoot);
             boolean ready = Boolean.TRUE.equals(report.get("ready"));
 
-            // 2.5 自动生成流水线脚本（缺 ci/ 时；不覆盖已有文件）
+            // 2.5 自动生成流水线定义：**存平台侧**（<工作区>/<id>/ci/），不写用户仓库。
+            //     仓库里的 ci/pipeline.yml 仍可作为可选的覆盖，随代码 review。
             String generatedNote = "";
-            if (!Files.isRegularFile(checkRoot.resolve("ci/pipeline.yml"))) {
+            if (!defStore.exists(id)) {
                 try {
                     ScaffoldPlan plan = scaffolder.plan(id, checkRoot, DeployTarget.DOCKER);
-                    List<String> written = scaffolder.apply(id, checkRoot, plan, false);
-                    report.put("scaffoldWritten", written);
-                    generatedNote = written.isEmpty()
-                            ? "（脚本已存在，未覆盖）"
-                            : "（已自动生成 " + String.join("、", written) + "，提交后即可在流水线页运行）";
-                    log.info("项目 {} 自动生成流水线脚本：{}", id, written);
+                    String pipelineYaml = plan.files().stream()
+                            .filter(f -> f.path().equals("ci/pipeline.yml"))
+                            .map(ScaffoldPlan.ScaffoldFile::content)
+                            .findFirst()
+                            .orElseThrow(() -> new IllegalStateException("脚手架没有生成 ci/pipeline.yml"));
+                    String actionsYaml = plan.files().stream()
+                            .filter(f -> f.path().equals("ci/actions.yml"))
+                            .map(ScaffoldPlan.ScaffoldFile::content)
+                            .findFirst()
+                            .orElse(null);
+                    boolean saved = defStore.write(id, pipelineYaml, actionsYaml);
+                    report.put("scaffoldWritten", saved
+                            ? List.of("platform:" + defStore.rootOf(id).resolve("ci/pipeline.yml"))
+                            : List.of());
+                    report.put("stack", plan.stack());
+                    generatedNote = saved
+                            ? "（已按仓库结构生成平台侧流水线定义，stack=" + plan.stack() + "，可直接运行）"
+                            : "（平台侧定义保存失败，可在项目页重试）";
+                    log.info("项目 {} 生成平台侧流水线定义：stack={} saved={}", id, plan.stack(), saved);
                 } catch (Exception e) {
-                    log.warn("项目 {} 自动生成流水线脚本失败：{}", id, e.getMessage());
+                    log.warn("项目 {} 生成流水线定义失败：{}", id, e.getMessage());
                     @SuppressWarnings("unchecked")
                     List<String> warnings = (List<String>) report.get("warnings");
-                    warnings.add("自动生成流水线脚本失败：" + e.getMessage()
+                    warnings.add("生成流水线定义失败：" + e.getMessage()
                             + "；可在项目页「生成流水线脚本」手动重试");
                 }
             }
@@ -275,9 +303,9 @@ public class ProjectIntakeService {
         }
         report.put("actions", actions);
 
-        // 2. 流水线：缺失时直接生成（与「生成流水线脚本」同一套规则）
+        // 2. 流水线：仓库里没有也没关系——平台会按仓库结构生成（存平台侧，不写仓库）
         boolean hasPipeline = Files.isRegularFile(repoRoot.resolve("ci/pipeline.yml"));
-        report.put("pipeline", hasPipeline ? "ci/pipeline.yml" : null);
+        report.put("pipeline", hasPipeline ? "ci/pipeline.yml（仓库覆盖）" : null);
         if (!hasPipeline) {
             try {
                 ScaffoldPlan plan = scaffolder.plan(projectIdOf(repoRoot), repoRoot, DeployTarget.DOCKER);
@@ -289,10 +317,11 @@ public class ProjectIntakeService {
                         .filter(f -> f.path().equals("ci/pipeline.yml"))
                         .findFirst()
                         .ifPresent(f -> report.put("pipelineTemplate", f.content()));
-                warnings.add("缺 ci/pipeline.yml：接入时已按仓库结构自动生成（见「生成的 ci/ 脚本」）");
+                warnings.add("仓库里没有 ci/pipeline.yml：将使用平台按仓库结构自动生成的定义"
+                        + "（无需提交到仓库，也可在仓库里放一份覆盖它）");
                 warnings.addAll(plan.notes());
             } catch (Exception e) {
-                warnings.add("自动生成流水线脚本失败：" + e.getMessage()
+                warnings.add("自动生成流水线定义失败：" + e.getMessage()
                         + "；可在项目页「生成流水线脚本」重试");
             }
         }

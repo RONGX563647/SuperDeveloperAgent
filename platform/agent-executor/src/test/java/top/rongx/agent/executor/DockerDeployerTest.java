@@ -118,14 +118,14 @@ class DockerDeployerTest {
     void failsFastWithoutImage() {
         DeployResult result = deployer.deploy(new DeployRequest(PROJECT, "run-x", "abcdef1234567",
                 null, null, null, buildDir.toString(), DeployTarget.DOCKER,
-                HOST_PORT, 3000, "/healthz", null, false));
+                HOST_PORT, 3000, "/healthz", null, false, null));
         assertEquals(false, result.success());
         assertEquals("E-501", result.errorCode());
     }
 
     private DeployRequest request(String runId) {
         return new DeployRequest(PROJECT, runId, "abcdef1234567", image, null, null,
-                buildDir.toString(), DeployTarget.DOCKER, HOST_PORT, 3000, "/healthz", null, false);
+                buildDir.toString(), DeployTarget.DOCKER, HOST_PORT, 3000, "/healthz", null, false, null);
     }
 
     private static String httpGet(String url) throws Exception {

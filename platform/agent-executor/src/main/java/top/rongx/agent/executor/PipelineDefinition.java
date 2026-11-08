@@ -49,11 +49,13 @@ public record PipelineDefinition(String name, List<StageDef> stages,
      * @param containerPort 容器内端口（docker）
      * @param healthPath    健康检查路径，如 {@code /healthz}
      * @param artifact      HOST 目标的产物（相对路径，如 {@code backend/target/app.jar}）；空则自动找 jar
+     * @param serverId      SERVER 目标使用的服务器 id（设置页里配置）；空则用默认服务器
      */
-    public record DeploySpec(String target, int port, int containerPort, String healthPath, String artifact) {
+    public record DeploySpec(String target, int port, int containerPort, String healthPath,
+                             String artifact, String serverId) {
 
         public static DeploySpec defaults() {
-            return new DeploySpec("docker", 8080, 8080, "/healthz", null);
+            return new DeploySpec("docker", 8080, 8080, "/healthz", null, null);
         }
     }
 
@@ -102,32 +104,14 @@ public record PipelineDefinition(String name, List<StageDef> stages,
         int port = map.get("port") instanceof Number p ? p.intValue() : 8080;
         int containerPort = map.get("containerPort") instanceof Number c ? c.intValue() : port;
         String artifact = map.get("artifact") == null ? null : String.valueOf(map.get("artifact"));
+        String serverId = map.get("serverId") == null ? null : String.valueOf(map.get("serverId"));
         return new DeploySpec(
                 str(map, "target", "docker"),
                 port,
                 containerPort,
                 str(map, "healthPath", "/healthz"),
-                artifact == null || artifact.isBlank() ? null : artifact);
-    }
-
-    /**
-     * 只解析 deploy 段（默认分支受审版本校验用，E-508）。
-     *
-     * <p>内容非法/不存在时返回 null；调用方应按"无法校验"处理，而不是当作一致。
-     */
-    public static DeploySpec parseDeploySection(String yamlContent) {
-        if (yamlContent == null || yamlContent.isBlank()) {
-            return null;
-        }
-        try {
-            Object loaded = new Yaml().load(yamlContent);
-            if (!(loaded instanceof Map<?, ?> root)) {
-                return null;
-            }
-            return parseDeploy(root.get("deploy"));
-        } catch (Exception e) {
-            return null;
-        }
+                artifact == null || artifact.isBlank() ? null : artifact,
+                serverId == null || serverId.isBlank() ? null : serverId);
     }
 
     private static List<StageDef> parseStages(Object raw, String field) {

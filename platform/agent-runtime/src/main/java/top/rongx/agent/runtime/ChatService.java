@@ -32,14 +32,24 @@ public class ChatService {
      * @return 事件流
      */
     public Flux<AgentEvent> stream(ProjectContext ctx, String sessionId, String text) {
+        return stream(ctx, sessionId, text, "chat");
+    }
+
+    /**
+     * 发起一轮对话（可指定 Agent 角色）。
+     *
+     * @param role {@code chat}=通用助手；{@code deploy}=部署 Agent（专管环境跑通与固化）
+     */
+    public Flux<AgentEvent> stream(ProjectContext ctx, String sessionId, String text, String role) {
         // 1. 空消息直接报错（不进入 Agent）
         if (text == null || text.isBlank()) {
             return Flux.error(new IllegalArgumentException("消息不能为空"));
         }
         // 2. 规范化会话 ID（缺失则生成）
         String sid = (sessionId == null || sessionId.isBlank()) ? UUID.randomUUID().toString() : sessionId;
-        // 3. 按项目上下文构造无状态 Agent
-        ReActAgent agent = agentFactory.create(ctx);
+        // 3. 按项目上下文构造无状态 Agent（角色决定工具面与系统提示）
+        ReActAgent agent = "deploy".equalsIgnoreCase(role)
+                ? agentFactory.createDeploy(ctx) : agentFactory.create(ctx);
         // 4. 显式传递运行时上下文（含项目上下文，非 ThreadLocal）
         RuntimeContext runtime = RuntimeContext.builder()
                 .userId(ctx.userId())

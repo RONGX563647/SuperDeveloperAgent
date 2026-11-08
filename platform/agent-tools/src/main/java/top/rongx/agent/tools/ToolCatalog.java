@@ -42,20 +42,41 @@ public class ToolCatalog {
                                 CiCommandTools ciCommandTools,
                                 ChangeTools changeTools,
                                 ActionQueryTools actionQueryTools,
-                                ActionCommandTools actionCommandTools) {
+                                ActionCommandTools actionCommandTools,
+                                DeployTools deployTools) {
         Toolkit toolkit = new Toolkit();
 
         // 只读工具：注册即生效（进入 basic 组）
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
+        toolkit.registerTool(deployTools);
 
         // 写操作单独成组：非生产会话激活
-        toolkit.createToolGroup(GROUP_WRITE, "会改变环境状态的操作（构建 / 变更请求）", true);
+        toolkit.createToolGroup(GROUP_WRITE, "会改变环境状态的操作（构建 / 变更请求 / 固化脚本）", true);
         toolkit.registration().tool(ciCommandTools).group(GROUP_WRITE).apply();
         toolkit.registration().tool(changeTools).group(GROUP_WRITE).apply();
         toolkit.registration().tool(actionCommandTools).group(GROUP_WRITE).apply();
 
+        return toolkit;
+    }
+
+    /**
+     * 部署 Agent 专用工具面：环境状态 + 触发 + 固化 + 通用只读工具。
+     *
+     * <p>只给"部署这件事需要的最小集合"：它不需要变更单工具，也不需要随手改配方的能力。
+     */
+    @Bean
+    @Qualifier("deployToolkit")
+    public Toolkit deployToolkit(ProjectTools projectTools,
+                                 CiQueryTools ciQueryTools,
+                                 ActionQueryTools actionQueryTools,
+                                 DeployTools deployTools) {
+        Toolkit toolkit = new Toolkit();
+        toolkit.registerTool(projectTools);
+        toolkit.registerTool(ciQueryTools);
+        toolkit.registerTool(actionQueryTools);
+        toolkit.registerTool(deployTools);
         return toolkit;
     }
 }

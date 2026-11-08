@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -15,93 +16,85 @@ import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionSource;
 import top.rongx.agent.domain.action.ActionSpec;
+import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
+import top.rongx.agent.domain.port.PipelineDefAuthor;
+import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
+import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * 缺 / 坏 {@code ci/pipeline.yml} 时的行为（回归：曾经只抛一句"无法读取某路径"）。
+ * 流水线定义的解析与来源（回归：仓库里没提交 ci/ 曾经直接报错）。
  *
- * <p>三条契约：
- * <ul>
- *   <li><b>白名单诚实</b>：仓库里没有定义就不列出流水线，避免"点了必然失败"；</li>
- *   <li><b>触发即失败</b>：提交里没有定义时在触发处返回可读原因（400），不落一条垃圾构建历史；</li>
- *   <li><b>报错可照做</b>：消息必须区分"根本没生成 ci/"和"生成了但没提交"。</li>
- * </ul>
- *
- * <p>执行期内还有一层 E-220 兜底（检出后仍读不到定义，例如触发与检出之间仓库被改写）——
- * 那是竞态防御，正常路径由触发期校验拦住。
+ * <p>新契约：定义默认放<b>平台侧</b>，接入时按仓库结构自动生成，所以"仓库里没有 ci/pipeline.yml"
+ * 不再是错误。优先级：仓库提交覆盖 → 平台定义 → 规则生成 → agent 兜底。
  */
 class PipelineDefinitionGuardTest {
 
     private static final String PROJECT = "GUARD";
 
     @Test
-    @DisplayName("工作区已生成 ci/pipeline.yml 但没提交 → 拒绝并提示先提交")
-    void rejectsUncommittedDefinition(@TempDir Path temp) throws Exception {
+    @DisplayName("仓库没有 ci/ → 平台自动生成定义并跑通（不再报缺文件）")
+    void generatesPlatformDefinitionWhenRepoHasNone(@TempDir Path temp) throws Exception {
         Path repo = newRepo(temp);
         String sha = commit(repo, "init");
-        // 只写到工作区（很多用户的真实状态：点了「生成流水线脚本」但忘了 commit）
-        Files.createDirectories(repo.resolve("ci"));
-        Files.writeString(repo.resolve("ci/pipeline.yml"), validPipeline(), StandardCharsets.UTF_8);
+        PipelineDefStore store = new MemoryStore(temp.resolve("platform"));
 
-        BuiltInPipelineEngine engine = newEngine(temp, locator(repo));
-        try {
-            // 工作区有 → 白名单能列出（否则用户连"为什么不能点"都看不到）
-            assertEquals(List.of("release", "verify"), engine.pipelines(PROJECT));
-
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> engine.trigger(PROJECT, "release", Map.of("gitSha", sha)));
-            String message = e.getMessage();
-            assertTrue(message.contains(sha.substring(0, 7)), message);
-            assertTrue(message.contains("ci/pipeline.yml"), message);
-            assertTrue(message.contains("未提交"), "应指出工作区有、提交里没有：" + message);
-        } finally {
-            engine.close();
-        }
-    }
-
-    @Test
-    @DisplayName("仓库根本没有 ci/ → 白名单为空，触发给「生成流水线脚本」指引")
-    void emptyWhitelistWhenNoDefinition(@TempDir Path temp) throws Exception {
-        Path repo = newRepo(temp);
-        String sha = commit(repo, "init");
-
-        BuiltInPipelineEngine engine = newEngine(temp, locator(repo));
-        try {
-            assertEquals(List.of(), engine.pipelines(PROJECT), "没有定义时不应列出假流水线");
-
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> engine.trigger(PROJECT, "release", Map.of("gitSha", sha)));
-            assertTrue(e.getMessage().contains("生成流水线脚本"), e.getMessage());
-            assertTrue(e.getMessage().contains("ci/pipeline.yml"), e.getMessage());
-        } finally {
-            engine.close();
-        }
-    }
-
-    @Test
-    @DisplayName("定义已提交 → 正常触发并跑通（不误伤正常仓库）")
-    void triggersCommittedDefinition(@TempDir Path temp) throws Exception {
-        Path repo = newRepo(temp);
-        Files.createDirectories(repo.resolve("ci"));
-        Files.writeString(repo.resolve("ci/pipeline.yml"), validPipeline(), StandardCharsets.UTF_8);
-        String sha = commit(repo, "ci: pipeline");
-
-        BuiltInPipelineEngine engine = newEngine(temp, locator(repo));
+        BuiltInPipelineEngine engine = newEngine(temp, locator(repo), store, scaffolder(JAVA_PLAN), null);
         try {
             assertEquals(List.of("release", "verify"), engine.pipelines(PROJECT));
             String runId = engine.trigger(PROJECT, "verify", Map.of("gitSha", sha));
-            StageStatus status = awaitTerminal(engine, runId);
-            assertEquals(StageStatus.SUCCEEDED, status,
-                    "build stage 应成功，日志：" + engine.logTail(runId));
-            assertTrue(engine.stages(runId).stream().anyMatch(s -> s.stageId().equals("build")),
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, runId),
+                    "构建应成功，日志：" + engine.logTail(runId));
+            assertTrue(store.exists(PROJECT), "应把生成的平台定义落盘");
+            assertTrue(engine.logTail(runId).contains("[definition]"), engine.logTail(runId));
+        } finally {
+            engine.close();
+        }
+    }
+
+    @Test
+    @DisplayName("仓库提交里的 ci/pipeline.yml 优先于平台定义")
+    void repoDefinitionWins(@TempDir Path temp) throws Exception {
+        Path repo = newRepo(temp);
+        Files.createDirectories(repo.resolve("ci"));
+        Files.writeString(repo.resolve("ci/pipeline.yml"), pipelineYaml("from-repo"), StandardCharsets.UTF_8);
+        String sha = commit(repo, "ci");
+        PipelineDefStore store = new MemoryStore(temp.resolve("platform"));
+        store.write(PROJECT, pipelineYaml("from-platform"), actionsYaml());
+
+        BuiltInPipelineEngine engine = newEngine(temp, locator(repo), store, scaffolder(JAVA_PLAN), null);
+        try {
+            assertTrue(engine.pipelines(PROJECT).contains("from-repo"),
+                    String.valueOf(engine.pipelines(PROJECT)));
+            String runId = engine.trigger(PROJECT, "verify", Map.of("gitSha", sha));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, runId));
+            assertTrue(engine.logTail(runId).contains("REPO"), engine.logTail(runId));
+        } finally {
+            engine.close();
+        }
+    }
+
+    @Test
+    @DisplayName("平台定义被写坏 → E-221（语法/结构错误）")
+    void brokenPlatformDefinition(@TempDir Path temp) throws Exception {
+        Path repo = newRepo(temp);
+        String sha = commit(repo, "init");
+        PipelineDefStore store = new MemoryStore(temp.resolve("platform"));
+        store.write(PROJECT, "name: release\nstages: [", actionsYaml());
+
+        BuiltInPipelineEngine engine = newEngine(temp, locator(repo), store, scaffolder(JAVA_PLAN), null);
+        try {
+            String runId = engine.trigger(PROJECT, "verify", Map.of("gitSha", sha));
+            assertEquals(StageStatus.FAILED, awaitTerminal(engine, runId));
+            assertTrue(engine.stages(runId).stream().anyMatch(s -> "E-221".equals(s.errorCode())),
                     String.valueOf(engine.stages(runId)));
         } finally {
             engine.close();
@@ -109,48 +102,128 @@ class PipelineDefinitionGuardTest {
     }
 
     @Test
-    @DisplayName("ci/pipeline.yml 存在但 YAML 非法 → 触发期给出解析错误，不进入执行")
-    void rejectsBrokenDefinition(@TempDir Path temp) throws Exception {
+    @DisplayName("规则识别不出技术栈 → agent 兜底定义生效")
+    void agentFallbackWhenStackUnknown(@TempDir Path temp) throws Exception {
         Path repo = newRepo(temp);
-        Files.createDirectories(repo.resolve("ci"));
-        Files.writeString(repo.resolve("ci/pipeline.yml"), "name: release\nstages: [", StandardCharsets.UTF_8);
-        String sha = commit(repo, "ci: broken");
+        String sha = commit(repo, "init");
+        PipelineDefStore store = new MemoryStore(temp.resolve("platform"));
+        PipelineDefAuthor author = (projectId, root, plan, reason) -> Optional.of(pipelineYaml("agent-made"));
 
-        BuiltInPipelineEngine engine = newEngine(temp, locator(repo));
+        BuiltInPipelineEngine engine = newEngine(temp, locator(repo), store, scaffolder(UNKNOWN_PLAN), author);
         try {
-            // 白名单不因解析失败而消失（否则用户连触发都点不到，看不到具体原因）
-            assertEquals(List.of("release", "verify"), engine.pipelines(PROJECT));
             String runId = engine.trigger(PROJECT, "verify", Map.of("gitSha", sha));
-            assertEquals(StageStatus.FAILED, awaitTerminal(engine, runId));
-            assertTrue(engine.stages(runId).stream().anyMatch(s -> "E-221".equals(s.errorCode())),
-                    "应给出 E-221（定义非法），实际：" + engine.stages(runId));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, runId), engine.logTail(runId));
+            assertTrue(store.read(PROJECT).orElse("").contains("agent-made"),
+                    store.read(PROJECT).orElse(""));
         } finally {
             engine.close();
         }
     }
 
-    // ---------------------------------------------------------------- helpers
-
-    /** 单 stage 的最小流水线（host 执行 node，不依赖宿主 JDK 版本）。 */
-    private static String validPipeline() {
-        return """
+    @Test
+    @DisplayName("agent 输出引用了未知动作 → 丢弃，退回规则骨架")
+    void invalidAgentDefinitionIsRejected(@TempDir Path temp) throws Exception {
+        Path repo = newRepo(temp);
+        String sha = commit(repo, "init");
+        PipelineDefStore store = new MemoryStore(temp.resolve("platform"));
+        String badYaml = """
                 name: release
+                stages:
+                  - id: hack
+                    type: action
+                    action: rm -rf /
+                """;
+        PipelineDefAuthor author = (projectId, root, plan, reason) -> Optional.of(badYaml);
+
+        BuiltInPipelineEngine engine = newEngine(temp, locator(repo), store, scaffolder(UNKNOWN_PLAN), author);
+        try {
+            String runId = engine.trigger(PROJECT, "verify", Map.of("gitSha", sha));
+            awaitTerminal(engine, runId);
+            assertTrue(store.read(PROJECT).orElse("").contains("backend_build"),
+                    "应退回规则骨架：" + store.read(PROJECT).orElse(""));
+        } finally {
+            engine.close();
+        }
+    }
+
+    @Test
+    @DisplayName("非法的仓库覆盖定义 → E-221，不进入执行")
+    void brokenRepoDefinition(@TempDir Path temp) throws Exception {
+        Path repo = newRepo(temp);
+        Files.createDirectories(repo.resolve("ci"));
+        Files.writeString(repo.resolve("ci/pipeline.yml"), "name: release\nstages: []\n", StandardCharsets.UTF_8);
+        String sha = commit(repo, "ci");
+        PipelineDefStore store = new MemoryStore(temp.resolve("platform"));
+
+        BuiltInPipelineEngine engine = newEngine(temp, locator(repo), store, scaffolder(JAVA_PLAN), null);
+        try {
+            String runId = engine.trigger(PROJECT, "verify", Map.of("gitSha", sha));
+            assertEquals(StageStatus.FAILED, awaitTerminal(engine, runId));
+            assertTrue(engine.stages(runId).stream().anyMatch(s -> "E-221".equals(s.errorCode())),
+                    String.valueOf(engine.stages(runId)));
+        } finally {
+            engine.close();
+        }
+    }
+
+    // ---------------------------------------------------------------- 夹具
+
+    /** 规则产物：一个 host 上跑 node 的 build stage（不依赖宿主 JDK / Docker）。 */
+    private static final ScaffoldPlan JAVA_PLAN = new ScaffoldPlan(PROJECT, "JAVA",
+            List.of(new ScaffoldPlan.ScaffoldFile("ci/pipeline.yml", pipelineYaml("release")),
+                    new ScaffoldPlan.ScaffoldFile("ci/actions.yml", actionsYaml())),
+            List.of());
+
+    private static final ScaffoldPlan UNKNOWN_PLAN = new ScaffoldPlan(PROJECT, "UNKNOWN",
+            List.of(new ScaffoldPlan.ScaffoldFile("ci/pipeline.yml", "name: release\nstages:\n"
+                            + "  - id: build\n    type: action\n    action: backend_build\n    runner: host\n"),
+                    new ScaffoldPlan.ScaffoldFile("ci/actions.yml", actionsYaml())),
+            List.of("未识别技术栈"));
+
+    private static String pipelineYaml(String name) {
+        return """
+                name: %s
                 stages:
                   - id: build
                     type: action
                     action: backend_build
                     runner: host
+                """.formatted(name);
+    }
+
+    private static String actionsYaml() {
+        return """
+                actions:
+                  backend_build:
+                    run: [["node", "-e", "console.log('built')"]]
+                    timeout: 1m
                 """;
     }
 
-    private static BuiltInPipelineEngine newEngine(Path workspace, ProjectRepoLocator locator) {
+    private static ProjectScaffolder scaffolder(ScaffoldPlan plan) {
+        return new ProjectScaffolder() {
+            @Override
+            public ScaffoldPlan plan(String projectId, Path repoRoot, DeployTarget preferredTarget) {
+                return plan;
+            }
+
+            @Override
+            public List<String> apply(String projectId, Path repoRoot, ScaffoldPlan p, boolean overwrite) {
+                return List.of();
+            }
+        };
+    }
+
+    private static BuiltInPipelineEngine newEngine(Path workspace, ProjectRepoLocator locator,
+                                                   PipelineDefStore store, ProjectScaffolder scaffolder,
+                                                   PipelineDefAuthor author) {
+        PipelineDefinitionResolver resolver = new PipelineDefinitionResolver(store, scaffolder, author);
         return new BuiltInPipelineEngine(RESOLVER, HOST, HOST, workspace,
-                RunHistoryStore.disabled(), "ci", locator);
+                RunHistoryStore.disabled(), "ci", locator, Deployers.builtin(), resolver);
     }
 
     private static final ActionRunner HOST = new ProcessActionRunner();
 
-    /** 只认 backend_build / backend_test 的配方解析器（避免测试依赖真实 mvn）。 */
     private static final ActionResolver RESOLVER = new ActionResolver() {
         @Override
         public Optional<ActionSpec> resolve(Path repoRoot, ActionId action) {
@@ -173,7 +246,50 @@ class PipelineDefinitionGuardTest {
         }
     };
 
-    /** DIRECT 模式定位器：仓库就在给定目录，worktree 建在 {@code <dir>/.agent/worktrees}。 */
+    /** 内存版平台定义存储（同时真写文件，便于断言内容）。 */
+    private static final class MemoryStore implements PipelineDefStore {
+        private final Path root;
+        private final Map<String, String> pipeline = new LinkedHashMap<>();
+        private final Map<String, String> actions = new LinkedHashMap<>();
+
+        MemoryStore(Path root) {
+            this.root = root;
+        }
+
+        @Override
+        public Path rootOf(String projectId) {
+            return root.resolve(projectId);
+        }
+
+        @Override
+        public boolean exists(String projectId) {
+            return pipeline.containsKey(projectId);
+        }
+
+        @Override
+        public Optional<String> read(String projectId) {
+            return Optional.ofNullable(pipeline.get(projectId));
+        }
+
+        @Override
+        public boolean write(String projectId, String pipelineYaml, String actionsYaml) {
+            try {
+                Path dir = rootOf(projectId).resolve("ci");
+                Files.createDirectories(dir);
+                Files.writeString(dir.resolve("pipeline.yml"), pipelineYaml, StandardCharsets.UTF_8);
+                if (actionsYaml != null && !actionsYaml.isBlank()) {
+                    Files.writeString(dir.resolve("actions.yml"), actionsYaml, StandardCharsets.UTF_8);
+                }
+            } catch (Exception e) {
+                return false;
+            }
+            pipeline.put(projectId, pipelineYaml);
+            actions.put(projectId, actionsYaml);
+            return true;
+        }
+    }
+
+    /** DIRECT 定位器：仓库就在给定目录，worktree 建在 {@code <dir>/.agent/worktrees}。 */
     private static ProjectRepoLocator locator(Path repo) {
         return new ProjectRepoLocator() {
             @Override
@@ -188,7 +304,7 @@ class PipelineDefinitionGuardTest {
 
             @Override
             public void sync(String projectId) {
-                // 本地目录：无远端，无需同步
+                // 本地目录：无远端
             }
 
             @Override

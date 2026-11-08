@@ -21,5 +21,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
+        <!-- 纯 Java SSH（密码/密钥认证统一走这里；Windows 无 sshpass 也能部署到远端） -->
+        <dependency>
+            <groupId>com.github.mwiede</groupId>
+            <artifactId>jsch</artifactId>
+            <version>0.2.20</version>
+        </dependency>
     </dependencies>
 </project>

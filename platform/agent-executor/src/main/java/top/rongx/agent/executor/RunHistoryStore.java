@@ -52,6 +52,7 @@ public class RunHistoryStore {
             Map<String, Object> data = new java.util.LinkedHashMap<>();
             data.put("runId", snapshot.runId());
             data.put("projectId", snapshot.projectId());
+            data.put("env", snapshot.env());
             data.put("pipelineId", snapshot.pipelineId());
             data.put("gitSha", snapshot.gitSha());
             data.put("status", snapshot.status().name());
@@ -122,7 +123,10 @@ public class RunHistoryStore {
                 }
             }
         }
-        return new RunSnapshot(str.apply("runId"), str.apply("projectId"), str.apply("pipelineId"),
+        String env = str.apply("env");
+        return new RunSnapshot(str.apply("runId"), str.apply("projectId"),
+                env == null || env.isBlank() ? "test" : env,
+                str.apply("pipelineId"),
                 str.apply("gitSha"), StageStatus.valueOf(str.apply("status")),
                 m.get("createdAt") instanceof Number n ? n.longValue() : 0L,
                 stages, artifacts, String.valueOf(m.getOrDefault("log", "")));
@@ -155,7 +159,7 @@ public class RunHistoryStore {
     }
 
     /** 一次运行的不可变快照。 */
-    public record RunSnapshot(String runId, String projectId, String pipelineId, String gitSha,
+    public record RunSnapshot(String runId, String projectId, String env, String pipelineId, String gitSha,
                               StageStatus status, long createdAt, List<StageResult> stages,
                               List<ArtifactRef> artifacts, String log) {
     }
