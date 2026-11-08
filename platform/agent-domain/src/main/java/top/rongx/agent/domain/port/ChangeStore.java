@@ -16,7 +16,7 @@ public interface ChangeStore {
      *
      * @param projectId 项目（服务端上下文）
      * @param env       目标环境
-     * @param kind      RELEASE / ROLLBACK / RUNBOOK / MIGRATION
+     * @param kind      可执行动作名（stack_deploy / stack_rollback），与 ActionId.wireName 同词汇表
      * @param summary   面向人的一句话
      * @param imageDigest 镜像 digest，可空
      * @param frontendDistHash 前端产物哈希，可空

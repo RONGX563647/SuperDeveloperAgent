@@ -14,6 +14,10 @@ import org.springframework.stereotype.Service;
  *
  * <p>职责边界：<b>只负责登记与查询</b>。签发确认令牌必须由 {@link ConfirmTokenService}
  * 在"用户已登录的请求链路"中完成，工具无权调用。
+ *
+ * <p>planHash 保证：{@link #request} 把 imageDigest / frontendDistHash 一并纳入哈希
+ * （确认后换 digest 会使令牌失效）；{@link #registerWithHash} 由调用方（动作路径）提供
+ * "基于实际配方"的哈希。
  */
 @Service
 public class ChangeRegistry implements ChangeStore {

@@ -8,10 +8,17 @@
   --line-soft: #ebeef5;
   --bg: #f3f4f6;
   --panel: #ffffff;
-  --header-h: 56px;
-  --sidebar-w: 232px;
 
-  /* Element Plus 圆角对齐 ruoyi-web */
+  /* 布局骨架：侧栏固定 260px（可折叠），Header 60px */
+  --sidebar-background-color: #f3f4f6;
+  --sidebar-width-260: 260px;
+
+  /* 工作区留白（由 Main 定义，页面消费） */
+  --workspace-padding: clamp(16px, 2.4vw, 40px);
+  --workspace-top-gap: clamp(16px, 2.5dvh, 28px);
+  --workspace-section-gap: clamp(14px, 2.5dvh, 24px);
+  --workspace-panel-padding: clamp(16px, 2vw, 24px);
+
   --el-border-radius-base: 10px;
 }
 
@@ -34,7 +41,6 @@ body,
   font-size: 12px;
 }
 
-/* 统一滚动条 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

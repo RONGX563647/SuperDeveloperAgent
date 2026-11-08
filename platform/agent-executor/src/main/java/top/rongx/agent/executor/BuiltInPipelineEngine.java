@@ -102,9 +102,25 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return "builtin-pipeline";
     }
 
+    /** 内置兜底流水线（仓库无 ci/pipeline.yml 时使用）。 */
+    private static final List<String> BUILTIN_PIPELINES = List.of("release", "verify");
+
     @Override
     public List<String> pipelines(String projectId) {
-        return List.of("release", "verify");
+        // 白名单来自仓库 ci/pipeline.yml（数据、人写、versioned）；读不到再退回内置
+        Path repoDir = workspaceRoot.resolve(projectId).toAbsolutePath().normalize().resolve("repo");
+        Path pipelineFile = repoDir.resolve("ci/pipeline.yml");
+        if (Files.isRegularFile(pipelineFile)) {
+            try {
+                PipelineDefinition def = PipelineDefinition.load(repoDir);
+                if (def.name() != null && !def.name().isBlank()) {
+                    return List.of(def.name(), "verify");
+                }
+            } catch (Exception e) {
+                // 仓库的 pipeline.yml 损坏时不阻塞白名单查询：回退内置并保留触发期报错
+            }
+        }
+        return BUILTIN_PIPELINES;
     }
 
     @Override

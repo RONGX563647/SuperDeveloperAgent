@@ -65,10 +65,16 @@ public class ActionQueryTools {
             paramPart = "（无）";
         } else {
             paramPart = s.params().entrySet().stream()
-                    .map(e -> "  - %s = %s%s".formatted(
-                            e.getKey(), e.getValue(),
-                            s.allowed().getOrDefault(e.getKey(), List.of()).isEmpty()
-                                    ? "" : " (allowed: " + s.allowed().get(e.getKey()) + ")"))
+                    .map(e -> {
+                        String allowedPart = s.allowed().getOrDefault(e.getKey(), List.of()).isEmpty()
+                                ? "" : " (allowed: " + s.allowed().get(e.getKey()) + ")";
+                        // 声明了参数但 steps 未引用：提示配方作者（避免覆盖永远不生效）
+                        boolean referenced = s.steps().stream()
+                                .flatMap(List::stream)
+                                .anyMatch(t -> t.contains("${param." + e.getKey() + "}"));
+                        String unusedWarn = referenced ? "" : "  ← 未被命令引用，覆盖不生效";
+                        return "  - %s = %s%s%s".formatted(e.getKey(), e.getValue(), allowedPart, unusedWarn);
+                    })
                     .collect(Collectors.joining("\n"));
         }
         return """

@@ -10,7 +10,7 @@ import java.time.Instant;
  * @param changeId        变更标识
  * @param projectId       所属项目（服务端绑定，不来自模型）
  * @param env             目标环境
- * @param kind            RELEASE / ROLLBACK / MIGRATION / RUNBOOK
+ * @param kind            可执行动作名（stack_deploy / stack_rollback），与 ActionId.wireName 同词汇表
  * @param planHash        计划内容的规范化哈希
  * @param summary         面向人的一句话
  * @param imageDigest     后端镜像 digest（可空）

@@ -12,6 +12,7 @@ import {
 } from '../api/action'
 import { applyChange, confirmChange, getChange } from '../api/change'
 import type { ChangeView, ConfirmResponse } from '../types'
+import PageHeader from '../layouts/components/PageHeader.vue'
 import {
   cancelRun,
   getHistory,
@@ -353,44 +354,41 @@ onBeforeUnmount(stopPolling)
 </script>
 
 <template>
-  <div class="workbench">
-    <header class="workbench-header">
-      <div>
-        <p class="eyebrow">
-          CI / CD WORKBENCH
-        </p>
-        <h1 class="workbench-title">
-          流水线与动作
-        </h1>
-        <p class="workbench-description">
-          命令由人写在仓库配方里；平台只做解析、隔离与审批。运行结果每 1s 刷新至终态。
-        </p>
-      </div>
-      <div class="header-actions">
-        <span class="engine-chip mono">引擎 {{ engine || '—' }}</span>
-        <el-button :icon="Refresh" :loading="pipelinesLoading" @click="loadPipelines">
-          刷新
-        </el-button>
-      </div>
-    </header>
-
-    <section class="trigger-card" aria-label="触发流水线">
-      <div class="section-heading">
-        <span class="step">01</span>
-        <h2 class="section-title">
-          触发运行
-        </h2>
+  <div class="pipeline-page">
+    <PageHeader title="流水线工作台" :subtitle="`引擎 ${engine || '—'} · ${projectId}/${env}`">
+      <template #actions>
+        <span v-if="polling" class="polling-chip">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          轮询中 · {{ pollCount }}
+        </span>
         <el-button
           v-if="runActive"
           type="warning"
           plain
           size="small"
-          class="cancel-btn"
           @click="doCancel"
         >
           取消运行
         </el-button>
-      </div>
+        <el-button size="small" :icon="Refresh" :loading="pipelinesLoading" @click="loadPipelines">
+          刷新
+        </el-button>
+      </template>
+    </PageHeader>
+
+    <!-- 页面唯一滚动容器，外层 app-shell 永不滚动 -->
+    <div class="page-scroll">
+      <p class="page-lead">
+        命令由人写在仓库配方里；平台只做解析、隔离与审批。运行结果每 1s 刷新至终态。
+      </p>
+
+      <section class="trigger-card" aria-label="触发流水线">
+        <div class="section-heading">
+          <span class="step">01</span>
+          <h2 class="section-title">
+            触发运行
+          </h2>
+        </div>
       <div class="trigger-form">
         <div class="tf-field">
           <label>项目</label>
@@ -627,6 +625,7 @@ onBeforeUnmount(stopPolling)
           </div>
         </div>
       </section>
+      </div>
     </div>
 
     <el-dialog v-model="changeDialog" title="L3 变更确认" width="560px">
@@ -699,51 +698,30 @@ onBeforeUnmount(stopPolling)
 </template>
 
 <style scoped>
-.workbench {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 100%;
-  padding: 20px clamp(16px, 2.4vw, 40px) 28px;
-  overflow-y: auto;
+/* 页面骨架：撑满主区，自身不滚动；滚动交给 .page-scroll */
+.pipeline-page {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   color: var(--ink);
 }
-.workbench-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
+.page-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 18px 20px 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.eyebrow {
-  margin: 0 0 10px;
-  font: 600 10px/1.4 monospace;
-  letter-spacing: 0.2em;
-  color: var(--accent);
-}
-.workbench-title {
-  margin: 0;
-  font-size: clamp(22px, 2vw, 28px);
-  font-weight: 650;
-  letter-spacing: -0.04em;
-}
-.workbench-description {
-  margin: 8px 0 0;
+.page-lead {
+  max-width: 70ch;
+  margin: 0 0 16px;
   font-size: 13px;
   line-height: 1.6;
   color: var(--ink-soft);
-}
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.engine-chip {
-  padding: 5px 12px;
-  color: var(--ink-soft);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 999px;
 }
 
 /* 触发卡片 */
@@ -776,9 +754,6 @@ onBeforeUnmount(stopPolling)
   font-size: 12px;
   font-weight: 400;
   color: #a0a6ad;
-}
-.cancel-btn {
-  margin-left: auto;
 }
 .trigger-form {
   display: grid;
