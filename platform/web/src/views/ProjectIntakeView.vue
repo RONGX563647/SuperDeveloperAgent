@@ -12,6 +12,7 @@ import {
 } from '../api/project'
 import DirPickerDialog from '../components/DirPickerDialog.vue'
 import GiteeRepoPicker from '../components/GiteeRepoPicker.vue'
+import { applySelection } from '../utils/projectId'
 
 /**
  * 项目接入向导：
@@ -147,12 +148,24 @@ function openDirBrowser() {
   chooseDir('project')
 }
 
+/** 上一次自动生成的 ID：用来区分"我们填的"和"用户手改的"。 */
+const lastSuggestedId = ref('')
+
+/**
+ * 按当前选择推导项目 ID（规则见 utils/projectId）。
+ *
+ * <p>关键点：**跟着选择走，但不覆盖用户手改过的值**。
+ * 之前的实现是"ID 非空就直接 return"，于是换一个目录/仓库后 ID 还是上一个项目名，
+ * 提交时撞上已登记的 projectId。
+ */
 function suggestId() {
-  if (projectId.value) return
-  const name = selectedRepo.value?.fullName.split('/')[1]
-    ?? selectedDir.value.split(/[\\/]/).filter(Boolean).pop() ?? ''
-  const id = name.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 16)
-  if (/^[A-Z]/.test(id)) projectId.value = id
+  const name = source.value === 'remote'
+    ? (selectedRepo.value?.fullName.split('/')[1] ?? '')
+    : (selectedDir.value.split(/[\\/]/).filter(Boolean).pop() ?? '')
+  const next = applySelection(
+    { current: projectId.value, lastSuggested: lastSuggestedId.value }, name)
+  projectId.value = next.current
+  lastSuggestedId.value = next.lastSuggested
 }
 
 // ---------------------------------------------------------------- 提交与轮询
@@ -269,10 +282,10 @@ onUnmounted(stopPoll)
         <p class="page-sub">本地目录就地收编（平台只读你的目录），或从 Gitee 选择仓库 clone。</p>
 
         <div class="tabs">
-          <button type="button" class="tab" :class="{ active: source === 'local' }" @click="source = 'local'">
+          <button type="button" class="tab" :class="{ active: source === 'local' }" @click="source = 'local'; suggestId()">
             <el-icon><Folder /></el-icon> 本地目录
           </button>
-          <button type="button" class="tab" :class="{ active: source === 'remote' }" @click="source = 'remote'">
+          <button type="button" class="tab" :class="{ active: source === 'remote' }" @click="source = 'remote'; suggestId()">
             <el-icon><Connection /></el-icon> Gitee 仓库
           </button>
         </div>
