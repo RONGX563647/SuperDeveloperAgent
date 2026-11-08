@@ -55,6 +55,7 @@ public class RunHistoryStore {
             data.put("pipelineId", snapshot.pipelineId());
             data.put("gitSha", snapshot.gitSha());
             data.put("status", snapshot.status().name());
+            data.put("createdAt", snapshot.createdAt());
             data.put("log", snapshot.log());
             data.put("stages", snapshot.stages().stream().map(RunHistoryStore::stageMap).toList());
             data.put("artifacts", snapshot.artifacts().stream().map(RunHistoryStore::artifactMap).toList());
@@ -65,7 +66,7 @@ public class RunHistoryStore {
         }
     }
 
-    /** 列出历史（按文件名倒序，最新在前）。 */
+    /** 列出历史（按创建时间倒序，最新在前；缺时间戳的旧文件排最后）。 */
     public List<RunSnapshot> list() {
         if (!enabled || !Files.isDirectory(dir)) {
             return List.of();
@@ -73,7 +74,6 @@ public class RunHistoryStore {
         List<RunSnapshot> out = new ArrayList<>();
         try (var stream = Files.list(dir)) {
             stream.filter(p -> p.toString().endsWith(".yml"))
-                    .sorted((a, b) -> b.getFileName().toString().compareTo(a.getFileName().toString()))
                     .forEach(p -> {
                         try {
                             out.add(read(p));
@@ -84,6 +84,7 @@ public class RunHistoryStore {
         } catch (IOException ignored) {
             // ignore
         }
+        out.sort((a, b) -> Long.compare(b.createdAt(), a.createdAt()));
         return out;
     }
 
@@ -123,6 +124,7 @@ public class RunHistoryStore {
         }
         return new RunSnapshot(str.apply("runId"), str.apply("projectId"), str.apply("pipelineId"),
                 str.apply("gitSha"), StageStatus.valueOf(str.apply("status")),
+                m.get("createdAt") instanceof Number n ? n.longValue() : 0L,
                 stages, artifacts, String.valueOf(m.getOrDefault("log", "")));
     }
 
@@ -154,7 +156,7 @@ public class RunHistoryStore {
 
     /** 一次运行的不可变快照。 */
     public record RunSnapshot(String runId, String projectId, String pipelineId, String gitSha,
-                              StageStatus status, List<StageResult> stages,
+                              StageStatus status, long createdAt, List<StageResult> stages,
                               List<ArtifactRef> artifacts, String log) {
     }
 }

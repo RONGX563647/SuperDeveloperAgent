@@ -161,6 +161,17 @@ class DualStackPipelineTest {
         assertTrue(restarted.logTail(runId).contains("checkout") ||
                         restarted.logTail(runId).contains("backend"),
                 "重启后应能查到日志：" + restarted.logTail(runId));
+
+        // 历史列表走 domain 端口：能查到本次 run，且时间倒序（最新在前）
+        List<PipelineEngine.RunSummary> history = restarted.history();
+        assertFalse(history.isEmpty(), "历史列表不应为空");
+        assertTrue(history.stream().anyMatch(h -> h.runId().equals(runId)),
+                "历史里应包含刚完成的 run：" + history);
+        assertTrue(history.stream().allMatch(h -> h.createdAt() > 0), "历史应带触发时间");
+        for (int i = 1; i < history.size(); i++) {
+            assertTrue(history.get(i - 1).createdAt() >= history.get(i).createdAt(),
+                    "历史应按触发时间倒序");
+        }
     }
 
     // ---------------------------------------------------------------- D3 并发串行

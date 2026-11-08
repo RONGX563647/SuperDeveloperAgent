@@ -153,7 +153,7 @@ public class BuiltInPipelineEngine implements PipelineEngine {
     public List<RunSummary> history() {
         return history.list().stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.pipelineId(), h.gitSha(),
-                        h.status(), h.stages().size()))
+                        h.status(), h.createdAt(), h.stages().size()))
                 .toList();
     }
 
@@ -455,6 +455,8 @@ public class BuiltInPipelineEngine implements PipelineEngine {
         final String projectId;
         final String pipelineId;
         final String gitSha;
+        /** 触发时间（epoch millis），构建历史按它倒序展示。 */
+        final long createdAt = System.currentTimeMillis();
         final List<StageResult> stages = new ArrayList<>();
         final List<ArtifactRef> artifacts = new ArrayList<>();
         final StringBuilder log = new StringBuilder();
@@ -463,7 +465,7 @@ public class BuiltInPipelineEngine implements PipelineEngine {
 
         RunSnapshot snapshot() {
             return new RunHistoryStore.RunSnapshot(runId, projectId, pipelineId, gitSha,
-                    status, List.copyOf(stages), List.copyOf(artifacts),
+                    status, createdAt, List.copyOf(stages), List.copyOf(artifacts),
                     ProcessExecutor.redact(log.toString()));
         }
 

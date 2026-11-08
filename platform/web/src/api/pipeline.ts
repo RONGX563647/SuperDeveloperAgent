@@ -69,3 +69,28 @@ export function triggerPipeline(
 export function getRun(runId: string): Promise<RunView> {
   return apiFetch<RunView>(`/api/v1/ci/runs/${encodeURIComponent(runId)}`)
 }
+
+/** 取消一次运行（只对未终态生效）。 */
+export function cancelRun(runId: string): Promise<RunView> {
+  return apiFetch<RunView>(`/api/v1/ci/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST'
+  })
+}
+
+/** 一条构建历史摘要（按触发时间倒序）。 */
+export interface HistoryItem {
+  runId: string
+  projectId: string
+  pipelineId: string
+  gitSha: string
+  status: string
+  /** 触发时间（epoch 毫秒，0 表示旧格式文件）。 */
+  createdAt: number
+  stageCount: number
+}
+
+/** 最近构建历史（最多 50 条）。 */
+export function getHistory(projectId?: string): Promise<HistoryItem[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+  return apiFetch<HistoryItem[]>(`/api/v1/ci/history${query}`)
+}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   getActionPlan,
@@ -9,12 +9,17 @@ import {
   type ActionRunView,
   type ActionView
 } from '../api/action'
+import { applyChange, confirmChange, getChange } from '../api/change'
+import type { ChangeView, ConfirmResponse } from '../types'
 import {
+  cancelRun,
+  getHistory,
   getRun,
   isTerminalStatus,
   listPipelines,
   triggerPipeline,
   type ArtifactView,
+  type HistoryItem,
   type RunView,
   type StageView
 } from '../api/pipeline'
@@ -42,10 +47,26 @@ const errorText = ref('')
 const pollCount = ref(0)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+const history = ref<HistoryItem[]>([])
+const historyLoading = ref(false)
+
+// L3 确认-执行闭环
+const changeDialog = ref(false)
+const change = ref<ChangeView | null>(null)
+const changePassword = ref('')
+const confirmToken = ref<string | null>(null)
+const changeBusy = ref(false)
+const appliedRun = ref<RunView | null>(null)
+
+// 日志面板
+const followLog = ref(true)
+const logRef = ref<HTMLElement | null>(null)
+
 const POLL_INTERVAL_MS = 1000
 
 const polling = computed(() => pollTimer !== null)
 const canTrigger = computed(() => !!selectedPipeline.value && /^[0-9a-f]{7,40}$/.test(gitSha.value))
+const runActive = computed(() => !!run.value && !isTerminalStatus(run.value.status))
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -70,6 +91,17 @@ function artifactKey(a: ArtifactView, i: number): string {
 
 function stageKey(s: StageView, i: number): string {
   return `${s.id}:${i}`
+}
+
+function formatTime(ms: number): string {
+  if (!ms) return '—'
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+function shortSha(sha: string): string {
+  return sha.length > 12 ? sha.slice(0, 12) : sha
 }
 
 async function loadPipelines() {
@@ -105,6 +137,31 @@ async function loadActions() {
   }
 }
 
+async function loadHistory() {
+  historyLoading.value = true
+  try {
+    history.value = await getHistory(projectId.value)
+  } catch (error) {
+    // 历史加载失败不打断主流程，只在面板里显示为空
+    history.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+/** 从历史里点开一条：直接恢复完整运行视图。 */
+async function openHistory(item: HistoryItem) {
+  stopPolling()
+  errorText.value = ''
+  try {
+    run.value = await getRun(item.runId)
+    runId.value = item.runId
+    if (!isTerminalStatus(run.value.status)) startPolling(item.runId)
+  } catch (error) {
+    ElMessage.error(`加载运行失败：${messageOf(error)}`)
+  }
+}
+
 /** 列表里没带命令原文时，点击「查看计划」按需取一次并缓存。 */
 async function showPlan(action: string) {
   if (planCache.value[action]) return
@@ -132,18 +189,88 @@ async function doRunAction(action: string) {
   }
 }
 
+/** L3 第一步：登记变更，随后弹出确认卡片完成「确认 → 执行」闭环。 */
 async function doRequestAction(action: string) {
   actionBusy.value = action
   actionResult.value = null
   requestInfo.value = ''
+  confirmToken.value = null
+  appliedRun.value = null
+  changePassword.value = ''
   try {
     const result = await requestAction(projectId.value, env.value, action)
     requestInfo.value = `${result.changeId} · planHash ${result.planHash.slice(0, 24)}…`
-    ElMessage.success('变更已登记，等待人工确认')
+    change.value = await getChange(result.changeId)
+    changeDialog.value = true
   } catch (error) {
     ElMessage.error(`登记失败：${messageOf(error)}`)
   } finally {
     actionBusy.value = ''
+  }
+}
+
+async function doConfirmChange() {
+  if (!change.value || confirmToken.value) return
+  changeBusy.value = true
+  try {
+    const result: ConfirmResponse = await confirmChange(
+      change.value.changeId,
+      change.value.highRisk ? changePassword.value : undefined
+    )
+    confirmToken.value = result.confirmToken
+    ElMessage.success('已确认，令牌 5 分钟内有效')
+  } catch (error) {
+    ElMessage.error(`确认失败：${messageOf(error)}`)
+  } finally {
+    changeBusy.value = false
+  }
+}
+
+/** L3 第二步：带令牌执行。结果直接进运行面板（同步返回终态）。 */
+async function doApplyChange() {
+  if (!change.value || !confirmToken.value) return
+  changeBusy.value = true
+  try {
+    const result = await applyChange(change.value.changeId, confirmToken.value)
+    appliedRun.value = {
+      runId: `${change.value.changeId}（动作 ${result.action}）`,
+      status: result.status,
+      stages: [],
+      artifacts: result.artifacts,
+      log: result.logTail
+    }
+    run.value = appliedRun.value
+    runId.value = ''
+    ElMessage.success(`变更执行完毕：${result.status}`)
+    changeDialog.value = false
+    void loadHistory()
+  } catch (error) {
+    ElMessage.error(`执行失败：${messageOf(error)}`)
+  } finally {
+    changeBusy.value = false
+  }
+}
+
+async function doCancel() {
+  if (!run.value || !runActive.value) return
+  try {
+    run.value = await cancelRun(run.value.runId)
+    if (isTerminalStatus(run.value.status)) stopPolling()
+    ElMessage.warning('已请求取消')
+    void loadHistory()
+  } catch (error) {
+    ElMessage.error(`取消失败：${messageOf(error)}`)
+  }
+}
+
+async function copyLog() {
+  const text = run.value?.log ?? ''
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('日志已复制')
+  } catch {
+    ElMessage.error('复制失败（浏览器未授权剪贴板）')
   }
 }
 
@@ -173,7 +300,10 @@ function startPolling(id: string) {
       const data = await getRun(id)
       run.value = data
       errorText.value = ''
-      if (isTerminalStatus(data.status)) stopPolling()
+      if (isTerminalStatus(data.status)) {
+        stopPolling()
+        void loadHistory()
+      }
     } catch (error) {
       errorText.value = `轮询运行状态失败：${messageOf(error)}`
       stopPolling()
@@ -193,6 +323,7 @@ async function doTrigger() {
     // 先取一次，避免首屏空白，再进入 1s 轮询
     run.value = await getRun(result.runId)
     if (!isTerminalStatus(run.value.status)) startPolling(result.runId)
+    void loadHistory()
   } catch (error) {
     errorText.value = `触发流水线失败：${messageOf(error)}`
   } finally {
@@ -200,14 +331,27 @@ async function doTrigger() {
   }
 }
 
+/** 轮询期间日志自动滚到底部（可关闭跟随）。 */
+watch(
+  () => run.value?.log,
+  async () => {
+    if (!followLog.value) return
+    await nextTick()
+    const el = logRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  }
+)
+
 watch([projectId, env], () => {
   void loadPipelines()
   void loadActions()
+  void loadHistory()
 })
 
 onMounted(() => {
   void loadPipelines()
   void loadActions()
+  void loadHistory()
 })
 
 onBeforeUnmount(stopPolling)
@@ -248,66 +392,103 @@ onBeforeUnmount(stopPolling)
       <el-button type="primary" size="small" :loading="runBusy" :disabled="!canTrigger" @click="doTrigger">
         触发运行
       </el-button>
+      <el-button
+        v-if="runActive"
+        size="small"
+        type="warning"
+        plain
+        @click="doCancel"
+      >
+        取消运行
+      </el-button>
     </div>
 
     <el-alert v-if="errorText" class="block" type="error" :closable="false" :title="errorText" />
 
     <div class="columns">
-      <section class="panel actions-panel">
-        <div class="panel-title">
-          动作列表
-          <span class="hint">{{ projectId }} / {{ env }} · {{ actions.length }} 项</span>
-        </div>
-        <div v-loading="actionsLoading" class="panel-body">
-          <div v-for="a in actions" :key="a.action" class="action-card">
-            <div class="action-head">
-              <b class="mono">{{ a.action }}</b>
-              <el-tag size="small" :type="a.level.startsWith('L3') ? 'warning' : 'info'">{{ a.level }}</el-tag>
-              <el-tag v-if="a.humanAuthored" size="small" type="success">人写配方</el-tag>
-            </div>
-            <div class="kv">来源 <span class="mono">{{ a.source }}</span></div>
-            <div class="kv">产物 <span class="mono">{{ a.produce.join(', ') || '—' }}</span></div>
-            <div class="kv">超时 <span class="mono">{{ a.timeoutMinutes }} 分钟</span></div>
-
-            <div class="commands-label">命令原文</div>
-            <pre class="commands mono">{{ a.commands.length ? a.commands.join('\n') : (planCache[a.action]?.commands.join('\n') ?? '（列表未返回命令，点「查看计划」读取）') }}</pre>
-
-            <div class="action-buttons">
-              <el-button size="small" :loading="actionBusy === a.action" @click="showPlan(a.action)">查看计划</el-button>
-              <el-button
-                v-if="!a.level.startsWith('L3')"
-                size="small"
-                type="primary"
-                plain
-                :loading="actionBusy === a.action"
-                @click="doRunAction(a.action)"
-              >
-                执行
-              </el-button>
-              <el-button
-                v-else
-                size="small"
-                type="warning"
-                plain
-                :loading="actionBusy === a.action"
-                @click="doRequestAction(a.action)"
-              >
-                登记变更
-              </el-button>
-            </div>
+      <div class="left-col">
+        <section class="panel actions-panel">
+          <div class="panel-title">
+            动作列表
+            <span class="hint">{{ projectId }} / {{ env }} · {{ actions.length }} 项</span>
           </div>
-          <el-empty v-if="!actionsLoading && !actions.length" description="暂无动作" :image-size="60" />
-        </div>
-      </section>
+          <div v-loading="actionsLoading" class="panel-body">
+            <div v-for="a in actions" :key="a.action" class="action-card">
+              <div class="action-head">
+                <b class="mono">{{ a.action }}</b>
+                <el-tag size="small" :type="a.level.startsWith('L3') ? 'warning' : 'info'">{{ a.level }}</el-tag>
+                <el-tag v-if="a.humanAuthored" size="small" type="success">人写配方</el-tag>
+              </div>
+              <div class="kv">来源 <span class="mono">{{ a.source }}</span></div>
+              <div class="kv">产物 <span class="mono">{{ a.produce.join(', ') || '—' }}</span></div>
+              <div class="kv">超时 <span class="mono">{{ a.timeoutMinutes }} 分钟</span></div>
+
+              <div class="commands-label">命令原文</div>
+              <pre class="commands mono">{{ a.commands.length ? a.commands.join('\n') : (planCache[a.action]?.commands.join('\n') ?? '（列表未返回命令，点「查看计划」读取）') }}</pre>
+
+              <div class="action-buttons">
+                <el-button size="small" :loading="actionBusy === a.action" @click="showPlan(a.action)">查看计划</el-button>
+                <el-button
+                  v-if="!a.level.startsWith('L3')"
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="actionBusy === a.action"
+                  @click="doRunAction(a.action)"
+                >
+                  执行
+                </el-button>
+                <el-button
+                  v-else
+                  size="small"
+                  type="warning"
+                  plain
+                  :loading="actionBusy === a.action"
+                  @click="doRequestAction(a.action)"
+                >
+                  登记变更
+                </el-button>
+              </div>
+            </div>
+            <el-empty v-if="!actionsLoading && !actions.length" description="暂无动作" :image-size="60" />
+          </div>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="panel-title">
+            构建历史
+            <span class="hint">{{ history.length }} 条 · 最新在前</span>
+            <el-button size="small" text :loading="historyLoading" @click="loadHistory">刷新</el-button>
+          </div>
+          <div v-loading="historyLoading" class="panel-body history-body">
+            <div
+              v-for="h in history"
+              :key="h.runId"
+              class="history-item"
+              :class="{ active: h.runId === runId }"
+              @click="openHistory(h)"
+            >
+              <el-tag size="small" :type="stageClass(h.status) === 'ok' ? 'success' : stageClass(h.status) === 'bad' ? 'danger' : 'info'">
+                {{ h.status }}
+              </el-tag>
+              <span class="mono hist-pipeline">{{ h.pipelineId }}</span>
+              <span class="mono hist-sha" :title="h.gitSha">{{ shortSha(h.gitSha) }}</span>
+              <span class="hist-time mono">{{ formatTime(h.createdAt) }}</span>
+            </div>
+            <el-empty v-if="!historyLoading && !history.length" description="暂无构建历史" :image-size="60" />
+          </div>
+        </section>
+      </div>
 
       <section class="panel run-panel">
         <div class="panel-title">
           运行状态
           <span v-if="runId" class="mono">{{ runId }}</span>
           <span v-if="polling" class="hint polling">● 轮询中（第 {{ pollCount }} 次）</span>
+          <el-checkbox v-model="followLog" size="small" class="follow">跟随日志</el-checkbox>
         </div>
         <div class="panel-body">
-          <div v-if="!run" class="empty-hint">选择流水线并填入 gitSha 后触发运行。</div>
+          <div v-if="!run" class="empty-hint">选择流水线并填入 gitSha 后触发运行；也可从左侧构建历史点开一条。</div>
 
           <template v-else>
             <div class="run-summary">
@@ -316,6 +497,7 @@ onBeforeUnmount(stopPolling)
                 {{ run.status }}
               </el-tag>
               <span class="hint">{{ run.stages.length }} 个 stage · {{ run.artifacts.length }} 个产物</span>
+              <el-button v-if="runActive" size="small" type="warning" plain @click="doCancel">取消</el-button>
             </div>
 
             <div class="sub-title">Stage 时间线</div>
@@ -350,8 +532,12 @@ onBeforeUnmount(stopPolling)
               <div v-if="!run.artifacts.length" class="empty-hint">尚无产物。</div>
             </div>
 
-            <div class="sub-title">日志尾部</div>
-            <pre class="log mono">{{ run.log || '（暂无日志）' }}</pre>
+            <div class="sub-title log-head">
+              日志尾部
+              <span class="hint">{{ (run.log || '').split('\n').length }} 行</span>
+              <el-button size="small" text @click="copyLog">复制</el-button>
+            </div>
+            <pre ref="logRef" class="log mono">{{ run.log || '（暂无日志）' }}</pre>
           </template>
 
           <div v-if="actionResult" class="action-result">
@@ -368,6 +554,57 @@ onBeforeUnmount(stopPolling)
         </div>
       </section>
     </div>
+
+    <el-dialog v-model="changeDialog" title="L3 变更确认" width="560px">
+      <div v-if="change" class="confirm-card">
+        <div class="line"><span>变更单</span><b class="mono">{{ change.changeId }}</b></div>
+        <div class="line"><span>项目 / 环境</span><b>{{ change.projectId }} / {{ change.env }}</b></div>
+        <div class="line"><span>类型</span><b>{{ change.kind }}</b></div>
+        <div class="line"><span>内容</span><b>{{ change.summary }}</b></div>
+        <div class="line"><span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b></div>
+        <div class="line">
+          <span>风险</span>
+          <el-tag :type="change.highRisk ? 'danger' : 'success'" size="small">
+            {{ change.highRisk ? '高危（需二次密码）' : '常规' }}
+          </el-tag>
+        </div>
+
+        <el-input
+          v-if="change.highRisk && !confirmToken"
+          v-model="changePassword"
+          type="password"
+          placeholder="请输入密码（账号体系接入前会失败关闭）"
+          show-password
+        />
+
+        <el-alert
+          v-if="confirmToken"
+          type="success"
+          :closable="false"
+          title="确认令牌已签发（5 分钟内有效，一次性）"
+          :description="confirmToken"
+        />
+
+        <el-alert
+          type="info"
+          :closable="false"
+          title="执行前会再次校验：令牌绑定的是当前配方，配方被改动则拒绝"
+        />
+      </div>
+
+      <template #footer>
+        <el-button @click="changeDialog = false">关闭</el-button>
+        <el-button :disabled="!!confirmToken" :loading="changeBusy" @click="doConfirmChange">确认变更</el-button>
+        <el-button
+          type="primary"
+          :disabled="!confirmToken || changeBusy"
+          :loading="changeBusy"
+          @click="doApplyChange"
+        >
+          带令牌执行
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -425,6 +662,12 @@ onBeforeUnmount(stopPolling)
   gap: 12px;
   align-items: start;
 }
+.left-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
 .panel {
   background: #fff;
   border: 1px solid var(--line);
@@ -444,11 +687,51 @@ onBeforeUnmount(stopPolling)
 .polling {
   color: var(--accent);
 }
+.follow {
+  margin-left: auto;
+  font-weight: 400;
+}
 .panel-body {
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.history-body {
+  gap: 4px;
+}
+.history-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 96px auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fafbfc;
+  cursor: pointer;
+}
+.history-item:hover {
+  border-color: var(--accent);
+  background: #fdf6f0;
+}
+.history-item.active {
+  border-color: var(--accent);
+  background: #fdeee4;
+}
+.hist-pipeline {
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-sha {
+  color: #6b7a88;
+  text-align: right;
+}
+.hist-time {
+  color: #8a98a6;
+  font-size: 11px;
 }
 .action-card {
   border: 1px solid var(--line);
@@ -474,6 +757,11 @@ onBeforeUnmount(stopPolling)
   font-size: 12px;
   font-weight: 600;
   color: #6b7a88;
+}
+.log-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .commands {
   margin: 0;
@@ -636,6 +924,21 @@ onBeforeUnmount(stopPolling)
   border-radius: 4px;
   color: #9a4514;
   word-break: break-all;
+}
+.confirm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.confirm-card .line {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+}
+.confirm-card .line span {
+  width: 90px;
+  flex: none;
+  color: #6b7a88;
 }
 @media (max-width: 900px) {
   .columns {

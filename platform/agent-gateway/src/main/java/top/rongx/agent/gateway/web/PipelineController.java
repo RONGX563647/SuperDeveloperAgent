@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.web;
 
+import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -45,6 +46,24 @@ public class PipelineController {
     public Map<String, Object> cancel(@PathVariable String runId) {
         engine.cancel(runId);
         return toView(runId);
+    }
+
+    /** 最近构建历史（按触发时间倒序；projectId 可选过滤）。 */
+    @GetMapping("/history")
+    public List<Map<String, Object>> history(String projectId) {
+        return engine.history().stream()
+                .filter(h -> projectId == null || projectId.isBlank()
+                        || h.projectId().equals(projectId))
+                .limit(50)
+                .map(h -> Map.<String, Object>of(
+                        "runId", h.runId(),
+                        "projectId", h.projectId(),
+                        "pipelineId", h.pipelineId(),
+                        "gitSha", h.gitSha(),
+                        "status", h.status().name(),
+                        "createdAt", h.createdAt(),
+                        "stageCount", h.stageCount()))
+                .toList();
     }
 
     private Map<String, Object> toView(String runId) {

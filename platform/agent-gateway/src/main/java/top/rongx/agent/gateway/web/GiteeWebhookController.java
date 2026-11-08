@@ -73,7 +73,8 @@ public class GiteeWebhookController {
                 .map(h -> Map.<String, Object>of(
                         "runId", h.runId(), "projectId", h.projectId(),
                         "pipelineId", h.pipelineId(), "gitSha", h.gitSha(),
-                        "status", h.status().name(), "stages", h.stageCount()))
+                        "status", h.status().name(), "createdAt", h.createdAt(),
+                        "stages", h.stageCount()))
                 .toList();
     }
 

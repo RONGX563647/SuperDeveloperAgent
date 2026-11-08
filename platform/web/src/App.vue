@@ -1,3 +1,8 @@
+<script setup lang="ts">
+import { currentUserId } from './api/http'
+const userId = currentUserId()
+</script>
+
 <template>
   <el-container class="app-shell">
     <el-header class="app-header">
@@ -7,6 +12,7 @@
         <router-link to="/pipeline" class="nav-link">流水线 / 动作</router-link>
       </nav>
       <div class="meta">
+        <span class="user mono" :title="'本地标识（账号体系接入前）'">{{ userId }}</span>
         <span class="hint">内网环境 · 所有写操作需人工确认</span>
       </div>
     </el-header>
@@ -62,6 +68,12 @@
 .hint {
   font-size: 12px;
   color: #b8c8d6;
+}
+.user {
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 10px;
+  color: #dce8f2;
 }
 .app-main {
   padding: 0;
