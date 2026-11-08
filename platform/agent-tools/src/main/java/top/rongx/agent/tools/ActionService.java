@@ -202,7 +202,8 @@ public class ActionService {
      * 容器内（isolated=true）放行；宿主仅允许 actions.yml/内置 直写命令的 L2 动作。
      */
     private void assertHostSafe(ProjectContext ctx, ActionSpec spec) {
-        if (runner.isolated() || allowTestL3) {
+        // allowTestL3 仅允许在测试环境生效；生产/未知环境即便误配置也走正常校验
+        if (runner.isolated() || (allowTestL3 && "test".equals(ctx.env()))) {
             return;
         }
         boolean untrusted = spec.source().kind() == ActionSource.Kind.MAKEFILE

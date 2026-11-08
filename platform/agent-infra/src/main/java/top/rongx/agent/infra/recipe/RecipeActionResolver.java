@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -68,11 +69,30 @@ public class RecipeActionResolver implements ActionResolver {
             ActionId.FRONTEND_BUILD, "frontend-build",
             ActionId.IMAGE_PACKAGE, "image-package");
 
+    /** 配方缓存：key = (仓库根 + 配方文件 mtime 集合), value = 已解析的 ActionSpec。 */
+    private final Map<String, Optional<ActionSpec>> cache = new ConcurrentHashMap<>();
+
     @Override
     public Optional<ActionSpec> resolve(Path repoRoot, ActionId action) {
         if (repoRoot == null || action == null) {
             return Optional.empty();
         }
+        // 缓存键含配方文件的 mtime：文件改动自动失效，git 工作区两次调用间不变则命中
+        String key = cacheKey(repoRoot, action);
+        if (key != null) {
+            Optional<ActionSpec> cached = cache.get(key);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        Optional<ActionSpec> resolved = doResolve(repoRoot, action);
+        if (key != null) {
+            cache.put(key, resolved);
+        }
+        return resolved;
+    }
+
+    private Optional<ActionSpec> doResolve(Path repoRoot, ActionId action) {
         // 1. 采集来源 commit（仅仓库来源有意义）
         String commit = resolveCommit(repoRoot);
         // 2. 多源并存时告警（保留 actions.yml 优先，但提示用户可能存在漂移）
@@ -91,6 +111,22 @@ public class RecipeActionResolver implements ActionResolver {
             return fromMake;
         }
         return fromBuiltin(action);
+    }
+
+    /** 缓存键：仓库根 + 各配方源文件的 mtime。非 git 仓库或不可读时返回 null（不缓存）。 */
+    private String cacheKey(Path repoRoot, ActionId action) {
+        try {
+            StringBuilder sb = new StringBuilder(repoRoot.toAbsolutePath().normalize().toString())
+                    .append('#').append(action.wireName());
+            for (String name : List.of(CI_ACTIONS, TASKFILE, MAKEFILE)) {
+                Path f = repoRoot.resolve(name);
+                sb.append('|').append(name).append('=')
+                        .append(Files.isRegularFile(f) ? Files.getLastModifiedTime(f).toMillis() : -1);
+            }
+            return sb.toString();
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     @Override

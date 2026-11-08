@@ -59,4 +59,28 @@ public class CiCommandTools {
                 evidence: run:%s
                 """.formatted(runId, pipelineId, engine.status(runId), runId);
     }
+
+    @Tool(name = "ci_cancel",
+            description = """
+                    取消一次尚未结束的构建。写操作。
+                    仅对 RUNNING / PENDING 状态的运行有效；已结束的运行返回提示，不报错。""",
+            readOnly = false, concurrencySafe = false)
+    public String cancel(
+            @ToolParam(name = "run_id", description = "ci_run 返回的 runId") String runId,
+            ProjectContext ctx) {
+        if (runId == null || runId.isBlank()) {
+            return "err: run_id 不能为空";
+        }
+        if (!engine.hasRun(runId)) {
+            return "err: run 不存在：" + runId;
+        }
+        if (engine.status(runId).isTerminal()) {
+            return "run " + runId + " 已结束（" + engine.status(runId) + "），无需取消";
+        }
+        engine.cancel(runId);
+        return """
+                runId: %s
+                status: %s
+                evidence: run:%s""".formatted(runId, engine.status(runId), runId);
+    }
 }

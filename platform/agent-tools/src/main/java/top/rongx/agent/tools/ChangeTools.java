@@ -25,26 +25,40 @@ public class ChangeTools {
     @Tool(name = "request_confirmation",
             description = """
                     发起一次变更并请求人工确认。写操作的前置步骤，本身不改变任何环境。
+                    kind 必须是可执行动作名（stack_deploy / stack_rollback），与 HTTP 的
+                    /api/v1/actions/{action}/request 使用同一词汇表——其它 kind 目前没有
+                    执行闭环，登记后无法 apply。
                     调用后必须把 changeId 告诉用户，并提示"请在平台确认卡片上确认"。
                     不要假设用户已确认；确认结果由系统另行通知。""",
             readOnly = false, concurrencySafe = false)
     public String requestConfirmation(
-            @ToolParam(name = "kind", description = "变更类型：RELEASE / ROLLBACK / RUNBOOK / MIGRATION") String kind,
+            @ToolParam(name = "kind", description = "可执行动作名：stack_deploy / stack_rollback") String kind,
             @ToolParam(name = "summary", description = "一句话说明将要做什么（不超过 120 字）") String summary,
-            @ToolParam(name = "image_digest", description = "要发布的镜像 digest（sha256:...），非发布类可空") String imageDigest,
+            @ToolParam(name = "image_digest", description = "要发布的镜像 digest（sha256:...），可空") String imageDigest,
             @ToolParam(name = "high_risk", description = "是否含 SQL / 依赖升级 / 安全配置；true 时需二次密码") boolean highRisk,
             ProjectContext ctx) {
         if (kind == null || kind.isBlank()) {
             return "err: kind 不能为空";
         }
+        // 与 ChangeController.apply 的 ActionId.fromWire 使用同一词汇表：
+        // 之前允许 RELEASE/RUNBOOK 等 kind，但它们在 apply 阶段无法解析成动作（闭环断裂）
+        var actionId = top.rongx.agent.domain.action.ActionId.fromWire(kind);
+        if (actionId.isEmpty()) {
+            return "err: kind 必须是可执行动作（"
+                    + java.util.Arrays.stream(top.rongx.agent.domain.action.ActionId.values())
+                    .map(top.rongx.agent.domain.action.ActionId::wireName)
+                    .collect(java.util.stream.Collectors.joining(", "))
+                    + "），收到：" + kind;
+        }
         if (summary == null || summary.isBlank() || summary.length() > 120) {
             return "err: summary 不能为空且不超过 120 字";
         }
-        if ("RELEASE".equals(kind) && (imageDigest == null || !imageDigest.matches("sha256:[0-9a-f]{64}"))) {
-            return "err: 发布类变更必须提供合法的 image_digest";
+        if (imageDigest != null && !imageDigest.isBlank()
+                && !imageDigest.matches("sha256:[0-9a-f]{64}")) {
+            return "err: image_digest 格式非法（需 sha256:... 64 位十六进制）";
         }
-        ChangePlan plan = registry.request(ctx.projectId(), ctx.env(), kind, summary,
-                imageDigest, null, highRisk);
+        ChangePlan plan = registry.request(ctx.projectId(), ctx.env(),
+                actionId.get().wireName(), summary, imageDigest, null, highRisk);
         return """
                 changeId: %s
                 planHash: %s

@@ -32,8 +32,16 @@ public class PipelineController {
     @PostMapping("/pipelines/{pipelineId}/run")
     public Map<String, Object> run(@PathVariable String pipelineId,
                                    @RequestBody Map<String, String> params) {
-        String runId = engine.trigger(String.valueOf(params.getOrDefault("projectId", "RY")),
-                pipelineId, Map.of("gitSha", String.valueOf(params.get("gitSha"))));
+        // projectId 必填：不再默认到某个写死的项目（防误触发）
+        String projectId = params.get("projectId");
+        if (projectId == null || projectId.isBlank()) {
+            throw new IllegalArgumentException("projectId 必填");
+        }
+        String sha = params.get("gitSha");
+        if (sha == null || sha.isBlank()) {
+            throw new IllegalArgumentException("gitSha 必填");
+        }
+        String runId = engine.trigger(projectId, pipelineId, Map.of("gitSha", sha));
         return Map.of("runId", runId, "status", engine.status(runId));
     }
 

@@ -28,6 +28,11 @@ public interface PipelineEngine {
     /** 运行状态。 */
     StageStatus status(String runId);
 
+    /** 该 runId 是否真实存在（把"不存在"与"排队中"区分开；默认保守返回 true）。 */
+    default boolean hasRun(String runId) {
+        return true;
+    }
+
     /** 各 stage 结果（按执行顺序）。 */
     List<StageResult> stages(String runId);
 

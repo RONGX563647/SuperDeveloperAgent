@@ -1,5 +1,6 @@
 package top.rongx.agent.runtime;
 
+import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
 import org.springframework.context.annotation.Bean;
@@ -22,6 +23,8 @@ public class ModelConfig {
                 .baseUrl(props.baseUrl())
                 .modelName(props.model())
                 .stream(true)
+                // temperature 只能通过 generateOptions 生效（Builder 没有 temperature 方法）
+                .generateOptions(GenerateOptions.builder().temperature(props.temperature()).build())
                 .build();
     }
 }

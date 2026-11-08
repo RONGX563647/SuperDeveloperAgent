@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { CopyDocument, CaretBottom, Loading, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
   getActionPlan,
@@ -56,7 +57,6 @@ const change = ref<ChangeView | null>(null)
 const changePassword = ref('')
 const confirmToken = ref<string | null>(null)
 const changeBusy = ref(false)
-const appliedRun = ref<RunView | null>(null)
 
 // 日志面板
 const followLog = ref(true)
@@ -67,22 +67,28 @@ const POLL_INTERVAL_MS = 1000
 const polling = computed(() => pollTimer !== null)
 const canTrigger = computed(() => !!selectedPipeline.value && /^[0-9a-f]{7,40}$/.test(gitSha.value))
 const runActive = computed(() => !!run.value && !isTerminalStatus(run.value.status))
+const logLineCount = computed(() => (run.value?.log ?? '').split('\n').filter(l => l.trim()).length)
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** digest 截断显示：保留前缀与短尾，避免长哈希撑破布局。 */
 function shortDigest(digest: string): string {
   const value = digest || '—'
   if (value.length <= 20) return value
   return `${value.slice(0, 16)}…${value.slice(-6)}`
 }
 
-function stageClass(status: string): string {
+type Tone = 'ok' | 'bad' | 'busy'
+
+function stageTone(status: string): Tone {
   if (status === 'SUCCEEDED') return 'ok'
   if (['FAILED', 'TIMEOUT', 'CANCELLED'].includes(status)) return 'bad'
   return 'busy'
+}
+
+function elTagType(tone: Tone): 'success' | 'danger' | 'primary' {
+  return tone === 'ok' ? 'success' : tone === 'bad' ? 'danger' : 'primary'
 }
 
 function artifactKey(a: ArtifactView, i: number): string {
@@ -141,15 +147,13 @@ async function loadHistory() {
   historyLoading.value = true
   try {
     history.value = await getHistory(projectId.value)
-  } catch (error) {
-    // 历史加载失败不打断主流程，只在面板里显示为空
+  } catch {
     history.value = []
   } finally {
     historyLoading.value = false
   }
 }
 
-/** 从历史里点开一条：直接恢复完整运行视图。 */
 async function openHistory(item: HistoryItem) {
   stopPolling()
   errorText.value = ''
@@ -162,7 +166,6 @@ async function openHistory(item: HistoryItem) {
   }
 }
 
-/** 列表里没带命令原文时，点击「查看计划」按需取一次并缓存。 */
 async function showPlan(action: string) {
   if (planCache.value[action]) return
   actionBusy.value = action
@@ -189,13 +192,11 @@ async function doRunAction(action: string) {
   }
 }
 
-/** L3 第一步：登记变更，随后弹出确认卡片完成「确认 → 执行」闭环。 */
 async function doRequestAction(action: string) {
   actionBusy.value = action
   actionResult.value = null
   requestInfo.value = ''
   confirmToken.value = null
-  appliedRun.value = null
   changePassword.value = ''
   try {
     const result = await requestAction(projectId.value, env.value, action)
@@ -226,20 +227,18 @@ async function doConfirmChange() {
   }
 }
 
-/** L3 第二步：带令牌执行。结果直接进运行面板（同步返回终态）。 */
 async function doApplyChange() {
   if (!change.value || !confirmToken.value) return
   changeBusy.value = true
   try {
     const result = await applyChange(change.value.changeId, confirmToken.value)
-    appliedRun.value = {
+    run.value = {
       runId: `${change.value.changeId}（动作 ${result.action}）`,
       status: result.status,
       stages: [],
       artifacts: result.artifacts,
       log: result.logTail
     }
-    run.value = appliedRun.value
     runId.value = ''
     ElMessage.success(`变更执行完毕：${result.status}`)
     changeDialog.value = false
@@ -281,7 +280,6 @@ function stopPolling() {
   }
 }
 
-/** 新一次运行前清空上一次的展示数据。 */
 function clearRunView() {
   run.value = null
   runId.value = ''
@@ -290,7 +288,6 @@ function clearRunView() {
   pollCount.value = 0
 }
 
-/** 每 1s 拉取一次运行状态，直到进入终态（SUCCEEDED/FAILED/TIMEOUT/CANCELLED）。 */
 function startPolling(id: string) {
   stopPolling()
   pollCount.value = 0
@@ -320,7 +317,6 @@ async function doTrigger() {
   try {
     const result = await triggerPipeline(selectedPipeline.value, projectId.value, gitSha.value)
     runId.value = result.runId
-    // 先取一次，避免首屏空白，再进入 1s 轮询
     run.value = await getRun(result.runId)
     if (!isTerminalStatus(run.value.status)) startPolling(result.runId)
     void loadHistory()
@@ -331,7 +327,6 @@ async function doTrigger() {
   }
 }
 
-/** 轮询期间日志自动滚到底部（可关闭跟随）。 */
 watch(
   () => run.value?.log,
   async () => {
@@ -358,76 +353,126 @@ onBeforeUnmount(stopPolling)
 </script>
 
 <template>
-  <div class="pipeline-page">
-    <div class="page-head">
-      <h2>流水线 / 动作面板</h2>
-      <span class="hint">引擎 <b class="mono">{{ engine || '—' }}</b> · 运行结果每 1s 刷新至终态</span>
-    </div>
+  <div class="workbench">
+    <header class="workbench-header">
+      <div>
+        <p class="eyebrow">
+          CI / CD WORKBENCH
+        </p>
+        <h1 class="workbench-title">
+          流水线与动作
+        </h1>
+        <p class="workbench-description">
+          命令由人写在仓库配方里；平台只做解析、隔离与审批。运行结果每 1s 刷新至终态。
+        </p>
+      </div>
+      <div class="header-actions">
+        <span class="engine-chip mono">引擎 {{ engine || '—' }}</span>
+        <el-button :icon="Refresh" :loading="pipelinesLoading" @click="loadPipelines">
+          刷新
+        </el-button>
+      </div>
+    </header>
 
-    <div class="toolbar">
-      <div class="field">
-        <label>项目</label>
-        <el-select v-model="projectId" size="small" style="width: 180px">
-          <el-option label="RY · RuoYi-Vue-Plus" value="RY" />
-        </el-select>
+    <section class="trigger-card" aria-label="触发流水线">
+      <div class="section-heading">
+        <span class="step">01</span>
+        <h2 class="section-title">
+          触发运行
+        </h2>
+        <el-button
+          v-if="runActive"
+          type="warning"
+          plain
+          size="small"
+          class="cancel-btn"
+          @click="doCancel"
+        >
+          取消运行
+        </el-button>
       </div>
-      <div class="field">
-        <label>环境</label>
-        <el-select v-model="env" size="small" style="width: 120px">
-          <el-option label="dev" value="dev" />
-          <el-option label="test" value="test" />
-          <el-option label="prod" value="prod" />
-        </el-select>
+      <div class="trigger-form">
+        <div class="tf-field">
+          <label>项目</label>
+          <el-select v-model="projectId" size="default" style="width: 100%">
+            <el-option label="RY · RuoYi-Vue-Plus" value="RY" />
+          </el-select>
+        </div>
+        <div class="tf-field">
+          <label>环境</label>
+          <el-select v-model="env" size="default" style="width: 100%">
+            <el-option label="dev" value="dev" />
+            <el-option label="test" value="test" />
+            <el-option label="prod" value="prod" />
+          </el-select>
+        </div>
+        <div class="tf-field">
+          <label>流水线</label>
+          <el-select v-model="selectedPipeline" size="default" :loading="pipelinesLoading" style="width: 100%">
+            <el-option v-for="p in pipelineList" :key="p" :label="p" :value="p" />
+          </el-select>
+        </div>
+        <div class="tf-field grow">
+          <label>gitSha（7-40 位小写十六进制）</label>
+          <el-input v-model="gitSha" class="mono" size="default" placeholder="a1b2c3d" clearable />
+        </div>
+        <el-button
+          type="primary"
+          :icon="VideoPlay"
+          :loading="runBusy"
+          :disabled="!canTrigger"
+          @click="doTrigger"
+        >
+          触发
+        </el-button>
       </div>
-      <div class="field grow">
-        <label>流水线</label>
-        <el-select v-model="selectedPipeline" size="small" :loading="pipelinesLoading" style="width: 200px">
-          <el-option v-for="p in pipelineList" :key="p" :label="p" :value="p" />
-        </el-select>
-      </div>
-      <div class="field grow">
-        <label>gitSha（7-40 位小写十六进制）</label>
-        <el-input v-model="gitSha" class="mono" size="small" placeholder="例如 a1b2c3d" clearable />
-      </div>
-      <el-button type="primary" size="small" :loading="runBusy" :disabled="!canTrigger" @click="doTrigger">
-        触发运行
-      </el-button>
-      <el-button
-        v-if="runActive"
-        size="small"
-        type="warning"
-        plain
-        @click="doCancel"
-      >
-        取消运行
-      </el-button>
-    </div>
+    </section>
 
-    <el-alert v-if="errorText" class="block" type="error" :closable="false" :title="errorText" />
+    <el-alert v-if="errorText" class="block-alert" type="error" :closable="false" :title="errorText" show-icon />
 
-    <div class="columns">
+    <div class="workbench-grid">
       <div class="left-col">
-        <section class="panel actions-panel">
-          <div class="panel-title">
-            动作列表
-            <span class="hint">{{ projectId }} / {{ env }} · {{ actions.length }} 项</span>
+        <section class="panel" aria-label="动作列表">
+          <div class="panel-heading">
+            <span class="step">02</span>
+            <h2 class="section-title">
+              动作
+              <span class="panel-count">{{ actions.length }} 项 · {{ projectId }}/{{ env }}</span>
+            </h2>
           </div>
           <div v-loading="actionsLoading" class="panel-body">
             <div v-for="a in actions" :key="a.action" class="action-card">
               <div class="action-head">
-                <b class="mono">{{ a.action }}</b>
-                <el-tag size="small" :type="a.level.startsWith('L3') ? 'warning' : 'info'">{{ a.level }}</el-tag>
-                <el-tag v-if="a.humanAuthored" size="small" type="success">人写配方</el-tag>
+                <b class="mono action-name">{{ a.action }}</b>
+                <el-tag size="small" :type="a.level.startsWith('L3') ? 'warning' : 'info'" effect="light" round>
+                  {{ a.level.replace('_EXECUTE_ISOLATED', '').replace('_EXECUTE_PROD', '') }}
+                </el-tag>
+                <el-tag v-if="a.humanAuthored" size="small" type="success" effect="light" round>
+                  人写配方
+                </el-tag>
               </div>
-              <div class="kv">来源 <span class="mono">{{ a.source }}</span></div>
-              <div class="kv">产物 <span class="mono">{{ a.produce.join(', ') || '—' }}</span></div>
-              <div class="kv">超时 <span class="mono">{{ a.timeoutMinutes }} 分钟</span></div>
+              <div class="kv">
+                <span class="kv-label">来源</span>
+                <span class="mono kv-value" :title="a.source">{{ a.source }}</span>
+              </div>
+              <div class="kv">
+                <span class="kv-label">产物</span>
+                <span class="mono kv-value">{{ a.produce.join(', ') || '—' }}</span>
+              </div>
+              <div class="kv">
+                <span class="kv-label">超时</span>
+                <span class="mono kv-value">{{ a.timeoutMinutes }} 分钟</span>
+              </div>
 
-              <div class="commands-label">命令原文</div>
-              <pre class="commands mono">{{ a.commands.length ? a.commands.join('\n') : (planCache[a.action]?.commands.join('\n') ?? '（列表未返回命令，点「查看计划」读取）') }}</pre>
+              <details class="cmd-fold" :open="a.commands.length > 0">
+                <summary>命令原文</summary>
+                <pre class="commands mono">{{ a.commands.length ? a.commands.join('\n') : (planCache[a.action]?.commands.join('\n') ?? '（列表未返回命令，点「查看计划」读取）') }}</pre>
+              </details>
 
               <div class="action-buttons">
-                <el-button size="small" :loading="actionBusy === a.action" @click="showPlan(a.action)">查看计划</el-button>
+                <el-button size="small" :loading="actionBusy === a.action" @click="showPlan(a.action)">
+                  查看计划
+                </el-button>
                 <el-button
                   v-if="!a.level.startsWith('L3')"
                   size="small"
@@ -454,56 +499,71 @@ onBeforeUnmount(stopPolling)
           </div>
         </section>
 
-        <section class="panel history-panel">
-          <div class="panel-title">
-            构建历史
-            <span class="hint">{{ history.length }} 条 · 最新在前</span>
-            <el-button size="small" text :loading="historyLoading" @click="loadHistory">刷新</el-button>
+        <section class="panel" aria-label="构建历史">
+          <div class="panel-heading">
+            <span class="step">03</span>
+            <h2 class="section-title">
+              构建历史
+              <span class="panel-count">{{ history.length }} 条 · 最新在前</span>
+            </h2>
+            <el-button size="small" text :icon="Refresh" :loading="historyLoading" @click="loadHistory" />
           </div>
           <div v-loading="historyLoading" class="panel-body history-body">
-            <div
+            <button
               v-for="h in history"
               :key="h.runId"
+              type="button"
               class="history-item"
               :class="{ active: h.runId === runId }"
+              :aria-pressed="h.runId === runId"
               @click="openHistory(h)"
             >
-              <el-tag size="small" :type="stageClass(h.status) === 'ok' ? 'success' : stageClass(h.status) === 'bad' ? 'danger' : 'info'">
-                {{ h.status }}
-              </el-tag>
-              <span class="mono hist-pipeline">{{ h.pipelineId }}</span>
+              <span class="hist-dot" :class="stageTone(h.status)" />
+              <span class="hist-pipeline">{{ h.pipelineId }}</span>
               <span class="mono hist-sha" :title="h.gitSha">{{ shortSha(h.gitSha) }}</span>
-              <span class="hist-time mono">{{ formatTime(h.createdAt) }}</span>
-            </div>
+              <span class="hist-status" :class="stageTone(h.status)">{{ h.status }}</span>
+              <time class="hist-time mono">{{ formatTime(h.createdAt) }}</time>
+            </button>
             <el-empty v-if="!historyLoading && !history.length" description="暂无构建历史" :image-size="60" />
           </div>
         </section>
       </div>
 
-      <section class="panel run-panel">
-        <div class="panel-title">
-          运行状态
-          <span v-if="runId" class="mono">{{ runId }}</span>
-          <span v-if="polling" class="hint polling">● 轮询中（第 {{ pollCount }} 次）</span>
-          <el-checkbox v-model="followLog" size="small" class="follow">跟随日志</el-checkbox>
+      <section class="panel run-panel" aria-label="运行详情">
+        <div class="panel-heading">
+          <span class="step">04</span>
+          <h2 class="section-title">
+            运行详情
+            <span v-if="runId" class="mono panel-count">{{ runId }}</span>
+          </h2>
+          <span v-if="polling" class="polling-chip">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            轮询中 · {{ pollCount }}
+          </span>
+          <el-checkbox v-model="followLog" size="small" class="follow">
+            <el-icon><CaretBottom /></el-icon>
+            跟随
+          </el-checkbox>
         </div>
         <div class="panel-body">
-          <div v-if="!run" class="empty-hint">选择流水线并填入 gitSha 后触发运行；也可从左侧构建历史点开一条。</div>
+          <div v-if="!run" class="empty-state">
+            <p>选择流水线并填入 gitSha 后触发运行；也可以从左侧构建历史点开一条。</p>
+          </div>
 
           <template v-else>
             <div class="run-summary">
-              <span>状态</span>
-              <el-tag :type="stageClass(run.status) === 'ok' ? 'success' : stageClass(run.status) === 'bad' ? 'danger' : 'primary'" size="small">
+              <el-tag :type="elTagType(stageTone(run.status))" effect="light" round>
                 {{ run.status }}
               </el-tag>
               <span class="hint">{{ run.stages.length }} 个 stage · {{ run.artifacts.length }} 个产物</span>
-              <el-button v-if="runActive" size="small" type="warning" plain @click="doCancel">取消</el-button>
             </div>
 
-            <div class="sub-title">Stage 时间线</div>
+            <div class="sub-title">
+              Stage 时间线
+            </div>
             <div class="timeline">
-              <div v-for="(s, i) in run.stages" :key="stageKey(s, i)" class="stage" :class="stageClass(s.status)">
-                <div class="dot" />
+              <div v-for="(s, i) in run.stages" :key="stageKey(s, i)" class="stage" :class="stageTone(s.status)">
+                <span class="dot" />
                 <div class="stage-body">
                   <div class="stage-head">
                     <b class="mono">{{ s.id }}</b>
@@ -518,10 +578,14 @@ onBeforeUnmount(stopPolling)
                   </div>
                 </div>
               </div>
-              <div v-if="!run.stages.length" class="empty-hint">尚无 stage 结果。</div>
+              <div v-if="!run.stages.length" class="empty-hint">
+                尚无 stage 结果。
+              </div>
             </div>
 
-            <div class="sub-title">产物列表</div>
+            <div class="sub-title">
+              产物
+            </div>
             <div class="artifacts">
               <div v-for="(a, i) in run.artifacts" :key="artifactKey(a, i)" class="artifact mono">
                 <span class="kind">{{ a.kind }}</span>
@@ -529,42 +593,62 @@ onBeforeUnmount(stopPolling)
                 <span class="digest" :title="a.digest">{{ shortDigest(a.digest) }}</span>
                 <span class="size">{{ a.sizeBytes }} B</span>
               </div>
-              <div v-if="!run.artifacts.length" class="empty-hint">尚无产物。</div>
+              <div v-if="!run.artifacts.length" class="empty-hint">
+                尚无产物。
+              </div>
             </div>
 
-            <div class="sub-title log-head">
-              日志尾部
-              <span class="hint">{{ (run.log || '').split('\n').length }} 行</span>
-              <el-button size="small" text @click="copyLog">复制</el-button>
+            <div class="log-heading">
+              <span class="sub-title">日志</span>
+              <span class="hint">{{ logLineCount }} 行</span>
+              <el-button size="small" text :icon="CopyDocument" @click="copyLog">
+                复制
+              </el-button>
             </div>
             <pre ref="logRef" class="log mono">{{ run.log || '（暂无日志）' }}</pre>
           </template>
 
           <div v-if="actionResult" class="action-result">
-            <div class="sub-title">动作执行结果 · {{ actionResult.action }}</div>
+            <div class="sub-title">
+              动作执行结果 · {{ actionResult.action }}
+            </div>
             <div class="kv mono">
               status={{ actionResult.status }} exitCode={{ actionResult.exitCode }}
               <template v-if="actionResult.errorCode"> errorCode={{ actionResult.errorCode }}</template>
               · {{ actionResult.durationMs }} ms
             </div>
-            <div v-if="actionResult.summary" class="kv">{{ actionResult.summary }}</div>
+            <div v-if="actionResult.summary" class="kv">
+              {{ actionResult.summary }}
+            </div>
             <pre class="log mono">{{ actionResult.logTail || '（无日志）' }}</pre>
           </div>
-          <div v-if="requestInfo" class="request-info mono">变更已登记：{{ requestInfo }}</div>
+          <div v-if="requestInfo" class="request-info mono">
+            变更已登记：{{ requestInfo }}
+          </div>
         </div>
       </section>
     </div>
 
     <el-dialog v-model="changeDialog" title="L3 变更确认" width="560px">
       <div v-if="change" class="confirm-card">
-        <div class="line"><span>变更单</span><b class="mono">{{ change.changeId }}</b></div>
-        <div class="line"><span>项目 / 环境</span><b>{{ change.projectId }} / {{ change.env }}</b></div>
-        <div class="line"><span>类型</span><b>{{ change.kind }}</b></div>
-        <div class="line"><span>内容</span><b>{{ change.summary }}</b></div>
-        <div class="line"><span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b></div>
+        <div class="line">
+          <span>变更单</span><b class="mono">{{ change.changeId }}</b>
+        </div>
+        <div class="line">
+          <span>项目 / 环境</span><b>{{ change.projectId }} / {{ change.env }}</b>
+        </div>
+        <div class="line">
+          <span>类型</span><b>{{ change.kind }}</b>
+        </div>
+        <div class="line">
+          <span>内容</span><b>{{ change.summary }}</b>
+        </div>
+        <div class="line">
+          <span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b>
+        </div>
         <div class="line">
           <span>风险</span>
-          <el-tag :type="change.highRisk ? 'danger' : 'success'" size="small">
+          <el-tag :type="change.highRisk ? 'danger' : 'success'" size="small" effect="light" round>
             {{ change.highRisk ? '高危（需二次密码）' : '常规' }}
           </el-tag>
         </div>
@@ -581,6 +665,7 @@ onBeforeUnmount(stopPolling)
           v-if="confirmToken"
           type="success"
           :closable="false"
+          show-icon
           title="确认令牌已签发（5 分钟内有效，一次性）"
           :description="confirmToken"
         />
@@ -588,13 +673,18 @@ onBeforeUnmount(stopPolling)
         <el-alert
           type="info"
           :closable="false"
+          show-icon
           title="执行前会再次校验：令牌绑定的是当前配方，配方被改动则拒绝"
         />
       </div>
 
       <template #footer>
-        <el-button @click="changeDialog = false">关闭</el-button>
-        <el-button :disabled="!!confirmToken" :loading="changeBusy" @click="doConfirmChange">确认变更</el-button>
+        <el-button @click="changeDialog = false">
+          关闭
+        </el-button>
+        <el-button :disabled="!!confirmToken" :loading="changeBusy" @click="doConfirmChange">
+          确认变更
+        </el-button>
         <el-button
           type="primary"
           :disabled="!confirmToken || changeBusy"
@@ -609,265 +699,393 @@ onBeforeUnmount(stopPolling)
 </template>
 
 <style scoped>
-.pipeline-page {
-  height: 100%;
+.workbench {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  padding: 20px clamp(16px, 2.4vw, 40px) 28px;
   overflow-y: auto;
-  padding: 16px 20px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.page-head {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-}
-.page-head h2 {
-  margin: 0;
-  font-size: 18px;
   color: var(--ink);
 }
-.hint {
-  font-size: 12px;
-  color: #8a98a6;
-}
-.toolbar {
+.workbench-header {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.eyebrow {
+  margin: 0 0 10px;
+  font: 600 10px/1.4 monospace;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+}
+.workbench-title {
+  margin: 0;
+  font-size: clamp(22px, 2vw, 28px);
+  font-weight: 650;
+  letter-spacing: -0.04em;
+}
+.workbench-description {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.engine-chip {
+  padding: 5px 12px;
+  color: var(--ink-soft);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+/* 触发卡片 */
+.trigger-card {
+  padding: var(--workspace-panel-padding, 20px);
+  margin-bottom: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.step {
+  font: 600 11px/24px monospace;
+  color: var(--accent);
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.panel-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: #a0a6ad;
+}
+.cancel-btn {
+  margin-left: auto;
+}
+.trigger-form {
+  display: grid;
+  grid-template-columns: 180px 120px 200px minmax(220px, 1fr) auto;
   align-items: flex-end;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 12px 14px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 6px;
 }
-.field {
+.tf-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
-.field.grow {
-  flex: 1 1 180px;
-}
-.field label {
+.tf-field label {
   font-size: 12px;
-  color: #6b7a88;
+  color: var(--ink-soft);
 }
-.block {
-  flex: none;
+.block-alert {
+  margin-bottom: 20px;
 }
-.columns {
+
+/* 双栏 */
+.workbench-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.2fr);
-  gap: 12px;
+  grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
   align-items: start;
+  gap: 20px;
 }
 .left-col {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 20px;
   min-width: 0;
 }
 .panel {
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 6px;
   min-width: 0;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
 }
-.panel-title {
+.panel-heading {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
+  gap: 10px;
+  padding: var(--workspace-panel-padding, 20px) var(--workspace-panel-padding, 20px) 0;
 }
-.polling {
+.panel-heading .el-button {
+  margin-left: auto;
+}
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px var(--workspace-panel-padding, 20px) var(--workspace-panel-padding, 20px);
+}
+.polling-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
   color: var(--accent);
 }
 .follow {
   margin-left: auto;
   font-weight: 400;
 }
-.panel-body {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.history-body {
-  gap: 4px;
-}
-.history-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 96px auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: #fafbfc;
-  cursor: pointer;
-}
-.history-item:hover {
-  border-color: var(--accent);
-  background: #fdf6f0;
-}
-.history-item.active {
-  border-color: var(--accent);
-  background: #fdeee4;
-}
-.hist-pipeline {
-  color: var(--ink-soft);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hist-sha {
-  color: #6b7a88;
-  text-align: right;
-}
-.hist-time {
-  color: #8a98a6;
-  font-size: 11px;
-}
+
+/* 动作卡 */
 .action-card {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: border-color 0.15s ease;
+}
+.action-card:hover {
+  border-color: var(--accent);
 }
 .action-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+}
+.action-name {
+  font-size: 13px;
+  font-weight: 600;
 }
 .kv {
+  display: flex;
+  gap: 8px;
   font-size: 12px;
-  color: var(--ink-soft);
-  word-break: break-all;
 }
-.commands-label,
-.sub-title {
+.kv-label {
+  flex: none;
+  color: #a0a6ad;
+}
+.kv-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-fold summary {
   font-size: 12px;
   font-weight: 600;
-  color: #6b7a88;
-}
-.log-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  color: var(--ink-soft);
+  cursor: pointer;
 }
 .commands {
-  margin: 0;
-  padding: 8px 10px;
-  background: #f7f9fb;
-  border: 1px solid var(--line);
-  border-radius: 4px;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
   white-space: pre-wrap;
   word-break: break-all;
-  line-height: 1.5;
-  color: var(--ink);
-  max-height: 140px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 150px;
   overflow-y: auto;
 }
 .action-buttons {
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
+  gap: 8px;
 }
-.empty-hint {
-  font-size: 12px;
-  color: #8a98a6;
-  padding: 4px 0;
+
+/* 历史 */
+.history-body {
+  gap: 6px;
+}
+.history-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 96px 84px auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.history-item:hover,
+.history-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.hist-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #c0c4cc;
+}
+.hist-dot.ok {
+  background: #67c23a;
+}
+.hist-dot.bad {
+  background: #f56c6c;
+}
+.hist-dot.busy {
+  background: var(--accent);
+}
+.hist-pipeline {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-sha {
+  color: #a0a6ad;
+  text-align: right;
+}
+.hist-status {
+  font-size: 11px;
+  color: #a0a6ad;
+}
+.hist-status.ok {
+  color: #67c23a;
+}
+.hist-status.bad {
+  color: #f56c6c;
+}
+.hist-time {
+  font-size: 11px;
+  color: #a0a6ad;
+}
+
+/* 运行详情 */
+.empty-state {
+  display: grid;
+  min-height: 160px;
+  place-items: center;
+  font-size: 13px;
+  color: #a0a6ad;
+  text-align: center;
+  background-image: radial-gradient(var(--line) 0.8px, transparent 0.8px);
+  background-size: 18px 18px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+.empty-state p {
+  margin: 0;
+  padding: 16px;
 }
 .run-summary {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+}
+.sub-title {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
 }
 .timeline {
   display: flex;
   flex-direction: column;
-  border-left: 2px solid var(--line);
   margin-left: 6px;
+  border-left: 2px solid var(--line);
 }
 .stage {
   display: flex;
   gap: 10px;
-  padding: 4px 0 10px 0;
   margin-left: -7px;
+  padding: 4px 0 10px;
 }
 .dot {
   width: 12px;
   height: 12px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  background: #8a98a6;
   flex: none;
-  margin-top: 2px;
+  margin-top: 4px;
+  background: #c0c4cc;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
 }
 .stage.ok .dot {
-  background: #2e9e5b;
+  background: #67c23a;
 }
 .stage.bad .dot {
-  background: #c0392b;
+  background: #f56c6c;
 }
 .stage.busy .dot {
   background: var(--accent);
 }
 .stage-body {
-  flex: 1;
   min-width: 0;
-  padding: 6px 10px;
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg);
   border: 1px solid var(--line);
-  border-left: 3px solid #8a98a6;
-  border-radius: 4px;
-  background: #fafbfc;
+  border-left: 3px solid #c0c4cc;
+  border-radius: 10px;
 }
 .stage.ok .stage-body {
-  border-left-color: #2e9e5b;
-  background: #f2fbf5;
+  background: #f0f9eb;
+  border-left-color: #67c23a;
 }
 .stage.bad .stage-body {
-  border-left-color: #c0392b;
-  background: #fdf3f2;
+  background: #fef0f0;
+  border-left-color: #f56c6c;
 }
 .stage.busy .stage-body {
+  background: var(--accent-soft);
   border-left-color: var(--accent);
-  background: #fdf6f0;
 }
 .stage-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
 }
 .status-label {
   font-size: 12px;
   color: var(--ink-soft);
 }
 .stage.ok .status-label {
-  color: #2e9e5b;
+  color: #529b2e;
 }
 .stage.bad .status-label {
-  color: #c0392b;
+  color: #c45656;
 }
 .duration {
   margin-left: auto;
-  color: #6b7a88;
+  color: #a0a6ad;
 }
 .stage-meta {
   margin-top: 4px;
   color: var(--ink-soft);
   word-break: break-all;
 }
+
+/* 产物 */
 .artifacts {
   display: flex;
   flex-direction: column;
@@ -875,12 +1093,12 @@ onBeforeUnmount(stopPolling)
 }
 .artifact {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr) 180px 90px;
-  gap: 8px;
-  padding: 6px 8px;
+  grid-template-columns: 64px minmax(0, 1fr) 170px 80px;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 4px;
-  background: #fafbfc;
+  border-radius: 8px;
 }
 .kind {
   color: var(--accent);
@@ -895,54 +1113,93 @@ onBeforeUnmount(stopPolling)
   color: var(--ink-soft);
 }
 .size {
+  color: #a0a6ad;
   text-align: right;
-  color: #8a98a6;
+}
+
+/* 日志 */
+.log-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.log-heading .el-button {
+  margin-left: auto;
 }
 .log {
   margin: 0;
-  padding: 10px;
-  background: #12263a;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.6;
   color: #d7e4f0;
-  border-radius: 4px;
   white-space: pre-wrap;
   word-break: break-all;
-  line-height: 1.5;
-  max-height: 260px;
+  background: #1e2430;
+  border-radius: 10px;
+  max-height: 300px;
   overflow-y: auto;
 }
 .action-result {
-  border-top: 1px dashed var(--line);
-  padding-top: 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
 }
 .request-info {
-  padding: 8px 10px;
-  border: 1px solid #f5d3b8;
-  background: #fdeee4;
-  border-radius: 4px;
+  padding: 10px 12px;
   color: #9a4514;
   word-break: break-all;
+  background: #fdf6ec;
+  border: 1px solid #f5d3b8;
+  border-radius: 10px;
 }
+.empty-hint {
+  padding: 4px 0;
+  font-size: 12px;
+  color: #a0a6ad;
+}
+
+/* L3 确认卡片 */
 .confirm-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .confirm-card .line {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   font-size: 13px;
 }
 .confirm-card .line span {
-  width: 90px;
   flex: none;
-  color: #6b7a88;
+  width: 90px;
+  color: var(--ink-soft);
 }
-@media (max-width: 900px) {
-  .columns {
-    grid-template-columns: 1fr;
+
+/* 自适应（对齐参考项目的 container query 思路） */
+@media (max-width: 1100px) {
+  .trigger-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .workbench-grid {
+    grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.1fr);
+    gap: 16px;
+  }
+}
+@media (max-width: 820px) {
+  .workbench-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .trigger-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .artifact {
+    grid-template-columns: 56px minmax(0, 1fr) 120px;
+  }
+  .artifact .size {
+    display: none;
   }
 }
 </style>

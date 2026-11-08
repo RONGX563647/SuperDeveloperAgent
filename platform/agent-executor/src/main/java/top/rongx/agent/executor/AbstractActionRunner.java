@@ -110,12 +110,16 @@ public abstract class AbstractActionRunner implements ActionRunner {
         }
         String lower = head.toLowerCase().replace('\\', '/');
         String base = lower.contains("/") ? lower.substring(lower.lastIndexOf('/') + 1) : lower;
+        // shell 解释器本身不能当命令启动（E-202）
         if (base.equals("sh") || base.equals("bash") || base.equals("zsh")
                 || base.equals("cmd") || base.equals("cmd.exe") || base.equals("powershell")
                 || base.equals("pwsh")) {
             return "E-202";
         }
-        if ("mvn".equals(base) && argv.contains("deploy")) {
+        // 归一化：去扩展名（Windows 包装器 mvn.cmd / mvn.bat）并识别 mvnw wrapper
+        String noExt = base.contains(".") ? base.substring(0, base.indexOf('.')) : base;
+        boolean isMaven = noExt.equals("mvn") || noExt.equals("mvnw");
+        if (isMaven && argv.stream().anyMatch(a -> a.equalsIgnoreCase("deploy"))) {
             return "E-211";
         }
         return null;

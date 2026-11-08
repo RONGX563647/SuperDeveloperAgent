@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.ProjectRepository;
 
 /**
  * Gitee webhook 接入：push 事件自动触发流水线。
@@ -31,12 +32,15 @@ import top.rongx.agent.domain.port.PipelineEngine;
 public class GiteeWebhookController {
 
     private final PipelineEngine engine;
+    private final ProjectRepository projects;
     private final String secret;
     private final java.util.Set<String> seen = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public GiteeWebhookController(PipelineEngine engine,
+                                  ProjectRepository projects,
                                   @Value("${agent.webhook.gitee-secret:}") String secret) {
         this.engine = engine;
+        this.projects = projects;
         this.secret = secret;
         // 通过 domain 端口恢复去重集合（不依赖执行面具体类）
         engine.history().forEach(h -> seen.add(h.projectId() + ":" + h.gitSha()));
@@ -61,8 +65,16 @@ public class GiteeWebhookController {
         if (!seen.add(key)) {
             return Map.of("duplicate", true, "sha", sha);
         }
-        String runId = engine.trigger(project, "verify", Map.of("gitSha", sha));
-        return Map.of("runId", runId, "projectId", project, "gitSha", sha,
+        // 只触发已托管仓库的构建：按 repoUrl 反查 projectId，未注册仓库直接拒绝
+        String projectId = projects.findAll().stream()
+                .filter(p -> p.repoUrl() != null && p.repoUrl().endsWith("/" + project + ".git")
+                        || project.equals(p.id()))
+                .map(top.rongx.agent.domain.project.Project::id)
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "仓库未托管：" + project + "（请先在 agent.projects 配置）"));
+        String runId = engine.trigger(projectId, "verify", Map.of("gitSha", sha));
+        return Map.of("runId", runId, "projectId", projectId, "gitSha", sha,
                 "pipeline", "verify", "status", engine.status(runId));
     }
 
@@ -124,7 +136,9 @@ public class GiteeWebhookController {
     private static String projectName(String body) {
         String full = jsonString(body, "path_with_namespace");
         if (full == null || full.isBlank()) {
-            return "RY";
+            // 不再静默兜底到某个项目：未知仓库的 push 必须被拒绝，防止误触发构建
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "webhook 缺少 project.path_with_namespace，无法确定项目");
         }
         int slash = full.lastIndexOf('/');
         return slash < 0 ? full : full.substring(slash + 1);

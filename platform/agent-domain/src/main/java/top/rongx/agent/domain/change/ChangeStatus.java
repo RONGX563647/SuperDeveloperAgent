@@ -1,27 +1,11 @@
 package top.rongx.agent.domain.change;
 
-/** 变更单状态机（PRD §4.10 确认模型）。 */
-public enum ChangeStatus {
-    /** Agent 已产出计划，尚未请求确认。 */
-    DRAFT,
-    /** 已请求确认，等待人操作。 */
-    PENDING_CONFIRM,
-    /** 人已确认，令牌已签发。 */
-    CONFIRMED,
-    /** 执行中。 */
-    EXECUTING,
-    /** 观察窗内。 */
-    OBSERVING,
-    /** 完成。 */
-    DONE,
-    /** 已回滚。 */
-    ROLLED_BACK,
-    /** 执行失败。 */
-    FAILED,
-    /** 确认超时（令牌过期）。 */
-    EXPIRED;
-
-    public boolean isTerminal() {
-        return this == DONE || this == ROLLED_BACK || this == FAILED || this == EXPIRED;
+/**
+ * @deprecated 死代码：变更单当前无状态流转，全库零引用。
+ * 接入持久化并真正维护状态机时再恢复（从 git 历史找回）。
+ */
+@Deprecated(since = "0.1.0", forRemoval = true)
+final class ChangeStatus {
+    private ChangeStatus() {
     }
 }

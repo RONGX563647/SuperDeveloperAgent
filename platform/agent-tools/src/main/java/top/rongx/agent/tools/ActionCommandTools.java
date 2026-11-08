@@ -8,7 +8,6 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
-import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.project.ProjectContext;
 
@@ -49,33 +48,37 @@ public class ActionCommandTools {
             return "err: 未知动作 " + action + "；可用：" + wireNames();
         }
         ActionResult result = actions.run(ctx, id.get(), params == null ? Map.of() : params);
-        return format(result, actions.plan(ctx, id.get()));
+        // 计划已在 plan_action 输出过；这里不再重复命令原文，减少 token
+        return format(result);
     }
 
-    private String format(ActionResult result, ActionSpec spec) {
+    private String format(ActionResult result) {
         var stage = result.result();
         String artifacts = stage.artifacts().isEmpty()
                 ? "（无）"
                 : stage.artifacts().stream().map(this::formatArtifact)
                 .collect(Collectors.joining("\n  ", "\n  ", ""));
+        String failedPart = "";
+        if (stage.status() == top.rongx.agent.domain.run.StageStatus.FAILED) {
+            failedPart = "errorCode: %s\nsummary: %s\n".formatted(
+                    stage.errorCode() == null ? "" : stage.errorCode(),
+                    stage.errorSummary() == null ? "" : stage.errorSummary());
+        }
         return """
                 action: %s
                 status: %s
                 exit: %d
                 cost: %dms
-                source: %s
-                command: %s
                 artifacts: %s
-                log tail:
+                %slog tail:
                 %s
                 """.formatted(
-                spec.action().wireName(),
+                stage.stageId(),
                 stage.status(),
                 stage.exitCode(),
                 stage.durationMs(),
-                spec.source().ref(),
-                spec.steps().stream().map(a -> String.join(" ", a)).collect(Collectors.joining(" && ")),
                 artifacts,
+                failedPart,
                 result.logTail() == null || result.logTail().isBlank() ? "（无输出）" : result.logTail());
     }
 

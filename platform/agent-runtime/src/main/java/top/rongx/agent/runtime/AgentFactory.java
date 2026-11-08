@@ -5,6 +5,7 @@ import io.agentscope.core.model.Model;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionMode;
 import io.agentscope.core.tool.Toolkit;
+import org.springframework.beans.factory.annotation.Qualifier;
 import top.rongx.agent.domain.project.ProjectContext;
 import org.springframework.stereotype.Component;
 
@@ -14,20 +15,25 @@ import org.springframework.stereotype.Component;
  * <p>设计要点：
  * <ul>
  *   <li>权限模式由<b>环境</b>决定：生产用 {@code DEFAULT}（写操作必须 ASK），非生产用 {@code ACCEPT_EDITS}；</li>
+ *   <li>工具集也由<b>环境</b>决定：生产用只读 Toolkit（写工具根本不在 schema 里），
+ *       非生产用含写组的完整 Toolkit——渐进式披露：低权限会话看到更小的工具面；</li>
  *   <li>系统提示只描述角色与边界，<b>不</b>承担安全职责（安全在工具与门禁层）；</li>
- *   <li>模型是单例（见 {@link ModelConfig}），Agent 每次新建（无状态）；</li>
- *   <li>工具集共享 {@link Toolkit}，写工具在 {@code write} 组，由配置决定是否激活。</li>
+ *   <li>模型是单例（见 {@link ModelConfig}），Agent 每次新建（无状态）。</li>
  * </ul>
  */
 @Component
 public class AgentFactory {
 
-    private final Toolkit toolkit;
+    private final Toolkit fullToolkit;
+    private final Toolkit readOnlyToolkit;
     private final Model model;
     private final AgentProperties props;
 
-    public AgentFactory(Toolkit toolkit, Model model, AgentProperties props) {
-        this.toolkit = toolkit;
+    public AgentFactory(@Qualifier("agentToolkit") Toolkit fullToolkit,
+                        @Qualifier("readOnlyToolkit") Toolkit readOnlyToolkit,
+                        Model model, AgentProperties props) {
+        this.fullToolkit = fullToolkit;
+        this.readOnlyToolkit = readOnlyToolkit;
         this.model = model;
         this.props = props;
     }
@@ -38,7 +44,9 @@ public class AgentFactory {
         PermissionContextState permission = PermissionContextState.builder()
                 .mode(ctx.isProduction() ? PermissionMode.DEFAULT : PermissionMode.ACCEPT_EDITS)
                 .build();
-        // 2. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
+        // 2. 工具面按环境渐进式披露：生产只见只读工具，非生产含写组
+        Toolkit toolkit = ctx.isProduction() ? readOnlyToolkit : fullToolkit;
+        // 3. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
         return ReActAgent.builder()
                 .name("devops-agent")
                 .sysPrompt(systemPrompt(ctx))

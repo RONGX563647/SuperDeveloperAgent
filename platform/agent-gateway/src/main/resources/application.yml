@@ -22,6 +22,31 @@ agent:
   # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）
   workspace:
     root: ${AGENT_WORKSPACE_ROOT:./data/workspaces}
+  # 托管项目清单：项目与环境来自配置，不在代码里写死
+  pipeline:
+    # 构建历史落盘（重启可恢复）
+    history: true
+    # 发布镜像 tag 前缀（正式发布建议改为项目名，如 ruoyi）
+    image-prefix: ${AGENT_PIPELINE_IMAGE_PREFIX:ci}
+  projects:
+    items:
+      - id: RY
+        name: RuoYi-Vue-Plus
+        repo-url: ${RY_REPO_URL:https://gitee.com/dromara/RuoYi-Vue-Plus.git}
+        repo-type: gitee
+        type: ruoyi-plus
+        port-range-start: 8080
+        port-range-end: 8099
+        envs:
+          - env: dev
+            app-url: ${RY_DEV_URL:http://127.0.0.1:8080}
+            compose-dir: ${RY_COMPOSE_DIR:/opt/apps/ry}
+          - env: test
+            app-url: ${RY_TEST_URL:http://127.0.0.1:8081}
+            compose-dir: ${RY_COMPOSE_DIR:/opt/apps/ry}
+          - env: prod
+            app-url: ${RY_PROD_URL:http://127.0.0.1:80}
+            compose-dir: ${RY_COMPOSE_DIR:/opt/apps/ry}
   # 动作执行沙箱：auto=Docker 可用就用容器，否则退回宿主进程
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:auto}          # auto | docker | process

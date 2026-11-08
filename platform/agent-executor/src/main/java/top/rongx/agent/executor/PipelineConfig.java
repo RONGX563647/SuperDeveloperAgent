@@ -30,9 +30,17 @@ public class PipelineConfig {
                                          @Qualifier("hostActionRunner") ProcessActionRunner host,
                                          @Qualifier("actionRunner") ActionRunner sandboxed,
                                          @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
-                                         @Value("${agent.pipeline.history:true}") boolean persist) {
+                                         @Value("${agent.pipeline.history:true}") boolean persist,
+                                         @Value("${agent.pipeline.image-prefix:ci}") String imagePrefix) {
         Path root = Path.of(workspaceRoot);
         RunHistoryStore store = persist ? RunHistoryStore.file(root) : RunHistoryStore.disabled();
-        return new BuiltInPipelineEngine(recipes, sandboxed, host, root, store);
+        BuiltInPipelineEngine engine =
+                new BuiltInPipelineEngine(recipes, sandboxed, host, root, store, imagePrefix);
+        // 应用关闭时中断执行线程，避免悬挂构建进程。
+        // 用虚拟线程工厂创建钩子线程（规约 R04 禁止 new Thread）；
+        // 虚拟线程必须为 daemon，而 JVM 退出本身会回收这些轻量线程，关闭语义不受影响。
+        Runtime.getRuntime().addShutdownHook(
+                Thread.ofVirtual().name("pipeline-shutdown").unstarted(engine::close));
+        return engine;
     }
 }

@@ -47,7 +47,7 @@ import top.rongx.agent.executor.RunHistoryStore.RunSnapshot;
  * <p>执行面是确定性代码，不调用任何模型（规约 A3）。每个 stage 底层都分解为
  * {@code ActionSpec}（动作层），与 {@code run_action} 共用同一套 ActionRunner 与门禁。
  */
-public class BuiltInPipelineEngine implements PipelineEngine {
+public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private static final Duration STAGE_TIMEOUT = Duration.ofMinutes(5);
 
@@ -64,19 +64,34 @@ public class BuiltInPipelineEngine implements PipelineEngine {
     private final TriggerScheduler scheduler = new TriggerScheduler();
     /** 构建历史持久化（重启可恢复）。 */
     private final RunHistoryStore history;
+    /** 发布镜像 tag 前缀（可配置；避免测试字样进入正式发布链路）。 */
+    private final String imagePrefix;
+
+    /** 应用关闭时停掉执行线程：不再接新任务，正在跑的构建被中断（避免悬挂进程）。 */
+    @Override
+    public void close() {
+        workers.shutdownNow();
+    }
 
     public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
                                  ActionRunner host, Path workspaceRoot) {
-        this(recipes, sandboxed, host, workspaceRoot, RunHistoryStore.disabled());
+        this(recipes, sandboxed, host, workspaceRoot, RunHistoryStore.disabled(), "ci");
     }
 
     public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
                                  ActionRunner host, Path workspaceRoot, RunHistoryStore history) {
+        this(recipes, sandboxed, host, workspaceRoot, history, "ci");
+    }
+
+    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
+                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
+                                 String imagePrefix) {
         this.recipes = recipes;
         this.sandboxed = sandboxed;
         this.host = host;
         this.workspaceRoot = workspaceRoot;
         this.history = history == null ? RunHistoryStore.disabled() : history;
+        this.imagePrefix = imagePrefix == null || imagePrefix.isBlank() ? "ci" : imagePrefix;
         restoreHistory();
     }
 
@@ -113,6 +128,11 @@ public class BuiltInPipelineEngine implements PipelineEngine {
     public StageStatus status(String runId) {
         RunState s = runs.get(runId);
         return s == null ? StageStatus.PENDING : s.status;
+    }
+
+    /** 该 runId 是否真实存在（用于把"不存在"与"排队中"区分开）。 */
+    public boolean hasRun(String runId) {
+        return runId != null && runs.containsKey(runId);
     }
 
     @Override
@@ -221,7 +241,7 @@ public class BuiltInPipelineEngine implements PipelineEngine {
                         List.of());
             }
 
-            String tag = "ci-e2e:" + state.gitSha.substring(0, 7);
+            String tag = imagePrefix + "-" + state.gitSha.substring(0, 7);
             Map<String, String> vars = Map.of(
                     "gitSha", state.gitSha,
                     "gitSha7", state.gitSha.substring(0, 7),
@@ -253,9 +273,16 @@ public class BuiltInPipelineEngine implements PipelineEngine {
         }
     }
 
-    /** 检出：git clone（本地仓库）+ checkout 指定 sha。 */
+    /** 检出：先 fetch 同步远端（新 push 的 sha 才存在），再 clone（本地仓库）+ checkout 指定 sha。 */
     private void checkout(Path source, Path runDir, RunState state) {
         long start = System.nanoTime();
+        // 1. 本地托管仓库可能落后于远端：fetch 一下（失败不致命——离线场景仍可构建已有提交）
+        ActionResult fetch = host.run(source, spec("checkout", List.of(
+                List.of("git", "-C", posix(source), "fetch", "--all", "--quiet"))));
+        if (fetch.result().status() != StageStatus.SUCCEEDED) {
+            state.log.append("[checkout] fetch 失败（继续用本地已有提交）：")
+                    .append(fetch.result().errorSummary()).append('\n');
+        }
         ActionResult clone = host.run(source, spec("checkout", List.of(
                 List.of("git", "clone", "--quiet", "--no-checkout", posix(source), posix(runDir)))));
         if (clone.result().status() != StageStatus.SUCCEEDED) {
@@ -264,7 +291,9 @@ public class BuiltInPipelineEngine implements PipelineEngine {
         ActionResult pinned = host.run(source, spec("checkout", List.of(
                 List.of("git", "-C", posix(runDir), "checkout", "--detach", "--quiet", state.gitSha))));
         if (pinned.result().status() != StageStatus.SUCCEEDED) {
-            throw new IllegalStateException("git checkout " + state.gitSha + " 失败：" + pinned.result().errorSummary());
+            throw new IllegalStateException("git checkout " + state.gitSha
+                    + " 失败：" + pinned.result().errorSummary()
+                    + "（若为新推送的提交，请确认本地仓库已 fetch 到该提交）");
         }
         state.log.append("[checkout] ").append(state.gitSha).append('\n');
         state.stages.add(StageResult.success("checkout", 0, List.of(),

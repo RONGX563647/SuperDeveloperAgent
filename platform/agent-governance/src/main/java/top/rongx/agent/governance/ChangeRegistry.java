@@ -24,7 +24,11 @@ public class ChangeRegistry implements ChangeStore {
     public ChangePlan request(String projectId, String env, String kind, String summary,
                               String imageDigest, String frontendDistHash, boolean highRisk) {
         String planHash = PlanHasher.hash(projectId, env, kind, imageDigest, frontendDistHash, summary);
-        return registerWithHash(projectId, env, kind, summary, planHash, highRisk);
+        String changeId = "chg-" + UUID.randomUUID();
+        ChangePlan plan = new ChangePlan(changeId, projectId, env, kind, planHash, summary,
+                imageDigest, frontendDistHash, highRisk, null);
+        changes.put(changeId, plan);
+        return plan;
     }
 
     @Override

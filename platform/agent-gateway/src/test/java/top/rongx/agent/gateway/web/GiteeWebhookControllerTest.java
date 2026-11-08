@@ -2,10 +2,14 @@ package top.rongx.agent.gateway.web;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.ProjectRepository;
+import top.rongx.agent.domain.project.Project;
+import top.rongx.agent.domain.project.ProjectEnv;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -18,6 +22,34 @@ class GiteeWebhookControllerTest {
             {"after":"abcdef1234567890abcdef1234567890abcdef12",
              "project":{"path_with_namespace":"tester/RY"}}
             """;
+
+    private static final String BODY_UNKNOWN_REPO = """
+            {"after":"abcdef1234567890abcdef1234567890abcdef12",
+             "project":{"path_with_namespace":"tester/UNKNOWN"}}
+            """;
+
+    private static final Project RY =
+            new Project("RY", "RuoYi", "https://gitee.com/x/RuoYi-Vue-Plus.git", "gitee", "ruoyi-plus", 8080, 8099);
+
+    /** 只注册 RY 一个项目的仓储。 */
+    private static ProjectRepository repo() {
+        return new ProjectRepository() {
+            @Override
+            public Optional<Project> findById(String projectId) {
+                return RY.id().equals(projectId) ? Optional.of(RY) : Optional.empty();
+            }
+
+            @Override
+            public List<Project> findAll() {
+                return List.of(RY);
+            }
+
+            @Override
+            public List<ProjectEnv> findEnvs(String projectId) {
+                return List.of();
+            }
+        };
+    }
 
     private static class StubEngine implements PipelineEngine {
         int calls = 0;
@@ -68,7 +100,7 @@ class GiteeWebhookControllerTest {
     @DisplayName("未配置密钥时拒绝，不静默放行")
     void rejectsWhenNoSecret() {
         StubEngine engine = new StubEngine();
-        GiteeWebhookController controller = new GiteeWebhookController(engine, "");
+        GiteeWebhookController controller = new GiteeWebhookController(engine, repo(), "");
         assertThrows(ResponseStatusException.class,
                 () -> controller.push("anything", null, BODY));
         assertEquals(0, engine.calls);
@@ -78,7 +110,7 @@ class GiteeWebhookControllerTest {
     @DisplayName("Token 正确 → 触发 verify，取仓库名作为 projectId")
     void triggersWithToken() {
         StubEngine engine = new StubEngine();
-        GiteeWebhookController controller = new GiteeWebhookController(engine, "s3cr3t");
+        GiteeWebhookController controller = new GiteeWebhookController(engine, repo(), "s3cr3t");
         Map<String, Object> result = controller.push("s3cr3t", null, BODY);
         assertEquals("run-1", result.get("runId"));
         assertEquals("RY", engine.projectId);
@@ -91,7 +123,7 @@ class GiteeWebhookControllerTest {
     @DisplayName("同一 commit 重复推送 → 幂等，不重复触发")
     void deduplicates() {
         StubEngine engine = new StubEngine();
-        GiteeWebhookController controller = new GiteeWebhookController(engine, "s3cr3t");
+        GiteeWebhookController controller = new GiteeWebhookController(engine, repo(), "s3cr3t");
         controller.push("s3cr3t", null, BODY);
         Map<String, Object> second = controller.push("s3cr3t", null, BODY);
         assertEquals(true, second.get("duplicate"));
@@ -102,9 +134,19 @@ class GiteeWebhookControllerTest {
     @DisplayName("Token 错误 → 401")
     void rejectsWrongToken() {
         StubEngine engine = new StubEngine();
-        GiteeWebhookController controller = new GiteeWebhookController(engine, "s3cr3t");
+        GiteeWebhookController controller = new GiteeWebhookController(engine, repo(), "s3cr3t");
         assertThrows(ResponseStatusException.class,
                 () -> controller.push("wrong", null, BODY));
+        assertEquals(0, engine.calls);
+    }
+
+    @Test
+    @DisplayName("未托管仓库的 push → 400 拒绝，不触发构建")
+    void rejectsUnknownRepo() {
+        StubEngine engine = new StubEngine();
+        GiteeWebhookController controller = new GiteeWebhookController(engine, repo(), "s3cr3t");
+        assertThrows(ResponseStatusException.class,
+                () -> controller.push("s3cr3t", null, BODY_UNKNOWN_REPO));
         assertEquals(0, engine.calls);
     }
 }

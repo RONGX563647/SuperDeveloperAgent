@@ -1,9 +1,18 @@
+/* 设计令牌（对齐 ruoyi-web 的浅色工作台风格） */
 :root {
-  --ink: #0f2a43;
-  --ink-soft: #3c556e;
-  --accent: #e06c2a;
-  --line: #e4e8ee;
-  --bg: #f5f7fa;
+  --ink: #191919;
+  --ink-soft: #606266;
+  --accent: #409eff;
+  --accent-soft: #ecf5ff;
+  --line: #e4e7ed;
+  --line-soft: #ebeef5;
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --header-h: 56px;
+  --sidebar-w: 232px;
+
+  /* Element Plus 圆角对齐 ruoyi-web */
+  --el-border-radius-base: 10px;
 }
 
 * {
@@ -15,7 +24,7 @@ body,
 #app {
   margin: 0;
   height: 100%;
-  font-family: 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   color: var(--ink);
   background: var(--bg);
 }
@@ -23,4 +32,23 @@ body,
 .mono {
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 12px;
+}
+
+/* 统一滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4d7de;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b8bcc4;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }

@@ -22,9 +22,13 @@ public record AgentProperties(
         Double temperature) {
 
     public AgentProperties {
-        baseUrl = baseUrl == null || baseUrl.isBlank()
-                ? "https://dashscope.aliyuncs.com/compatible-mode/v1" : baseUrl;
-        model = model == null || model.isBlank() ? "qwen-plus" : model;
+        // 默认值统一在 application.yml 的 ${ENV:默认} 里声明，Java 端缺失即快速失败，避免双源漂移
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("agent.model.base-url 未配置");
+        }
+        if (model == null || model.isBlank()) {
+            throw new IllegalStateException("agent.model.model 未配置");
+        }
         maxIters = maxIters == null || maxIters < 1 ? 8 : Math.min(maxIters, 30);
         temperature = temperature == null ? 0.2d : temperature;
         if (apiKey == null || apiKey.isBlank()) {

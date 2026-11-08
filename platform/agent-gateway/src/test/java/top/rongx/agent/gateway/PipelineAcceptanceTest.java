@@ -129,7 +129,7 @@ class PipelineAcceptanceTest {
         runQuietly(List.of("docker", "rm", "-f", CONTAINER));
         // 清掉测试产生的镜像
         try {
-            Process p = new ProcessBuilder("docker", "images", "-q", "--filter", "reference=ci-e2e:*")
+            Process p = new ProcessBuilder("docker", "images", "-q", "--filter", "reference=ci-*")
                     .redirectErrorStream(true).start();
             String ids = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
             p.waitFor(10, TimeUnit.SECONDS);
@@ -201,7 +201,7 @@ class PipelineAcceptanceTest {
         assertFalse(ids.contains("health"), "失败后不得执行健康检查：" + ids);
         assertTrue(ids.stream().anyMatch(s -> s.startsWith("on-failure:")),
                 "应执行 on-failure 回滚：" + ids + "\n日志：" + current.logTail(badRun));
-        assertTrue(current.logTail(badRun).contains("deployed ci-e2e:" + goodSha.substring(0, 7)),
+        assertTrue(current.logTail(badRun).contains("deployed ci-" + goodSha.substring(0, 7)),
                 "回滚应把上一个好版本重新部署，日志：" + current.logTail(badRun));
 
         StageResult failedTest = current.stages(badRun).stream()

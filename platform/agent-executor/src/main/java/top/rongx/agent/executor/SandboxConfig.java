@@ -26,7 +26,7 @@ public class SandboxConfig {
     public DockerSandbox dockerSandbox(
             @Value("${agent.sandbox.docker-binary:docker}") String binary,
             @Value("${agent.sandbox.image:maven:3.9-eclipse-temurin-21}") String image,
-            @Value("${agent.sandbox.network:none}") String network,
+            @Value("${agent.sandbox.network:bridge}") String network,
             @Value("${agent.sandbox.memory:2g}") String memory,
             @Value("${agent.sandbox.cpus:2}") String cpus,
             @Value("${agent.sandbox.pids-limit:512}") int pidsLimit,
