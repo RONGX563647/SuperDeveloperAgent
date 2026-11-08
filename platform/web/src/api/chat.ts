@@ -5,6 +5,7 @@ import { currentUserId } from './http'
  * 发起对话并按 SSE 事件流消费。
  *
  * 用 fetch + ReadableStream 而不是 EventSource：EventSource 只支持 GET，而我们需要 POST 传上下文。
+ * 回调收到的 event.type 是 SSE 的 event: 行（"agent" / "error"），payload 是 data JSON。
  */
 export async function streamChat(
   req: ChatRequest,
@@ -47,19 +48,28 @@ export async function streamChat(
   }
 }
 
-/** 解析一个 SSE 帧；后端每个 data 都是单行 JSON。 */
+/**
+ * 解析一个 SSE 帧。
+ *
+ * <p>必须同时读 {@code event:} 与 {@code data:} 两行：后端把流式异常作为
+ * {@code event:error} + {@code data:{"message":…}} 发出，丢了 event 行，
+ * 错误就会被当成普通 agent 事件处理，前端永远看不到失败。
+ */
 function parseSseChunk(chunk: string): AgentEventDto | null {
   const dataLines: string[] = []
+  let eventName = 'agent'
   for (const line of chunk.split('\n')) {
     if (line.startsWith('data:')) {
       dataLines.push(line.slice(5).trimStart())
+    } else if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
     }
   }
   if (dataLines.length === 0) return null
   const raw = dataLines.join('\n')
   if (!raw || raw === '[DONE]') return null
   try {
-    return JSON.parse(raw) as AgentEventDto
+    return { type: eventName, payload: JSON.parse(raw) as Record<string, unknown> }
   } catch {
     return null
   }

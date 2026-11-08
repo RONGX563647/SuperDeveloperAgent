@@ -37,6 +37,17 @@ const placeholder = computed(() =>
 )
 
 const tokens = ref(0)
+/** 中文输入法组合标记：组合期间 Enter 不应触发发送。 */
+const composing = ref(false)
+/** 用户是否粘在底部：上翻看历史时暂停自动滚底，回到底部附近恢复。 */
+const stickToBottom = ref(true)
+/** 最后一条 assistant 消息（流式光标挂在它上面）。 */
+const lastAssistantId = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') return messages.value[i].id
+  }
+  return ''
+})
 
 function push(role: ChatMessage['role'], text: string, label?: string) {
   messages.value.push({
@@ -49,18 +60,45 @@ function push(role: ChatMessage['role'], text: string, label?: string) {
   void scrollToBottom()
 }
 
-async function scrollToBottom() {
+async function scrollToBottom(force = false) {
+  if (!force && !stickToBottom.value) return
   await nextTick()
   const el = listRef.value
   if (el) el.scrollTop = el.scrollHeight
 }
 
+/** 滚动时判断是否仍在底部附近（±40px 内视为粘底）。 */
+function onListScroll() {
+  const el = listRef.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+}
+
+async function copyMessage(text: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败（浏览器未授权剪贴板）')
+  }
+}
+
+function formatTime(at: number): string {
+  const d = new Date(at)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 async function send() {
   const text = input.value.trim()
   if (!text || streaming.value) return
+  // 中文输入法组合中不发送（compositionend 前 keydown 也会带 enter）
+  if (composing.value) return
   input.value = ''
   push('user', text)
   appStore.touchSession(text)
+  stickToBottom.value = true
 
   streaming.value = true
   elapsedMs.value = 0
@@ -74,6 +112,13 @@ async function send() {
     await streamChat(
       { projectId: projectId.value, env: env.value, sessionId: sessionId.value, message: text },
       (event) => {
+        // 后端用 event:error + data:{"message":…} 表示流式失败（如模型 401）
+        if (event.type === 'error') {
+          const msg = typeof event.payload?.message === 'string'
+            ? event.payload.message
+            : '对话流异常'
+          throw new Error(msg)
+        }
         const target = messages.value.find((m) => m.id === assistantId)
         if (!target) return
         const label = String(event.payload?.tool ?? '')
@@ -194,7 +239,7 @@ onMounted(() => {
     </PageHeader>
 
     <!-- 消息区：唯一滚动容器（min-height:0 防止被内容撑破） -->
-    <div ref="listRef" class="chat-list">
+    <div ref="listRef" class="chat-list" @scroll.passive="onListScroll">
       <div class="chat-column">
         <div v-for="m in messages" :key="m.id" class="row" :class="m.role">
           <div v-if="m.role === 'step'" class="step-row">
@@ -204,8 +249,22 @@ onMounted(() => {
           <div v-else-if="m.role === 'error'" class="bubble error">
             {{ m.text }}
           </div>
-          <div v-else class="bubble" :class="{ user: m.role === 'user' }">
-            {{ m.text || '…' }}
+          <div v-else class="bubble-group" :class="{ user: m.role === 'user' }">
+            <div class="bubble" :class="{ user: m.role === 'user', streaming: m.role === 'assistant' && streaming && m.id === messages[messages.length - 1]?.id && !m.text }">
+              <span class="bubble-text">{{ m.text }}</span><span v-if="streaming && m.role === 'assistant' && m.id === lastAssistantId" class="caret" />
+            </div>
+            <div class="bubble-meta">
+              <span class="mono meta-time">{{ formatTime(m.at) }}</span>
+              <button
+                v-if="m.text"
+                type="button"
+                class="meta-copy"
+                title="复制"
+                @click="copyMessage(m.text)"
+              >
+                <el-icon><CopyDocument /></el-icon>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -233,18 +292,24 @@ onMounted(() => {
           resize="none"
           class="composer-input"
           :placeholder="placeholder"
+          @compositionstart="composing = true"
+          @compositionend="composing = false"
           @keydown.enter.exact.prevent="send"
         />
         <div class="composer-bar">
           <div class="bar-left">
-            <button type="button" class="icon-btn" title="添加附件">
-              <el-icon><Paperclip /></el-icon>
-            </button>
-            <el-select v-model="permission" size="small" class="permission-select">
-              <el-option label="每次确认" value="confirm" />
-              <el-option label="只读" value="readonly" />
-              <el-option label="自动执行" value="auto" />
-            </el-select>
+            <el-tooltip content="附件功能待接入（占位）" placement="top">
+              <button type="button" class="icon-btn" disabled title="附件功能待接入">
+                <el-icon><Paperclip /></el-icon>
+              </button>
+            </el-tooltip>
+            <el-tooltip content="执行策略：会话内工具调用的门禁偏好" placement="top">
+              <el-select v-model="permission" size="small" class="permission-select">
+                <el-option label="每次确认" value="confirm" />
+                <el-option label="只读" value="readonly" />
+                <el-option label="自动执行" value="auto" />
+              </el-select>
+            </el-tooltip>
           </div>
           <div class="bar-right">
             <span class="metric mono">
@@ -364,12 +429,22 @@ onMounted(() => {
 .row.user {
   justify-content: flex-end;
 }
-.bubble {
+.bubble-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
   max-width: 78%;
+}
+.row.user .bubble-group {
+  align-items: flex-end;
+}
+.bubble {
   padding: 11px 15px;
   font-size: 14px;
   line-height: 1.7;
   white-space: pre-wrap;
+  word-break: break-word;
   color: var(--ink);
   background: var(--panel);
   border: 1px solid var(--line);
@@ -379,11 +454,64 @@ onMounted(() => {
   color: var(--ink);
   background: #f2f3f5;
   border-color: #eceef1;
+  border-bottom-right-radius: 4px;
+}
+.row.assistant .bubble {
+  border-bottom-left-radius: 4px;
 }
 .bubble.error {
   color: #c45656;
   background: #fef0f0;
   border-color: #f3c2c2;
+}
+/* 流式光标：跟随最后一条 assistant 消息 */
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--accent);
+  animation: caret-blink 0.9s step-end infinite;
+}
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+/* 气泡元信息：时间 + 复制，hover 才出现，不喧宾夺主 */
+.bubble-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.bubble-group:hover .bubble-meta {
+  opacity: 1;
+}
+.meta-time {
+  font-size: 10px;
+  color: #b0b6bd;
+}
+.meta-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: #b0b6bd;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+}
+.meta-copy:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 .step-row {
   display: flex;
