@@ -1,10 +1,12 @@
 package top.rongx.agent.gateway;
 
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.tool.Toolkit;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -15,7 +17,6 @@ import top.rongx.agent.tools.CiCommandTools;
 import top.rongx.agent.tools.CiQueryTools;
 import top.rongx.agent.tools.ChangeTools;
 import top.rongx.agent.tools.ProjectTools;
-import top.rongx.agent.tools.ToolCatalog;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -52,7 +53,11 @@ class ToolChainTest {
     @Autowired
     private ActionCommandTools actionCommandTools;
     @Autowired
-    private ToolCatalog toolCatalog;
+    @Qualifier("agentToolkit")
+    private Toolkit agentToolkit;
+    @Autowired
+    @Qualifier("readOnlyToolkit")
+    private Toolkit readOnlyToolkit;
 
     /** 构造与 ChatService.stream 相同形态的 RuntimeContext。 */
     private static RuntimeContext runtime(ProjectContext ctx) {
@@ -64,7 +69,7 @@ class ToolChainTest {
     }
 
     private static ProjectContext ctx(String env) {
-        return new ProjectContext("RY", env, "tester", "https://gitee.com/x/RuoYi-Vue-Plus.git");
+        return new ProjectContext("RY", env, "tester", "https://gitee.com/x/RuoYi-Vue-Plus.git", null);
     }
 
     // ---------------------------------------------------------------- 只读工具
@@ -144,11 +149,16 @@ class ToolChainTest {
     // ---------------------------------------------------------------- 装配完整性
 
     @Test
-    @DisplayName("T8 ToolCatalog：两个 Toolkit 都能构建（生产只读 / 非生产完整）")
+    @DisplayName("T8 ToolCatalog：非生产 Toolkit 带写工具，生产只读 Toolkit 不带")
     void toolkitsWired() {
-        // 通过 Spring 装配本身验证两个 @Bean 都能实例化；这里再确认 ToolCatalog 常量
-        assertNotNull(ToolCatalog.GROUP_WRITE);
-        assertFalse(ToolCatalog.GROUP_WRITE.isBlank());
+        // 写工具必须直接可见：放进工具组会被会话状态覆盖成"未激活"，模型看不到 request_confirmation
+        assertTrue(agentToolkit.getToolNames().contains("request_confirmation"));
+        assertTrue(agentToolkit.getToolNames().contains("ci_run"));
+        assertTrue(agentToolkit.getToolNames().contains("run_action"));
+        // 生产只读面：写工具根本不存在
+        assertFalse(readOnlyToolkit.getToolNames().contains("request_confirmation"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("ci_run"));
+        assertTrue(readOnlyToolkit.getToolNames().contains("git_status"));
     }
 
     @Test

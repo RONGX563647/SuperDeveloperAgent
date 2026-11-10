@@ -55,10 +55,20 @@ public class RecipeActionResolver implements ActionResolver {
 
     /** 内置默认配方（仓库没有覆盖时使用）。 */
     private static final Map<ActionId, List<List<String>>> BUILTIN_STEPS = Map.of(
-            ActionId.BACKEND_BUILD, List.of(List.of("mvn", "-B", "-q", "-DskipTests", "package")),
+            ActionId.BACKEND_BUILD, List.of(List.of("mvn", "-B", "-q", "verify")),
+            ActionId.BACKEND_TEST, List.of(List.of("mvn", "-B", "-q", "test")),
             ActionId.FRONTEND_BUILD, List.of(
                     List.of("pnpm", "install", "--frozen-lockfile", "--ignore-scripts"),
-                    List.of("pnpm", "build")));
+                    List.of("pnpm", "build")),
+            ActionId.FRONTEND_TEST, List.of(List.of("pnpm", "test")));
+
+    /** 动作级默认超时：测试给足 20m，构建/镜像 10~20m，其余 15m。 */
+    private static final Map<ActionId, Duration> DEFAULT_TIMEOUTS = Map.of(
+            ActionId.BACKEND_BUILD, Duration.ofMinutes(10),
+            ActionId.BACKEND_TEST, Duration.ofMinutes(20),
+            ActionId.FRONTEND_BUILD, Duration.ofMinutes(10),
+            ActionId.FRONTEND_TEST, Duration.ofMinutes(20),
+            ActionId.IMAGE_PACKAGE, Duration.ofMinutes(20));
 
     private static final Map<ActionId, List<String>> BUILTIN_PRODUCE = Map.of(
             ActionId.BACKEND_BUILD, List.of("target/*.jar"),
@@ -67,7 +77,9 @@ public class RecipeActionResolver implements ActionResolver {
     /** make/task 的默认 target 名。 */
     private static final Map<ActionId, String> DEFAULT_TARGET = Map.of(
             ActionId.BACKEND_BUILD, "backend-build",
+            ActionId.BACKEND_TEST, "backend-test",
             ActionId.FRONTEND_BUILD, "frontend-build",
+            ActionId.FRONTEND_TEST, "frontend-test",
             ActionId.IMAGE_PACKAGE, "image-package");
 
     /** 配方缓存：key = (仓库根 + 配方文件 mtime 集合), value = 已解析的 ActionSpec。 */
@@ -174,7 +186,7 @@ public class RecipeActionResolver implements ActionResolver {
         if (produce.isEmpty()) {
             produce = BUILTIN_PRODUCE.getOrDefault(action, List.of());
         }
-        Duration timeout = parseTimeout(def.get("timeout"));
+        Duration timeout = parseTimeout(def.get("timeout"), action);
         Map<String, List<String>> allowed = parseParamAllowed(rawParams, action);
         log.debug("配方命中 {}.{} → {}", CI_ACTIONS, action.wireName(), steps);
         return Optional.of(new ActionSpec(action, steps, produce, timeout,
@@ -304,7 +316,7 @@ public class RecipeActionResolver implements ActionResolver {
         }
         return Optional.of(new ActionSpec(action, steps,
                 BUILTIN_PRODUCE.getOrDefault(action, List.of()),
-                DEFAULT_TIMEOUT,
+                defaultTimeout(action),
                 ActionSource.builtin(action.wireName())));
     }
 
@@ -416,10 +428,15 @@ public class RecipeActionResolver implements ActionResolver {
         return List.copyOf(out);
     }
 
+    /** 动作级默认超时（未在 ci/actions.yml 声明 timeout 时使用）。 */
+    private Duration defaultTimeout(ActionId action) {
+        return DEFAULT_TIMEOUTS.getOrDefault(action, DEFAULT_TIMEOUT);
+    }
+
     /** 支持 "20m" / "30s" / "1h" / 纯数字（分钟）。 */
-    private Duration parseTimeout(Object value) {
+    private Duration parseTimeout(Object value, ActionId action) {
         if (value == null) {
-            return DEFAULT_TIMEOUT;
+            return defaultTimeout(action);
         }
         if (value instanceof Number n) {
             return Duration.ofMinutes(n.longValue());

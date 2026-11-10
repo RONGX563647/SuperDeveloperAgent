@@ -283,6 +283,17 @@ export function listProjects(): Promise<ProjectRow[]> {
   return apiFetch('/api/v1/projects')
 }
 
+/** 项目已配置的环境（对话页环境下拉用，只含真实存在的环境）。 */
+export interface ProjectEnvRow {
+  env: string
+  appUrl: string
+  composeDir: string
+}
+
+export function projectEnvs(projectId: string): Promise<ProjectEnvRow[]> {
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/envs`)
+}
+
 export function decommission(projectId: string): Promise<{ ok: boolean; note: string }> {
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' })
 }
@@ -300,6 +311,27 @@ export function gitDiff(projectId: string, from: string, to: string): Promise<Gi
 
 export function gitSync(projectId: string): Promise<{ ok: boolean; head: string }> {
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/sync`, { method: 'POST' })
+}
+
+/** 切换分支的结果。 */
+export interface GitCheckoutResult {
+  ok: boolean
+  branch: string
+  worktree: string
+  head: string
+}
+
+/**
+ * 切换分支：DIRECT 在用户目录执行，MANAGED 在平台 worktree 执行。
+ * worktree 为空 = 主仓库（DIRECT）或默认 worktree（MANAGED）。
+ */
+export function gitCheckout(
+  projectId: string, branch: string, worktree = ''
+): Promise<GitCheckoutResult> {
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/checkout`, {
+    method: 'POST',
+    body: JSON.stringify({ branch, worktree })
+  })
 }
 
 export interface GitCommitsPage {

@@ -33,31 +33,14 @@ agent:
   # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）
   workspace:
     root: ${AGENT_WORKSPACE_ROOT:./data/workspaces}
-  # 托管项目清单：项目与环境来自配置，不在代码里写死
+  # 流水线：项目与环境来自配置/接入，不在代码里写死
   pipeline:
     # 构建历史落盘（重启可恢复）
     history: true
     # 发布镜像 tag 前缀（正式发布建议改为项目名，如 ruoyi）
     image-prefix: ${AGENT_PIPELINE_IMAGE_PREFIX:ci}
-  projects:
-    items:
-      - id: RY
-        name: RuoYi-Vue-Plus
-        repo-url: ${RY_REPO_URL:https://gitee.com/dromara/RuoYi-Vue-Plus.git}
-        repo-type: gitee
-        type: ruoyi-plus
-        port-range-start: 8080
-        port-range-end: 8099
-        envs:
-          - env: dev
-            app-url: ${RY_DEV_URL:http://127.0.0.1:8080}
-            compose-dir: ${RY_COMPOSE_DIR:/opt/apps/ry}
-          - env: test
-            app-url: ${RY_TEST_URL:http://127.0.0.1:8081}
-            compose-dir: ${RY_COMPOSE_DIR:/opt/apps/ry}
-          - env: prod
-            app-url: ${RY_PROD_URL:http://127.0.0.1:80}
-            compose-dir: ${RY_COMPOSE_DIR:/opt/apps/ry}
+  # 预置项目清单（agent.projects.items）已移除：项目统一走下面的「项目接入」，
+  # 由项目页接入后落库（data/workspaces/_platform/projects.db）。
   # 项目接入
   intake:
     # 工作区边界（shared-root 模式）：配置后目录浏览限制在此边界内，
@@ -82,6 +65,9 @@ agent:
     cpus: "2"
     pids-limit: 512
     user: "1000:1000"                          # 非 root
+    # 依赖缓存卷前缀（按项目隔离）：Maven ~/.m2 与 npm cache 跨构建复用，
+    # 否则每次构建都冷下载依赖，大项目必然撞上 10 分钟构建超时
+    cache-volume-prefix: ${AGENT_SANDBOX_CACHE_VOLUME:agent-cache}
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}

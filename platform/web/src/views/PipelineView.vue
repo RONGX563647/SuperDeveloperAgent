@@ -1,37 +1,41 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
+import { Close, CopyDocument, Download, Link, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import ResizableSplitter from '../components/project/ResizableSplitter.vue'
 import TriggerBar from '../components/pipeline/TriggerBar.vue'
 import EnvStateBand from '../components/pipeline/EnvStateBand.vue'
+import EnvSummary from '../components/pipeline/EnvSummary.vue'
 import HistoryList from '../components/pipeline/HistoryList.vue'
-import ActionPanel from '../components/pipeline/ActionPanel.vue'
 import StageTimeline from '../components/pipeline/StageTimeline.vue'
 import RunLog from '../components/pipeline/RunLog.vue'
-import { getHistory, listDeployTargets, listPipelines, triggerPipeline,
-  type DeployTargetOption, type HistoryItem, type RunView } from '../api/pipeline'
+import {
+  artifactFilePath, deleteHistory, getHistory, getRun, isTerminalStatus, listPipelines, previewPipeline,
+  retryStage, stopLocalDeploy, triggerPipeline,
+  type ArtifactView, type HistoryItem, type PreviewStage, type RunView, type StageView,
+} from '../api/pipeline'
+import { apiBlob } from '../api/http'
 import { gitCommits, listProjects, type GitCommit, type ProjectRow } from '../api/project'
-import { getActionPlan, listActions, requestAction, runAction, type ActionView, type ActionRunView } from '../api/action'
-import { applyChange, confirmChange, getChange } from '../api/change'
-import type { ChangeView } from '../types'
+import { deployConfirm, deployEnvs, deployReplay, type EnvStatus } from '../api/deploy'
 import { appStore } from '../stores/app'
 import { useRunTracker } from '../composables/useRunTracker'
 import { formatDuration, statusLabel, statusTone } from '../utils/status'
+import { envLabel, envShort, formatBytes, pipelineLabel } from '../utils/pipelineLabels'
 
 /**
- * 流水线工作台（重构版）：
+ * 流水线工作台：
  *
- * 修复要点：
- * 1. 运行详情与会话解耦——点击历史不覆盖、不消费；运行中可在列表间来回切换；
- * 2. 日志走增量接口（offset 续传）并追加渲染，不再每秒全量重绘；
- * 3. sha 输入自动清洗 + 禁用原因可读；
- * 4. 历史补齐字段/筛选/键盘可达；重跑常显；
- * 5. 状态中文化 + 统一设计令牌（无硬编码 Element 默认色）；
- * 6. 粘性运行条（状态、耗时、取消、重跑、复制）随页面滚动始终可见；
- * 7. 左右分栏可拖拽；空状态带引导动作。
+ * 一次运行只保留三个决策：项目、环境、提交 + 一个「部署方式」开关。
+ *
+ * 规则：
+ * 1. 环境切换真正生效（env 传给后端）；
+ * 2. 部署方式只有两种：打包成镜像（docker）/ 直接部署（host）；
+ *    - dev 固定「直接部署」：前后端跑在本机，可一键停止后改用 IDE 启动，不提供镜像选项；
+ *    - test 默认「打包成镜像」，可切到直接部署；
+ *    - prod 固定远程服务器发布（不做本机部署）。
+ * 3. 运行前展示真实阶段（后端同一份定义），不再用文案骗人。
  */
 const route = useRoute()
 const router = useRouter()
@@ -39,49 +43,31 @@ const router = useRouter()
 const projectId = computed(() => appStore.projectId)
 const env = computed(() => appStore.env)
 
-/** 环境策略：选环境即套用（流水线 + 部署目标），仍可手动覆盖。 */
 interface EnvStrategy {
   key: string
-  label: string
   pipeline: string
   target: string
-  desc: string
+}
+
+/** 部署方式默认值：dev 本机、test 镜像、prod 远程服务器。 */
+function defaultTarget(key: string): string {
+  if (key === 'dev') return 'host'
+  if (key === 'prod') return 'server'
+  return 'docker'
 }
 
 const ENV_STRATEGIES: EnvStrategy[] = [
-  { key: 'dev', label: '开发环境', pipeline: 'verify', target: 'host', desc: '只构建+测试，不部署（本机直跑）' },
-  { key: 'test', label: '测试环境', pipeline: 'release', target: 'docker', desc: '构建+镜像+部署到本机 Docker' },
-  { key: 'prod', label: '生产环境', pipeline: 'release', target: 'server', desc: '构建+部署到远程服务器' },
+  { key: 'dev', pipeline: 'release', target: 'host' },
+  { key: 'test', pipeline: 'release', target: 'docker' },
+  { key: 'prod', pipeline: 'release', target: 'server' },
 ]
 
-const strategy = computed<EnvStrategy>(() =>
-  ENV_STRATEGIES.find((s) => s.key === env.value) ?? ENV_STRATEGIES[1])
-
-/** 流水线的人类可读名称：release / verify 不再直接暴露给用户。 */
-function pipelineLabel(id: string): string {
-  if (id === 'release') return '发布'
-  if (id === 'verify') return '检查构建'
-  return id
-}
-
-function pipelineDesc(id: string): string {
-  if (id === 'release') return '构建 → 测试 → 镜像 → 部署 → 健康检查'
-  if (id === 'verify') return '只构建 + 测试，不部署（PR 检查）'
-  return '仓库自定义流水线'
-}
-
-/** Header 副标题：反映"当前真正会怎么跑"，而不是只显示环境默认。 */
-const headerSubtitle = computed(() => {
-  const target = deployTargets.value.find((t) => t.target === deployTarget.value)
-  return `${strategy.value.label} · ${pipelineLabel(pipelineId.value)} → ${target?.label ?? deployTarget.value}`
-})
-
 const projects = ref<ProjectRow[]>([])
-/** 项目下拉选项：接口为空时至少保留当前项目，避免出现"空下拉框"。 */
 const projectChoices = computed<Array<{ id: string, name: string }>>(() =>
   projects.value.length
     ? projects.value.map((p) => ({ id: p.id, name: p.name }))
     : [{ id: projectId.value, name: projectId.value }])
+
 const commits = ref<GitCommit[]>([])
 const commitsLoading = ref(false)
 
@@ -91,39 +77,241 @@ const pipelineId = ref('')
 const sha = ref('')
 const triggerBusy = ref(false)
 const pipelinesLoading = ref(false)
-/** 部署目标（方案 C：平台部署器，运行时可覆盖 pipeline.yml 的 deploy.target）。 */
-const deployTarget = ref('docker')
-const deployTargets = ref<DeployTargetOption[]>([
-  { target: 'docker', label: '本机 Docker 容器', available: true, detail: '' },
-  { target: 'host', label: '本机直接运行', available: true, detail: '' },
-  { target: 'server', label: '远程服务器', available: false, detail: '未配置' },
-])
+
+const deployTarget = ref(defaultTarget(appStore.env))
+
+const preview = ref<PreviewStage[]>([])
+/** verify 流水线的预览：展示「只检查构建会跑几步、跳过什么」。 */
+const verifyPreview = ref<PreviewStage[]>([])
+const previewLoading = ref(false)
+/** 预览请求序号：提交切换很快时丢弃旧响应，避免"选了 A 却显示 B 的命令"。 */
+let previewSeq = 0
+
+/** 本次要执行的动作：发布 / 只检查构建。 */
+const action = ref<'release' | 'verify'>('release')
+
+const envRows = ref<EnvStatus[]>([])
+const envsLoading = ref(false)
 
 const history = ref<HistoryItem[]>([])
 const historyLoading = ref(false)
+/** 是否还有更早的历史可加载（上一页返回满一页即认为还有）。 */
+const historyHasMore = ref(false)
+const HISTORY_PAGE = 50
 
-const actions = ref<ActionView[]>([])
-const actionsLoading = ref(false)
-const actionBusy = ref('')
-const actionResult = shallowRef<ActionRunView | null>(null)
+const localStopping = ref(false)
+
+/** 从失败阶段继续：重试进行中。 */
+const retrying = ref(false)
+
+/** 两次运行对比弹窗。 */
+const compareOpen = ref(false)
+const compareLoading = ref(false)
+const compareCurrent = ref<RunView | null>(null)
+const comparePrev = ref<RunView | null>(null)
 
 const leftPct = ref(34)
 const topError = ref('')
 
+/** 当前右侧查看的运行来自哪次触发/哪条历史（运行详情本身不带 env/pipeline）。 */
+const activeMeta = ref<{ env: string, pipelineId: string, sha: string } | null>(null)
+
 const {
   run, runId, loading: runLoading, errorText, startedAt, running,
   open: openRun, attach, cancel, clear,
-} = useRunTracker({ onFinished: () => void loadHistory() })
+} = useRunTracker({ onFinished: () => { void loadHistory(); void loadEnvs() } })
 
-// L3 确认-执行闭环
-const changeDialog = ref(false)
-const change = ref<ChangeView | null>(null)
-const changePassword = ref('')
-const confirmToken = ref<string | null>(null)
-const changeBusy = ref(false)
+/** 当前查看运行所属环境在「设置 → 项目环境」里的状态（用于展示固化脚本版本）。 */
+const activeEnvRow = computed(() => {
+  const target = activeMeta.value?.env ?? env.value
+  return envRows.value.find((row) => row.env === target)
+})
+
+/** 本次运行的流水线定义来自哪里（Agent 固化脚本 / 仓库 / 自动生成）。 */
+const definitionSourceLabel = computed(() => {
+  const source = run.value?.meta?.definitionSource
+  if (source === 'RECIPE') return '已固化脚本'
+  if (source === 'REPO') return '仓库定义'
+  if (source === 'PLATFORM') return '平台定义'
+  if (source === 'GENERATED') return '自动生成'
+  return ''
+})
+
+/** 定义来自固化脚本时，展示当前生效的 vN（证据运行 id 放在 title 里）。 */
+const activeRecipeVersion = computed(() =>
+  run.value?.meta?.definitionSource === 'RECIPE' ? activeEnvRow.value?.recipeVersion ?? 0 : 0)
+
+/* ---------------------------------------------------------------- 计算属性 */
+
+const envModel = computed({
+  get: () => env.value,
+  set: (value: string) => applyEnv(value),
+})
+
+const currentEnvRow = computed(() => envRows.value.find((row) => row.env === env.value))
+
+const shaValid = computed(() => /^[0-9a-f]{7,40}$/.test(sha.value))
 
 const lastGoodSha = computed(() =>
-  history.value.find((h) => h.status === 'SUCCEEDED')?.gitSha ?? '')
+  history.value.find((h) => h.status === 'SUCCEEDED'
+    && h.pipelineId === 'release'
+    && h.env === env.value)?.gitSha ?? '')
+
+const headerSubtitle = computed(() => {
+  const parts = [envLabel(env.value), pipelineLabel(pipelineId.value)]
+  if (preview.value.length) parts.push(`${preview.value.length} 个阶段`)
+  return parts.join(' · ')
+})
+
+const runHint = computed(() => {
+  if (!pipelines.value.length) {
+    return '没有可用的流水线定义：到项目页「生成流水线定义」后刷新'
+  }
+  if (!shaValid.value) return '提交需为 7–40 位十六进制（可直接粘贴完整 sha）'
+  if (!preview.value.length) return '正在读取本次会执行的阶段…'
+  return ''
+})
+
+const primaryLabel = computed(() => {
+  if (env.value === 'prod') return '发布到生产'
+  if (env.value === 'dev') return '启动本机前后端'
+  if (deployTarget.value === 'host') return '本机部署'
+  if (currentEnvRow.value?.recipeVersion) return `重放到${envShort(env.value)}环境`
+  return `打包并部署到${envShort(env.value)}环境`
+})
+
+/** dev 固定本机、prod 固定服务器：只有 test 需要选镜像/直接部署。 */
+const showModeSwitch = computed(() => env.value === 'test')
+
+const modeNote = computed(() => {
+  if (env.value === 'dev') return '开发环境固定本机运行：后端 jar + 前端 dist，不打镜像'
+  if (deployTarget.value === 'host') return '前后端直接跑在本机（后端 jar + 前端 dist）'
+  return '构建镜像并在本机 Docker 运行'
+})
+
+/** 最近一次 dev 本机部署的前后端端口（来自 run 产物的 meta）。 */
+const localDeployInfo = computed(() => {
+  const dep = (run.value?.artifacts ?? []).find(
+    (a) => a.kind === 'deployment' && String(a.meta?.target ?? '') === 'host')
+  if (!dep) return null
+  return {
+    backend: Number(dep.meta?.backendPort ?? 0),
+    frontend: Number(dep.meta?.frontendPort ?? 0),
+    endpoint: dep.ref,
+  }
+})
+
+const localHint = computed(() => {
+  const info = localDeployInfo.value
+  if (info && info.backend) {
+    return `本机运行：后端 127.0.0.1:${info.backend}`
+      + (info.frontend ? ` · 前端 127.0.0.1:${info.frontend}` : '')
+      + '（可在 IDE 启动前先停止）'
+  }
+  return '平台托管的本机前后端可随时停止，之后用 IDE 启动'
+})
+
+/** dev 本机部署成功后的「打开前端 / 后端」入口（以产物 meta 为准，不依赖左侧当前环境）。 */
+const localLinks = computed<Array<{ label: string, url: string }>>(() => {
+  const info = localDeployInfo.value
+  if (!info) return []
+  const links: Array<{ label: string, url: string }> = []
+  if (info.frontend) links.push({ label: '打开前端', url: `http://127.0.0.1:${info.frontend}` })
+  if (info.backend) links.push({ label: '打开后端', url: `http://127.0.0.1:${info.backend}` })
+  return links
+})
+
+/** 失败阶段（取最后一个失败/超时的阶段）——失败卡片据此展示原因与重试入口。 */
+const failedStage = computed<StageView | null>(() => {
+  const stages = run.value?.stages ?? []
+  for (let i = stages.length - 1; i >= 0; i -= 1) {
+    if (stages[i].status === 'FAILED' || stages[i].status === 'TIMEOUT') return stages[i]
+  }
+  return null
+})
+
+/** 失败原因涉及端口占用时，给出可操作的提示。 */
+const portHint = computed(() => {
+  const stage = failedStage.value
+  if (!stage) return ''
+  const text = `${stage.errorCode} ${stage.summary}`
+  if (/port|端口|EADDRINUSE|address already in use/i.test(text)) {
+    return '端口被占用：先停掉占用进程（或「停止本机服务」），再重试该阶段'
+  }
+  return ''
+})
+
+/** 「对比上次」的基线：同项目 + 流水线 + 环境的上一条终态运行。 */
+const compareBaseline = computed<HistoryItem | null>(() => {
+  if (!run.value || !activeMeta.value || running.value) return null
+  const currentRunId = run.value.runId
+  const current = history.value.find((h) => h.runId === currentRunId)
+  const pool = history.value.filter((h) =>
+    h.runId !== currentRunId
+    && h.env === activeMeta.value?.env
+    && h.pipelineId === activeMeta.value?.pipelineId
+    && isTerminalStatus(h.status)
+    && (!current || h.createdAt < current.createdAt))
+  return pool[0] ?? null
+})
+
+interface StageDiff {
+  id: string
+  prevStatus: string
+  curStatus: string
+  prevMs: number
+  curMs: number
+  deltaMs: number
+}
+
+/** 阶段耗时/状态对比（按阶段 id 对齐）。 */
+const stageDiffs = computed<StageDiff[]>(() => {
+  const prev = comparePrev.value
+  const cur = compareCurrent.value
+  if (!prev || !cur) return []
+  const ids = [...new Set([...prev.stages.map((s) => s.id), ...cur.stages.map((s) => s.id)])]
+  return ids.map((id) => {
+    const p = prev.stages.find((s) => s.id === id)
+    const c = cur.stages.find((s) => s.id === id)
+    return {
+      id,
+      prevStatus: p?.status ?? '—',
+      curStatus: c?.status ?? '—',
+      prevMs: p?.durationMs ?? 0,
+      curMs: c?.durationMs ?? 0,
+      deltaMs: (c?.durationMs ?? 0) - (p?.durationMs ?? 0),
+    }
+  })
+})
+
+/** 产物差异：按 kind + ref 对齐，得到新增 / 消失。 */
+const artifactDiff = computed<{ added: ArtifactView[], removed: ArtifactView[] }>(() => {
+  const prev = comparePrev.value
+  const cur = compareCurrent.value
+  if (!prev || !cur) return { added: [], removed: [] }
+  const key = (a: ArtifactView): string => `${a.kind}|${a.ref}`
+  const prevKeys = new Set(prev.artifacts.map(key))
+  const curKeys = new Set(cur.artifacts.map(key))
+  return {
+    added: cur.artifacts.filter((a) => !prevKeys.has(key(a))),
+    removed: prev.artifacts.filter((a) => !curKeys.has(key(a))),
+  }
+})
+
+/** dev 固定本机运行，停止入口始终可见（不依赖当前选中的部署方式）。 */
+const canStopLocal = computed(() => env.value === 'dev')
+
+const canRun = computed(() =>
+  !!pipelineId.value && shaValid.value && !triggerBusy.value && !pipelinesLoading.value)
+
+const runDuration = computed(() => {
+  if (!run.value) return ''
+  if (!running.value) {
+    const total = run.value.stages.reduce((sum, s) => sum + s.durationMs, 0)
+    return formatDuration(total)
+  }
+  return formatDuration(Math.max(0, nowTick.value - startedAt.value))
+})
 
 /* ---------------------------------------------------------------- 数据加载 */
 
@@ -134,11 +322,7 @@ async function loadPipelines(): Promise<void> {
     engine.value = data.engine
     pipelines.value = data.pipelines ?? []
     if (!pipelines.value.includes(pipelineId.value)) {
-      // 优先用"环境策略"推荐的流水线（开发=检查构建，测试/生产=发布）
-      const preferred = strategy.value.pipeline
-      pipelineId.value = pipelines.value.includes(preferred)
-        ? preferred
-        : pipelines.value[0] ?? ''
+      choosePipeline()
     }
   } catch (e) {
     topError.value = `加载流水线失败：${e instanceof Error ? e.message : String(e)}`
@@ -149,43 +333,73 @@ async function loadPipelines(): Promise<void> {
   }
 }
 
-async function loadHistory(): Promise<void> {
+/** 按环境策略选默认流水线（用户仍可在高级选项里改）。 */
+function choosePipeline(): void {
+  const strategy = ENV_STRATEGIES.find((s) => s.key === env.value) ?? ENV_STRATEGIES[1]
+  if (pipelines.value.includes(strategy.pipeline)) {
+    pipelineId.value = strategy.pipeline
+  } else if (pipelines.value.length) {
+    pipelineId.value = pipelines.value[0]
+  }
+}
+
+async function loadPreview(): Promise<void> {
+  if (!pipelineId.value || !projectId.value) {
+    preview.value = []
+    verifyPreview.value = []
+    return
+  }
+  previewLoading.value = true
+  const seq = ++previewSeq
+  try {
+    // 发布 / 只检查构建两份预览一起取：动作卡片要显示各自步数与是否产镜像
+    // 带 sha：仓库定义随提交变化，预览要按"这次会检出的提交"解析
+    const [release, verify] = await Promise.all([
+      previewPipeline(projectId.value, pipelineId.value, env.value, sha.value).catch(() => null),
+      previewPipeline(projectId.value, 'verify', env.value, sha.value).catch(() => null),
+    ])
+    if (seq !== previewSeq) return
+    preview.value = release?.stages ?? []
+    verifyPreview.value = verify?.stages ?? []
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+async function loadEnvs(): Promise<void> {
+  envsLoading.value = true
+  try {
+    envRows.value = await deployEnvs(projectId.value)
+  } catch {
+    envRows.value = []
+  } finally {
+    envsLoading.value = false
+  }
+}
+
+/** 构建历史：reset=true 重新取第一页，否则按已加载条数往后翻。 */
+async function loadHistory(reset = true): Promise<void> {
+  if (historyLoading.value && !reset) return
   historyLoading.value = true
   try {
-    history.value = await getHistory(projectId.value)
+    const offset = reset ? 0 : history.value.length
+    const page = await getHistory(projectId.value, offset, HISTORY_PAGE)
+    history.value = reset ? page : [...history.value, ...page]
+    historyHasMore.value = page.length === HISTORY_PAGE
   } catch {
-    history.value = []
+    if (reset) {
+      history.value = []
+      historyHasMore.value = false
+    }
   } finally {
     historyLoading.value = false
   }
 }
 
-async function loadActions(): Promise<void> {
-  actionsLoading.value = true
-  try {
-    actions.value = await listActions(projectId.value, env.value)
-  } catch {
-    actions.value = []
-  } finally {
-    actionsLoading.value = false
-  }
+function loadMoreHistory(): void {
+  void loadHistory(false)
 }
 
-async function loadDeployTargets(): Promise<void> {
-  try {
-    const list = await listDeployTargets()
-    if (list.length) {
-      deployTargets.value = list
-      const preferred = list.find((t) => t.target === strategy.value.target && t.available)
-      const current = list.find((t) => t.target === deployTarget.value && t.available)
-      deployTarget.value = (preferred ?? current ?? list.find((t) => t.available))?.target ?? 'docker'
-    }
-  } catch {
-    // 端点不可用时保留本地默认（docker）
-  }
-}
-
-/** 项目列表（Header 选择器）；当前项目不在列表时保留全局值。 */
 async function loadProjects(): Promise<void> {
   try {
     projects.value = await listProjects()
@@ -197,13 +411,11 @@ async function loadProjects(): Promise<void> {
   }
 }
 
-/** 提交列表：用 git 选提交，而不是让用户手敲 sha。 */
 async function loadCommits(): Promise<void> {
   commitsLoading.value = true
   try {
     const page = await gitCommits(projectId.value, 30)
     commits.value = page.commits
-    // 当前 sha 不在最近提交里（或为空）时，默认选最新一条
     if (page.commits.length && !page.commits.some((c) => c.sha === sha.value)) {
       sha.value = page.commits[0].sha
     }
@@ -214,105 +426,317 @@ async function loadCommits(): Promise<void> {
   }
 }
 
-/** 切换环境：套用该环境的流水线 + 部署目标策略。 */
 function applyEnv(key: string): void {
   if (!ENV_STRATEGIES.some((s) => s.key === key)) return
   appStore.env = key
-  const s = ENV_STRATEGIES.find((x) => x.key === key)!
-  if (pipelines.value.includes(s.pipeline)) {
-    pipelineId.value = s.pipeline
-  }
-  const target = deployTargets.value.find((t) => t.target === s.target)
-  if (!target || target.available) {
-    deployTarget.value = s.target
-  }
+  // 切环境时部署方式跟着换默认值：dev 本机、test 镜像、prod 远程服务器
+  deployTarget.value = defaultTarget(key)
+  choosePipeline()
 }
 
 function applyProject(id: string): void {
   appStore.projectId = id
   sha.value = ''
-  // 项目写进 URL：刷新/分享链接不会掉回默认项目
   void router.replace({ query: { ...route.query, projectId: id } })
 }
 
-watch([projectId, env], () => {
-  void loadPipelines()
-  void loadActions()
-  void loadHistory()
-  void loadDeployTargets()
-  void loadCommits()
-})
+/* ---------------------------------------------------------------- 触发 */
 
-onMounted(async () => {
-  // ?projectId= 优先：从项目页/书签/分享链接进来时按 URL 定位项目
-  const fromQuery = typeof route.query.projectId === 'string' ? route.query.projectId : ''
-  if (fromQuery) {
-    appStore.projectId = fromQuery
+function attachRun(result: { runId: string, status: string },
+                   meta: { env: string, pipelineId: string, sha: string }): void {
+  const initial: RunView = {
+    runId: result.runId,
+    status: result.status,
+    stages: [],
+    artifacts: [],
+    log: '',
   }
-  await loadProjects()
-  await Promise.all([loadPipelines(), loadActions(), loadHistory(), loadDeployTargets(), loadCommits()])
-  const fromUrl = typeof route.query.runId === 'string' ? route.query.runId : ''
-  if (fromUrl) void openRun(fromUrl)
-})
+  attach(result.runId, initial)
+  activeMeta.value = meta
+  syncUrl(result.runId)
+  void loadHistory()
+  void loadEnvs()
+}
 
-/* ---------------------------------------------------------------- 触发 / 查阅 */
+async function triggerSelected(): Promise<void> {
+  const result = await triggerPipeline(
+    pipelineId.value, projectId.value, sha.value, deployTarget.value, env.value)
+  attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: sha.value })
+  ElMessage.success('已触发运行')
+}
 
-async function doTrigger(): Promise<void> {
-  if (!pipelineId.value || !/^[0-9a-f]{7,40}$/.test(sha.value) || triggerBusy.value) return
+async function replayEnv(): Promise<void> {
+  const result = await deployReplay(projectId.value, env.value, sha.value)
+  attachRun(result, { env: env.value, pipelineId: 'release', sha: sha.value })
+  ElMessage.success('已按环境脚本重放')
+}
+
+/** 生产发布：测试证据 + 一次性确认令牌（与后端 DeployGate 同一套规则）。 */
+async function promoteProd(): Promise<void> {
+  const plan = await deployConfirm(projectId.value, 'prod', sha.value)
+  if (!plan.allowed) {
+    ElMessage.warning(plan.reason ?? '测试环境还没有成功案例')
+    return
+  }
+  const evidence = plan.evidence
+  const ok = await ElMessageBox.confirm(
+    `即将发布提交 ${sha.value.slice(0, 7)} 到生产环境。\n`
+    + `依据：测试环境 v${evidence?.version ?? '?'} · 证据运行 ${evidence?.runId ?? '?'}`
+    + `（${evidence?.status ?? '?'}）\n这是高危操作，确认后立即执行。`,
+    '确认发布到生产',
+    { confirmButtonText: '确认发布', cancelButtonText: '取消', type: 'warning' },
+  ).then(() => true).catch(() => false)
+  if (!ok) {
+    ElMessage.info('已取消')
+    return
+  }
+  const result = await deployReplay(
+    projectId.value, 'prod', sha.value, plan.confirmToken)
+  attachRun(result, { env: 'prod', pipelineId: 'release', sha: sha.value })
+  ElMessage.success('已触发生产发布')
+}
+
+async function doPrimary(): Promise<void> {
+  if (!canRun.value || triggerBusy.value) return
   triggerBusy.value = true
   topError.value = ''
   try {
-    const result = await triggerPipeline(
-      pipelineId.value, projectId.value, sha.value, deployTarget.value)
-    const initial: RunView = {
-      runId: result.runId,
-      status: result.status,
-      stages: [],
-      artifacts: [],
-      log: '',
+    if (env.value === 'prod') {
+      await promoteProd()
+    } else if (env.value === 'dev') {
+      // dev 固定本机：当前工作区代码直接构建运行，不走固化脚本重放（脚本里的 docker 步骤不适用）
+      await triggerSelected()
+    } else if (deployTarget.value === 'host') {
+      await triggerSelected()
+    } else if (currentEnvRow.value?.recipeVersion) {
+      await replayEnv()
+    } else {
+      await triggerSelected()
     }
-    attach(result.runId, initial)
-    syncUrl(result.runId)
-    ElMessage.success('已触发运行')
-    void loadHistory()
   } catch (e) {
-    topError.value = `触发流水线失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `触发失败：${e instanceof Error ? e.message : String(e)}`
   } finally {
     triggerBusy.value = false
   }
 }
 
+/** 只做构建检查（不部署）：dev 想验证代码能编过时用。 */
+async function doVerify(): Promise<void> {
+  if (triggerBusy.value || !shaValid.value) return
+  triggerBusy.value = true
+  topError.value = ''
+  try {
+    const result = await triggerPipeline(
+      'verify', projectId.value, sha.value, deployTarget.value, env.value)
+    attachRun(result, { env: env.value, pipelineId: 'verify', sha: sha.value })
+    ElMessage.success('已触发检查构建')
+  } catch (e) {
+    topError.value = `触发失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    triggerBusy.value = false
+  }
+}
+
+/** 主按钮：按当前选择分发到「发布」或「只检查构建」。 */
+async function doAction(): Promise<void> {
+  if (action.value === 'verify') {
+    await doVerify()
+    return
+  }
+  await doPrimary()
+}
+
+/** 从失败阶段继续：后端复用失败现场，只重跑该阶段及其后续。 */
+async function retryFailedStage(): Promise<void> {
+  const stage = failedStage.value
+  const current = run.value
+  if (!stage || !current || retrying.value) return
+  retrying.value = true
+  topError.value = ''
+  try {
+    const res = await retryStage(current.runId, stage.id)
+    if (!res.retrying) {
+      ElMessage.warning(res.message || '该阶段无法重试，请整条重跑')
+      return
+    }
+    ElMessage.success(res.message || '已从失败阶段继续')
+    // 后端复用同一个 runId，重新接入轮询即可看到后续阶段
+    await openRun(current.runId)
+  } catch (e) {
+    topError.value = `重试失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    retrying.value = false
+  }
+}
+
+/** 复制失败信息：阶段、退出码、摘要、端口提示，方便贴到聊天/工单里。 */
+function copyFailure(): void {
+  const stage = failedStage.value
+  const current = run.value
+  if (!stage || !current) return
+  const lines = [
+    `运行 ${current.runId} · 阶段 ${stage.id} 失败`,
+    `状态 ${stage.status} · 退出码 ${stage.exitCode}`
+      + (stage.errorCode ? ` · ${stage.errorCode}` : ''),
+    stage.summary,
+    portHint.value,
+  ].filter(Boolean)
+  void copyText(lines.join('\n'), '失败信息')
+}
+
+/** 打开「与上一次运行对比」：拉两次运行的阶段/产物（不带日志）。 */
+async function openCompare(): Promise<void> {
+  const base = compareBaseline.value
+  const current = run.value
+  if (!base || !current) {
+    ElMessage.info('没有可对比的上一次运行')
+    return
+  }
+  compareOpen.value = true
+  compareLoading.value = true
+  comparePrev.value = null
+  compareCurrent.value = null
+  try {
+    const [prev, cur] = await Promise.all([
+      getRun(base.runId, false),
+      getRun(current.runId, false),
+    ])
+    comparePrev.value = prev
+    compareCurrent.value = cur
+  } catch (e) {
+    compareOpen.value = false
+    topError.value = `对比失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    compareLoading.value = false
+  }
+}
+
+/** 下载文件产物（jar / dist 等）：走带令牌的 apiBlob，再触发浏览器保存。 */
+async function downloadArtifact(a: ArtifactView, index: number): Promise<void> {
+  const current = run.value
+  if (!current || a.kind !== 'file') return
+  try {
+    const blob = await apiBlob(artifactFilePath(current.runId, index))
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = a.ref.split(/[\\/]/).pop() || `artifact-${index + 1}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error(`下载失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
+/** 镜像产物的本机启动命令（优先用本地镜像地址）。 */
+function dockerRunCommand(a: ArtifactView): string {
+  const image = String(a.meta?.localImage ?? '') || a.ref
+  return `docker run --rm ${image}`
+}
+
+/** 对比弹窗里的耗时差（正数变慢、负数变快）。 */
+function deltaLabel(ms: number): string {
+  if (!ms) return '—'
+  return `${ms > 0 ? '+' : '-'}${formatDuration(Math.abs(ms))}`
+}
+
+/** 停掉平台托管的 dev 前后端，把运行权交还 IDE。 */
+async function stopLocalServices(): Promise<void> {
+  localStopping.value = true
+  try {
+    const result = await stopLocalDeploy(projectId.value, 'dev')
+    ElMessage[result.stopped ? 'success' : 'info'](result.message || '已处理')
+  } catch (e) {
+    topError.value = `停止本机服务失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    localStopping.value = false
+  }
+}
+
+/* ---------------------------------------------------------------- 历史 / 详情 */
+
 function openedRun(item: HistoryItem): void {
+  activeMeta.value = { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha }
   void openRun(item.runId, { startedAt: item.createdAt })
-  sha.value = item.gitSha.slice(0, 8)
-  pipelineId.value = item.pipelineId
   syncUrl(item.runId)
 }
 
-/** 环境状态带触发了运行：切到对应环境并打开该 run 的详情。 */
-function onEnvStarted(id: string, envKey: string): void {
-  if (envKey) appStore.env = envKey
-  void openRun(id)
-  syncUrl(id)
-  void loadHistory()
+async function rerun(item: HistoryItem): Promise<void> {
+  triggerBusy.value = true
+  topError.value = ''
+  try {
+    const result = await triggerPipeline(
+      item.pipelineId, projectId.value, item.gitSha, deployTarget.value, item.env)
+    attachRun(result, { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha })
+    ElMessage.success('已用该提交重跑')
+  } catch (e) {
+    topError.value = `重跑失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    triggerBusy.value = false
+  }
 }
 
-async function rerun(item: HistoryItem): Promise<void> {
-  sha.value = item.gitSha.slice(0, 8)
-  pipelineId.value = item.pipelineId
-  await doTrigger()
+/** 删除一条构建历史：只删记录（含磁盘上的 run yml），不动仓库与已构建镜像。 */
+async function handleDeleteHistory(item: HistoryItem): Promise<void> {
+  const label = `#${item.seq || '—'} · ${item.gitSha.slice(0, 8)}`
+  try {
+    await ElMessageBox.confirm(
+      `删除构建历史 ${label}？只删除记录，不影响代码和已构建的镜像。`,
+      '删除历史',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await deleteHistory(item.runId)
+    if (!res.deleted) {
+      ElMessage.warning(res.message || '这条运行不能删除')
+      return
+    }
+    // 正看着被删的那次运行：关掉详情，避免轮询已删除的记录
+    if (runId.value === item.runId) closeRun()
+    await loadHistory()
+    ElMessage.success('已删除该条构建历史')
+  } catch (e) {
+    topError.value = `删除失败：${e instanceof Error ? e.message : String(e)}`
+  }
 }
 
 async function doCancel(): Promise<void> {
   if (await cancel()) ElMessage.warning('已请求取消')
 }
 
+/** 运行条上的「重跑」：重跑"正在看的这次"，而不是当前表单里选的那次。 */
+async function rerunActive(): Promise<void> {
+  const meta = activeMeta.value
+  if (!meta) {
+    await doPrimary()
+    return
+  }
+  triggerBusy.value = true
+  topError.value = ''
+  try {
+    const result = await triggerPipeline(
+      meta.pipelineId, projectId.value, meta.sha, deployTarget.value, meta.env)
+    attachRun(result, { env: meta.env, pipelineId: meta.pipelineId, sha: meta.sha })
+    ElMessage.success('已用相同参数重跑')
+  } catch (e) {
+    topError.value = `重跑失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    triggerBusy.value = false
+  }
+}
+
 function closeRun(): void {
   clear()
+  activeMeta.value = null
   syncUrl('')
 }
 
-/** 运行 id 同步到 URL，刷新/分享可恢复（替代"运行状态只活在内存里"）。 */
+/** 运行 id 同步到 URL，刷新/分享可恢复。 */
 function syncUrl(id: string): void {
   const query = { ...route.query }
   if (id) query.runId = id
@@ -320,80 +744,8 @@ function syncUrl(id: string): void {
   void router.replace({ query })
 }
 
-/* ---------------------------------------------------------------- 动作 */
-
-async function runActionNow(action: string): Promise<void> {
-  actionBusy.value = action
-  actionResult.value = null
-  try {
-    const plan = await getActionPlan(projectId.value, action)
-    const commands = plan.commands.length ? plan.commands.join('\n') : '（无命令）'
-    const ok = await ElMessageBox.confirm(
-      `将执行：\n${commands}`,
-      '执行确认',
-      { confirmButtonText: '执行', cancelButtonText: '取消', type: 'warning' },
-    ).then(() => true).catch(() => false)
-    if (!ok) return
-    const result = await runAction(projectId.value, env.value, action)
-    actionResult.value = result
-    ElMessage.success(`${action} 执行完毕：${statusLabel(result.status)}`)
-  } catch (e) {
-    ElMessage.error(`执行失败：${e instanceof Error ? e.message : String(e)}`)
-  } finally {
-    actionBusy.value = ''
-  }
-}
-
-async function requestActionChange(action: string): Promise<void> {
-  actionBusy.value = action
-  try {
-    const result = await requestAction(projectId.value, env.value, action)
-    change.value = await getChange(result.changeId)
-    changePassword.value = ''
-    confirmToken.value = null
-    changeDialog.value = true
-  } catch (e) {
-    ElMessage.error(`登记失败：${e instanceof Error ? e.message : String(e)}`)
-  } finally {
-    actionBusy.value = ''
-  }
-}
-
-async function doConfirmChange(): Promise<void> {
-  if (!change.value || confirmToken.value) return
-  changeBusy.value = true
-  try {
-    const result = await confirmChange(
-      change.value.changeId,
-      change.value.highRisk ? changePassword.value : undefined,
-    )
-    confirmToken.value = result.confirmToken
-    ElMessage.success('已确认，令牌 5 分钟内有效')
-  } catch (e) {
-    ElMessage.error(`确认失败：${e instanceof Error ? e.message : String(e)}`)
-  } finally {
-    changeBusy.value = false
-  }
-}
-
-async function doApplyChange(): Promise<void> {
-  if (!change.value || !confirmToken.value) return
-  changeBusy.value = true
-  try {
-    const result = await applyChange(change.value.changeId, confirmToken.value)
-    ElMessage.success(`变更执行完毕：${statusLabel(result.status)}`)
-    changeDialog.value = false
-    void loadHistory()
-  } catch (e) {
-    ElMessage.error(`执行失败：${e instanceof Error ? e.message : String(e)}`)
-  } finally {
-    changeBusy.value = false
-  }
-}
-
 /* ---------------------------------------------------------------- 生命周期 */
 
-/** 运行计时：运行中每秒刷新（否则 "运行中 3.2s" 会定格）。 */
 const nowTick = ref(Date.now())
 let tickTimer: ReturnType<typeof setInterval> | null = null
 
@@ -406,18 +758,85 @@ watch(running, (value) => {
   }
 }, { immediate: true })
 
+watch(projectId, () => {
+  sha.value = ''
+  void Promise.all([
+    loadPipelines(), loadHistory(), loadEnvs(), loadCommits(),
+  ]).then(() => loadPreview())
+})
+
+watch(pipelineId, () => void loadPreview())
+
+// 提交变化会改变"仓库定义"（ci/pipeline.yml 随提交），预览必须重取
+watch(sha, () => void loadPreview())
+
+watch(env, () => {
+  // 环境也可能从侧栏/其他页面切换，不只是点环境胶囊
+  deployTarget.value = defaultTarget(env.value)
+  choosePipeline()
+  void loadEnvs()
+  void loadHistory()
+  void loadPreview()
+})
+
+onMounted(async () => {
+  const fromQuery = typeof route.query.projectId === 'string' ? route.query.projectId : ''
+  if (fromQuery) appStore.projectId = fromQuery
+  await loadProjects()
+  await Promise.all([
+    loadPipelines(), loadHistory(), loadEnvs(), loadCommits(),
+  ])
+  await loadPreview()
+  const fromUrl = typeof route.query.runId === 'string' ? route.query.runId : ''
+  if (fromUrl) {
+    const item = history.value.find((h) => h.runId === fromUrl)
+    if (item) activeMeta.value = { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha }
+    void openRun(fromUrl)
+  } else if (history.value.length) {
+    // 打开页面就展示最近一次"有内容"的运行：空白详情页对"看看刚才跑成什么样"毫无帮助
+    const latest = history.value.find((h) => h.stageCount > 0) ?? history.value[0]
+    openedRun(latest)
+  }
+})
+
 onBeforeUnmount(() => {
   if (tickTimer !== null) clearInterval(tickTimer)
 })
 
-const runDuration = computed(() => {
-  if (!run.value) return ''
-  if (!running.value) {
-    return formatDuration(run.value.stages.reduce((sum, s) => sum + s.durationMs, 0))
+/* ---------------------------------------------------------------- 小工具 */
+
+/** 镜像产物附带的可读版本与本地镜像地址；非镜像产物返回 null。 */
+function imageMeta(a: ArtifactView): { version: string, local: string } | null {
+  if (a.kind !== 'image') return null
+  const version = String(a.meta?.version ?? '')
+  const local = String(a.meta?.localImage ?? '')
+  return version || local ? { version, local } : null
+}
+
+function shortDigest(digest: string): string {
+  if (!digest) return '—'
+  return digest.length > 16 ? `${digest.slice(0, 16)}…` : digest
+}
+
+async function copyText(text: string, label: string): Promise<void> {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(`${label}已复制`)
+  } catch {
+    ElMessage.error('复制失败（浏览器未授权剪贴板）')
   }
-  // 依赖 nowTick 触发重算
-  return formatDuration(Math.max(0, nowTick.value - startedAt.value))
-})
+}
+
+async function copyDigest(digest: string): Promise<void> {
+  if (!digest) return
+  try {
+    await navigator.clipboard.writeText(digest)
+    ElMessage.success('digest 已复制')
+  } catch {
+    ElMessage.error('复制失败（浏览器未授权剪贴板）')
+  }
+}
 </script>
 
 <template>
@@ -434,12 +853,11 @@ const runDuration = computed(() => {
     </PageHeader>
 
     <div class="wp-body">
-      <!-- 左：触发 + 历史 + 动作 -->
+      <!-- 左：上下文 + 运行 + 历史 -->
       <div class="wp-left" :style="{ width: `${leftPct}%` }">
         <div class="wp-left-inner">
-          <!-- 上下文：项目 + 环境（环境决定默认策略，可再手动覆盖） -->
           <div class="ctx-bar">
-            <label class="ctx-field">
+            <label class="ctx-project">
               <span class="ctx-label">项目</span>
               <el-select
                 :model-value="projectId" size="default" class="ctx-select"
@@ -452,84 +870,58 @@ const runDuration = computed(() => {
                 />
               </el-select>
             </label>
-            <label class="ctx-field">
-              <span class="ctx-label">环境</span>
-              <el-select
-                :model-value="env" size="default" class="ctx-select env"
-                @update:model-value="applyEnv"
-              >
-                <el-option
-                  v-for="s in ENV_STRATEGIES" :key="s.key"
-                  :label="s.label" :value="s.key"
-                >
-                  <span class="ctx-opt-main">{{ s.label }}</span>
-                  <span class="ctx-opt-desc">{{ s.pipeline === 'verify' ? '只构建+测试' : '构建+部署' }} · {{ s.desc }}</span>
-                </el-option>
-              </el-select>
-            </label>
+            <div class="ctx-env">
+              <span class="ctx-label">
+                环境
+                <span v-if="envsLoading" class="ctx-loading">读取中…</span>
+              </span>
+              <EnvStateBand v-model="envModel" :rows="envRows" :loading="envsLoading" />
+            </div>
           </div>
 
-          <EnvStateBand
-            :project-id="projectId"
-            :sha="sha"
-            :busy="triggerBusy"
-            @started="onEnvStarted"
-          />
-
           <TriggerBar
-            v-model:pipeline-id="pipelineId"
             v-model:sha="sha"
             v-model:deploy-target="deployTarget"
-            :pipelines="pipelines"
-            :engine="engine"
-            :busy="triggerBusy || pipelinesLoading"
-            :last-good-sha="lastGoodSha"
-            :deploy-targets="deployTargets"
+            v-model:action="action"
+            :env-label="envLabel(env)"
+            :primary-label="primaryLabel"
             :commits="commits"
             :commits-loading="commitsLoading"
-            @run="doTrigger"
+            :show-mode-switch="showModeSwitch"
+            :mode-note="modeNote"
+            :local-hint="localHint"
+            :can-stop-local="canStopLocal"
+            :preview="preview"
+            :verify-preview="verifyPreview"
+            :preview-loading="previewLoading"
+            :busy="triggerBusy || pipelinesLoading || localStopping"
+            :last-good-sha="lastGoodSha"
+            :hint="runHint"
+            :can-run="canRun"
+            @run="doAction"
             @refresh-commits="loadCommits"
+            @stop-local="stopLocalServices"
           />
 
           <HistoryList
             class="fill"
             :items="history"
             :active-run-id="runId"
+            :env="env"
             :loading="historyLoading"
+            :has-more="historyHasMore"
             @open="openedRun"
             @rerun="rerun"
+            @delete="handleDeleteHistory"
             @refresh="loadHistory"
+            @more="loadMoreHistory"
           />
 
-          <ActionPanel
-            :actions="actions"
-            :busy-action="actionBusy"
-            :loading="actionsLoading"
-            @run="runActionNow"
-            @request="requestActionChange"
-          />
-
-          <!-- 动作执行结果（状态 + 日志尾部），不再只在 toast 里一闪而过 -->
-          <section v-if="actionResult" class="action-result">
-            <div class="ar-head">
-              <span class="ar-title mono">{{ actionResult.action }}</span>
-              <span class="ar-status" :class="statusTone(actionResult.status)">
-                {{ statusLabel(actionResult.status) }}
-              </span>
-              <span class="ar-meta mono">
-                exit={{ actionResult.exitCode }} · {{ formatDuration(actionResult.durationMs) }}
-              </span>
-              <button type="button" class="ar-close" title="关闭" @click="actionResult = null">
-                <el-icon><Close /></el-icon>
-              </button>
-            </div>
-            <pre v-if="actionResult.logTail" class="ar-log mono">{{ actionResult.logTail }}</pre>
-            <p v-else class="ar-meta">（无输出）</p>
-          </section>
+          <EnvSummary :project-id="projectId" :env="env" />
         </div>
       </div>
 
-      <ResizableSplitter v-model="leftPct" :min="22" :max="55" />
+      <ResizableSplitter v-model="leftPct" :min="24" :max="55" />
 
       <!-- 右：运行详情 -->
       <div class="wp-right">
@@ -539,42 +931,52 @@ const runDuration = computed(() => {
         />
 
         <div v-if="!run && !runLoading" class="run-empty">
-          <div class="re-illus" aria-hidden="true">
-            <svg width="88" height="60" viewBox="0 0 88 60" fill="none">
-              <rect x="6" y="8" width="76" height="44" rx="6" fill="var(--surface-sunken)" />
-              <rect x="14" y="18" width="22" height="4" rx="2" fill="var(--accent)" opacity="0.5" />
-              <rect x="42" y="18" width="22" height="4" rx="2" fill="var(--ink-faint)" opacity="0.35" />
-              <rect x="14" y="28" width="50" height="3" rx="1.5" fill="var(--ink-faint)" opacity="0.25" />
-              <rect x="14" y="36" width="30" height="3" rx="1.5" fill="var(--ink-faint)" opacity="0.2" />
-            </svg>
-          </div>
-          <p class="re-title">还没有选中运行</p>
+          <p class="re-title">选择提交后点「{{ primaryLabel }}」</p>
           <p class="re-sub">
-            {{ pipelines.length
-              ? '在上方填入提交 sha 触发一次，或从左侧历史点开某次运行'
-              : '还没有可用的流水线定义：刷新一次，或到项目页重新生成（平台会按仓库结构自动生成）' }}
+            运行详情会实时显示阶段、产物与日志；也可以从左侧历史打开一次旧运行。
           </p>
           <button
             type="button" class="re-btn"
-            :disabled="!pipelines.length || (!lastGoodSha && !sha)"
-            @click="sha = sha || lastGoodSha.slice(0, 8); doTrigger()"
+            :disabled="!canRun"
+            @click="doPrimary"
           >
-            <el-icon><VideoPlay /></el-icon> 运行最近提交
+            <el-icon><VideoPlay /></el-icon> {{ primaryLabel }}
           </button>
         </div>
 
         <template v-else>
-          <!-- 粘性运行条 -->
           <div class="run-bar" :class="statusTone(run?.status ?? '')">
             <span class="rb-status">
               <span class="rb-dot" /> {{ run ? statusLabel(run.status) : '加载中' }}
             </span>
-            <span class="rb-id mono" :title="runId">{{ runId.slice(0, 12) }}</span>
+            <span v-if="activeMeta" class="rb-tag">{{ envShort(activeMeta.env) }}</span>
+            <span v-if="activeMeta" class="rb-tag plain">{{ pipelineLabel(activeMeta.pipelineId) }}</span>
+            <span v-if="activeMeta" class="rb-sha mono">{{ activeMeta.sha.slice(0, 8) }}</span>
+            <span
+              v-if="definitionSourceLabel" class="rb-tag plain"
+              :title="run?.meta?.definitionNote"
+            >{{ definitionSourceLabel }}</span>
+            <span
+              v-if="activeRecipeVersion" class="rb-tag plain"
+              :title="`证据运行 ${activeEnvRow?.evidenceRunId || '—'}`"
+            >v{{ activeRecipeVersion }}</span>
+            <span
+              v-if="run?.meta?.bindingId" class="rb-tag plain mono"
+              :title="`环境绑定 ${run.meta.bindingId}（确认人 ${run.meta.confirmedBy || '—'}）`"
+            >binding</span>
+            <span v-if="run?.meta?.actor" class="rb-tag plain">{{ run.meta.actor }}</span>
             <span v-if="run" class="rb-meta">{{ run.stages.length }} 阶段 · {{ run.artifacts.length }} 产物 · {{ runDuration }}</span>
             <span v-if="errorText" class="rb-err">{{ errorText }}</span>
             <div class="rb-actions">
+              <button
+                v-if="compareBaseline" type="button" class="rb-btn"
+                :disabled="running" title="与上一次同环境运行对比阶段耗时和产物"
+                @click="openCompare"
+              >
+                对比上次
+              </button>
               <button v-if="running" type="button" class="rb-btn warn" @click="doCancel">取消运行</button>
-              <button type="button" class="rb-btn" :disabled="running || !sha" @click="doTrigger">
+              <button type="button" class="rb-btn" :disabled="running" @click="rerunActive">
                 <el-icon><RefreshRight /></el-icon> 重跑
               </button>
               <button type="button" class="rb-btn icon" title="关闭详情" @click="closeRun">
@@ -583,7 +985,47 @@ const runDuration = computed(() => {
             </div>
           </div>
 
+          <!-- 失败卡片：失败阶段 / 退出码 / 摘要 / 端口提示 + 三个快捷动作 -->
+          <section v-if="failedStage" class="fail-card" aria-label="运行失败">
+            <div class="fc-head">
+              <span class="fc-title">阶段 {{ failedStage.id }} 失败</span>
+              <span class="fc-meta">
+                退出码 {{ failedStage.exitCode }}
+                <template v-if="failedStage.errorCode"> · {{ failedStage.errorCode }}</template>
+              </span>
+            </div>
+            <p class="fc-summary">
+              {{ failedStage.summary || '没有错误摘要，打开下方日志查看详情' }}
+            </p>
+            <p v-if="portHint" class="fc-hint">{{ portHint }}</p>
+            <div class="fc-actions">
+              <button type="button" class="fc-btn" @click="copyFailure">
+                <el-icon><CopyDocument /></el-icon> 复制错误
+              </button>
+              <button
+                type="button" class="fc-btn primary"
+                :disabled="retrying" @click="retryFailedStage"
+              >
+                <el-icon><RefreshRight /></el-icon> {{ retrying ? '继续中…' : '重试该阶段' }}
+              </button>
+              <button type="button" class="fc-btn" @click="rerunActive">
+                <el-icon><VideoPlay /></el-icon> 整条重跑
+              </button>
+            </div>
+          </section>
+
           <div class="run-detail">
+            <!-- dev 一键体验：本机服务就绪后直接给可点开的地址 -->
+            <div v-if="localLinks.length" class="local-links">
+              <span class="ll-label">本机服务已就绪</span>
+              <a
+                v-for="l in localLinks" :key="l.url"
+                class="ll-link" :href="l.url" target="_blank" rel="noreferrer"
+              >
+                <el-icon><Link /></el-icon> {{ l.label }}
+              </a>
+            </div>
+
             <StageTimeline
               v-if="run"
               :stages="run.stages"
@@ -592,16 +1034,45 @@ const runDuration = computed(() => {
             />
 
             <section v-if="run?.artifacts.length" class="artifact-panel">
-              <h3 class="ap-title">产物</h3>
-              <div
-                v-for="(a, i) in run.artifacts" :key="`${a.kind}-${a.ref}-${i}`"
-                class="artifact-row"
-              >
-                <span class="art-kind">{{ a.kind }}</span>
-                <code class="art-ref mono" :title="a.ref">{{ a.ref }}</code>
-                <code class="art-digest mono" :title="a.digest">{{ a.digest ? `${a.digest.slice(0, 12)}…` : '—' }}</code>
-                <span class="art-size">{{ a.sizeBytes }} B</span>
-              </div>
+              <h3 class="ap-title">产物 <span class="ap-count">{{ run.artifacts.length }}</span></h3>
+              <template v-for="(a, i) in run.artifacts" :key="`${a.kind}-${a.ref}-${i}`">
+                <div class="artifact-row">
+                  <span class="art-kind">{{ a.kind }}</span>
+                  <code class="art-ref mono" :title="a.ref" @click="copyText(a.ref, '产物地址')">{{ a.ref }}</code>
+                  <span class="art-size">{{ formatBytes(a.sizeBytes) }}</span>
+                  <button
+                    type="button" class="art-digest mono"
+                    :title="a.digest ? `点击复制 ${a.digest}` : '无摘要'"
+                    @click="copyDigest(a.digest)"
+                  >
+                    {{ shortDigest(a.digest) }}
+                  </button>
+                  <span class="art-actions">
+                    <button
+                      v-if="a.kind === 'file'" type="button" class="art-act"
+                      title="下载到本机" @click="downloadArtifact(a, i)"
+                    >
+                      <el-icon><Download /></el-icon> 下载
+                    </button>
+                    <button
+                      v-else-if="a.kind === 'image'" type="button" class="art-act"
+                      title="复制本机启动命令" @click="copyText(dockerRunCommand(a), 'docker run 命令')"
+                    >
+                      <el-icon><CopyDocument /></el-icon> docker run
+                    </button>
+                  </span>
+                </div>
+                <div v-if="imageMeta(a)" class="artifact-image">
+                  <span class="ai-label">镜像版本</span>
+                  <span class="ai-version mono">{{ imageMeta(a)?.version || '—' }}</span>
+                  <span class="ai-label">本地镜像</span>
+                  <button
+                    type="button" class="ai-local mono"
+                    :title="`点击复制本地镜像地址 ${imageMeta(a)?.local}`"
+                    @click="copyText(imageMeta(a)?.local ?? '', '本地镜像地址')"
+                  >{{ imageMeta(a)?.local }}</button>
+                </div>
+              </template>
             </section>
 
             <RunLog
@@ -615,39 +1086,58 @@ const runDuration = computed(() => {
       </div>
     </div>
 
-    <!-- L3 变更确认（合并为一次弹窗流程，语义明确） -->
-    <el-dialog v-model="changeDialog" title="L3 变更确认" width="560px">
-      <div v-if="change" class="confirm-card">
-        <div class="line"><span>变更单</span><b class="mono">{{ change.changeId }}</b></div>
-        <div class="line"><span>项目 / 环境</span><b>{{ change.projectId }} / {{ change.env }}</b></div>
-        <div class="line"><span>类型</span><b>{{ change.kind }}</b></div>
-        <div class="line"><span>内容</span><b>{{ change.summary }}</b></div>
-        <div class="line"><span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b></div>
-        <div class="line">
-          <span>风险</span>
-          <el-tag :type="change.highRisk ? 'danger' : 'success'" size="small" effect="light" round>
-            {{ change.highRisk ? '高危（需二次密码）' : '常规' }}
-          </el-tag>
+    <!-- 对比上次运行：阶段状态/耗时 + 产物增删 -->
+    <el-dialog v-model="compareOpen" title="与上一次运行对比" width="720px" append-to-body>
+      <p v-if="compareLoading" class="cmp-none">加载中…</p>
+      <template v-else-if="comparePrev && compareCurrent">
+        <div class="cmp-head">
+          <span class="cmp-side">
+            上次 <em class="mono">{{ comparePrev.runId.slice(0, 8) }}</em>
+          </span>
+          <span class="cmp-side">
+            本次 <em class="mono">{{ compareCurrent.runId.slice(0, 8) }}</em>
+          </span>
         </div>
-        <el-input
-          v-if="change.highRisk && !confirmToken"
-          v-model="changePassword" type="password"
-          placeholder="账号体系接入前无法通过，仅验证流程连通" show-password
-        />
-        <el-alert
-          v-if="confirmToken" type="success" :closable="false" show-icon
-          title="确认令牌已签发（5 分钟有效、一次性、绑定当前配方）"
-          :description="confirmToken"
-        />
-      </div>
-      <template #footer>
-        <el-button @click="changeDialog = false">关闭</el-button>
-        <el-button v-if="!confirmToken" :loading="changeBusy" @click="doConfirmChange">
-          1. 确认变更
-        </el-button>
-        <el-button v-else type="primary" :loading="changeBusy" @click="doApplyChange">
-          2. 执行变更
-        </el-button>
+
+        <el-table v-if="stageDiffs.length" :data="stageDiffs" size="small" class="cmp-table">
+          <el-table-column prop="id" label="阶段" min-width="130" />
+          <el-table-column label="上次" width="120">
+            <template #default="{ row }">
+              <span class="cmp-st" :class="statusTone(row.prevStatus)">{{ row.prevStatus }}</span>
+              <span class="cmp-ms">{{ row.prevMs ? formatDuration(row.prevMs) : '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="本次" width="120">
+            <template #default="{ row }">
+              <span class="cmp-st" :class="statusTone(row.curStatus)">{{ row.curStatus }}</span>
+              <span class="cmp-ms">{{ row.curMs ? formatDuration(row.curMs) : '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="耗时变化" width="100">
+            <template #default="{ row }">
+              <span
+                class="cmp-delta"
+                :class="{ slow: row.deltaMs > 0, fast: row.deltaMs < 0 }"
+              >{{ deltaLabel(row.deltaMs) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="cmp-artifacts">
+          <p class="cmp-sub">产物变化</p>
+          <p
+            v-if="!artifactDiff.added.length && !artifactDiff.removed.length"
+            class="cmp-none"
+          >产物一致</p>
+          <p
+            v-for="a in artifactDiff.added" :key="`add-${a.kind}-${a.ref}`"
+            class="cmp-art add"
+          >+ {{ a.kind }} · {{ a.ref }}</p>
+          <p
+            v-for="a in artifactDiff.removed" :key="`del-${a.kind}-${a.ref}`"
+            class="cmp-art del"
+          >- {{ a.kind }} · {{ a.ref }}</p>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -686,8 +1176,8 @@ const runDuration = computed(() => {
   overscroll-behavior: contain;
 }
 .wp-left-inner .fill {
-  flex: 1 1 260px;
-  min-height: 200px;
+  flex: 1 1 420px;
+  min-height: 320px;
 }
 .wp-right {
   display: flex;
@@ -706,13 +1196,51 @@ const runDuration = computed(() => {
   min-height: 200px;
 }
 
+/* 上下文：项目 + 环境 */
+.ctx-bar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.ctx-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctx-label {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.ctx-select {
+  flex: 1;
+  min-width: 0;
+}
+.ctx-env {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ctx-loading {
+  margin-left: 4px;
+  color: var(--ink-faint);
+}
+.ctx-env :deep(.env-switch) {
+  width: 100%;
+}
+
 /* 运行条 */
 .run-bar {
   display: flex;
   flex: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line-soft);
@@ -738,12 +1266,20 @@ const runDuration = computed(() => {
   animation: dot-pulse 1.4s ease-in-out infinite;
 }
 @keyframes dot-pulse { 50% { opacity: 0.3; } }
-.rb-id {
+.rb-tag {
   padding: 1px 7px;
-  font-size: 11px;
+  font-size: 10.5px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+}
+.rb-tag.plain {
   color: var(--ink-muted);
   background: var(--surface-sunken);
-  border-radius: var(--radius-xs);
+}
+.rb-sha {
+  font-size: 10.5px;
+  color: var(--ink-faint);
 }
 .rb-meta {
   font-size: 11.5px;
@@ -816,10 +1352,16 @@ const runDuration = computed(() => {
   font-weight: 600;
   color: var(--ink);
 }
+.ap-count {
+  margin-left: 4px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
 .artifact-row {
   display: grid;
-  grid-template-columns: 70px minmax(0, 1fr) 150px 76px;
+  grid-template-columns: 70px minmax(0, 1fr) 76px 170px 96px;
   gap: 10px;
+  align-items: center;
   padding: 5px 0;
   font-size: 11.5px;
   border-top: 1px solid var(--line-soft);
@@ -827,92 +1369,246 @@ const runDuration = computed(() => {
 .art-kind {
   color: var(--accent-ink);
 }
-.art-ref,
-.art-digest {
+.art-ref {
   overflow: hidden;
   color: var(--ink-soft);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.art-digest {
-  color: var(--ink-muted);
+  cursor: copy;
 }
 .art-size {
   color: var(--ink-faint);
   text-align: right;
 }
-
-/* 动作执行结果 */
-.action-result {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  background: var(--panel);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-md);
+.art-digest {
+  padding: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
 }
-.ar-head {
+.art-digest:hover {
+  color: var(--accent-ink);
+}
+.art-actions {
   display: flex;
+  justify-content: flex-end;
+}
+.art-act {
+  display: inline-flex;
   align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+}
+.art-act:hover {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* 镜像产物的附带信息：可读版本（env-vN）+ 本地镜像地址 */
+.artifact-image {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 0 0 6px 80px;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.ai-version {
+  padding: 0 5px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius-xs);
+}
+.ai-local {
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.ai-local:hover {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+
+/* 失败卡片 */
+.fail-card {
+  flex: none;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+}
+.fc-head {
+  display: flex;
+  align-items: baseline;
   gap: 8px;
 }
-.ar-title {
+.fc-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--danger);
+}
+.fc-meta {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.fc-summary {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.fc-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--warn);
+}
+.fc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.fc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.fc-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--ink) 25%, transparent);
+}
+.fc-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.fc-btn.primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+}
+.fc-btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 86%, #000);
+}
+
+/* dev 本机服务入口 */
+.local-links {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--ok) 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--ok) 28%, transparent);
+  border-radius: var(--radius-md);
+}
+.ll-label {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.ll-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--accent-ink);
+  text-decoration: none;
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: var(--radius-pill);
+}
+.ll-link:hover {
+  background: var(--accent-soft);
+}
+
+/* 对比弹窗 */
+.cmp-head {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.cmp-side em {
+  font-style: normal;
+  color: var(--accent-ink);
+}
+.cmp-table {
+  width: 100%;
+}
+.cmp-st {
+  display: inline-block;
+  min-width: 64px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.cmp-st.ok { color: var(--ok); }
+.cmp-st.bad { color: var(--danger); }
+.cmp-st.busy { color: var(--accent-ink); }
+.cmp-ms {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.cmp-delta {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.cmp-delta.slow { color: var(--danger); }
+.cmp-delta.fast { color: var(--ok); }
+.cmp-artifacts {
+  margin-top: 12px;
+}
+.cmp-sub {
+  margin: 0 0 6px;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink);
 }
-.ar-status {
-  padding: 1px 7px;
-  font-size: 10.5px;
-  border-radius: var(--radius-pill);
+.cmp-art {
+  margin: 0 0 3px;
+  font-size: 11.5px;
   color: var(--ink-muted);
-  background: var(--surface-sunken);
+  overflow-wrap: anywhere;
 }
-.ar-status.ok {
-  color: var(--ok);
-  background: var(--ok-soft);
-}
-.ar-status.bad {
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-.ar-meta {
+.cmp-art.add { color: var(--ok); }
+.cmp-art.del { color: var(--danger); }
+.cmp-none {
   margin: 0;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-}
-.ar-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin-left: auto;
   font-size: 12px;
   color: var(--ink-faint);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius-xs);
-}
-.ar-close:hover {
-  color: var(--ink);
-  background: var(--surface-hover);
-}
-.ar-log {
-  margin: 0;
-  padding: 8px 10px;
-  overflow: auto;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--ink-soft);
-  white-space: pre-wrap;
-  word-break: break-all;
-  background: var(--code-bg);
-  border-radius: var(--radius-xs);
-  max-height: 160px;
 }
 
 /* 空状态 */
@@ -927,14 +1623,16 @@ const runDuration = computed(() => {
   text-align: center;
 }
 .re-title {
-  margin: 10px 0 0;
+  margin: 0;
   font-size: 14px;
   font-weight: 500;
   color: var(--ink-muted);
 }
 .re-sub {
   margin: 0;
+  max-width: 380px;
   font-size: 12px;
+  line-height: 1.7;
   color: var(--ink-faint);
 }
 .re-btn {
@@ -955,39 +1653,6 @@ const runDuration = computed(() => {
 .re-btn:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-/* 上下文选择器（项目 / 环境） */
-.ctx-bar {
-  display: flex;
-  flex: none;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--panel);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-md);
-}
-.ctx-field {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-.ctx-label {
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  letter-spacing: 0.02em;
-}
-.ctx-select {
-  width: 100%;
-}
-.ctx-opt-main {
-  margin-right: 8px;
-}
-.ctx-opt-desc {
-  font-size: 11px;
-  color: var(--ink-faint);
 }
 
 /* Header 状态 chip */
@@ -1014,23 +1679,6 @@ const runDuration = computed(() => {
   animation: dot-pulse 1.4s ease-in-out infinite;
 }
 
-/* 确认卡 */
-.confirm-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.confirm-card .line {
-  display: flex;
-  gap: 14px;
-  font-size: 13px;
-}
-.confirm-card .line span {
-  flex: none;
-  width: 90px;
-  color: var(--ink-muted);
-}
-
 @media (max-width: 900px) {
   .wp-body {
     flex-direction: column;
@@ -1038,7 +1686,7 @@ const runDuration = computed(() => {
   .wp-left {
     width: 100% !important;
     height: auto;
-    max-height: 45%;
+    max-height: 50%;
     border-right: 0;
     border-bottom: 1px solid var(--line-soft);
   }

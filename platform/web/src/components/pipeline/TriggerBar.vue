@@ -1,36 +1,52 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { CopyDocument, Download, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import type { GitCommit } from '../../api/project'
+import type { PreviewStage } from '../../api/pipeline'
+import { previewLabel } from '../../utils/pipelineLabels'
 
 /**
- * 触发条（易用性改造）：
- * - 提交从项目 git 历史里**选**（可搜索、可粘贴），不再要求手敲 sha；
- * - 流水线按人类可读名称展示（发布 / 检查构建）并给出说明；
- * - 部署目标可选（方案 C：平台部署器）；
- * - 校验失败给出可读原因。
+ * 运行卡：一次运行只需要三件事——提交、选部署方式、点运行。
+ *
+ * - 提交从 git 历史里选（可搜索/可粘贴 sha），默认最新一条；
+ * - 阶段预览来自后端同一份定义（不是前端猜的），避免"以为是发布、实际只跑了检查构建"；
+ * - 部署方式只有两种：打包成镜像（Docker）/ 直接部署（本机）；流水线由环境自动解析。
  */
 interface Props {
-  pipelines: string[]
-  pipelineId: string
+  envLabel: string
+  primaryLabel: string
   sha: string
-  busy: boolean
-  lastGoodSha?: string
-  engine?: string
-  deployTarget: string
-  deployTargets: Array<{ target: string, label: string, available: boolean, detail: string }>
   commits: GitCommit[]
   commitsLoading?: boolean
+  /** docker / host / server（prod 固定 server，不展示切换）。 */
+  deployTarget: string
+  showModeSwitch?: boolean
+  modeNote?: string
+  /** 本机运行提示；有值时展示「停止本机服务」 */
+  localHint?: string
+  canStopLocal?: boolean
+  /** 本次要执行的动作：发布（release）/ 只检查构建（verify）。 */
+  action: 'release' | 'verify'
+  preview: PreviewStage[]
+  /** 只检查构建的预览：用来展示会跑几步、跳过什么。 */
+  verifyPreview?: PreviewStage[]
+  previewLoading?: boolean
+  busy: boolean
+  lastGoodSha?: string
+  hint?: string
+  canRun: boolean
 }
 
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
-  (e: 'update:pipelineId', v: string): void
   (e: 'update:sha', v: string): void
   (e: 'update:deployTarget', v: string): void
+  (e: 'update:action', v: 'release' | 'verify'): void
   (e: 'run'): void
   (e: 'refreshCommits'): void
+  (e: 'stopLocal'): void
 }>()
 
 const SHA_PREFIX = /^([0-9a-f]{7,40})\b/i
@@ -44,144 +60,292 @@ function normalizeSha(raw: string): string {
   return loose.length >= 7 ? loose.slice(0, 40).toLowerCase() : loose.toLowerCase()
 }
 
-const shaValid = computed(() => /^[0-9a-f]{7,40}$/.test(props.sha))
-const hint = computed(() => {
-  // 定义通常在接入时由平台自动生成（存平台侧），仓库里的 ci/pipeline.yml 只是可选覆盖；
-  // 所以这里只在"确实读不到"时给一句排查指引。
-  if (!props.pipelines.length) {
-    return '未读取到流水线定义：确认项目已接入后刷新，或在项目页「生成流水线定义」重新生成'
-  }
-  if (!props.pipelineId) return '请选择流水线'
-  if (!props.sha) return '请选择提交（从项目 git 历史中选，或粘贴 sha）'
-  if (!shaValid.value) return 'sha 需为 7–40 位十六进制'
-  return ''
+/** 提交下拉只显示 sha + 标题（旧实现把整段 commit 标题塞进选择框，宽度不可控）。 */
+function commitLabel(c: GitCommit): string {
+  return `${c.sha.slice(0, 8)} · ${c.subject}`
+}
+
+/** 当前动作对应的阶段预览（verify 用单独的 that preview）。 */
+const activePreview = computed<PreviewStage[]>(() =>
+  props.action === 'verify' ? (props.verifyPreview ?? []) : props.preview)
+
+/** 这次真正会执行的阶段（skipReason 为空的）。 */
+const runnable = computed(() => activePreview.value.filter((s) => !s.skipReason))
+
+/** 被跳过的阶段：只展示「跳过几步 + 原因」，不逐个列名字。 */
+const skipNote = computed(() => {
+  const skipped = activePreview.value.filter((s) => !!s.skipReason)
+  if (!skipped.length) return ''
+  const reasons = [...new Set(skipped.map((s) => s.skipReason))]
+  return `跳过 ${skipped.length} 步：${reasons.join('；')}`
 })
-const canRun = computed(() => !!props.pipelineId && shaValid.value && !props.busy)
 
-/** 流水线的人类可读名称（release/verify 不直接暴露）。 */
-function labelOf(id: string): string {
-  if (id === 'release') return '发布'
-  if (id === 'verify') return '检查构建'
-  return id
+const openedStage = ref('')
+const detail = computed<PreviewStage | null>(() =>
+  runnable.value.find((s) => s.id === openedStage.value) ?? null)
+
+watch(() => props.action, () => { openedStage.value = '' })
+watch(activePreview, () => {
+  if (openedStage.value && !runnable.value.some((s) => s.id === openedStage.value)) {
+    openedStage.value = ''
+  }
+})
+
+function toggleStage(id: string): void {
+  openedStage.value = openedStage.value === id ? '' : id
 }
 
-function descOf(id: string): string {
-  if (id === 'release') return '构建 → 测试 → 镜像 → 部署 → 健康检查'
-  if (id === 'verify') return '只构建 + 测试，不部署'
-  return '仓库自定义'
+/** 复制命令或完整脚本（优先脚本：多步 && 拼起来也能用）。 */
+async function copyCommand(stage: PreviewStage): Promise<void> {
+  const text = stage.script || stage.command
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动选择文本')
+  }
 }
 
-function onShaChange(value: string): void {
-  emit('update:sha', normalizeSha(value))
+/** 脚本里是否有 ${var} 占位符：预览展示模板，运行时才替换成实际值。 */
+function hasPlaceholder(stage: PreviewStage): boolean {
+  return /\$\{[^}]+\}/.test(stage.script || '')
 }
+
+/** 下载脚本（pwsh → .ps1，其余 → .sh）；纯前端生成，稳定可复现。 */
+function downloadScript(stage: PreviewStage): void {
+  if (!stage.script) return
+  const ext = stage.shell === 'pwsh' ? 'ps1' : 'sh'
+  const blob = new Blob([stage.script], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${stage.id}.${ext}`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** 卡片元信息：可执行阶段数 + 是否产镜像。 */
+function cardMeta(stages: PreviewStage[]): { count: number, image: boolean } {
+  const steps = stages.filter((s) => !s.skipReason)
+  return {
+    count: steps.length,
+    image: steps.some((s) => s.id.includes('image') || s.action.includes('image')),
+  }
+}
+
+const releaseMeta = computed(() => cardMeta(props.preview))
+const verifyMeta = computed(() => cardMeta(props.verifyPreview ?? []))
+
+const runLabel = computed(() =>
+  props.action === 'verify' ? '开始检查构建' : props.primaryLabel)
 </script>
 
 <template>
-  <div class="trigger">
-    <div class="t-row">
-      <el-select
-        :model-value="pipelineId"
-        class="t-pipeline" size="default" placeholder="选择流水线"
-        @update:model-value="emit('update:pipelineId', $event)"
-      >
-        <el-option v-for="p in pipelines" :key="p" :label="labelOf(p)" :value="p">
-          <span class="opt-main">{{ labelOf(p) }}</span>
-          <span class="opt-detail">{{ descOf(p) }}</span>
-        </el-option>
-      </el-select>
+  <section class="run-card" aria-label="触发运行">
+    <header class="rc-head">
+      <h2 class="rc-title">运行</h2>
+      <span class="rc-env">{{ envLabel }}</span>
+      <span v-if="hint" class="rc-hint">{{ hint }}</span>
+    </header>
 
+    <div class="rc-commit">
+      <label class="rc-label" for="commit-select">提交</label>
       <el-select
+        id="commit-select"
         :model-value="sha"
-        class="t-sha" size="default" filterable allow-create default-first-option
-        placeholder="选择提交（或粘贴 sha）"
+        class="rc-sha" size="default" filterable allow-create default-first-option
+        placeholder="选择提交，或直接粘贴 sha"
         :loading="commitsLoading"
-        @update:model-value="onShaChange"
+        @update:model-value="(v: string) => emit('update:sha', normalizeSha(v))"
       >
         <el-option
           v-for="c in commits" :key="c.sha"
-          :label="`${c.sha} · ${c.subject}`" :value="c.sha"
+          :label="commitLabel(c)" :value="c.sha"
         >
           <div class="commit-row">
-            <span class="commit-sha mono">{{ c.sha }}</span>
+            <span class="commit-sha mono">{{ c.sha.slice(0, 8) }}</span>
             <span class="commit-subject">{{ c.subject }}</span>
             <span class="commit-meta">{{ c.author }} · {{ c.relativeTime }}</span>
           </div>
         </el-option>
       </el-select>
-
       <button
-        type="button" class="t-refresh" :disabled="commitsLoading"
+        type="button" class="rc-refresh" :disabled="commitsLoading"
         title="刷新提交列表" @click="emit('refreshCommits')"
       >
         <el-icon :class="{ 'is-loading': commitsLoading }"><Refresh /></el-icon>
       </button>
-
-      <el-select
-        :model-value="deployTarget"
-        class="t-target" size="default" title="部署目标"
-        @update:model-value="emit('update:deployTarget', $event)"
-      >
-        <el-option
-          v-for="t in deployTargets" :key="t.target"
-          :label="t.label" :value="t.target" :disabled="!t.available"
-        >
-          <span class="opt-main">{{ t.label }}</span>
-          <span class="opt-detail">{{ t.available ? t.detail : '不可用' }}</span>
-        </el-option>
-      </el-select>
-
-      <el-button
-        type="primary" :icon="VideoPlay" :loading="busy" :disabled="!canRun"
-        @click="emit('run')"
-      >
-        运行
-      </el-button>
     </div>
 
-    <div class="t-meta">
-      <span v-if="hint" class="t-hint">{{ hint }}</span>
-      <span v-else class="t-hint ok">
-        {{ engine ? `引擎 ${engine}` : '就绪' }} · {{ labelOf(pipelineId) }} · 提交 {{ sha.slice(0, 8) }}
+    <div class="rc-pick" role="group" aria-label="选择动作">
+      <button
+        type="button" class="pick-card" :class="{ active: action === 'release' }"
+        @click="emit('update:action', 'release')"
+      >
+        <span class="pc-head">
+          <span class="pc-title">{{ primaryLabel }}</span>
+          <span v-if="action === 'release'" class="pc-check">已选</span>
+        </span>
+        <span class="pc-desc">构建并部署到当前环境</span>
+        <span class="pc-meta">{{ releaseMeta.count }} 步 · {{ releaseMeta.image ? '产镜像' : '不产镜像' }}</span>
+      </button>
+      <button
+        type="button" class="pick-card" :class="{ active: action === 'verify' }"
+        @click="emit('update:action', 'verify')"
+      >
+        <span class="pc-head">
+          <span class="pc-title">只检查构建</span>
+          <span v-if="action === 'verify'" class="pc-check">已选</span>
+        </span>
+        <span class="pc-desc">只编译和测试，不部署</span>
+        <span class="pc-meta">{{ verifyMeta.count }} 步 · 不产镜像</span>
+      </button>
+    </div>
+
+    <div class="rc-preview">
+      <span class="rc-label">将执行</span>
+      <ol v-if="runnable.length" class="flow">
+        <li
+          v-for="(s, i) in runnable" :key="s.id"
+          class="flow-step" :class="{ open: openedStage === s.id }"
+          role="button" tabindex="0"
+          :title="s.command"
+          @click="toggleStage(s.id)"
+          @keydown.enter="toggleStage(s.id)"
+        >
+          <span class="flow-no">{{ i + 1 }}</span>
+          <span class="flow-name">{{ previewLabel(s) }}</span>
+        </li>
+      </ol>
+      <span v-else class="flow-empty">
+        {{ previewLoading ? '读取流水线定义…' : '还没有可用的流水线定义' }}
       </span>
-      <span class="t-target-note">
-        部署到：{{ deployTargets.find((t) => t.target === deployTarget)?.label ?? deployTarget }}
-      </span>
+      <span v-if="runnable.length" class="rc-tip">点阶段看命令</span>
+    </div>
+    <p v-if="skipNote" class="rc-skip">{{ skipNote }}</p>
+
+    <!-- 命令级预览：这一步实际执行什么（脚本由配方确定性渲染，可直接复制/下载） -->
+    <div v-if="detail" class="cmd-panel">
+      <header class="cmd-head">
+        <span class="cmd-title mono">{{ detail.id }}</span>
+        <span v-if="detail.shell" class="cmd-chip">{{ detail.shell }}</span>
+        <span v-if="detail.workdir && detail.workdir !== '.'" class="cmd-meta">
+          目录 {{ detail.workdir }}
+        </span>
+        <span v-if="detail.scriptSha" class="cmd-meta mono">sha {{ detail.scriptSha }}</span>
+        <span v-if="hasPlaceholder(detail)" class="cmd-meta">占位符运行时替换</span>
+        <span class="cmd-spacer" />
+        <button type="button" class="cmd-btn" @click="copyCommand(detail)">
+          <el-icon><CopyDocument /></el-icon> 复制
+        </button>
+        <button v-if="detail.script" type="button" class="cmd-btn" @click="downloadScript(detail)">
+          <el-icon><Download /></el-icon> 下载脚本
+        </button>
+      </header>
+      <pre v-if="detail.script" class="cmd-code">{{ detail.script }}</pre>
+      <p v-else class="cmd-builtin">{{ detail.command }} · 平台内置步骤，无脚本</p>
+    </div>
+
+    <div v-if="showModeSwitch && action === 'release'" class="rc-mode">
+      <span class="rc-label">方式</span>
+      <div class="mode-switch" role="group" aria-label="部署方式">
+        <button
+          type="button" class="mode-btn"
+          :class="{ active: deployTarget === 'docker' }"
+          @click="emit('update:deployTarget', 'docker')"
+        >
+          打包成镜像
+        </button>
+        <button
+          type="button" class="mode-btn"
+          :class="{ active: deployTarget === 'host' }"
+          @click="emit('update:deployTarget', 'host')"
+        >
+          直接部署
+        </button>
+      </div>
+      <span v-if="modeNote" class="rc-mode-note">{{ modeNote }}</span>
+    </div>
+    <span v-else-if="modeNote && action === 'release'" class="rc-mode-note solo">{{ modeNote }}</span>
+
+    <div v-if="canStopLocal && action === 'release'" class="rc-local">
+      <span class="rc-local-hint">{{ localHint }}</span>
+      <button type="button" class="rc-stop" @click="emit('stopLocal')">停止本机服务</button>
+    </div>
+
+    <div class="rc-actions">
+      <el-button
+        type="primary" size="large" :icon="VideoPlay"
+        :loading="busy" :disabled="!canRun"
+        @click="emit('run')"
+      >
+        {{ runLabel }}
+      </el-button>
       <button
         v-if="lastGoodSha"
-        type="button" class="t-quick mono"
-        title="回填最近一次成功构建的提交"
+        type="button" class="rc-last mono"
+        title="填入最近一次成功部署的提交"
         @click="emit('update:sha', lastGoodSha.slice(0, 8))"
       >
         上次成功 {{ lastGoodSha.slice(0, 8) }}
       </button>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.trigger {
+.run-card {
   display: flex;
+  flex: none;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   padding: 12px 14px;
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
 }
-.t-row {
+.rc-head {
   display: flex;
-  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.rc-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.rc-env {
+  padding: 1px 7px;
+  font-size: 11px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+}
+.rc-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.rc-commit {
+  display: flex;
   align-items: center;
   gap: 8px;
 }
-.t-pipeline {
-  width: 160px;
+.rc-label {
+  flex: none;
+  width: 42px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
 }
-.t-sha {
-  flex: 1 1 260px;
+.rc-sha {
+  flex: 1;
   min-width: 0;
 }
-.t-refresh {
+.rc-refresh {
   display: flex;
   flex: none;
   align-items: center;
@@ -195,23 +359,288 @@ function onShaChange(value: string): void {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
 }
-.t-refresh:hover:not(:disabled) {
+.rc-refresh:hover:not(:disabled) {
   color: var(--ink);
   background: var(--surface-hover);
 }
-.t-refresh:disabled {
+.rc-refresh:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
-.t-target {
-  width: 150px;
+.rc-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
 }
-.opt-main {
-  margin-right: 8px;
+/* 动作选择卡：发布 / 只检查构建，点一下就切换，主按钮文案跟着变 */
+.rc-pick {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
-.opt-detail {
+.pick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+.pick-card:hover {
+  border-color: var(--line-soft);
+}
+.pick-card.active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.pc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.pc-title {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-card.active .pc-title {
+  color: var(--accent-ink);
+}
+.pc-check {
+  flex: none;
+  font-size: 10px;
+  color: var(--accent-ink);
+}
+.pc-desc {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-meta {
+  font-size: 10.5px;
+  color: var(--ink-muted);
+}
+.rc-skip {
+  margin: -4px 0 0 50px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+.rc-tip {
+  flex: none;
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+/* 命令级预览 */
+.cmd-panel {
+  padding: 8px 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.cmd-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.cmd-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.cmd-chip {
+  padding: 0 6px;
+  font-size: 10px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+}
+.cmd-meta {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.cmd-spacer {
+  flex: 1;
+}
+.cmd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+}
+.cmd-btn:hover {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.cmd-code {
+  max-height: 180px;
+  padding: 8px;
+  margin: 0;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  white-space: pre;
+  background: var(--panel);
+  border-radius: var(--radius-xs);
+}
+.cmd-builtin {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.flow-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 3px;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+}
+.flow-step:hover {
+  color: var(--ink);
+  border-color: var(--line-soft);
+}
+.flow-step.open {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.flow-step.open .flow-no {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.flow-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 50%;
+}
+.flow-name {
+  white-space: nowrap;
+}
+.flow-empty {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.rc-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rc-last {
+  padding: 0;
+  font-size: 11px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  text-decoration: underline dotted;
+}
+.rc-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.mode-switch {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+}
+.mode-btn {
+  height: 24px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+}
+.mode-btn:hover {
+  color: var(--ink);
+}
+.mode-btn.active {
+  color: var(--accent-ink);
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+.rc-mode-note {
+  flex: 1 1 160px;
   font-size: 11px;
   color: var(--ink-faint);
+}
+.rc-mode-note.solo {
+  padding-left: 50px;
+}
+.rc-local {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+.rc-local-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.rc-stop {
+  flex: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--danger);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  text-decoration: underline dotted;
 }
 .commit-row {
   display: flex;
@@ -237,34 +666,5 @@ function onShaChange(value: string): void {
   flex: none;
   font-size: 10.5px;
   color: var(--ink-faint);
-}
-.t-target-note {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--ink-faint);
-}
-.t-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 16px;
-}
-.t-hint {
-  font-size: 11px;
-  color: var(--ink-faint);
-}
-.t-hint.ok {
-  color: var(--ok);
-}
-.t-quick {
-  margin-left: 8px;
-  padding: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--accent-ink);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  text-decoration: underline dotted;
 }
 </style>

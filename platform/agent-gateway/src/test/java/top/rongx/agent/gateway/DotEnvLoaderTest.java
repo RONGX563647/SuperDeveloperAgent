@@ -18,22 +18,24 @@ class DotEnvLoaderTest {
     @DisplayName("解析 K=V 与注释行，注入系统属性")
     void parsesKeyValue(@TempDir Path dir) throws IOException {
         Path file = dir.resolve(".env");
+        // 用不会与真实环境变量重名的键：真实环境变量优先是 .env 的既定语义，
+        // 用 AGENT_MODEL_* 这类键会让本用例在"机器上确实配了模型变量"时失败。
         Files.writeString(file, """
                 # 注释
-                AGENT_MODEL_BASE_URL=https://api.deepseek.com
-                AGENT_MODEL_NAME=deepseek-chat
+                DOTENV_BASE_URL=https://api.deepseek.com
+                DOTENV_MODEL_NAME=deepseek-chat
 
                 QUOTED="hello world"
                 """);
         // 清理可能存在的同名属性
-        System.clearProperty("AGENT_MODEL_BASE_URL");
-        System.clearProperty("AGENT_MODEL_NAME");
+        System.clearProperty("DOTENV_BASE_URL");
+        System.clearProperty("DOTENV_MODEL_NAME");
         System.clearProperty("QUOTED");
 
         AgentApplication.loadDotEnv(file);
 
-        assertEquals("https://api.deepseek.com", System.getProperty("AGENT_MODEL_BASE_URL"));
-        assertEquals("deepseek-chat", System.getProperty("AGENT_MODEL_NAME"));
+        assertEquals("https://api.deepseek.com", System.getProperty("DOTENV_BASE_URL"));
+        assertEquals("deepseek-chat", System.getProperty("DOTENV_MODEL_NAME"));
         assertEquals("hello world", System.getProperty("QUOTED"));
     }
 

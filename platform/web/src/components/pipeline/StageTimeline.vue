@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { StageView } from '../../api/pipeline'
 import { formatDuration, statusLabel, statusTone } from '../../utils/status'
+import { stageLabel } from '../../utils/pipelineLabels'
 
 /**
  * Stage 进度可视化：
@@ -80,13 +81,16 @@ function stageDuration(s: StageView): string {
         </span>
         <div class="step-body">
           <div class="step-head">
-            <b class="mono step-id">{{ s.id }}</b>
+            <b class="step-id" :title="`stage id: ${s.id}`">{{ stageLabel(s) }}</b>
             <span class="step-status">{{ statusLabel(s.status) }}</span>
             <span class="step-duration mono">{{ stageDuration(s) }}</span>
           </div>
           <p v-if="s.errorCode || s.summary" class="step-meta">
             <span v-if="s.errorCode" class="mono err-code">{{ s.errorCode }}</span>
             <span v-if="s.summary">{{ s.summary }}</span>
+          </p>
+          <p v-else-if="s.artifacts" class="step-meta">
+            <span>{{ s.artifacts }} 个产物</span>
           </p>
         </div>
       </li>

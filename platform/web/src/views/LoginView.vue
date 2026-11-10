@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getToken, login, setToken } from '../api/auth'
 import { appStore } from '../stores/app'
 
 const router = useRouter()
+const route = useRoute()
 // 已有 token 直接进主界面（有效性由路由守卫校验）
 if (getToken().length > 0) void router.replace('/chat')
+
+/** 登录后回到被拦截的页面（守卫带的 redirect），否则进对话页。 */
+const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+  ? route.query.redirect
+  : '/chat'
 
 const username = ref('')
 const password = ref('')
@@ -27,10 +33,11 @@ async function doLogin() {
     appStore.setIdentity({
       userId: result.userId,
       displayName: result.displayName,
-      role: result.role
+      role: result.role,
+      permissions: result.permissions
     })
     ElMessage.success(`欢迎，${result.displayName}（${result.role}）`)
-    void router.push('/chat')
+    void router.push(redirect)
   } catch (error) {
     errorText.value = error instanceof Error ? error.message : '登录失败'
   } finally {

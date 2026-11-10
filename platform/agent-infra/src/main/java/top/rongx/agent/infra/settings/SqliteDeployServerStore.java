@@ -319,11 +319,17 @@ public class SqliteDeployServerStore implements DeployServerRepository {
                 rs.getInt("is_default") == 1,
                 enc != null,
                 masked,
-                (Long) rs.getObject("last_test_at"),
+                nullableLong(rs, "last_test_at"),
                 rs.getObject("last_test_ok") == null ? null : rs.getInt("last_test_ok") == 1,
                 rs.getString("last_test_msg"),
                 rs.getString("updated_by"),
                 rs.getLong("updated_at"));
+    }
+
+    /** SQLite 的 INTEGER 可能映射为 Integer/Long，统一按 Number 读取。 */
+    private static Long nullableLong(ResultSet rs, String column) throws SQLException {
+        Object value = rs.getObject(column);
+        return value == null ? null : ((Number) value).longValue();
     }
 
     private String newId() {

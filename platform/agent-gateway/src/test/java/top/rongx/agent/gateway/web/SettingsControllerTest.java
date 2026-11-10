@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.web;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SettingsControllerTest {
 
     private final Map<String, DeployServer> serverStore = new LinkedHashMap<>();
+    private final List<DeployServer> probed = new ArrayList<>();
+    private final List<String> probedSecrets = new ArrayList<>();
+    private final Map<String, Boolean> recordedTests = new LinkedHashMap<>();
     private int seq = 0;
 
     private final DeployServerRepository servers = new DeployServerRepository() {
@@ -71,7 +75,7 @@ class SettingsControllerTest {
 
         @Override
         public void recordTest(String id, boolean ok, String message, Long latencyMs) {
-            // no-op（测试断言用）
+            recordedTests.put(id, ok);
         }
 
         @Override
@@ -123,11 +127,10 @@ class SettingsControllerTest {
     };
 
     private final SshAccess ssh = new SshAccess() {
-        boolean called;
-
         @Override
         public Result probe(DeployServer server, String secret) {
-            called = true;
+            probed.add(server);
+            probedSecrets.add(secret);
             return Result.ok("docker 29.2.1");
         }
 
@@ -212,5 +215,69 @@ class SettingsControllerTest {
 
         assertEquals(true, result.get("ok"));
         assertEquals("docker 29.2.1", result.get("dockerVersion"));
+        assertTrue(recordedTests.isEmpty(), "纯草稿测试不应写回任何一行的列表状态");
+    }
+
+    @Test
+    @DisplayName("编辑态测试用当前表单配置，并沿用已保存密钥、把本次结果写回列表")
+    void testDraftUsesCurrentFormAndPersists() {
+        Map<String, Object> saved = new LinkedHashMap<>();
+        saved.put("host", "10.0.0.12");
+        saved.put("sshUser", "deploy");
+        saved.put("authType", "PASSWORD");
+        saved.put("secret", "p@ssw0rd");
+        saved.put("isDefault", true);
+        DeployServer origin = controller(allowed).createServer(saved);
+        probed.clear();
+        probedSecrets.clear();
+        recordedTests.clear();
+
+        // 用户在表单里把主机改了、密码留空（表示沿用）
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("id", origin.id());
+        body.put("host", "10.0.0.99");
+        body.put("sshUser", "deploy");
+        body.put("authType", "PASSWORD");
+
+        Map<String, Object> result = controller(allowed).testServerDraft(body);
+
+        assertEquals(true, result.get("ok"));
+        assertEquals("10.0.0.99", probed.get(0).host(), "必须测当前表单，不能是第一次保存的旧配置");
+        assertEquals("secret-value", probedSecrets.get(0), "留空密钥应沿用已保存的密钥");
+        assertEquals(true, recordedTests.get(origin.id()), "本次结果应写回该行，列表状态才不是第一次的");
+    }
+
+    @Test
+    @DisplayName("删除默认服务器后自动把剩余启用服务器提升为默认")
+    void deleteDefaultServerPromotesNext() {
+        Map<String, Object> first = new LinkedHashMap<>();
+        first.put("host", "10.0.0.12");
+        first.put("sshUser", "deploy");
+        first.put("isDefault", true);
+        DeployServer origin = controller(allowed).createServer(first);
+        Map<String, Object> second = new LinkedHashMap<>();
+        second.put("host", "10.0.0.13");
+        second.put("sshUser", "deploy");
+        DeployServer next = controller(allowed).createServer(second);
+
+        Map<String, Object> out = controller(allowed).deleteServer(origin.id());
+
+        assertEquals(true, out.get("ok"));
+        assertFalse(serverStore.containsKey(origin.id()));
+        assertTrue(serverStore.get(next.id()).isDefault(), "删掉默认服务器后要有新的默认，不能留死局");
+    }
+
+    @Test
+    @DisplayName("只剩一台默认服务器时也能删除")
+    void deleteOnlyDefaultServer() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("host", "10.0.0.12");
+        body.put("sshUser", "deploy");
+        body.put("isDefault", true);
+        DeployServer only = controller(allowed).createServer(body);
+
+        controller(allowed).deleteServer(only.id());
+
+        assertTrue(serverStore.isEmpty(), "唯一的默认服务器不应被删除规则锁死");
     }
 }

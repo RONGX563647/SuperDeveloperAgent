@@ -3,7 +3,7 @@ import { nextTick, ref, useTemplateRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheck, CircleClose, Plus, Star } from '@element-plus/icons-vue'
 import {
-  createServer, deleteServer, listServers, setDefaultServer, testServer, testServerDraft,
+  createServer, deleteServer, listServers, setDefaultServer, testServerDraft,
   updateServer, type DeployServer, type DeployServerInput, type TestResult
 } from '../../api/settings'
 
@@ -83,13 +83,21 @@ function closeForm(): void {
   editing.value = null
 }
 
+/**
+ * 测试连接一律用「当前表单草稿」：
+ * 编辑态若走 /servers/{id}/test，测的是数据库里第一次保存的旧配置，
+ * 改了主机/端口/密码再点测试，结果仍是第一次的，看起来像结果被缓存。
+ * 带上 id 后，留空的密钥由后端沿用已保存值，本次结果也会写回列表状态。
+ */
 async function testCurrent(): Promise<void> {
   testing.value = true
   testResult.value = null
   try {
-    testResult.value = editing.value
-      ? await testServer(editing.value.id)
-      : await testServerDraft(form.value)
+    testResult.value = await testServerDraft({
+      ...form.value,
+      id: editing.value?.id
+    })
+    await load()
   } catch (e) {
     testResult.value = {
       ok: false,
@@ -120,8 +128,11 @@ async function save(): Promise<void> {
 }
 
 async function remove(server: DeployServer): Promise<void> {
+  const tip = server.isDefault
+    ? `删除默认服务器「${server.name}」？删除后会自动把另一台启用服务器设为默认。`
+    : `删除服务器「${server.name}」？`
   const ok = await ElMessageBox.confirm(
-    `删除服务器「${server.name}」？`, '删除确认',
+    tip, '删除确认',
     { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
   ).then(() => true).catch(() => false)
   if (!ok) return
@@ -265,7 +276,7 @@ defineExpose({ load })
           <el-button size="small" text :disabled="s.isDefault" @click="makeDefault(s)">
             <el-icon><Star /></el-icon> 设默认
           </el-button>
-          <el-button size="small" text type="danger" :disabled="s.isDefault" @click="remove(s)">
+          <el-button size="small" text type="danger" @click="remove(s)">
             删除
           </el-button>
         </div>

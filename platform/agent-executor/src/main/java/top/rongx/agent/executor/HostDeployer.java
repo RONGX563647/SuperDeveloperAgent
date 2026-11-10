@@ -96,6 +96,8 @@ public class HostDeployer implements Deployer {
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
         pb.environment().put("CI", "true");
+        // 平台「设置 → 项目环境」里的变量（与 DOCKER 目标同一份数据）
+        request.env().forEach((key, value) -> pb.environment().put(key, value == null ? "" : value));
 
         try {
             Process process = pb.start();

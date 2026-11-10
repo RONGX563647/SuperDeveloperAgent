@@ -59,7 +59,7 @@ const switchTarget = computed(() =>
   gap: 16px;
   height: var(--header-height);
   padding: 0 20px;
-  background: var(--bg);
+  background: transparent;
 }
 .head-left {
   display: flex;

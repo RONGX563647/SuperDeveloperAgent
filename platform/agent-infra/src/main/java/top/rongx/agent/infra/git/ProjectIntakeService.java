@@ -164,7 +164,10 @@ public class ProjectIntakeService {
                 local ? "LOCAL" : "REMOTE",
                 localPath,
                 storageMode);
+        // 三个环境都登记：dev 走本地服务（端口由 LocalServiceManager 按项目 hash 动态分配，
+        // 因此没有固定 appUrl / composeDir）；只登记 test/prod 会导致对话页缺「开发环境」选项。
         store.upsert(p, List.of(
+                new top.rongx.agent.domain.project.ProjectEnv(id, "dev", "", ""),
                 new top.rongx.agent.domain.project.ProjectEnv(id, "test", "http://127.0.0.1:8180", "/opt/apps/" + id.toLowerCase()),
                 new top.rongx.agent.domain.project.ProjectEnv(id, "prod", "http://127.0.0.1:8181", "/opt/apps/" + id.toLowerCase())));
     }

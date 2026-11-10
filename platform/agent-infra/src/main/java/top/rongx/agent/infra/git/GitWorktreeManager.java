@@ -33,6 +33,8 @@ public class GitWorktreeManager {
 
     private static final Logger log = LoggerFactory.getLogger(GitWorktreeManager.class);
     private static final long GIT_TIMEOUT_SECONDS = 600;
+    /** fetch 单独收紧超时：远端不可达时不该让一次运行挂满 10 分钟。 */
+    private static final long FETCH_TIMEOUT_SECONDS = 90;
     private static final String AGENT_REMOTE = "agent";
 
     private final Path workspaceRoot;
@@ -315,12 +317,13 @@ public class GitWorktreeManager {
         if (!Files.isDirectory(bare.resolve("objects"))) {
             throw new GitIntakeException("项目仓库不存在：" + bare);
         }
-        run(bare, List.of("git", "fetch", "--all", "--quiet"), "git fetch origin");
+        run(bare, List.of("git", "fetch", "--all", "--quiet"), "git fetch origin", FETCH_TIMEOUT_SECONDS);
     }
 
     /** 在指定（用户）仓库目录内 fetch 远端（DIRECT/REMOTE 模式同步最新代码）。 */
     public void fetchRemoteIn(Path repoDir) {
-        run(repoDir, List.of("git", "fetch", "--all", "--quiet"), "git fetch（用户目录）");
+        run(repoDir, List.of("git", "fetch", "--all", "--quiet"), "git fetch（用户目录）",
+                FETCH_TIMEOUT_SECONDS);
     }
 
     /**
@@ -355,8 +358,13 @@ public class GitWorktreeManager {
 
     /** 用户目录工作区状态（未提交改动）：porcelain 行列表。 */
     public List<String> statusPorcelain(Path localDir) {
-        return run(localDir, List.of("git", "status", "--porcelain"), "git status")
-                .logTail().lines().filter(l -> !l.isBlank()).toList();
+        try {
+            return tryRun(localDir, List.of("git", "status", "--porcelain"), "git status")
+                    .logTail().lines().filter(l -> !l.isBlank()).toList();
+        } catch (GitIntakeException noWorkTree) {
+            // bare 仓库（MANAGED）没有工作区："this operation must be run in a work tree" 是预期结果
+            return List.of();
+        }
     }
 
     /** 提交区间列表（oneline）：{@code from..to}。 */
@@ -378,10 +386,47 @@ public class GitWorktreeManager {
         return out.logTail().lines().filter(l -> !l.isBlank()).map(String::trim).toList();
     }
 
+    /** 列出分支（普通仓库/worktree 内）：refs/heads/xxx。 */
+    public List<String> localBranches(Path repoDir) {
+        ActionResult out = run(repoDir,
+                List.of("git", "for-each-ref", "--format=%(refname:short)", "refs/heads"), "git branch");
+        return out.logTail().lines().filter(l -> !l.isBlank()).map(String::trim).toList();
+    }
+
+    /**
+     * 在指定仓库目录切换分支（DIRECT 的用户目录 / MANAGED 的 worktree）。
+     *
+     * <p>只接受普通分支名：拒绝空白、以 {@code -} 开头、含路径穿越的输入，
+     * 避免把参数拼成 git 选项或跳出仓库。
+     */
+    public void checkout(Path repoDir, String branch) {
+        String name = branch == null ? "" : branch.trim();
+        if (!name.matches("[A-Za-z0-9._/-]+") || name.startsWith("-") || name.contains("..")) {
+            throw new GitIntakeException("分支名不合法：" + branch);
+        }
+        run(repoDir, List.of("git", "checkout", "--quiet", name), "git checkout " + name);
+    }
+
     // ---------------------------------------------------------------- 内部
 
     /** 跑一条 git 命令；失败抛 GitIntakeException（带原始报错）。 */
     private ActionResult run(Path dir, List<String> argv, String what) {
+        return run(dir, argv, what, GIT_TIMEOUT_SECONDS);
+    }
+
+    private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds) {
+        return run(dir, argv, what, timeoutSeconds, false);
+    }
+
+    /**
+     * 允许失败的探测（如"分支没有 upstream"）：非零退出不算异常信号，不记 WARN。
+     * 仍然抛异常，由调用方决定如何降级。
+     */
+    private ActionResult tryRun(Path dir, List<String> argv, String what) {
+        return run(dir, argv, what, GIT_TIMEOUT_SECONDS, true);
+    }
+
+    private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds, boolean quiet) {
         // 目录必须先存在：ProcessBuilder 对无效目录抛 CreateProcess error=267（目录名称无效），
         // 这种 OS 码对用户毫无意义——转成"先接入项目"的可读指引。
         if (dir == null || !Files.isDirectory(dir)) {
@@ -389,22 +434,44 @@ public class GitWorktreeManager {
                     what + " 失败：git 仓库目录不存在（" + dir + "）。该项目尚未完成接入，请先在「项目接入」页完成 clone 或本地登记。");
         }
         try {
-            Process p = new ProcessBuilder(argv)
+            ProcessBuilder pb = new ProcessBuilder(argv)
                     .directory(dir.toFile())
-                    .redirectErrorStream(true)
-                    .start();
-            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            if (!p.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS) || p.exitValue() != 0) {
-                if (!p.waitFor(10, TimeUnit.SECONDS)) {
-                    p.destroyForcibly();
+                    .redirectErrorStream(true);
+            // 远端不可达时 git 可能会等待凭据输入：禁止交互，让它尽快失败而不是挂住
+            pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+            Process p = pb.start();
+            // 输出必须与等待并行读取：先 readAllBytes 会一直阻塞到进程退出，
+            // 超时参数就形同虚设（远端 hang 住时整条运行永远是"进行中"）。
+            StringBuilder out = new StringBuilder();
+            Thread pump = Thread.ofVirtual().start(() -> {
+                try (var in = p.getInputStream()) {
+                    out.append(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+                } catch (IOException ignored) {
+                    // 进程被强杀时流会提前关闭，属预期
                 }
-                String detail = out.isBlank() ? ("exit " + p.exitValue()) : out;
-                log.warn("git 命令失败 [{}]：{}", what, detail);
+            });
+            boolean finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                p.waitFor(10, TimeUnit.SECONDS);
+            }
+            pump.join(TimeUnit.SECONDS.toMillis(10));
+            String output = out.toString();
+            if (!finished) {
+                log.warn("git 命令超时 [{}]：{}", what, output);
+                throw new GitIntakeException(what + " 超时（" + timeoutSeconds + "s）："
+                        + "远端不可达或网络过慢，请检查仓库地址/网络后重试");
+            }
+            if (p.exitValue() != 0) {
+                String detail = output.isBlank() ? ("exit " + p.exitValue()) : output;
+                if (!quiet) {
+                    log.warn("git 命令失败 [{}]：{}", what, detail);
+                }
                 throw new GitIntakeException(what + " 失败：\n" + detail);
             }
             return new ActionResult(
                     top.rongx.agent.domain.run.StageResult.success("git", 0, List.of(), 0),
-                    out);
+                    output);
         } catch (IOException e) {
             throw new GitIntakeException(what + " 失败（无法启动 git）：" + e.getMessage());
         } catch (InterruptedException e) {
@@ -491,7 +558,8 @@ public class GitWorktreeManager {
     /** ref 对应的 upstream（如 origin/main）；无则返回 null。 */
     public String upstreamOf(Path repoDir, String ref) {
         try {
-            ActionResult out = run(repoDir,
+            // 本地新分支没有 upstream 是常态（fatal: no upstream configured），不该刷 WARN
+            ActionResult out = tryRun(repoDir,
                     List.of("git", "rev-parse", "--abbrev-ref", ref + "@{upstream}"), "git upstream");
             String name = out.logTail().trim().lines().findFirst().orElse("").trim();
             return (name.isBlank() || name.contains("fatal") || "HEAD".equals(name)) ? null : name;

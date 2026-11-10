@@ -40,6 +40,8 @@ public class DockerSandbox {
     private final String cacheVolumePrefix;
     /** 已初始化的卷（避免每次 docker run 都做一次 chown）。 */
     private static final Set<String> INITIALIZED_VOLUMES = ConcurrentHashMap.newKeySet();
+    /** 当前线程正在运行的容器名（用于超时/取消后清理，避免 docker run 客户端被杀而容器残留）。 */
+    private static final ThreadLocal<String> ACTIVE_CONTAINER = new ThreadLocal<>();
 
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user) {
@@ -71,6 +73,12 @@ public class DockerSandbox {
         cmd.add(dockerBinary);
         cmd.add("run");
         cmd.add("--rm");
+        // 1b. 固定容器名：超时/取消时据此 docker rm -f，防止 CLI 被杀后容器成孤儿
+        String containerName = ACTIVE_CONTAINER.get();
+        if (containerName != null) {
+            cmd.add("--name");
+            cmd.add(containerName);
+        }
         cmd.add("--entrypoint=");
         // 2. 网络档位（默认 bridge，可配 none 防外联）
         cmd.add("--network");
@@ -96,7 +104,7 @@ public class DockerSandbox {
         cmd.add(hostPath(workspace) + ":" + CONTAINER_WORKDIR);
         // 5b. 依赖缓存卷：Maven ~/.m2 与 npm cache 跨构建复用（按项目隔离）
         if (cacheVolumePrefix != null && !cacheVolumePrefix.isBlank()) {
-            String name = safeVolumeName(cacheVolumePrefix + "-" + workspace.getFileName());
+            String name = safeVolumeName(cacheVolumePrefix + "-" + cacheKey(workspace));
             ensureCacheVolumeWritable(name);
             cmd.add("-v");
             cmd.add(name + ":/cache");
@@ -116,6 +124,44 @@ public class DockerSandbox {
         String absolute = workspace.toAbsolutePath().normalize().toString().replace('\\', '/');
         // Windows 下 E:\x → E:/x 即可被 Docker Desktop 接受；若以 / 开头说明已是 POSIX
         return absolute;
+    }
+
+    /**
+     * 缓存卷的项目键：worktree 每次运行名字都不同（wt-build-run-xxx），
+     * 用 worktree 目录名会让缓存永远命中不了；取 {@code <project>/worktrees/<wt>} 里的项目名。
+     */
+    static String cacheKey(Path workspace) {
+        Path parent = workspace.getParent();
+        if (parent != null && parent.getFileName() != null
+                && "worktrees".equals(parent.getFileName().toString())
+                && parent.getParent() != null && parent.getParent().getFileName() != null) {
+            return parent.getParent().getFileName().toString();
+        }
+        return workspace.getFileName() == null ? "default" : workspace.getFileName().toString();
+    }
+
+    /** 开始一次容器执行：生成容器名并绑定到当前线程，供超时清理使用。 */
+    public String beginContainer() {
+        String name = "agent-act-" + java.util.UUID.randomUUID().toString()
+                .replace("-", "").substring(0, 12);
+        ACTIVE_CONTAINER.set(name);
+        return name;
+    }
+
+    /** 结束容器执行：无论成功、失败还是超时都清理容器，避免孤儿进程占端口/内存。 */
+    public void endContainer(String name) {
+        ACTIVE_CONTAINER.remove();
+        if (name == null || name.isBlank()) {
+            return;
+        }
+        try {
+            Process p = new ProcessBuilder(dockerBinary, "rm", "-f", name)
+                    .redirectErrorStream(true).start();
+            p.getInputStream().readAllBytes();
+            p.waitFor(30, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            // 容器已随 --rm 退出或 docker 不可用：清理失败不影响动作结果
+        }
     }
 
     /**

@@ -13,25 +13,32 @@ import org.springframework.context.annotation.Primary;
  * <ul>
  *   <li>{@code readOnlyToolkit}：只含只读工具，供<b>生产环境</b>会话使用——
  *       写工具根本不在 schema 里（比"组未激活"更强的保证）；</li>
- *   <li>{@code fullToolkit}：只读工具 + 写组（初始激活），供<b>非生产环境</b>会话使用。</li>
+ *   <li>{@code fullToolkit}：只读工具 + 全部写工具，供<b>非生产环境</b>会话使用。</li>
  * </ul>
  * 这样"生产环境没有写工具"是装配层面的，而不是提示词层面的。
+ *
+ * <p><b>为什么不把写工具放进工具组：</b>AgentScope 的 ReActAgent 在每次 call 前都会用
+ * 会话状态里的 {@code activatedGroups} 覆盖 Toolkit 的激活集，而新会话的该列表为空——
+ * 放进自定义分组的工具会被整体过滤掉，模型也就看不到 {@code request_confirmation}，
+ * 与系统提示自相矛盾。写操作的边界由只读 Toolkit（生产）与确认卡/控制器共同保证，
+ * 不依赖工具组的激活状态。
  */
 @Configuration
 public class ToolCatalog {
-
-    /** 写操作工具分组名。 */
-    public static final String GROUP_WRITE = "write";
 
     @Bean
     @Qualifier("readOnlyToolkit")
     public Toolkit readOnlyToolkit(ProjectTools projectTools,
                                    CiQueryTools ciQueryTools,
-                                   ActionQueryTools actionQueryTools) {
+                                   ActionQueryTools actionQueryTools,
+                                   RepoQueryTools repoQueryTools,
+                                   RuntimeTools runtimeTools) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
+        toolkit.registerTool(repoQueryTools);
+        toolkit.registerTool(runtimeTools);
         return toolkit;
     }
 
@@ -43,20 +50,25 @@ public class ToolCatalog {
                                 ChangeTools changeTools,
                                 ActionQueryTools actionQueryTools,
                                 ActionCommandTools actionCommandTools,
-                                DeployTools deployTools) {
+                                DeployTools deployTools,
+                                EnvTools envTools,
+                                RepoQueryTools repoQueryTools,
+                                RuntimeTools runtimeTools) {
         Toolkit toolkit = new Toolkit();
 
-        // 只读工具：注册即生效（进入 basic 组）
+        // 只读工具
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
+        toolkit.registerTool(envTools);
         toolkit.registerTool(deployTools);
+        toolkit.registerTool(repoQueryTools);
+        toolkit.registerTool(runtimeTools);
 
-        // 写操作单独成组：非生产会话激活
-        toolkit.createToolGroup(GROUP_WRITE, "会改变环境状态的操作（构建 / 变更请求 / 固化脚本）", true);
-        toolkit.registration().tool(ciCommandTools).group(GROUP_WRITE).apply();
-        toolkit.registration().tool(changeTools).group(GROUP_WRITE).apply();
-        toolkit.registration().tool(actionCommandTools).group(GROUP_WRITE).apply();
+        // 写操作工具：直接注册，保证非生产会话始终可见（确认交给变更单 / 确认卡）
+        toolkit.registerTool(ciCommandTools);
+        toolkit.registerTool(changeTools);
+        toolkit.registerTool(actionCommandTools);
 
         return toolkit;
     }
@@ -71,12 +83,16 @@ public class ToolCatalog {
     public Toolkit deployToolkit(ProjectTools projectTools,
                                  CiQueryTools ciQueryTools,
                                  ActionQueryTools actionQueryTools,
-                                 DeployTools deployTools) {
+                                 DeployTools deployTools,
+                                 EnvTools envTools,
+                                 RuntimeTools runtimeTools) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
+        toolkit.registerTool(envTools);
         toolkit.registerTool(deployTools);
+        toolkit.registerTool(runtimeTools);
         return toolkit;
     }
 }

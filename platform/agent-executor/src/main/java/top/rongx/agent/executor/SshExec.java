@@ -31,11 +31,19 @@ public class SshExec implements SshAccess {
         if (!echo.ok()) {
             return Result.failed(1, echo.stderr());
         }
+        // docker version 的模板字段是 .Server.Version；旧写法 {{.ServerVersion}} 会让
+        // docker CLI 报 "can't evaluate field ServerVersion in type system.versionInfo"，
+        // 导致 SSH 明明连通却一直判为失败。模板必须用引号包住，避免被远端 shell 展开。
+        // 老版本 CLI 再兜底到 docker info 的 .ServerVersion。
         JschSsh.Result docker = ssh.run(server.host(), server.port(), server.sshUser(),
                 server.authType(), server.keyPath(), secret,
-                "docker version --format {{.ServerVersion}}");
+                "docker version --format '{{.Server.Version}}' "
+                        + "|| docker info --format '{{.ServerVersion}}'");
         if (!docker.ok()) {
-            return Result.failed(1, "SSH 已连通，但远端 docker 不可用：" + docker.stderr());
+            String reason = docker.stderr();
+            return Result.failed(1, "SSH 已连通，但远端 docker 不可用："
+                    + (reason == null || reason.isBlank()
+                    ? "docker version / docker info 执行失败" : reason));
         }
         return Result.ok("docker " + docker.stdout());
     }

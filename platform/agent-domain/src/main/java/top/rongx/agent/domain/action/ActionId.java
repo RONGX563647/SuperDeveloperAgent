@@ -14,6 +14,7 @@ public enum ActionId {
     BACKEND_BUILD("backend_build", ToolLevel.L2_EXECUTE_ISOLATED),
     BACKEND_TEST("backend_test", ToolLevel.L2_EXECUTE_ISOLATED),
     FRONTEND_BUILD("frontend_build", ToolLevel.L2_EXECUTE_ISOLATED),
+    FRONTEND_TEST("frontend_test", ToolLevel.L2_EXECUTE_ISOLATED),
     IMAGE_PACKAGE("image_package", ToolLevel.L2_EXECUTE_ISOLATED),
     STACK_DEPLOY("stack_deploy", ToolLevel.L3_EXECUTE_PROD),
     STACK_ROLLBACK("stack_rollback", ToolLevel.L3_EXECUTE_PROD);

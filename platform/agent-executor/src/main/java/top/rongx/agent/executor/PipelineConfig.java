@@ -48,6 +48,40 @@ public class PipelineConfig {
         return new SshExec(knownHosts);
     }
 
+    /** 应用容器只读巡检：env_runtime_status / app_logs 的运行时事实来源。 */
+    @Bean
+    public AppRuntimeInspector appRuntimeInspector() {
+        return new AppRuntimeInspector();
+    }
+
+    /** 中间件运行时：部署前自动启动项目引用的 docker 中间件（设置页也可手动启停）。 */
+    @Bean
+    public top.rongx.agent.domain.env.EnvRuntime envRuntime(
+            top.rongx.agent.domain.env.EnvironmentStore envStore,
+            top.rongx.agent.domain.settings.DeployServerRepository servers,
+            top.rongx.agent.domain.settings.SshAccess sshAccess) {
+        return new DockerEnvRuntime(envStore, servers, sshAccess);
+    }
+
+    /** 环境容器自愈：项目在该环境缺中间件时按需创建隔离容器，并注入连接信息。 */
+    @Bean
+    public top.rongx.agent.domain.env.EnvProvisioner envProvisioner(
+            top.rongx.agent.domain.env.EnvironmentStore envStore,
+            top.rongx.agent.domain.port.ProjectRepoLocator repoLocator) {
+        return new DockerEnvProvisioner(envStore, repoLocator);
+    }
+
+    /** 开发环境本机托管（后端 jar + 前端 dist）；登记 ServiceLease 并共用 dev 日志目录。 */
+    @Bean
+    public LocalDevHostDeployer localDevHostDeployer(
+            top.rongx.agent.domain.env.EnvironmentStore envStore,
+            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+        // 与 LocalProcessServiceRuntime 的 stateRoot 对齐：app_logs dev 读同一份 backend.log
+        var logRoot = java.nio.file.Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("local");
+        return new LocalDevHostDeployer(envStore, logRoot);
+    }
+
     @Bean
     public PipelineEngine pipelineEngine(ActionResolver recipes,
                                          @Qualifier("hostActionRunner") ProcessActionRunner host,
@@ -60,15 +94,39 @@ public class PipelineConfig {
                                          top.rongx.agent.domain.port.PipelineDefStore defStore,
                                          top.rongx.agent.domain.port.ProjectScaffolder scaffolder,
                                          top.rongx.agent.domain.port.RecipeStore recipeStore,
+                                         top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
+                                         top.rongx.agent.domain.env.EnvironmentStore envStore,
+                                         LocalDevHostDeployer localDevHost,
+                                         top.rongx.agent.domain.env.EnvRuntime envRuntime,
+                                         top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
                                          org.springframework.beans.factory.ObjectProvider<
-                                                 top.rongx.agent.domain.port.PipelineDefAuthor> defAuthor) {
+                                                 top.rongx.agent.domain.port.PipelineDefAuthor> defAuthor,
+                                         org.springframework.beans.factory.ObjectProvider<
+                                                 top.rongx.agent.domain.run.RunRecoveryAdvisor> recoveryAdvisor) {
         Path root = Path.of(workspaceRoot);
         RunHistoryStore store = persist ? RunHistoryStore.file(root) : RunHistoryStore.disabled();
         // 定义解析：仓库提交覆盖 > 环境固化脚本 > 平台定义 > 规则生成 > agent 兜底
         PipelineDefinitionResolver resolver = new PipelineDefinitionResolver(
                 defStore, scaffolder, defAuthor.getIfAvailable(), recipeStore);
+        // 失败自动诊断：用 ObjectProvider 延迟到"运行失败时"才解析，避免
+        // pipelineEngine → advisor → ChatService → 工具 → pipelineEngine 的 Bean 循环依赖。
+        top.rongx.agent.domain.run.RunRecoveryAdvisor lazyRecovery =
+                new top.rongx.agent.domain.run.RunRecoveryAdvisor() {
+                    @Override
+                    public boolean available() {
+                        return recoveryAdvisor.getIfAvailable() != null;
+                    }
+
+                    @Override
+                    public java.util.List<String> advise(
+                            top.rongx.agent.domain.run.RunRecoveryAdvisor.Context ctx) {
+                        var target = recoveryAdvisor.getIfAvailable();
+                        return target == null ? java.util.List.of() : target.advise(ctx);
+                    }
+                };
         BuiltInPipelineEngine engine = new BuiltInPipelineEngine(recipes, sandboxed, host, root, store,
-                imagePrefix, repoLocator, deployers, resolver, recipeStore);
+                imagePrefix, repoLocator, deployers, resolver, recipeStore, envVars, envStore,
+                envRuntime, envProvisioner, lazyRecovery, localDevHost);
         // 应用关闭时中断执行线程，避免悬挂构建进程。
         // 用虚拟线程工厂创建钩子线程（规约 R04 禁止 new Thread）；
         // 虚拟线程必须为 daemon，而 JVM 退出本身会回收这些轻量线程，关闭语义不受影响。

@@ -34,12 +34,15 @@ public class ProjectScaffoldController {
     private final ProjectScaffolder scaffolder;
     private final ProjectRepoLocator repoLocator;
     private final PipelineDefStore defStore;
+    private final top.rongx.agent.domain.port.RecipeStore recipes;
 
     public ProjectScaffoldController(ProjectScaffolder scaffolder, ProjectRepoLocator repoLocator,
-                                     PipelineDefStore defStore) {
+                                     PipelineDefStore defStore,
+                                     top.rongx.agent.domain.port.RecipeStore recipes) {
         this.scaffolder = scaffolder;
         this.repoLocator = repoLocator;
         this.defStore = defStore;
+        this.recipes = recipes;
     }
 
     /**
@@ -104,8 +107,16 @@ public class ProjectScaffoldController {
                 String pipelineYaml = fileContent(plan, "ci/pipeline.yml");
                 String actionsYaml = fileContent(plan, "ci/actions.yml");
                 boolean saved = defStore.write(id, pipelineYaml, actionsYaml);
+                if (saved && overwrite) {
+                    // 旧的环境脚本是旧定义的固化产物：继续生效会让"重新生成"看起来没作用。
+                    // 只失效 current 指针，历史版本仍可人工 activate 回来。
+                    for (String env : List.of("dev", "test", "prod")) {
+                        recipes.invalidate(id, env);
+                    }
+                }
                 log.info("项目 {} 脚手架保存到平台：target={} saved={}", id, deployTarget.wireName(), saved);
                 out.put("savedTo", "platform");
+                out.put("resetRecipes", saved && overwrite);
                 out.put("written", saved
                         ? List.of("platform:" + defStore.rootOf(id).resolve("ci/pipeline.yml"),
                         "platform:" + defStore.rootOf(id).resolve("ci/actions.yml"))

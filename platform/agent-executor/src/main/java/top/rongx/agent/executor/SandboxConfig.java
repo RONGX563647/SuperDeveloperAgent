@@ -30,8 +30,10 @@ public class SandboxConfig {
             @Value("${agent.sandbox.memory:2g}") String memory,
             @Value("${agent.sandbox.cpus:2}") String cpus,
             @Value("${agent.sandbox.pids-limit:512}") int pidsLimit,
-            @Value("${agent.sandbox.user:1000:1000}") String user) {
-        return new DockerSandbox(binary, image, network, memory, cpus, pidsLimit, user);
+            @Value("${agent.sandbox.user:1000:1000}") String user,
+            @Value("${agent.sandbox.cache-volume-prefix:}") String cacheVolumePrefix) {
+        return new DockerSandbox(binary, image, network, memory, cpus, pidsLimit, user,
+                cacheVolumePrefix);
     }
 
     @Bean

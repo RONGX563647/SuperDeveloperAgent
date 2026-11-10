@@ -2,28 +2,27 @@
 import { computed } from 'vue'
 import type { AgentProjection } from '../../types'
 import MessageItem from './MessageItem.vue'
+import ThinkingBlock from './ThinkingBlock.vue'
 
 /**
  * 消息时间线（参考 ruoyi-copilot 的 ConversationTimeline.vue 的职责）：
- * 接收 reducer 投影 + 本地 user 消息，统一渲染成消息列；
+ * 只渲染 reducer 投影里的消息列（user 消息也在其中，保证多轮顺序）；
  * 滚动容器和粘底逻辑由父视图持有（scroll container 放在 View 层便于布局）。
  */
 interface Props {
   projection: AgentProjection
-  /** 本地 user/greeting 消息（reducer 不处理 user 侧）。 */
-  localUserMessages?: AgentProjection['messages']
   /** 是否在流式生成中（决定光标与步骤行的运行态）。 */
   streaming?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { localUserMessages: () => [] })
+const props = defineProps<Props>()
 
 const emit = defineEmits<{ (e: 'copy', text: string): void }>()
 
 /** 确认卡是否已展开（由父视图通过 v-model 式同步；展开后隐藏提示条避免信息重复）。 */
 const cardOpen = defineModel<boolean>('cardOpen', { default: false })
 
-const items = computed(() => [...props.localUserMessages, ...props.projection.messages])
+const items = computed(() => props.projection.messages)
 
 /** 是否最后一条 assistant 消息（挂流式光标）。 */
 const lastAssistantId = computed(() => {
@@ -48,6 +47,8 @@ function itemActive(index: number, m: { role: string; id: string }): boolean {
 
 /** 流式轮次作为虚拟的"最后一块 assistant 正文"追加。 */
 const streamingText = computed(() => props.projection.streamingTurn?.text ?? '')
+/** 思考增量：与正文同样逐帧刷新，正文开始后自动收起。 */
+const streamingThinking = computed(() => props.projection.streamingTurn?.thinking ?? '')
 </script>
 
 <template>
@@ -56,14 +57,21 @@ const streamingText = computed(() => props.projection.streamingTurn?.text ?? '')
       v-for="(m, i) in items"
       :key="m.id"
       :message="m"
+      :tool="m.toolCallId ? projection.tools[m.toolCallId] : undefined"
       :streaming="itemActive(i, m)"
       @copy="emit('copy', $event)"
     />
 
-    <!-- 流式中的 assistant 正文（尚未落盘） -->
+    <!-- 流式中的 assistant 思考 + 正文（尚未落盘，随 SSE 增量实时刷新） -->
     <div v-if="projection.streamingTurn" class="row assistant">
       <div class="assistant-block">
-        <span class="streaming-text">{{ streamingText }}</span><span class="caret" />
+        <ThinkingBlock
+          v-if="streamingThinking"
+          :content="streamingThinking"
+          :active="!streamingText"
+        />
+        <span v-if="streamingText" class="streaming-text">{{ streamingText }}</span>
+        <span class="caret" />
       </div>
     </div>
 
@@ -80,15 +88,17 @@ const streamingText = computed(() => props.projection.streamingTurn?.text ?? '')
 .chat-column {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   width: 100%;
-  max-width: 54rem;
+  max-width: 45rem;
   min-height: 100%;
-  padding: 0 0 24px clamp(0px, 2vw, 24px);
+  padding: 0 0 28px;
+  margin: 0 auto;
 }
 .row.assistant {
   display: flex;
   min-width: 0;
+  margin-top: 6px;
 }
 .assistant-block {
   display: flex;

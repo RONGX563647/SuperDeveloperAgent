@@ -1,8 +1,9 @@
 import { computed, onScopeDispose, shallowRef } from 'vue'
 import type { ShallowRef } from 'vue'
 import { streamChatOnce } from '../api/sse'
-import type { AgentEvent, AgentProjection } from '../types'
+import type { AgentEvent, AgentProjection, ChatMessage, ToolActivity } from '../types'
 import { emptyAgentProjection, reduceAgentEvent } from '../state/agentEventReducer'
+import { addSessionCost, emptySessionCost } from '../utils/deepseekPricing'
 
 /**
  * 会话编排 composable（参考 ruoyi-copilot 的 useHarnessAgent 收敛而来）：
@@ -59,6 +60,24 @@ export function useAgentChat(options: UseAgentChatOptions) {
     error.value = ''
   }
 
+  /** 追加一条本地消息（user 侧）：与 reducer 的消息放在同一列表，保证多轮顺序正确。 */
+  function appendMessage(message: ChatMessage): void {
+    projection.value = {
+      ...projection.value,
+      messages: [...projection.value.messages, message],
+    }
+  }
+
+  /** 恢复历史会话快照（切换会话 / 刷新页面时用）。 */
+  function hydrate(messages: ChatMessage[], tools: Record<string, ToolActivity>): void {
+    // 会话累计费用随历史一起重建，刷新/切回会话不会归零
+    const sessionCost = messages.reduce(
+      (acc, message) => (message.cost ? addSessionCost(acc, message.cost) : acc),
+      emptySessionCost(),
+    )
+    projection.value = { ...emptyAgentProjection(), messages, tools, sessionCost }
+  }
+
   async function send(text: string): Promise<void> {
     const trimmed = text.trim()
     if (!trimmed || streaming.value) return
@@ -69,6 +88,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
     error.value = ''
     timer = setInterval(() => (elapsedMs.value += 100), 100)
     controller = new AbortController()
+    // 每次发送都是一个独立的 SSE 流（sequence 从 1 重新计数）：
+    // 不重置去重游标的话，第二轮的全部事件会被 reducer 当成「迟到事件」丢弃，
+    // 表现为第二问发出后完全收不到回复。
+    projection.value = { ...projection.value, lastSequence: 0 }
 
     try {
       await streamChatOnce(
@@ -111,6 +134,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
             id: `seq-final-${current.messages.length}-${Date.now()}`,
             role: 'assistant',
             text: current.streamingTurn.text || '（连接中断）',
+            thinking: current.streamingTurn.thinking || undefined,
+            cost: current.streamingTurn.cost,
             at: Date.now(),
           }],
         }
@@ -151,6 +176,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
     // 动作
     send,
     stop,
+    appendMessage,
+    hydrate,
     reset: resetProjection,
   }
 }

@@ -98,6 +98,26 @@ public class ProjectIntakeController {
         return intake.status(projectId);
     }
 
+    // ---------------------------------------------------------------- 环境
+
+    /**
+     * 项目已配置的环境（对话页环境下拉用）。
+     *
+     * <p>只返回项目真实存在的环境，避免前端选到未配置的 dev 后被服务端拒绝。
+     */
+    @GetMapping("/{id}/envs")
+    public List<Map<String, Object>> envs(@PathVariable String id) {
+        return projects.findEnvs(id).stream()
+                .map(e -> {
+                    Map<String, Object> row = new java.util.LinkedHashMap<>();
+                    row.put("env", e.env());
+                    row.put("appUrl", e.appUrl() == null ? "" : e.appUrl());
+                    row.put("composeDir", e.composeDir() == null ? "" : e.composeDir());
+                    return row;
+                })
+                .toList();
+    }
+
     // ---------------------------------------------------------------- git 状态 / 对比 / 同步
 
     /** git 仓库上下文：DIRECT = 用户目录；MANAGED = 平台 bare。 */
@@ -145,8 +165,11 @@ public class ProjectIntakeController {
         out.put("head", git.revParse(dir, "HEAD"));
         String branch = git.currentBranch(dir);
         out.put("branch", branch);
-        if (!ctx.direct()) {
-            out.put("branches", git.branches(id));
+        // DIRECT 的用户目录同样要给出分支列表（此前只在 MANAGED 下返回，分支选择器因此为空）
+        try {
+            out.put("branches", ctx.direct() ? git.localBranches(dir) : git.branches(id));
+        } catch (Exception e) {
+            out.put("branches", List.of());
         }
         // 远程：名称 + URL（修复：之前完全不返回，前端"检测不到远程"）
         List<Map<String, String>> remotes = new ArrayList<>();
@@ -168,6 +191,7 @@ public class ProjectIntakeController {
             out.put("ahead", 0L);
             out.put("behind", 0L);
         }
+        // 未提交改动：bare 仓库（MANAGED）没有工作区，manager 内部会降级为空列表
         try {
             out.put("uncommitted", git.statusPorcelain(dir));
         } catch (Exception e) {
@@ -212,6 +236,65 @@ public class ProjectIntakeController {
             git.fetchRemote(id);
         }
         return Map.of("ok", true, "head", git.revParse(ctx.dir(), "HEAD"));
+    }
+
+    /**
+     * 切换分支：body {@code {branch, worktree?}}。
+     *
+     * <p>DIRECT 直接在用户目录切换；MANAGED 的 bare 没有工作区，切换发生在平台 worktree
+     * （未指定时优先 wt-verify，其次任一已登记 worktree）。切换前不自动 stash：
+     * 有未提交改动时 git 会自己拒绝，原始报错透传给前端。
+     */
+    @PostMapping("/{id}/git/checkout")
+    public Map<String, Object> checkout(@PathVariable String id,
+                                        @RequestBody(required = false) Map<String, Object> body) {
+        currentUser.requireUserId();
+        Map<String, Object> payload = body == null ? Map.of() : body;
+        String branch = str(payload, "branch");
+        if (branch == null || branch.isBlank()) {
+            throw new IllegalArgumentException("branch 不能为空");
+        }
+        RepoContext ctx = repoContext(id);
+        if (!ctx.initialized()) {
+            throw new IllegalArgumentException("该项目尚未完成 git 接入，无法切换分支。");
+        }
+        String worktree = str(payload, "worktree");
+        Path target = checkoutTarget(id, ctx, worktree);
+        git.checkout(target, branch);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("branch", git.currentBranch(target));
+        out.put("worktree", worktree == null ? "" : worktree);
+        out.put("head", git.revParse(target, "HEAD"));
+        return out;
+    }
+
+    private Path checkoutTarget(String id, RepoContext ctx, String worktree) {
+        if (worktree != null && !worktree.isBlank() && !"main".equals(worktree)) {
+            if (worktree.contains("..") || worktree.contains("/") || worktree.contains("\\")) {
+                throw new IllegalArgumentException("工作树名称不合法：" + worktree);
+            }
+            Path base = ctx.direct()
+                    ? ctx.dir().resolve(".agent").resolve("worktrees")
+                    : git.worktreesDir(id);
+            Path target = base.resolve(worktree);
+            if (!Files.isDirectory(target)) {
+                throw new IllegalArgumentException("工作树不存在：" + worktree);
+            }
+            return target;
+        }
+        if (ctx.direct()) {
+            return ctx.dir();
+        }
+        Path verify = git.verifyWorktree(id);
+        if (Files.isDirectory(verify)) {
+            return verify;
+        }
+        List<GitWorktreeManager.WorktreeInfo> list = git.listWorktrees(id);
+        if (list.isEmpty()) {
+            throw new IllegalArgumentException("该项目还没有可用的工作树，无法切换分支。");
+        }
+        return Path.of(list.get(0).path());
     }
 
     /** 远程分支列表（UI 选择对比目标用）。 */

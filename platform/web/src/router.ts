@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getToken, me } from './api/auth'
+import { getToken, me, setUnauthorizedHandler } from './api/auth'
 import { appStore } from './stores/app'
 import ChatView from './views/ChatView.vue'
 import PipelineView from './views/PipelineView.vue'
@@ -35,6 +35,7 @@ router.beforeEach(async (to) => {
     return true
   }
   if (!getToken()) {
+    appStore.clearIdentity()
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (!appStore.identity.userId) {
@@ -43,13 +44,29 @@ router.beforeEach(async (to) => {
       appStore.setIdentity({
         userId: identity.userId,
         displayName: identity.displayName,
-        role: identity.role
+        role: identity.role,
+        permissions: identity.permissions
       })
     } catch {
+      appStore.clearIdentity()
       return { name: 'login', query: { redirect: to.fullPath } }
     }
   }
   return true
+})
+
+/**
+ * 任意接口返回 401（会话过期 / 后端重启）时统一收口：
+ * 清身份 + 回到登录页，并带上当前路径以便登录后跳回。
+ *
+ * <p>否则界面会一直是"已登录"的样子，用户点任何按钮都只看到
+ * "未登录或会话已过期"，却始终停在原页面。
+ */
+setUnauthorizedHandler(() => {
+  appStore.clearIdentity()
+  const current = router.currentRoute.value
+  if (current.name === 'login') return
+  void router.replace({ name: 'login', query: { redirect: current.fullPath } })
 })
 
 export default router

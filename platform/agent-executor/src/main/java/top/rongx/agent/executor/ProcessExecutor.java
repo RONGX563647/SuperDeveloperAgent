@@ -156,8 +156,9 @@ final class ProcessExecutor {
         text = text.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._-]{16,}", "$1***");
         text = text.replaceAll("(?i)((?:" + "token|secret|password|passwd|api[_-]?key|access[_-]?key"
                 + "|authorization" + ")\\s*[=:]\\s*)[^\\s\"']{8,}", "$1***");
-        // 2. 长十六进制串（sha256/jwt 第二段等）按行内孤立 token 处理
-        text = text.replaceAll("\\b[0-9a-fA-F]{64}\\b", "***");
+        // 2. 长十六进制串（jwt 第二段等）按行内孤立 token 处理；
+        //    但 `sha256:<hex>` 是镜像/产物的公开指纹，属于构建证据，必须保留（否则页面上只剩 ***）。
+        text = text.replaceAll("(?<!sha256:)(?<!sha512:)\\b[0-9a-fA-F]{64}\\b", "***");
         // 3. 形如 -----BEGIN ... PRIVATE KEY----- 的 PEM 块
         text = text.replaceAll("(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "***PEM***");
         return text;

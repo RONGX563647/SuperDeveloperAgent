@@ -73,7 +73,14 @@ public class IntakeProjectStore implements AutoCloseable {
                     """)) {
                 st.executeUpdate();
             }
-            // 旧库迁移：加 storage_mode 列（幂等；已存在则忽略）
+            // 旧库迁移：补齐 dev 环境（历史接入只写了 test/prod，对话页因此没有「开发环境」）；
+            // dev 走本地服务、端口动态分配，故 app_url / compose_dir 留空。已存在则忽略（幂等）。
+            try (PreparedStatement st = conn.prepareStatement("""
+                    INSERT OR IGNORE INTO project_envs (project_id, env, app_url, compose_dir)
+                    SELECT id, 'dev', '', '' FROM projects
+                    """)) {
+                st.executeUpdate();
+            }
             try (PreparedStatement st = conn.prepareStatement(
                     "ALTER TABLE projects ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'MANAGED'")) {
                 st.executeUpdate();

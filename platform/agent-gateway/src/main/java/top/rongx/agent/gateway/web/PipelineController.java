@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
+import top.rongx.agent.domain.port.PipelineEngine.RunMeta;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.gateway.deploy.DeployGate;
@@ -27,20 +29,62 @@ public class PipelineController {
     private final boolean legacyServerConfigured;
     private final top.rongx.agent.domain.settings.DeployServerRepository deployServers;
     private final DeployGate deployGate;
+    private final top.rongx.agent.gateway.settings.EnvBindingService bindings;
+    private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
 
     public PipelineController(PipelineEngine engine,
                               @Value("${agent.deploy.server.host:}") String serverHost,
                               top.rongx.agent.domain.settings.DeployServerRepository deployServers,
-                              DeployGate deployGate) {
+                              DeployGate deployGate,
+                              top.rongx.agent.gateway.settings.EnvBindingService bindings,
+                              top.rongx.agent.gateway.auth.CurrentUser currentUser) {
         this.engine = engine;
         this.legacyServerConfigured = serverHost != null && !serverHost.isBlank();
         this.deployServers = deployServers;
         this.deployGate = deployGate;
+        this.bindings = bindings;
+        this.currentUser = currentUser;
     }
 
     @GetMapping("/pipelines")
     public Map<String, Object> pipelines(String projectId) {
         return Map.of("engine", engine.id(), "pipelines", engine.pipelines(projectId));
+    }
+
+    /**
+     * 阶段预览：点击"运行"之前先看清这次到底会跑哪些阶段。
+     *
+     * <p>「检查构建」会裁掉部署/健康检查；「发布」在仓库没有 Dockerfile 时也会裁掉镜像。
+     */
+    @GetMapping("/pipelines/{pipelineId}/preview")
+    public Map<String, Object> preview(@PathVariable String pipelineId,
+                                       @RequestParam String projectId,
+                                       @RequestParam(required = false) String env,
+                                       @RequestParam(required = false) String gitSha) {
+        return Map.of(
+                "pipelineId", pipelineId,
+                "env", env == null ? "" : env,
+                // 指定提交时按该提交的定义预览（仓库定义会随提交变化）
+                "gitSha", gitSha == null ? "" : gitSha,
+                "stages", engine.preview(projectId, pipelineId, env, gitSha).stream()
+                        .map(s -> {
+                            java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+                            row.put("id", s.id());
+                            row.put("type", s.type());
+                            row.put("action", s.action() == null ? "" : s.action());
+                            row.put("runner", s.runner() == null ? "" : s.runner());
+                            row.put("workdir", s.workdir() == null ? "" : s.workdir());
+                            // 跳过原因非空：这次不会执行（例如 verify 不部署/不产镜像）
+                            row.put("skipReason", s.skipReason() == null ? "" : s.skipReason());
+                            // 命令级预览：脚本由配方确定性渲染，执行日志首行与之一致
+                            row.put("shell", s.shell() == null ? "" : s.shell());
+                            row.put("command", s.command() == null ? "" : s.command());
+                            row.put("script", s.script() == null ? "" : s.script());
+                            row.put("scriptSha", s.scriptSha() == null ? "" : s.scriptSha());
+                            row.put("builtin", s.builtin());
+                            return row;
+                        })
+                        .toList());
     }
 
     @PostMapping("/pipelines/{pipelineId}/run")
@@ -60,9 +104,21 @@ public class PipelineController {
         String normalizedEnv = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
         // 服务器（prod）操作：测试证据 + 一次性人工确认令牌，两个入口（这里 / deploy/replay）共用同一校验
         deployGate.requireIfNeeded(projectId, normalizedEnv, sha, params.get("confirmToken"));
+        // Agent 触发：必须带已人工确认的环境绑定（普通 UI 触发不强制）
+        String bindingId = params.get("bindingId");
+        String actor = currentUser.requireUserId();
+        String confirmedBy = null;
+        if (bindingId != null && !bindingId.isBlank()) {
+            confirmedBy = bindings.requireForRun(bindingId, projectId, normalizedEnv).confirmedBy();
+        }
         Map<String, String> triggerParams = new LinkedHashMap<>();
         triggerParams.put("gitSha", sha);
         triggerParams.put("env", normalizedEnv);
+        triggerParams.put("actor", bindingId == null || bindingId.isBlank() ? "ui:" + actor : "agent");
+        if (bindingId != null && !bindingId.isBlank()) {
+            triggerParams.put("bindingId", bindingId);
+            triggerParams.put("confirmedBy", confirmedBy == null ? "" : confirmedBy);
+        }
         // 可选：本次运行的部署目标覆盖（docker / host / server），空则由 pipeline.yml 决定
         String deployTarget = params.get("deployTarget");
         if (deployTarget != null && !deployTarget.isBlank()) {
@@ -88,6 +144,21 @@ public class PipelineController {
                         "detail", "仅 Java jar；pid 文件管理"),
                 Map.of("target", "server", "label", "远程服务器", "available",
                         serverReady, "detail", serverDetail));
+    }
+
+    /**
+     * 停止开发环境本机前后端（停掉后可用 IDE 启动）。
+     *
+     * <p>与流水线"直接部署"配套：平台托管的本机进程随时可以交还给 IDE。
+     */
+    @PostMapping("/deploy/host/stop")
+    public Map<String, Object> stopLocalDev(@RequestParam String projectId,
+                                            @RequestParam(defaultValue = "dev") String env) {
+        boolean stopped = engine.stopLocalDev(projectId, env);
+        return Map.of("stopped", stopped,
+                "message", stopped
+                        ? "已停止本机前后端进程，可用 IDE 启动"
+                        : "本机没有平台托管的前后端进程");
     }
 
     @GetMapping("/runs/{runId}")
@@ -123,13 +194,18 @@ public class PipelineController {
         return toView(runId, true);
     }
 
-    /** 最近构建历史（按触发时间倒序；projectId 可选过滤）。 */
+    /** 构建历史（按触发时间倒序；projectId 可选过滤，offset/limit 分页）。 */
     @GetMapping("/history")
-    public List<Map<String, Object>> history(String projectId) {
+    public List<Map<String, Object>> history(String projectId,
+                                             @RequestParam(defaultValue = "0") int offset,
+                                             @RequestParam(defaultValue = "50") int limit) {
+        int from = Math.max(0, offset);
+        int size = Math.min(Math.max(1, limit), 200);
         return engine.history().stream()
                 .filter(h -> projectId == null || projectId.isBlank()
                         || h.projectId().equals(projectId))
-                .limit(50)
+                .skip(from)
+                .limit(size)
                 .map(h -> Map.<String, Object>of(
                         "runId", h.runId(),
                         "projectId", h.projectId(),
@@ -138,8 +214,48 @@ public class PipelineController {
                         "gitSha", h.gitSha(),
                         "status", h.status().name(),
                         "createdAt", h.createdAt(),
-                        "stageCount", h.stageCount()))
+                        "seq", h.seq(),
+                        "stageCount", h.stageCount(),
+                        // 各阶段耗时之和：列表直接显示「这次跑了多久」，不用再点进去
+                        "durationMs", h.durationMs()))
                 .toList();
+    }
+
+    /** 从失败阶段继续（复用保留的构建现场，只重跑该阶段及之后）。 */
+    @PostMapping("/runs/{runId}/retry")
+    public Map<String, Object> retry(@PathVariable String runId,
+                                     @RequestParam String stageId) {
+        try {
+            engine.retryStage(runId, stageId);
+            return Map.of("runId", runId, "retrying", true);
+        } catch (IllegalArgumentException e) {
+            return Map.of("runId", runId, "retrying", false, "message", e.getMessage());
+        }
+    }
+
+    /** 下载文件产物（jar / dist 等）：只允许读取本次运行的产物归档目录。 */
+    @GetMapping("/runs/{runId}/artifacts/{index}/file")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> downloadArtifact(
+            @PathVariable String runId, @PathVariable int index) {
+        java.nio.file.Path file = engine.artifactFile(runId, index).orElse(null);
+        if (file == null) {
+            return org.springframework.http.ResponseEntity.notFound().build();
+        }
+        return org.springframework.http.ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + file.getFileName() + "\"")
+                .contentType(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM)
+                .body(new org.springframework.core.io.FileSystemResource(file));
+    }
+
+    /** 删除一条构建历史（滑动删除）；运行中返回 400。 */
+    @DeleteMapping("/history/{runId}")
+    public Map<String, Object> deleteHistory(@PathVariable String runId) {
+        try {
+            return Map.of("deleted", engine.deleteHistory(runId));
+        } catch (IllegalArgumentException e) {
+            return Map.of("deleted", false, "message", e.getMessage());
+        }
     }
 
     private Map<String, Object> toView(String runId, boolean withLog) {
@@ -151,6 +267,16 @@ public class PipelineController {
         view.put("artifacts", engine.artifacts(runId).stream().map(this::artifactView).toList());
         // 增量日志模式下（withLog=false）不重复传输整段日志
         view.put("log", withLog ? engine.logTail(runId) : "");
+        // 运行元信息：触发者 / 环境绑定 / 定义来源（Agent 固化脚本时可直接看出）
+        RunMeta meta = engine.runMeta(runId);
+        if (meta != null) {
+            view.put("meta", Map.of(
+                    "actor", meta.actor() == null ? "" : meta.actor(),
+                    "bindingId", meta.bindingId() == null ? "" : meta.bindingId(),
+                    "confirmedBy", meta.confirmedBy() == null ? "" : meta.confirmedBy(),
+                    "definitionSource", meta.definitionSource() == null ? "" : meta.definitionSource(),
+                    "definitionNote", meta.definitionNote() == null ? "" : meta.definitionNote()));
+        }
         return view;
     }
 
@@ -163,7 +289,13 @@ public class PipelineController {
     }
 
     private Map<String, Object> artifactView(ArtifactRef a) {
-        return Map.of("kind", a.kind(), "ref", a.ref(),
-                "digest", a.digest() == null ? "" : a.digest(), "sizeBytes", a.sizeBytes());
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("kind", a.kind());
+        view.put("ref", a.ref());
+        view.put("digest", a.digest() == null ? "" : a.digest());
+        view.put("sizeBytes", a.sizeBytes());
+        // 部署产物的附加信息（本机模式带 backendPort / frontendPort，供页面展示）
+        view.put("meta", a.meta());
+        return view;
     }
 }

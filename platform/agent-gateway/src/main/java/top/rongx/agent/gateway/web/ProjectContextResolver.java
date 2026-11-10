@@ -30,6 +30,19 @@ public class ProjectContextResolver {
      * @throws IllegalArgumentException 项目不存在、环境不属于该项目
      */
     public ProjectContext resolve(String projectId, String env, String userId) {
+        return resolve(projectId, env, userId, null);
+    }
+
+    /**
+     * 校验并构造上下文（带工作树）。
+     *
+     * @param projectId 客户端选择的项目
+     * @param env       客户端选择的环境
+     * @param userId    已认证用户
+     * @param worktree  客户端当前选中的工作树（可空 = 主仓库）
+     * @throws IllegalArgumentException 项目不存在、环境不属于该项目
+     */
+    public ProjectContext resolve(String projectId, String env, String userId, String worktree) {
         // 1. 项目必须存在（服务端校验，模型不可伪造）
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + projectId));
@@ -43,6 +56,6 @@ public class ProjectContextResolver {
             throw new IllegalArgumentException("环境不属于该项目: " + targetEnv);
         }
         // 4. 构造不可变上下文
-        return new ProjectContext(project.id(), targetEnv, userId, project.repoUrl());
+        return new ProjectContext(project.id(), targetEnv, userId, project.repoUrl(), worktree);
     }
 }

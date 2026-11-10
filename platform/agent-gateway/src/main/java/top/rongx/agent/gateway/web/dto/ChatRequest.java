@@ -7,12 +7,8 @@ package top.rongx.agent.gateway.web.dto;
  * @param env       环境
  * @param sessionId 会话标识，可空（空则新建）
  * @param message   用户输入
- * @param role      Agent 角色：chat（默认通用助手）/ deploy（部署 Agent）
+ * @param worktree  当前工作树名（空 = 主仓库），仅作为会话上下文提示
  */
-public record ChatRequest(String projectId, String env, String sessionId, String message, String role) {
-
-    /** 兼容旧构造（不带角色）。 */
-    public ChatRequest(String projectId, String env, String sessionId, String message) {
-        this(projectId, env, sessionId, message, "chat");
-    }
+public record ChatRequest(String projectId, String env, String sessionId, String message,
+                          String worktree) {
 }

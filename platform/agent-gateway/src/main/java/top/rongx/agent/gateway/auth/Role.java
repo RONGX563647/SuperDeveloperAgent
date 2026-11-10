@@ -12,10 +12,14 @@ public enum Role {
     /** 管理员：全部权限（含用户管理预留）。 */
     ADMIN("admin", List.of("*")),
 
-    /** 研发运维：可触发构建、执行 L2 动作、发起并执行发布/回滚；可只读设置面板。 */
+    /**
+     * 研发运维：可触发构建、执行 L2 动作、发起并执行发布/回滚；可只读设置面板，
+     * 并允许查看环境变量明文（写审计日志），但不具备修改环境配置的写权限。
+     */
     DEVOPS("devops", List.of(
             "chat", "ci:read", "ci:run", "action:read", "action:run",
-            "change:request", "change:confirm", "change:apply", "settings:read")),
+            "change:request", "change:confirm", "change:apply",
+            "settings:read", "settings:reveal")),
 
     /** 只读：看流水线/历史/日志，执行任何写操作都会被拦。 */
     VIEWER("viewer", List.of("chat", "ci:read", "action:read"));

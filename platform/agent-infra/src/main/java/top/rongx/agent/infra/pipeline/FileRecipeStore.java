@@ -135,6 +135,19 @@ public class FileRecipeStore implements RecipeStore {
         return versionDir(safe(projectId), safe(env), version);
     }
 
+    /** 只删 current 指针：历史版本保留，必要时可用 activate 回到旧脚本。 */
+    @Override
+    public void invalidate(String projectId, String env) {
+        Path pointer = envDir(safe(projectId), safe(env)).resolve("current");
+        try {
+            if (Files.deleteIfExists(pointer)) {
+                log.info("环境脚本已失效：{} / {}（定义已重新生成，下次运行重新固化）", projectId, env);
+            }
+        } catch (IOException e) {
+            log.warn("失效环境脚本失败 {} / {}：{}", projectId, env, e.getMessage());
+        }
+    }
+
     // ---------------------------------------------------------------- 内部
 
     private Optional<Integer> currentVersion(String projectId, String env) {

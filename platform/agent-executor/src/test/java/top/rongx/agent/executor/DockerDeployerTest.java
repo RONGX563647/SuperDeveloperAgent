@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
@@ -91,10 +92,10 @@ class DockerDeployerTest {
     }
 
     @Test
-    @DisplayName("部署 → 容器可达 → 重复部署替换（幂等）→ 取消掉旧进程不报错")
+    @DisplayName("部署 → 容器可达 → 注入环境变量 → 重复部署替换（幂等）")
     void deploysAndReplacesContainer() throws Exception {
         DockerDeployer local = deployer;
-        DeployResult first = local.deploy(request("run-1"));
+        DeployResult first = local.deploy(request("run-1", Map.of("SMOKE_VALUE", "hello-env")));
         assertTrue(first.success(), "首次部署应成功：" + first.summary() + "\n" + first.log());
         assertTrue(first.endpoint().contains(":" + HOST_PORT), first.endpoint());
         assertEquals(CONTAINER, first.resource());
@@ -103,7 +104,7 @@ class DockerDeployerTest {
                 "部署后 /healthz 应返回 200 OK");
 
         // 第二次：同槽位替换，不应因端口/名称冲突失败
-        DeployResult second = local.deploy(request("run-2"));
+        DeployResult second = local.deploy(request("run-2", Map.of("SMOKE_VALUE", "hello-env")));
         assertTrue(second.success(), "重复部署应成功（替换语义）：" + second.summary() + "\n" + second.log());
         assertEquals("OK", httpGet("http://127.0.0.1:" + HOST_PORT + "/healthz"),
                 "替换后服务仍应可用");
@@ -111,6 +112,10 @@ class DockerDeployerTest {
         // 标签应跟着新 run（证明容器确实被替换而不是复用旧容器）
         String labels = run("docker", "inspect", "--format", "{{.Config.Labels}}", CONTAINER);
         assertTrue(labels.contains("run-2"), "容器应带新 run 标签：" + labels);
+
+        // 平台环境变量注入容器
+        String env = run("docker", "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", CONTAINER);
+        assertTrue(env.contains("SMOKE_VALUE=hello-env"), "容器应带平台注入的环境变量：" + env);
     }
 
     @Test
@@ -123,9 +128,9 @@ class DockerDeployerTest {
         assertEquals("E-501", result.errorCode());
     }
 
-    private DeployRequest request(String runId) {
+    private DeployRequest request(String runId, java.util.Map<String, String> env) {
         return new DeployRequest(PROJECT, runId, "abcdef1234567", image, null, null,
-                buildDir.toString(), DeployTarget.DOCKER, HOST_PORT, 3000, "/healthz", null, false, null);
+                buildDir.toString(), DeployTarget.DOCKER, HOST_PORT, 3000, "/healthz", null, false, null, env);
     }
 
     private static String httpGet(String url) throws Exception {

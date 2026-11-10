@@ -52,6 +52,21 @@ class GitWorktreeManagerTest {
     // ---------------------------------------------------------------- 收编
 
     @Test
+    @DisplayName("bare 仓库上探测 status/upstream：返回空而不是抛错刷 WARN")
+    void probeOnBareRepoIsQuiet() throws Exception {
+        makeUserRepo("quiet-demo");
+        GitWorktreeManager m = manager();
+        Path bare = m.bareDir("QUIET");
+        Files.createDirectories(bare);
+        exec(bare, "git", "init", "--bare", "-q");
+
+        // bare 没有工作区：git status 会 fatal，调用方应拿到空列表
+        assertTrue(m.statusPorcelain(bare).isEmpty());
+        // 分支没有 upstream：应返回 null（而不是抛异常）
+        assertTrue(m.upstreamOf(bare, "master") == null || m.upstreamOf(bare, "master").isBlank());
+    }
+
+    @Test
     @DisplayName("L1 本地目录收编：bare 建成、agent remote 关联、HEAD 进 bare")
     void linkLocal() throws Exception {
         String head = makeUserRepo("shop-mall");

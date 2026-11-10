@@ -121,7 +121,7 @@ public class GiteeBrowserController {
         JsonNode tokenResp = postForm(OAUTH_TOKEN, body);
         String accessToken = tokenResp.path("access_token").asText("");
         if (accessToken.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Gitee 授权失败：未返回 access_token");
         }
         JsonNode giteeUser = fetchJson(API_BASE + "/user?access_token=" + accessToken);
@@ -144,7 +144,8 @@ public class GiteeBrowserController {
         JsonNode giteeUser = fetchJson(API_BASE + "/user?access_token=" + token);
         String login = giteeUser.path("login").asText("");
         if (login.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token 无效");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Gitee 令牌无效：未返回用户信息，请重新生成私人令牌");
         }
         accounts.bind(userId, login, token, "projects");
         return Map.of("ok", true, "giteeLogin", login);
@@ -242,8 +243,13 @@ public class GiteeBrowserController {
                     .GET().build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() != 200) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                        "Gitee API 返回 " + resp.statusCode() + "（token 无效或网络不可达）");
+                // 上游鉴权失败是「用户的 Gitee 令牌问题」，不能回 401：
+                // 401 在本平台专指登录态失效，前端会据此清除会话并踢回登录页。
+                HttpStatus status = resp.statusCode() == 401 || resp.statusCode() == 403
+                        ? HttpStatus.BAD_REQUEST
+                        : HttpStatus.BAD_GATEWAY;
+                throw new ResponseStatusException(status,
+                        "Gitee API 返回 " + resp.statusCode() + "（令牌无效或已过期，请重新绑定 Gitee 账号）");
             }
             return mapper.readTree(resp.body());
         } catch (ResponseStatusException e) {
@@ -263,7 +269,11 @@ public class GiteeBrowserController {
                     .build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() != 200) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                // 同上：OAuth 换 token 失败属于上游/用户授权问题，不能回 401
+                HttpStatus status = resp.statusCode() >= 400 && resp.statusCode() < 500
+                        ? HttpStatus.BAD_REQUEST
+                        : HttpStatus.BAD_GATEWAY;
+                throw new ResponseStatusException(status,
                         "Gitee 换取 token 失败（HTTP " + resp.statusCode() + "）：" + resp.body());
             }
             return mapper.readTree(resp.body());

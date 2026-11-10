@@ -77,7 +77,7 @@ public class ServerDeployer implements Deployer {
         Path localTar = workdir.resolve(".agent/deploy")
                 .resolve(request.projectId() + "-" + shortSha(request.gitSha()) + ".tar");
         String remoteTar = server.remoteDir() + "/" + request.projectId() + ".tar";
-        String container = DockerDeployer.containerName(request.projectId());
+        String container = DockerDeployer.containerName(request.projectId(), request.envName());
         StringBuilder log = new StringBuilder();
         BooleanSupplierNever never = new BooleanSupplierNever();
 
@@ -113,20 +113,35 @@ public class ServerDeployer implements Deployer {
 
             ssh.run(server, secret, "docker rm -f " + container, SSH_TIMEOUT_MS);
 
+            // 远端端口预检：ss + docker ps，冲突时在期望端口之后续找；不杀未知进程。
+            int hostPort = allocateRemotePort(server, secret, request.hostPort());
+            if (hostPort < 0) {
+                return DeployResult.failed(DeployTarget.SERVER, "E-704",
+                        "远端端口耗尽：从 " + request.hostPort() + " 起 200 个端口都被占用", redact(log));
+            }
+            if (hostPort != request.hostPort()) {
+                log.append("[port] 远端 ").append(request.hostPort())
+                        .append(" 被占用 → 分配 ").append(hostPort).append('\n');
+            }
+
             String runCommand = "docker run -d --name " + container
                     + " --restart unless-stopped"
                     + " --label agent.project=" + request.projectId()
                     + " --label agent.sha=" + request.gitSha()
-                    + " -p " + request.hostPort() + ":" + request.containerPort()
+                    + " -p " + hostPort + ":" + request.containerPort()
+                    + (request.network() == null || request.network().isBlank()
+                            ? "" : " --network " + request.network().trim())
+                    + remoteEnvArgs(request.env())
                     + " " + image;
             SshAccess.Result run = ssh.run(server, secret, runCommand, SSH_TIMEOUT_MS);
             if (!run.ok()) {
                 return DeployResult.failed(DeployTarget.SERVER, "E-502",
-                        "远端容器启动失败：" + run.error(), redact(log));
+                        "远端容器启动失败：" + DockerDeployer.sanitize(run.error(), request.env()),
+                        redact(log));
             }
 
             return DeployResult.ok(DeployTarget.SERVER,
-                    "http://" + server.host() + ":" + request.hostPort()
+                    "http://" + server.host() + ":" + hostPort
                             + safePath(request.healthPath()),
                     server.host() + ":" + container, redact(log));
         } finally {
@@ -138,8 +153,52 @@ public class ServerDeployer implements Deployer {
         }
     }
 
+    /**
+     * 远端端口分配（只读探测）：ss 监听 + docker 端口映射任一占用即视为不可用。
+     *
+     * @return 可用端口；200 个都不可用返回 -1
+     */
+    private int allocateRemotePort(DeployServer server, String secret, int desired) {
+        for (int port = Math.max(1, desired); port <= desired + 200; port++) {
+            if (remotePortFree(server, secret, port)) {
+                return port;
+            }
+        }
+        return -1;
+    }
+
+    private boolean remotePortFree(DeployServer server, String secret, int port) {
+        SshAccess.Result listening = ssh.run(server, secret,
+                "ss -ltn 2>/dev/null | awk '{print $4}' | grep -E '[:.]" + port + "$' || true",
+                SSH_TIMEOUT_MS);
+        if (!listening.ok()) {
+            // 探测失败时按"占用"处理（fail-closed），避免盲目抢端口
+            return false;
+        }
+        if (!listening.output().trim().isEmpty()) {
+            return false;
+        }
+        SshAccess.Result mapped = ssh.run(server, secret,
+                "docker ps --format '{{.Ports}}' | grep -E ':" + port + "->' || true",
+                SSH_TIMEOUT_MS);
+        return mapped.ok() && mapped.output().trim().isEmpty();
+    }
+
     private String redact(StringBuilder log) {
         return ProcessExecutor.redact(log.toString());
+    }
+
+    /** 远端 shell 里的 -e 参数（单引号包裹并转义，变量值含空格/引号也不会被 shell 拆开）。 */
+    private static String remoteEnvArgs(java.util.Map<String, String> env) {
+        if (env == null || env.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : new java.util.TreeMap<>(env).entrySet()) {
+            String pair = e.getKey() + "=" + (e.getValue() == null ? "" : e.getValue());
+            sb.append(" -e '").append(pair.replace("'", "'\\''")).append('\'');
+        }
+        return sb.toString();
     }
 
     private static String shortSha(String sha) {

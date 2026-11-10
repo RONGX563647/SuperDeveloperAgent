@@ -22,7 +22,7 @@ import java.util.Map;
  * @param params   已合并默认值的参数表（key=参数名，value=实际取值）
  * @param allowed  每个参数的允许取值；空 list 表示该参数接受任意字符串
  */
-public record ActionSpec(
+public record   ActionSpec(
         ActionId action,
         List<List<String>> steps,
         List<String> produce,

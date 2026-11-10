@@ -3,7 +3,7 @@ import { nextTick, ref, useTemplateRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheck, CircleClose, Plus, Star } from '@element-plus/icons-vue'
 import {
-  createModel, deleteModel, listModels, setDefaultModel, testModel, testModelDraft, updateModel,
+  createModel, deleteModel, listModels, setDefaultModel, testModelDraft, updateModel,
   type ModelConnection, type ModelConnectionInput, type TestResult
 } from '../../api/settings'
 
@@ -97,17 +97,18 @@ function closeForm(): void {
   editing.value = null
 }
 
+/** 编辑态也测当前表单草稿：否则改了地址/模型再测，结果仍是第一次保存的配置。 */
 async function testCurrent(): Promise<void> {
   testing.value = true
   testResult.value = null
   try {
-    testResult.value = editing.value
-      ? await testModel(editing.value.id)
-      : await testModelDraft({
-          baseUrl: form.value.baseUrl,
-          modelName: form.value.modelName,
-          apiKey: form.value.apiKey
-        })
+    testResult.value = await testModelDraft({
+      baseUrl: form.value.baseUrl,
+      modelName: form.value.modelName,
+      apiKey: form.value.apiKey,
+      connectionId: editing.value?.id
+    })
+    await load()
   } catch (e) {
     testResult.value = {
       ok: false,

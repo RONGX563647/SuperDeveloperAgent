@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../types'
+import { notifyUnauthorized } from './auth'
 
 /**
  * SSE 传输层（参考 ruoyi-copilot 的 harnessSse.ts 移植）：
@@ -192,6 +193,8 @@ export async function streamEvents(
       if (!response.ok || !response.body) {
         const payload = await readErrorPayload(response)
         const message = payload.message ?? `事件流连接失败 (${response.status} ${response.statusText})`
+        // 401：会话失效，交给统一处理跳登录页（不能当成可重试的流中断）
+        if (response.status === 401) notifyUnauthorized()
         if (response.status >= 400 && response.status < 500
           && response.status !== 408 && response.status !== 429) {
           throw new NonRetryableStreamError(message)
@@ -264,6 +267,7 @@ export async function streamChatOnce(
 ): Promise<void> {
   const response = await fetch(url, { ...init, signal })
   if (!response.ok || !response.body) {
+    if (response.status === 401) notifyUnauthorized()
     const payload = await readErrorPayload(response)
     throw new SseProtocolError(payload.message ?? `建立事件流失败（${response.status}）`)
   }

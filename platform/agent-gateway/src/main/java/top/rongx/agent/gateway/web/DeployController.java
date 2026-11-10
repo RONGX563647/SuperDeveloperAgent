@@ -37,13 +37,35 @@ public class DeployController {
     private final PipelineEngine engine;
     private final DeployGate gate;
     private final CurrentUser currentUser;
+    private final top.rongx.agent.domain.env.EnvironmentStore envStore;
 
     public DeployController(RecipeStore recipes, PipelineEngine engine,
-                            DeployGate gate, CurrentUser currentUser) {
+                            DeployGate gate, CurrentUser currentUser,
+                            top.rongx.agent.domain.env.EnvironmentStore envStore) {
         this.recipes = recipes;
         this.engine = engine;
         this.gate = gate;
         this.currentUser = currentUser;
+        this.envStore = envStore;
+    }
+
+    /** 端口租约：本次部署实际使用的宿主端口（排障 / 审计）。 */
+    @GetMapping("/ports")
+    public List<Map<String, Object>> ports(@RequestParam String projectId,
+                                           @RequestParam(defaultValue = "test") String env) {
+        currentUser.checkPermission("settings:read");
+        return envStore.leases(projectId, env.trim().toLowerCase()).stream()
+                .map(l -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("projectId", l.projectId());
+                    row.put("env", l.env());
+                    row.put("containerPort", l.containerPort());
+                    row.put("hostPort", l.hostPort());
+                    row.put("runId", l.runId());
+                    row.put("updatedAt", l.updatedAt());
+                    return row;
+                })
+                .toList();
     }
 
     /** 每个环境的状态：脚本版本、证据运行、能否上服务器。 */

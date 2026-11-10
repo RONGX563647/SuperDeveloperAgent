@@ -50,13 +50,56 @@ public record PipelineDefinition(String name, List<StageDef> stages,
      * @param healthPath    健康检查路径，如 {@code /healthz}
      * @param artifact      HOST 目标的产物（相对路径，如 {@code backend/target/app.jar}）；空则自动找 jar
      * @param serverId      SERVER 目标使用的服务器 id（设置页里配置）；空则用默认服务器
+     * @param envRequired   部署必填的环境变量名清单（E-509 预检依据；只声明名字，值在「设置 → 项目环境」维护）
+     * @param services      多容器部署（test：前端 + 后端各一个容器）；空 = 单容器模型
      */
     public record DeploySpec(String target, int port, int containerPort, String healthPath,
-                             String artifact, String serverId) {
+                             String artifact, String serverId, List<String> envRequired,
+                             List<ServiceSpec> services) {
+
+        public DeploySpec(String target, int port, int containerPort, String healthPath,
+                          String artifact, String serverId, List<String> envRequired) {
+            this(target, port, containerPort, healthPath, artifact, serverId, envRequired, List.of());
+        }
 
         public static DeploySpec defaults() {
-            return new DeploySpec("docker", 8080, 8080, "/healthz", null, null);
+            return new DeploySpec("docker", 8080, 8080, "/healthz", null, null, List.of(), List.of());
         }
+    }
+
+    /**
+     * 单个服务容器（test 环境前后端分离部署）。
+     *
+     * @param name          服务名：backend / frontend（用于容器名、卷名与反向代理别名）
+     * @param image         运行镜像（由前面的构建 stage 产出）
+     * @param containerPort 容器内端口
+     * @param hostPort      期望宿主端口（0 = 自动在端口段内分配）
+     * @param volumePath    需要持久化的容器内路径（空 = 不挂卷）
+     * @param envRequired   该服务必填变量（空 = 沿用 deploy.env-required）
+     */
+    public record ServiceSpec(String name, String image, int containerPort, int hostPort,
+                              String volumePath, List<String> envRequired) {
+    }
+
+    /**
+     * 「检查构建」用的切片：去掉部署/健康检查/回滚与镜像打包，只留构建与测试。
+     *
+     * <p>预览与执行共用这一个方法，避免两处 filter 各自漂移（预览≠实跑）。
+     * 镜像打包默认去掉：它是最贵的一步，而检查构建只回答"能不能编过"；
+     * Dockerfile 的问题交给测试环境暴露，或在触发时显式要求保留镜像。
+     *
+     * @param keepImage 是否保留 {@code image_package}
+     */
+    public PipelineDefinition forVerify(boolean keepImage) {
+        return new PipelineDefinition(name,
+                stages.stream()
+                        .filter(s -> !"health".equals(s.type()))
+                        .filter(s -> !"deploy".equals(s.type()))
+                        .filter(s -> !"rollback".equals(s.type()))
+                        .filter(s -> !"stack_deploy".equals(s.action()))
+                        .filter(s -> keepImage || !"image_package".equals(s.action()))
+                        .toList(),
+                List.of(), null);
     }
 
     /** 从仓库根读 {@code ci/pipeline.yml}。 */
@@ -111,7 +154,96 @@ public record PipelineDefinition(String name, List<StageDef> stages,
                 containerPort,
                 str(map, "healthPath", "/healthz"),
                 artifact == null || artifact.isBlank() ? null : artifact,
-                serverId == null || serverId.isBlank() ? null : serverId);
+                serverId == null || serverId.isBlank() ? null : serverId,
+                parseEnvRequired(map),
+                parseServices(map));
+    }
+
+    /**
+     * 解析 {@code deploy.services}（多容器部署）：
+     *
+     * <pre>
+     * deploy:
+     *   services:
+     *     - name: backend
+     *       image: my-backend:latest
+     *       containerPort: 8080
+     *     - name: frontend
+     *       image: my-frontend:latest
+     *       containerPort: 80
+     * </pre>
+     */
+    private static List<ServiceSpec> parseServices(Map<?, ?> deployMap) {
+        Object raw = deployMap.get("services");
+        if (!(raw instanceof List<?> list)) {
+            return List.of();
+        }
+        List<ServiceSpec> out = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> m)) {
+                continue;
+            }
+            String name = str(m, "name", "").trim();
+            String image = m.get("image") == null ? "" : String.valueOf(m.get("image")).trim();
+            if (name.isEmpty() || image.isEmpty()) {
+                throw new IllegalArgumentException("deploy.services 每项必须声明 name 与 image");
+            }
+            if (!name.matches("[a-z0-9][a-z0-9-]{0,31}")) {
+                throw new IllegalArgumentException(
+                        "deploy.services.name 只能用小写字母/数字/短横线：" + name);
+            }
+            for (ServiceSpec existing : out) {
+                if (existing.name().equals(name)) {
+                    throw new IllegalArgumentException("deploy.services 服务名重复：" + name);
+                }
+            }
+            int containerPort = m.get("containerPort") instanceof Number c ? c.intValue() : 0;
+            if (containerPort <= 0 || containerPort > 65535) {
+                throw new IllegalArgumentException(
+                        "deploy.services[" + name + "].containerPort 必须是 1–65535");
+            }
+            int hostPort = m.get("hostPort") instanceof Number h ? h.intValue() : 0;
+            String volumePath = m.get("volume") == null ? null : String.valueOf(m.get("volume"));
+            out.add(new ServiceSpec(name, image, containerPort, hostPort,
+                    volumePath == null || volumePath.isBlank() ? null : volumePath,
+                    parseEnvRequired(m)));
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * 解析 {@code env-required} 清单：支持两种写法——
+     * 纯字符串列表（{@code - DB_HOST}）或带属性的映射（{@code - name: DB_HOST}）。
+     * 只保留变量名：值属于「设置 → 项目环境」，绝不进流水线定义（定义会落盘/入库）。
+     */
+    private static List<String> parseEnvRequired(Map<?, ?> deployMap) {
+        Object raw = deployMap.get("env-required");
+        if (raw == null) {
+            raw = deployMap.get("envRequired");
+        }
+        if (!(raw instanceof List<?> list)) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (Object item : list) {
+            String name = null;
+            if (item instanceof String s) {
+                name = s;
+            } else if (item instanceof Map<?, ?> m) {
+                Object n = m.get("name");
+                name = n == null ? null : String.valueOf(n);
+            }
+            if (name != null && !name.isBlank()) {
+                String key = name.trim();
+                if (!key.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+                    throw new IllegalArgumentException("env-required 变量名非法：" + key);
+                }
+                if (!out.contains(key)) {
+                    out.add(key);
+                }
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static List<StageDef> parseStages(Object raw, String field) {

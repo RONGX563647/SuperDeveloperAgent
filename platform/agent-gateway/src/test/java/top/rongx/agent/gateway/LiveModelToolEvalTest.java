@@ -134,7 +134,7 @@ class LiveModelToolEvalTest {
                 "AGENT_MODEL_API_KEY 未设置，跳过真实模型评测（不消耗 token）");
 
         ProjectContext ctx = new ProjectContext("RY", "test", USER,
-                "https://gitee.com/x/RuoYi-Vue-Plus.git");
+                "https://gitee.com/x/RuoYi-Vue-Plus.git", null);
         RuntimeContext runtime = RuntimeContext.builder()
                 .userId(ctx.userId())
                 .sessionId("eval-live-" + System.currentTimeMillis())

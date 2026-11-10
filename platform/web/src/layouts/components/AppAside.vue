@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, MoreFilled, SwitchButton } from '@element-plus/icons-vue'
+import { ChatDotRound, Delete, Document, Folder, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, Box, SwitchButton, ArrowRight, ArrowDown, FolderAdd } from '@element-plus/icons-vue'
 import { logout } from '../../api/auth'
-import { appStore } from '../../stores/app'
+import { listProjects, type ProjectRow } from '../../api/project'
+import { appStore, type SessionItem } from '../../stores/app'
+import { clearHistory } from '../../state/sessionHistory'
 
 /**
  * 左侧栏 —— 结构对齐 DSH：
@@ -26,7 +28,129 @@ const entries = [
 ]
 
 const activeName = computed(() => String(route.name ?? ''))
-const sessions = computed(() => appStore.sessions)
+const projects = ref<ProjectRow[]>([])
+const searchOpen = ref(false)
+const searchText = ref('')
+const searchRef = ref<HTMLInputElement | null>(null)
+const collapsedGroups = ref<Record<string, boolean>>({})
+const expandedGroups = ref<Record<string, boolean>>({})
+/** 已归档的工作区（= 项目）：只从侧栏隐藏，不影响项目本身与会话数据。 */
+const ARCHIVED_WS_KEY = 'agent.workspaces.archived'
+const archivedIds = ref<string[]>(loadArchived())
+const showArchived = ref(false)
+
+function loadArchived(): string[] {
+  try {
+    const raw = localStorage.getItem(ARCHIVED_WS_KEY)
+    return raw ? (JSON.parse(raw) as string[]) : []
+  } catch {
+    return []
+  }
+}
+
+function persistArchived(): void {
+  try {
+    localStorage.setItem(ARCHIVED_WS_KEY, JSON.stringify(archivedIds.value))
+  } catch {
+    // 隐私模式下不可写，忽略
+  }
+}
+
+async function loadProjects(): Promise<void> {
+  try {
+    projects.value = await listProjects()
+  } catch {
+    projects.value = []
+  }
+}
+
+function projectName(id: string): string {
+  return projects.value.find((p) => p.id === id)?.name ?? id
+}
+
+/** 工作区 = 项目；每个分组下只放该项目自己的会话。 */
+const groups = computed(() => {
+  const query = searchText.value.trim().toLowerCase()
+  const byProject = new Map<string, SessionItem[]>()
+  for (const s of appStore.sessions) {
+    if (query
+      && !s.title.toLowerCase().includes(query)
+      && !projectName(s.projectId).toLowerCase().includes(query)) continue
+    const bucket = byProject.get(s.projectId) ?? []
+    bucket.push(s)
+    byProject.set(s.projectId, bucket)
+  }
+  const ids = [
+    ...projects.value.map((p) => p.id),
+    ...[...byProject.keys()].filter((id) => !projects.value.some((p) => p.id === id))
+  ]
+  return ids
+    .filter((id) => !archivedIds.value.includes(id))
+    .map((id) => ({
+      id,
+      name: projectName(id),
+      sessions: (byProject.get(id) ?? []).sort((a, b) => b.at - a.at),
+      active: id === appStore.projectId
+    }))
+})
+
+/** 已归档工作区（用于侧栏底部恢复入口）。 */
+const archivedGroups = computed(() =>
+  archivedIds.value.map((id) => ({ id, name: projectName(id) })))
+
+/** 在指定工作区里新建会话并跳转。 */
+function newSessionIn(projectId: string): void {
+  appStore.projectId = projectId
+  appStore.newSession()
+  void router.push('/chat')
+}
+
+/** 添加工作区 = 去「项目接入」登记一个新的本地目录 / 远程仓库。 */
+function addWorkspace(): void {
+  void router.push('/projects/intake')
+}
+
+/** 归档工作区：仅从侧栏移除；若归档的是当前工作区，自动切到剩下的第一个。 */
+function archiveWorkspace(projectId: string): void {
+  if (archivedIds.value.includes(projectId)) return
+  archivedIds.value = [...archivedIds.value, projectId]
+  persistArchived()
+  if (appStore.projectId === projectId) {
+    const next = projects.value.find((p) => !archivedIds.value.includes(p.id))
+    if (next) appStore.switchProject(next.id)
+  }
+}
+
+function restoreWorkspace(projectId: string): void {
+  archivedIds.value = archivedIds.value.filter((id) => id !== projectId)
+  persistArchived()
+}
+
+function visibleSessions(group: { id: string; sessions: SessionItem[] }): SessionItem[] {
+  return expandedGroups.value[group.id]
+    ? group.sessions
+    : group.sessions.slice(0, 6)
+}
+
+function toggleGroup(id: string): void {
+  collapsedGroups.value = { ...collapsedGroups.value, [id]: !collapsedGroups.value[id] }
+}
+
+function toggleExpand(id: string): void {
+  expandedGroups.value = { ...expandedGroups.value, [id]: !expandedGroups.value[id] }
+}
+
+function toggleSearch(): void {
+  searchOpen.value = !searchOpen.value
+  if (searchOpen.value) void nextTick(() => searchRef.value?.focus())
+  else searchText.value = ''
+}
+
+/** 点组头 = 切换当前工作区，并落到该项目最近的一条会话。 */
+function selectWorkspace(id: string): void {
+  appStore.switchProject(id)
+  void router.push('/chat')
+}
 
 function toggle() {
   emit('update:collapsed', !props.collapsed)
@@ -42,10 +166,23 @@ function openSession(id: string) {
   void router.push('/chat')
 }
 
+/** 删除会话：侧栏条目 + 本地时间线一起清，删当前会话时 store 会自动回落。 */
+function removeSession(id: string) {
+  clearHistory(id)
+  appStore.removeSession(id)
+}
+
 async function doLogout() {
   await logout()
+  appStore.clearIdentity()
   void router.push('/login')
 }
+
+const permissionHint = computed(() => {
+  const list = identity.value.permissions
+  if (list.includes('*')) return '全部权限'
+  return list.length ? `${list.length} 项权限` : '未加载权限'
+})
 
 /** 相对时间：比绝对时间短，且不会出现「11-08 15:42」这种要换算的字符串。 */
 function formatTime(ms: number): string {
@@ -55,6 +192,8 @@ function formatTime(ms: number): string {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
   return `${Math.floor(diff / 86_400_000)} 天前`
 }
+
+onMounted(() => void loadProjects())
 </script>
 
 <template>
@@ -102,31 +241,107 @@ function formatTime(ms: number): string {
         <div class="group-head">
           <span class="group-title">工作区</span>
           <span class="group-actions">
-            <button type="button" class="icon-btn sm" disabled title="会话搜索待接入">
+            <button
+              type="button" class="icon-btn sm" :class="{ on: searchOpen }"
+              title="搜索会话 / 项目" @click="toggleSearch"
+            >
               <el-icon><Search /></el-icon>
             </button>
-            <button type="button" class="icon-btn sm" disabled title="更多操作待接入">
-              <el-icon><MoreFilled /></el-icon>
+            <button
+              type="button" class="icon-btn sm" title="添加工作区（项目接入）" @click="addWorkspace"
+            >
+              <el-icon><FolderAdd /></el-icon>
+            </button>
+            <button
+              type="button" class="icon-btn sm" :class="{ on: showArchived }"
+              :disabled="!archivedGroups.length"
+              :title="archivedGroups.length ? `已归档 ${archivedGroups.length} 个工作区` : '暂无已归档工作区'"
+              @click="showArchived = !showArchived"
+            >
+              <el-icon><Box /></el-icon>
             </button>
           </span>
         </div>
 
-        <div class="session-list">
-          <button
-            v-for="s in sessions"
-            :key="s.id"
-            type="button"
-            class="session-item"
-            :class="{ active: s.id === appStore.sessionId }"
-            @click="openSession(s.id)"
+        <div v-if="searchOpen" class="ws-search">
+          <el-icon><Search /></el-icon>
+          <input ref="searchRef" v-model="searchText" type="text" placeholder="搜索会话 / 项目" />
+        </div>
+
+        <!-- 已归档工作区：默认收起，点开可恢复 -->
+        <div v-if="showArchived && archivedGroups.length" class="ws-archived">
+          <p class="ws-archived-title">已归档工作区</p>
+          <div v-for="a in archivedGroups" :key="a.id" class="ws-archived-row">
+            <el-icon><Box /></el-icon>
+            <span class="ws-archived-name">{{ a.name }}</span>
+            <button type="button" class="ws-restore" @click="restoreWorkspace(a.id)">恢复</button>
+          </div>
+        </div>
+
+        <!-- 工作区 = 项目：每个项目一个可折叠分组，点组头切换当前工作区 -->
+        <div class="workspace-list">
+          <section
+            v-for="g in groups" :key="g.id"
+            class="ws-group" :class="{ active: g.active }"
           >
-            <span class="session-dot" aria-hidden="true" />
-            <span class="session-title">{{ s.title }}</span>
-            <span class="session-time">{{ formatTime(s.at) }}</span>
-          </button>
-          <p v-if="!sessions.length" class="session-empty">
-            还没有会话，点上方「新会话」开始。
-          </p>
+            <div class="ws-group-head">
+              <button
+                type="button" class="ws-group-main"
+                :title="`切换到工作区 ${g.name}`" @click="selectWorkspace(g.id)"
+              >
+                <el-icon class="ws-icon"><Folder /></el-icon>
+                <span class="ws-name">{{ g.name }}</span>
+                <span class="ws-count mono">{{ g.sessions.length }}</span>
+              </button>
+              <span class="ws-group-actions">
+                <button
+                  type="button" class="ws-act" title="在此工作区新建会话"
+                  @click.stop="newSessionIn(g.id)"
+                >
+                  <el-icon><Plus /></el-icon>
+                </button>
+                <button
+                  type="button" class="ws-act" title="归档工作区（仅从侧栏隐藏）"
+                  @click.stop="archiveWorkspace(g.id)"
+                >
+                  <el-icon><Box /></el-icon>
+                </button>
+              </span>
+              <button
+                type="button" class="ws-caret"
+                :title="collapsedGroups[g.id] ? '展开分组' : '收起分组'"
+                @click="toggleGroup(g.id)"
+              >
+                <el-icon><component :is="collapsedGroups[g.id] ? ArrowRight : ArrowDown" /></el-icon>
+              </button>
+            </div>
+            <div v-if="!collapsedGroups[g.id]" class="ws-sessions">
+              <div
+                v-for="s in visibleSessions(g)" :key="s.id"
+                class="session-row" :class="{ active: s.id === appStore.sessionId }"
+              >
+                <button type="button" class="session-item" @click="openSession(s.id)">
+                  <el-icon class="session-icon"><Document /></el-icon>
+                  <span class="session-title">{{ s.title }}</span>
+                  <span class="session-time">{{ formatTime(s.at) }}</span>
+                </button>
+                <button
+                  type="button" class="session-del" title="删除会话"
+                  @click.stop="removeSession(s.id)"
+                >
+                  <el-icon><Delete /></el-icon>
+                </button>
+              </div>
+              <button
+                v-if="g.sessions.length > 6" type="button" class="ws-more"
+                @click="toggleExpand(g.id)"
+              >
+                {{ expandedGroups[g.id] ? '收起' : `还有 ${g.sessions.length - 6} 条会话` }}
+              </button>
+              <p v-if="!g.sessions.length" class="ws-empty">暂无会话</p>
+            </div>
+          </section>
+          <p v-if="!groups.length" class="session-empty">没有匹配的工作区或会话。</p>
         </div>
       </div>
 
@@ -136,7 +351,7 @@ function formatTime(ms: number): string {
           <span class="user-avatar" aria-hidden="true">{{ (identity.displayName || identity.userId).slice(0, 1).toUpperCase() }}</span>
           <div class="user-meta">
             <span class="user-name">{{ identity.displayName }}</span>
-            <span class="user-hint">{{ identity.role }} · 内网环境</span>
+            <span class="user-hint">{{ identity.role || '未登录' }} · {{ permissionHint }}</span>
           </div>
           <button type="button" class="logout-btn" title="退出登录" @click="doLogout">
             <el-icon><SwitchButton /></el-icon>
@@ -270,7 +485,7 @@ function formatTime(ms: number): string {
   overscroll-behavior: contain;
 }
 
-/* 新会话：DSH 用软底块做主按钮，比描边按钮轻、比纯文字重 */
+/* 新会话：DSH 用白底卡片做主按钮 —— 比描边按钮实、比实心块轻 */
 .new-chat {
   display: flex;
   flex: none;
@@ -278,18 +493,21 @@ function formatTime(ms: number): string {
   gap: 8px;
   height: 36px;
   padding: 0 10px;
+  margin-bottom: 6px;
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--ink);
   cursor: pointer;
-  background: var(--surface-hover);
+  background: var(--surface-raised);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
-  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+  box-shadow: var(--shadow-1);
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
 }
 .new-chat:hover {
-  background: var(--surface-active);
   border-color: var(--line);
+  box-shadow: 0 2px 6px rgb(16 24 40 / 8%);
 }
 
 /* 入口 */
@@ -320,22 +538,11 @@ function formatTime(ms: number): string {
   color: var(--ink);
   background: var(--surface-hover);
 }
-/* 选中：不加蓝色块，只用左侧 2px 蓝条 + 提亮 —— 侧栏要安静 */
+/* 选中：只提亮文字 + 极浅底，不加蓝条 —— 侧栏要安静 */
 .nav-entry.active {
-  position: relative;
   color: var(--ink);
   background: var(--surface-hover);
-}
-.nav-entry.active::before {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 2px;
-  height: 14px;
-  content: '';
-  background: var(--accent);
-  border-radius: var(--radius-pill);
-  transform: translateY(-50%);
+  font-weight: 500;
 }
 .nav-entry.is-muted {
   color: var(--ink-muted);
@@ -367,6 +574,218 @@ function formatTime(ms: number): string {
   opacity: 1;
 }
 
+/* 工作区搜索 */
+.icon-btn.on {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.ws-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 9px;
+  margin: 4px 2px 2px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.ws-search input {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  outline: none;
+}
+.ws-search input::placeholder {
+  color: var(--ink-faint);
+}
+
+/* 工作区分组：项目为一级，会话为二级 */
+.workspace-list {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+}
+.ws-group {
+  border-radius: var(--radius-sm);
+}
+.ws-group-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding-right: 2px;
+}
+.ws-group-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 6px 0 8px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+.ws-group-main:hover {
+  background: var(--surface-hover);
+}
+.ws-icon {
+  flex: none;
+  font-size: 14px;
+  color: var(--ink-muted);
+}
+.ws-group.active .ws-icon {
+  color: var(--accent-ink);
+}
+.ws-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ws-group.active .ws-name {
+  color: var(--ink);
+}
+.ws-count {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.ws-caret {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+}
+.ws-caret:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+/* 组头悬浮操作：新建会话 / 归档工作区（默认不占视觉，hover 才出现） */
+.ws-group-actions {
+  display: flex;
+  flex: none;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease;
+}
+.ws-group-head:hover .ws-group-actions {
+  opacity: 1;
+}
+.ws-act {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+}
+.ws-act:hover {
+  color: var(--ink);
+  background: var(--surface-active);
+}
+
+/* 已归档工作区 */
+.ws-archived {
+  flex: none;
+  padding: 6px 10px 4px;
+  margin: 4px 2px 2px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+.ws-archived-title {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.ws-archived-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.ws-archived-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ws-restore {
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.ws-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 2px 4px 14px;
+}
+.ws-sessions .session-item {
+  height: 29px;
+  padding: 0 8px;
+  font-size: 12.5px;
+}
+.ws-more,
+.ws-empty {
+  padding: 4px 8px;
+  margin: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.ws-more:hover {
+  color: var(--accent-ink);
+}
+.ws-empty {
+  cursor: default;
+  line-height: 1.6;
+}
+
 /* 会话条目 */
 .session-list {
   display: flex;
@@ -374,15 +793,24 @@ function formatTime(ms: number): string {
   flex-direction: column;
   gap: 1px;
 }
-.session-item {
+/* 一行 = 会话按钮 + hover 出现的删除键（按钮不能嵌套按钮，所以外面加一层容器） */
+.session-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  min-width: 0;
+}
+.session-item {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
   width: 100%;
-  height: 32px;
-  padding: 0 10px;
+  height: 30px;
+  padding: 0 8px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--ink-soft);
   text-align: left;
   cursor: pointer;
@@ -395,21 +823,20 @@ function formatTime(ms: number): string {
   color: var(--ink);
   background: var(--surface-hover);
 }
+/* 选中：浅灰块 + 左侧 2px 蓝色竖条（用 inset 阴影贴合圆角，避免浮一块色条上去） */
 .session-item.active {
   color: var(--ink);
-  background: var(--surface-hover);
+  background: var(--surface-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+  font-weight: 500;
 }
-.session-dot {
+.session-icon {
   flex: none;
-  width: 4px;
-  height: 4px;
-  background: currentColor;
-  border-radius: 50%;
-  opacity: 0.5;
+  font-size: 13px;
+  color: var(--ink-faint);
 }
-.session-item.active .session-dot {
-  background: var(--accent);
-  opacity: 1;
+.session-item.active .session-icon {
+  color: var(--ink-muted);
 }
 .session-title {
   flex: 1;
@@ -418,17 +845,43 @@ function formatTime(ms: number): string {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-/* 时间默认隐去，hover 让位显示 —— 列表安静，信息不丢 */
+/* 时间常显：列表扫读靠它区分新旧，hover 才显示会让整列忽隐忽现 */
 .session-time {
   flex: none;
-  font-size: 11px;
-  color: var(--ink-muted);
-  opacity: 0;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
   transition: opacity var(--dur-fast) ease;
 }
-.session-item:hover .session-time,
-.session-item.active .session-time {
+/* hover 时时间让位给删除键，避免两个控件叠在一起 */
+.session-row:hover .session-time {
+  opacity: 0;
+}
+/* 删除键：透明底、与行同色，hover 才显形；不铺白块才像是行内的一部分 */
+.session-del {
+  position: absolute;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  opacity: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  transition: opacity var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.session-row:hover .session-del,
+.session-del:focus-visible {
   opacity: 1;
+}
+.session-del:hover {
+  color: var(--danger);
 }
 .session-empty {
   padding: 6px 10px;

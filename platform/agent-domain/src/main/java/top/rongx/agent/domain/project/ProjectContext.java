@@ -12,8 +12,10 @@ package top.rongx.agent.domain.project;
  * @param env       目标环境
  * @param userId    当前操作人
  * @param repoUrl   仓库地址
+ * @param worktree  当前工作树（可空 = 主仓库）
  */
-public record ProjectContext(String projectId, String env, String userId, String repoUrl) {
+public record ProjectContext(String projectId, String env, String userId, String repoUrl,
+                             String worktree) {
 
     public ProjectContext {
         if (projectId == null || projectId.isBlank()) {
@@ -22,6 +24,7 @@ public record ProjectContext(String projectId, String env, String userId, String
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("userId 不能为空");
         }
+        worktree = (worktree == null || worktree.isBlank()) ? null : worktree.trim();
     }
 
     public boolean isProduction() {

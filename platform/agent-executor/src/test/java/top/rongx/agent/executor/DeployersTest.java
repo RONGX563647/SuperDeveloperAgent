@@ -128,6 +128,15 @@ class DeployersTest {
     }
 
     @Test
+    @DisplayName("单容器名按环境隔离：dev 与 test 互不覆盖；env 为空退化为旧命名")
+    void containerNameIsScopedByEnv() {
+        assertEquals("agent-deploy-ry-dev", DockerDeployer.containerName("RY", "dev"));
+        assertEquals("agent-deploy-ry-test", DockerDeployer.containerName("RY", "test"));
+        assertEquals("agent-deploy-ry", DockerDeployer.containerName("RY", null));
+        assertEquals("agent-deploy-ry", DockerDeployer.containerName("RY", " "));
+    }
+
+    @Test
     @DisplayName("注册表按目标分派；未知目标 fail-closed")
     void registryDispatchesByTarget() {
         Deployers deployers = Deployers.builtin();

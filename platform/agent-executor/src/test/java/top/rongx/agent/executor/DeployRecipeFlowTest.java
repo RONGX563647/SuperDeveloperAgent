@@ -16,11 +16,14 @@ import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionSource;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.deploy.DeployRecipe;
+import top.rongx.agent.domain.deploy.DeployRequest;
+import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.RecipeRenderer;
 import top.rongx.agent.domain.deploy.EnvironmentPromotion;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
+import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.ProjectScaffolder;
@@ -168,7 +171,23 @@ class DeployRecipeFlowTest {
         PipelineDefinitionResolver resolver = new PipelineDefinitionResolver(
                 store, scaffolder(), null, recipes);
         return new BuiltInPipelineEngine(RESOLVER, HOST, HOST, workspace,
-                RunHistoryStore.disabled(), "ci", locator(repo), Deployers.builtin(), resolver, recipes);
+                RunHistoryStore.disabled(), "ci", locator(repo), alwaysOkDeployer(), resolver, recipes);
+    }
+
+    /** 只验证"跑通后固化"的编排语义：部署本身用桩，避免依赖 Docker。 */
+    private static Deployer alwaysOkDeployer() {
+        return new Deployer() {
+            @Override
+            public boolean supports(DeployTarget target) {
+                return true;
+            }
+
+            @Override
+            public DeployResult deploy(DeployRequest request) {
+                return DeployResult.ok(request.target(),
+                        "http://127.0.0.1:" + request.hostPort(), "stub", "ok");
+            }
+        };
     }
 
     /** 内存版 recipe 存储：同时把 ci/pipeline.yml 真的写到磁盘（解析器要读）。 */
@@ -290,11 +309,18 @@ class DeployRecipeFlowTest {
         ScaffoldPlan plan = new ScaffoldPlan(PROJECT, "JAVA",
                 List.of(new ScaffoldPlan.ScaffoldFile("ci/pipeline.yml", """
                         name: release
+                        deploy:
+                          target: host
+                          port: 8080
+                          containerPort: 8080
+                          healthPath: /healthz
                         stages:
                           - id: build
                             type: action
                             action: backend_build
                             runner: host
+                          - id: deploy
+                            type: deploy
                         """), new ScaffoldPlan.ScaffoldFile("ci/actions.yml", "actions: {}\n")),
                 List.of());
         return new ProjectScaffolder() {
@@ -366,6 +392,9 @@ class DeployRecipeFlowTest {
         git(repo, "config", "user.name", "CI");
         git(repo, "config", "commit.gpgsign", "false");
         Files.writeString(repo.resolve("README.md"), "# demo\n", StandardCharsets.UTF_8);
+        // 部署目标自愈（reconcileTarget）需要本次真有可运行产物：host 目标认 target/*.jar
+        Files.createDirectories(repo.resolve("target"));
+        Files.writeString(repo.resolve("target/app.jar"), "jar", StandardCharsets.UTF_8);
         return repo;
     }
 

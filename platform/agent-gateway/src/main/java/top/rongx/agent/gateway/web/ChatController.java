@@ -61,11 +61,11 @@ public class ChatController {
         // 1. 认证：身份由 Sa-Token 会话保证（客户端不可伪造）
         String userId = currentUser.requireUserId();
         // 2. 服务端解析并校验项目上下文（模型不可篡改）
-        ProjectContext ctx = contextResolver.resolve(request.projectId(), request.env(), userId);
+        ProjectContext ctx = contextResolver.resolve(
+                request.projectId(), request.env(), userId, request.worktree());
         // 3. 建立 SSE 发射器，向业务层要事件流
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
-        Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
-                request.role());
+        Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message());
         // 4. 虚拟线程异步推送：逐事件映射为 DTO 并发送
         executor.submit(() -> {
             try {

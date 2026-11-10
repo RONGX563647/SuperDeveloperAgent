@@ -30,4 +30,13 @@ public interface RecipeStore {
 
     /** 读取某个版本的定义根目录（其下有 ci/，供解析与配方查找复用）。 */
     Path rootOf(String projectId, String env, int version);
+
+    /**
+     * 让该环境当前生效脚本失效（保留历史版本，可再 activate 回来）。
+     *
+     * <p>用于"平台定义被重新生成"：旧脚本是旧定义的固化产物，继续生效会让用户以为
+     * 新定义没起作用。默认 no-op，方便测试替身。
+     */
+    default void invalidate(String projectId, String env) {
+    }
 }

@@ -74,10 +74,16 @@ public class SettingsController {
         requireWrite();
         DeployServer server = servers.find(id).orElseThrow(
                 () -> new IllegalArgumentException("服务器不存在：" + id));
-        if (server.isDefault()) {
-            throw new IllegalStateException("默认服务器不可删除，请先把其它服务器设为默认");
-        }
         servers.delete(id);
+        // 默认服务器也允许删除：否则只剩一台默认服务器时，删除按钮被禁用、
+        // 「设默认」又不可用于它本身，用户会陷入谁都删不掉的死局。
+        // 删掉后自动把剩余启用服务器中最新的一台提升为默认（findAll 已按更新时间倒序）。
+        if (server.isDefault()) {
+            servers.findAll().stream()
+                    .filter(DeployServer::enabled)
+                    .findFirst()
+                    .ifPresent(next -> servers.markDefault(next.id()));
+        }
         return Map.of("ok", true);
     }
 
@@ -95,29 +101,41 @@ public class SettingsController {
         requireWrite();
         DeployServer server = servers.find(id).orElseThrow(
                 () -> new IllegalArgumentException("服务器不存在：" + id));
-        return runServerTest(server, servers.secretOf(id).orElse(null), true);
+        return runServerTest(server, servers.secretOf(id).orElse(null), id);
     }
 
-    /** 未保存配置的测试（保存前验证）。 */
+    /**
+     * 当前表单的测试（保存前验证 + 编辑态验证）。
+     *
+     * <p>编辑态会带上已保存的 id：密码/口令留空时沿用库里的密钥，
+     * 测试结果写回该行，列表里的「可连接 / 连接失败」才是本次结果而不是第一次的。
+     */
     @PostMapping("/servers/test")
     public Map<String, Object> testServerDraft(@RequestBody Map<String, Object> body) {
         requireWrite();
         DeployServerRepository.DeployServerView view = serverView(body);
         String secret = str(body, "secret");
+        String sourceId = str(body, "id");
+        boolean saved = sourceId != null && !sourceId.isBlank()
+                && servers.find(sourceId).isPresent();
+        if ((secret == null || secret.isBlank()) && saved) {
+            secret = servers.secretOf(sourceId).orElse(null);
+        }
         DeployServer draft = new DeployServer(
-                "draft", view.name(), view.host(), view.port(), view.sshUser(), view.authType(),
-                view.keyPath(), view.remoteDir(), true, false,
+                saved ? sourceId : "draft", view.name(), view.host(), view.port(),
+                view.sshUser(), view.authType(), view.keyPath(), view.remoteDir(), true, false,
                 secret != null && !secret.isBlank(), null,
                 null, null, null, null, System.currentTimeMillis());
-        return runServerTest(draft, secret, false);
+        return runServerTest(draft, secret, saved ? sourceId : null);
     }
 
-    private Map<String, Object> runServerTest(DeployServer server, String secret, boolean persist) {
+    /** @param persistId 需要写回测试结果的行 id；纯草稿传 null。 */
+    private Map<String, Object> runServerTest(DeployServer server, String secret, String persistId) {
         long start = System.nanoTime();
         SshAccess.Result result = ssh.probe(server, secret);
         long latency = (System.nanoTime() - start) / 1_000_000L;
-        if (persist && !"draft".equals(server.id())) {
-            servers.recordTest(server.id(), result.ok(), result.ok()
+        if (persistId != null && !persistId.isBlank()) {
+            servers.recordTest(persistId, result.ok(), result.ok()
                     ? "连接正常（" + result.output().trim() + "）" : result.error(), latency);
         }
         Map<String, Object> out = new LinkedHashMap<>();
@@ -225,10 +243,18 @@ public class SettingsController {
         }
         String apiKey = str(body, "apiKey");
         String connectionId = str(body, "connectionId");
+        boolean saved = connectionId != null && !connectionId.isBlank()
+                && models.find(connectionId).isPresent();
         if ((apiKey == null || apiKey.isBlank()) && connectionId != null && !connectionId.isBlank()) {
             apiKey = models.apiKeyOf(connectionId).orElse("");
         }
-        return modelTestResponse(modelProbe.probe(baseUrl, apiKey, modelName));
+        ModelProbe.Result result = modelProbe.probe(baseUrl, apiKey, modelName);
+        // 编辑态测的是当前表单，结果写回该行，列表状态才不会停在第一次保存时的结果
+        if (saved) {
+            models.recordTest(connectionId, result.ok(),
+                    result.ok() ? "连接正常" : result.message(), result.latencyMs());
+        }
+        return modelTestResponse(result);
     }
 
     /** 轻量选项：给对话页展示当前模型名（不含任何密钥）。 */
