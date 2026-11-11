@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { CopyDocument, Search } from '@element-plus/icons-vue'
 import type { ToolActivity, TraceStep, TraceTurn } from '../../types'
 import { agentProfile } from '../../api/agent'
+import { formatAmount, formatCost, formatTokens } from '../../utils/deepseekPricing'
 
 /**
  * 轨迹视图：左侧密集步骤列表 + 右侧详情检查器（Detail Inspector）。
@@ -77,11 +78,18 @@ const stats = computed(() => {
     durationMs: first && last ? Math.max(0, last.endedAt - first.startedAt) : 0,
     turns: props.turns.length,
     calls: props.turns.reduce((n, t) => n + t.tools, 0),
+    cost: props.turns.reduce((sum, t) => sum + (t.cost?.totalCost ?? 0), 0),
   }
 })
 
 function turnMs(turn: TraceTurn): number {
   return Math.max(0, turn.endedAt - turn.startedAt)
+}
+
+/** 概览带悬浮提示：轮次 + 耗时 + 步数 + 本轮费用。 */
+function roundTitle(turn: TraceTurn): string {
+  const money = turn.cost ? ` · ￥${formatAmount(turn.cost.totalCost)}` : ''
+  return `第 ${turn.index} 轮 · ${duration(turnMs(turn))} · ${turn.steps} 步${money}`
 }
 
 function duration(ms: number): string {
@@ -247,6 +255,9 @@ watch(() => `${props.projectId}:${props.env}`, () => {
         <span class="stat"><b class="mono">{{ duration(stats.durationMs) }}</b><em>总时长</em></span>
         <span class="stat"><b class="mono">{{ stats.turns }}</b><em>轮次</em></span>
         <span class="stat"><b class="mono">{{ stats.calls }}</b><em>工具调用</em></span>
+        <span v-if="stats.cost > 0" class="stat">
+          <b class="mono">￥{{ formatAmount(stats.cost) }}</b><em>总费用</em>
+        </span>
         <span v-if="streaming" class="live"><i />进行中</span>
       </div>
       <div class="bar-right">
@@ -272,7 +283,7 @@ watch(() => `${props.projectId}:${props.env}`, () => {
             class="ov-turn"
             :class="{ on: turn.id === sel.turnId, bad: turn.failed }"
             :style="{ flexGrow: Math.max(turnMs(turn), 40) }"
-            :title="`第 ${turn.index} 轮 · ${duration(turnMs(turn))} · ${turn.steps} 步`"
+            :title="roundTitle(turn)"
             @click="focusTurn(turn.id)"
           >
             <span class="ov-input" />
@@ -319,6 +330,9 @@ watch(() => `${props.projectId}:${props.env}`, () => {
                 <span class="round-meta mono">
                   {{ clock(turn.at) }} · {{ turn.steps }} 步 · {{ turn.tools }} 工具 · {{ duration(turnMs(turn)) }}
                 </span>
+                <span v-if="turn.cost" class="round-money mono">
+                  ￥{{ formatAmount(turn.cost.totalCost) }}
+                </span>
                 <span v-if="turn.failed" class="badge">失败</span>
               </button>
 
@@ -339,6 +353,10 @@ watch(() => `${props.projectId}:${props.env}`, () => {
                       :class="(step.status || 'running').toLowerCase()"
                     >{{ stateText(step.status) }}</span>
                     <span v-else class="step-cost mono">{{ duration(step.durationMs) }}</span>
+                    <!-- 每步费用：模型输出步才有，工具步无 -->
+                    <span v-if="step.cost" class="step-money mono">
+                      ￥{{ formatAmount(step.cost.totalCost) }}
+                    </span>
                   </button>
                 </li>
                 <li v-if="!turn.items.length" class="step-empty">这一轮还没有步骤</li>
@@ -404,6 +422,21 @@ watch(() => `${props.projectId}:${props.env}`, () => {
                   <dd class="mono">{{ fullTime(selStep.at) }}</dd>
                   <dt>估算耗时</dt>
                   <dd class="mono">{{ duration(selStep.durationMs) }}</dd>
+                  <template v-if="selStep.cost">
+                    <dt>本步费用</dt>
+                    <dd class="mono">{{ formatCost(selStep.cost.totalCost) }}</dd>
+                    <dt>输入 / 输出</dt>
+                    <dd class="mono">
+                      {{ formatCost(selStep.cost.inputCost) }} / {{ formatCost(selStep.cost.outputCost) }}
+                    </dd>
+                    <dt>Token</dt>
+                    <dd class="mono">
+                      {{ formatTokens(selStep.cost.hitTokens + selStep.cost.missTokens) }} in /
+                      {{ formatTokens(selStep.cost.completionTokens) }} out
+                    </dd>
+                    <dt>时段</dt>
+                    <dd>{{ selStep.cost.isPeak ? '高峰' : '空闲' }}</dd>
+                  </template>
                   <template v-if="selStep.kind === 'tool'">
                     <dt>入参</dt>
                     <dd class="mono">
@@ -518,6 +551,16 @@ watch(() => `${props.projectId}:${props.env}`, () => {
                 <dt>工具调用</dt><dd class="mono">{{ selTurn.tools }}</dd>
                 <dt>模型输出</dt><dd class="mono">{{ selTurn.items.filter((s) => s.kind === 'text').length }}</dd>
                 <dt>总耗时</dt><dd class="mono">{{ duration(turnMs(selTurn)) }}</dd>
+                <template v-if="selTurn.cost">
+                  <dt>本轮费用</dt>
+                  <dd class="mono">{{ formatCost(selTurn.cost.totalCost) }}</dd>
+                  <dt>输入（命中）</dt>
+                  <dd class="mono">{{ formatTokens(selTurn.cost.hitTokens) }} tokens</dd>
+                  <dt>输入（未命中）</dt>
+                  <dd class="mono">{{ formatTokens(selTurn.cost.missTokens) }} tokens</dd>
+                  <dt>输出</dt>
+                  <dd class="mono">{{ formatTokens(selTurn.cost.completionTokens) }} tokens</dd>
+                </template>
               </dl>
               <div class="code-head"><span class="mono">工具清单</span></div>
               <ul v-if="selTurn.tools" class="tool-list">
@@ -533,11 +576,11 @@ watch(() => `${props.projectId}:${props.env}`, () => {
               </ul>
               <p v-else class="muted">这一轮没有工具调用。</p>
             </div>
-            <div class="insp-foot">
-              <button type="button" class="ghost-btn" @click="emit('locate', selTurn.id)">
-                在对话中定位
-              </button>
-            </div>
+<!--            <div class="insp-foot">-->
+<!--              <button type="button" class="ghost-btn" @click="emit('locate', selTurn.id)">-->
+<!--                在对话中定位-->
+<!--              </button>-->
+<!--            </div>-->
           </template>
 
           <div v-else class="insp-empty">
@@ -813,6 +856,12 @@ watch(() => `${props.projectId}:${props.env}`, () => {
   font-size: 10px;
   color: var(--ink-faint);
 }
+/* 本轮费用：比耗时信息更醒目一点，方便横向比较哪轮更贵 */
+.round-money {
+  flex: none;
+  font-size: 10px;
+  color: var(--ink-muted);
+}
 .badge {
   flex: none;
   padding: 0 5px;
@@ -880,6 +929,12 @@ watch(() => `${props.projectId}:${props.env}`, () => {
   flex: none;
   font-size: 9.5px;
   color: var(--ink-faint);
+}
+/* 每步费用：模型输出步才有 */
+.step-money {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--ink-muted);
 }
 .step-state.completed { color: var(--ok); }
 .step-state.running { color: var(--accent-ink); }

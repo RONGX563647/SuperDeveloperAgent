@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AgentProjection } from '../../types'
+import type { AgentProjection, UsageCost } from '../../types'
+import { formatAmount, sumCost } from '../../utils/deepseekPricing'
 import MessageItem from './MessageItem.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 
@@ -49,18 +50,61 @@ function itemActive(index: number, m: { role: string; id: string }): boolean {
 const streamingText = computed(() => props.projection.streamingTurn?.text ?? '')
 /** 思考增量：与正文同样逐帧刷新，正文开始后自动收起。 */
 const streamingThinking = computed(() => props.projection.streamingTurn?.thinking ?? '')
+
+/**
+ * 每轮费用合计：一轮 = 一条 user 消息 → 下一条 user 消息之前的所有消息
+ * （含轮内多次模型调用与工具步骤），统计落在该轮最后一条消息下方。
+ *
+ * <p>末尾轮在流式中先不显示，避免金额反复跳动；本轮结束后自然出现。</p>
+ */
+const turnCosts = computed(() => {
+  const map = new Map<string, UsageCost>()
+  let acc: UsageCost | undefined
+  let lastId = ''
+  let tail = false
+  const flush = () => {
+    if (acc && lastId && (!tail || !props.streaming)) map.set(lastId, acc)
+  }
+  for (const message of items.value) {
+    if (message.role === 'user') {
+      flush()
+      acc = undefined
+      lastId = ''
+      tail = false
+      continue
+    }
+    if (message.cost) acc = sumCost(acc, message.cost)
+    lastId = message.id
+  }
+  tail = true
+  flush()
+  return map
+})
+
+/** 渲染行：消息 + 是否挂流式光标 + 该轮费用合计（仅该轮最后一条有值）。 */
+const rows = computed(() => items.value.map((message, index) => ({
+  message,
+  streaming: itemActive(index, message),
+  cost: turnCosts.value.get(message.id),
+})))
 </script>
 
 <template>
   <div class="chat-column">
-    <MessageItem
-      v-for="(m, i) in items"
-      :key="m.id"
-      :message="m"
-      :tool="m.toolCallId ? projection.tools[m.toolCallId] : undefined"
-      :streaming="itemActive(i, m)"
-      @copy="emit('copy', $event)"
-    />
+    <template v-for="row in rows" :key="row.message.id">
+      <MessageItem
+        :message="row.message"
+        :tool="row.message.toolCallId ? projection.tools[row.message.toolCallId] : undefined"
+        :streaming="row.streaming"
+        @copy="emit('copy', $event)"
+      />
+      <!-- 每轮费用合计：等宽小字，贴在该轮最后一条消息下方 -->
+      <div v-if="row.cost" class="turn-cost mono">
+        ￥ 本轮消耗：{{ formatAmount(row.cost.totalCost) }}
+        (输入: {{ formatAmount(row.cost.inputCost) }} | 输出: {{ formatAmount(row.cost.outputCost) }})
+        [{{ row.cost.isPeak ? '高峰时段' : '空闲时段' }}]
+      </div>
+    </template>
 
     <!-- 流式中的 assistant 思考 + 正文（尚未落盘，随 SSE 增量实时刷新） -->
     <div v-if="projection.streamingTurn" class="row assistant">
@@ -99,6 +143,15 @@ const streamingThinking = computed(() => props.projection.streamingTurn?.thinkin
   display: flex;
   min-width: 0;
   margin-top: 6px;
+}
+/* 每轮费用：等宽小字，常驻显示（轮末一行，不随 hover 隐藏） */
+.turn-cost {
+  padding: 1px 2px 2px;
+  margin-bottom: 2px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+  word-break: break-all;
 }
 .assistant-block {
   display: flex;

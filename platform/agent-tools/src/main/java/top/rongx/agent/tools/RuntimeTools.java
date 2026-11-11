@@ -22,7 +22,7 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.project.ProjectContext;
-import top.rongx.agent.executor.AppRuntimeInspector;
+import top.rongx.agent.domain.runtime.RuntimeInspector;
 
 /**
  * 应用运行时工具：只回答"应用有没有在跑、日志里报了什么"，不启停任何东西。
@@ -46,10 +46,10 @@ public class RuntimeTools {
 
     private final EnvironmentStore envStore;
     private final ServiceRuntime services;
-    private final AppRuntimeInspector inspector;
+    private final RuntimeInspector inspector;
 
     public RuntimeTools(EnvironmentStore envStore, ServiceRuntime services,
-                        AppRuntimeInspector inspector) {
+                        RuntimeInspector inspector) {
         this.envStore = envStore;
         this.services = services;
         this.inspector = inspector;
@@ -80,7 +80,7 @@ public class RuntimeTools {
             any = appendHostProcesses(sb, ctx, target, effective);
         }
         String dockerError = null;
-        List<AppRuntimeInspector.ContainerStatus> containers = List.of();
+        List<RuntimeInspector.ContainerStatus> containers = List.of();
         try {
             containers = inspector.containers(ctx.projectId(), target);
         } catch (IllegalStateException e) {
@@ -90,13 +90,13 @@ public class RuntimeTools {
             sb.append("docker: 不可用（").append(dockerError).append("）\n");
         } else if (!containers.isEmpty()) {
             any = true;
-            long running = containers.stream().filter(AppRuntimeInspector.ContainerStatus::running).count();
+            long running = containers.stream().filter(RuntimeInspector.ContainerStatus::running).count();
             sb.append("runtime: docker\n")
                     .append("containers: ").append(running).append('/').append(containers.size())
                     .append(" running\n");
-            for (AppRuntimeInspector.ContainerStatus c : containers) {
+            for (RuntimeInspector.ContainerStatus c : containers) {
                 sb.append("container: ").append(c.name()).append('\n')
-                        .append("  service: ").append(AppRuntimeInspector.serviceName(c)).append('\n')
+                        .append("  service: ").append(RuntimeInspector.serviceName(c)).append('\n')
                         .append("  status: ").append(c.status())
                         .append(c.running() ? "" : "（exit " + c.exitCode() + "）").append('\n')
                         .append("  health: ").append(c.health() == null ? "none" : c.health()).append('\n')
@@ -177,7 +177,7 @@ public class RuntimeTools {
 
         // docker：test/prod（dev 也可能有遗留容器，一并查；没有就跳过）
         String dockerError = null;
-        List<AppRuntimeInspector.ContainerStatus> containers = List.of();
+        List<RuntimeInspector.ContainerStatus> containers = List.of();
         try {
             containers = inspector.containers(ctx.projectId(), target);
         } catch (IllegalStateException e) {
@@ -186,8 +186,8 @@ public class RuntimeTools {
         if (dockerError != null && !wrote) {
             sb.append("docker: 不可用（").append(dockerError).append("）\n");
         }
-        for (AppRuntimeInspector.ContainerStatus c : containers) {
-            String serviceName = AppRuntimeInspector.serviceName(c);
+        for (RuntimeInspector.ContainerStatus c : containers) {
+            String serviceName = RuntimeInspector.serviceName(c);
             // 单容器发布一个容器承担全部服务（service=app）：按 backend/frontend 查也应命中。
             if (!"all".equalsIgnoreCase(wanted)
                     && !serviceName.equalsIgnoreCase(wanted)
@@ -251,7 +251,7 @@ public class RuntimeTools {
         }
 
         String dockerError = null;
-        List<AppRuntimeInspector.PortOwner> owners = List.of();
+        List<RuntimeInspector.PortOwner> owners = List.of();
         try {
             owners = inspector.portOwners(port);
         } catch (IllegalStateException e) {
@@ -262,7 +262,7 @@ public class RuntimeTools {
         } else if (owners.isEmpty()) {
             sb.append("docker: 没有运行中的容器映射该端口\n");
         } else {
-            for (AppRuntimeInspector.PortOwner owner : owners) {
+            for (RuntimeInspector.PortOwner owner : owners) {
                 sb.append("docker: ").append(owner.container());
                 if (owner.project() != null) {
                     sb.append("  project=").append(owner.project());

@@ -8,7 +8,7 @@
  * 单价单位：元 / 百万 tokens。价格调整只需改下面的 RATES 常量。</p>
  */
 
-export type DeepSeekKind = 'chat' | 'reasoner'
+export type DeepSeekKind = 'flash' | 'pro'
 
 /** 一次模型调用返回的用量（AgentScope 的 ChatUsage，或 OpenAI 风格的 snake_case）。 */
 export interface UsageLike {
@@ -58,14 +58,23 @@ interface Rate {
   output: number
 }
 
+/**
+ * 官方单价（元 / 百万 tokens，2026-11 查询）：
+ * - deepseek-v4-flash：命中 0.02 / 未命中 1 / 输出 2
+ * - deepseek-v4-pro：命中 0.025 / 未命中 3 / 输出 6
+ *
+ * <p>官方已取消峰谷差价，且 deepseek-chat / deepseek-reasoner 分别对应
+ * v4-flash 的非思考 / 思考模式（同价）。这里仍保留 peak / idle 两组值：
+ * 时段标签照常展示，后续若恢复峰谷折扣只需改这张表。</p>
+ */
 const RATES: Record<DeepSeekKind, { peak: Rate; idle: Rate }> = {
-  chat: {
-    peak: { hit: 0.1, miss: 2.0, output: 8.0 },
-    idle: { hit: 0.1, miss: 1.0, output: 4.0 },
+  flash: {
+    peak: { hit: 0.02, miss: 1.0, output: 2.0 },
+    idle: { hit: 0.02, miss: 1.0, output: 2.0 },
   },
-  reasoner: {
-    peak: { hit: 0.1, miss: 4.0, output: 16.0 },
-    idle: { hit: 0.1, miss: 1.0, output: 8.0 },
+  pro: {
+    peak: { hit: 0.025, miss: 3.0, output: 6.0 },
+    idle: { hit: 0.025, miss: 3.0, output: 6.0 },
   },
 }
 
@@ -77,12 +86,15 @@ export function isDeepSeekModel(modelName: string | undefined | null): boolean {
 }
 
 export function deepSeekKind(modelName: string): DeepSeekKind {
-  // deepseek-reasoner / deepseek-r1 / 带 reasoner 的代理别名都按 R1 计价
-  return /reasoner|r1/i.test(modelName) ? 'reasoner' : 'chat'
+  // v4-pro 单独一档；deepseek-chat / deepseek-reasoner / v3 / r1 都归入 flash 档
+  return /pro/i.test(modelName) ? 'pro' : 'flash'
 }
 
 /**
  * 高峰判断（Asia/Shanghai）：周一至周五 09:00-12:00、14:00-18:00。
+ *
+ * <p>官方当前已取消峰谷差价，该结果只用于界面上的时段标签；
+ * 若之后恢复峰谷价，改 RATES 里的 peak / idle 即可生效。</p>
  *
  * <p>不依赖本地时区设置，用 Intl 显式指定时区，避免用户机器在东八区外算错时段。</p>
  */
@@ -196,7 +208,27 @@ export function addSessionCost(base: SessionCost, cost: UsageCost): SessionCost 
 
 /** 金额统一保留 5 位小数，避免 0.000001 被截成 0.00。 */
 export function formatCost(value: number): string {
-  return `¥${value.toFixed(5)}`
+  return `￥${value.toFixed(5)}`
+}
+
+/** 纯数字金额（前面已有时段/标题符号时用，避免重复货币符号）。 */
+export function formatAmount(value: number): string {
+  return value.toFixed(5)
+}
+
+/** 合并两次调用的费用（同一轮内多次模型调用需要累加）。 */
+export function sumCost(previous: UsageCost | undefined, addition: UsageCost): UsageCost {
+  if (!previous) return addition
+  return {
+    model: addition.model,
+    isPeak: addition.isPeak,
+    hitTokens: previous.hitTokens + addition.hitTokens,
+    missTokens: previous.missTokens + addition.missTokens,
+    completionTokens: previous.completionTokens + addition.completionTokens,
+    inputCost: previous.inputCost + addition.inputCost,
+    outputCost: previous.outputCost + addition.outputCost,
+    totalCost: previous.totalCost + addition.totalCost,
+  }
 }
 
 export function formatTokens(value: number): string {

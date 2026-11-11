@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 import { CopyDocument } from '@element-plus/icons-vue'
 import type { ChatMessage, ToolActivity } from '../../types'
-import { formatCost } from '../../utils/deepseekPricing'
 import MarkdownView from './MarkdownView.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 
@@ -128,12 +127,6 @@ const time = computed(() => {
         <ThinkingBlock v-if="message.thinking" :content="message.thinking" />
         <MarkdownView :content="message.text" />
         <span v-if="streaming" class="caret" />
-        <!-- 单次费用：本地按 usage 算价，仅 deepseek 系列有值 -->
-        <div v-if="message.cost" class="msg-cost mono">
-          💰 本次消耗：{{ formatCost(message.cost.totalCost) }}
-          (输入: {{ formatCost(message.cost.inputCost) }} | 输出: {{ formatCost(message.cost.outputCost) }})
-          [{{ message.cost.isPeak ? '高峰时段' : '空闲时段' }}]
-        </div>
         <div v-if="message.text" class="msg-meta">
           <time class="meta-time mono">{{ time }}</time>
           <button type="button" class="meta-btn" title="复制" @click="emit('copy', message.text)">
@@ -323,15 +316,6 @@ const time = computed(() => {
 }
 @keyframes caret-blink {
   50% { opacity: 0; }
-}
-
-/* 单次费用：等宽小字，常驻显示（不随 hover 隐藏） */
-.msg-cost {
-  padding: 1px 2px;
-  font-size: 10.5px;
-  line-height: 1.6;
-  color: var(--ink-faint);
-  word-break: break-all;
 }
 
 /* meta 行：hover 才出现 */

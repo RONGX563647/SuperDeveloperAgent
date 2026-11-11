@@ -16,7 +16,7 @@ import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
-import top.rongx.agent.executor.AppRuntimeInspector;
+import top.rongx.agent.domain.runtime.RuntimeInspector;
 import org.springframework.stereotype.Component;
 
 /**
@@ -32,10 +32,10 @@ public class CiQueryTools {
     private final PipelineEngine engine;
     private final RepoInspector repo;
     private final RecipeStore recipes;
-    private final AppRuntimeInspector inspector;
+    private final RuntimeInspector inspector;
 
     public CiQueryTools(PipelineEngine engine, RepoInspector repo, RecipeStore recipes,
-                        AppRuntimeInspector inspector) {
+                        RuntimeInspector inspector) {
         this.engine = engine;
         this.repo = repo;
         this.recipes = recipes;
@@ -270,14 +270,14 @@ public class CiQueryTools {
         int deployCount = 0;
         boolean dockerDown = false;
         for (String env : List.of("dev", "test", "prod")) {
-            List<AppRuntimeInspector.ContainerStatus> containers;
+            List<RuntimeInspector.ContainerStatus> containers;
             try {
                 containers = inspector.containers(projectId, env);
             } catch (IllegalStateException e) {
                 dockerDown = true;
                 continue;
             }
-            for (AppRuntimeInspector.ContainerStatus c : containers) {
+            for (RuntimeInspector.ContainerStatus c : containers) {
                 if (c.sha() == null || !c.sha().toLowerCase().startsWith(needle)) {
                     continue;
                 }

@@ -3,7 +3,7 @@ import type {
   UsageCost,
 } from '../types'
 import {
-  addSessionCost, calculateDeepSeekCost, emptySessionCost, isDeepSeekModel,
+  addSessionCost, calculateDeepSeekCost, emptySessionCost, isDeepSeekModel, sumCost,
 } from '../utils/deepseekPricing'
 import type { UsageLike } from '../utils/deepseekPricing'
 
@@ -82,6 +82,7 @@ const toolDisplayNames: Record<string, string> = {
   plan_action: '规划动作',
   run_action: '执行动作',
   request_confirmation: '发起变更确认',
+  propose_patch: '提交代码补丁',
 }
 
 /**
@@ -177,21 +178,6 @@ function pushMessage(
     cost,
     at: Date.now(),
   })
-}
-
-/** 同一轮可能连续调用多次模型（工具循环），费用要累加而不是互相覆盖。 */
-function mergeCost(previous: UsageCost | undefined, addition: UsageCost): UsageCost {
-  if (!previous) return addition
-  return {
-    model: addition.model,
-    isPeak: addition.isPeak,
-    hitTokens: previous.hitTokens + addition.hitTokens,
-    missTokens: previous.missTokens + addition.missTokens,
-    completionTokens: previous.completionTokens + addition.completionTokens,
-    inputCost: previous.inputCost + addition.inputCost,
-    outputCost: previous.outputCost + addition.outputCost,
-    totalCost: previous.totalCost + addition.totalCost,
-  }
 }
 
 export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent): AgentProjection {
@@ -346,12 +332,12 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
       if (!usage) break
       const cost = calculateDeepSeekCost(usage, model)
       if (next.streamingTurn) {
-        next.streamingTurn.cost = mergeCost(next.streamingTurn.cost, cost)
+        next.streamingTurn.cost = sumCost(next.streamingTurn.cost, cost)
       } else {
         const lastAssistant = [...next.messages].reverse()
           .find((message) => message.role === 'assistant')
         if (lastAssistant) {
-          lastAssistant.cost = mergeCost(lastAssistant.cost, cost)
+          lastAssistant.cost = sumCost(lastAssistant.cost, cost)
         } else {
           pushMessage(next, 'assistant', '', undefined, undefined, undefined, cost)
         }

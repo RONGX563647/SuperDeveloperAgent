@@ -12,7 +12,7 @@ import { useFollowScroll } from '../composables/useFollowScroll'
 import { getToken } from '../api/auth'
 import { listProjects, projectEnvs, type ProjectRow } from '../api/project'
 import { envLabel } from '../utils/pipelineLabels'
-import { formatCost, formatTokens } from '../utils/deepseekPricing'
+import { formatCost, formatTokens, sumCost } from '../utils/deepseekPricing'
 import { loadHistory, saveHistory } from '../state/sessionHistory'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import ChatTraceRail from '../components/chat/ChatTraceRail.vue'
@@ -178,7 +178,10 @@ const traceTurns = computed<TraceTurn[]>(() => {
       turn.segments.push('text')
       turn.items.push({
         id: m.id, kind: 'text', title: '模型输出', text: m.text, at: m.at, durationMs: 0,
+        cost: m.cost,
       })
+      // 每轮费用 = 轮内所有模型调用之和（工具循环会产生多条 assistant 消息）
+      if (m.cost) turn.cost = sumCost(turn.cost, m.cost)
     } else if (m.role === 'step') {
       turn.steps += 1
       turn.tools += 1
@@ -219,9 +222,11 @@ const traceTurns = computed<TraceTurn[]>(() => {
       liveTurn.segments.push('text')
       liveTurn.items.push({
         id: 'live-text', kind: 'text', title: '模型输出',
-        text: streaming.text, at: now, durationMs: 0,
+        text: streaming.text, at: now, durationMs: 0, cost: streaming.cost,
       })
     }
+    // 流式中的费用尚未落盘，实时并入当前轮
+    if (streaming.cost) liveTurn.cost = sumCost(liveTurn.cost, streaming.cost)
     liveTurn.endAt = now
     liveTurn.endedAt = now
   }

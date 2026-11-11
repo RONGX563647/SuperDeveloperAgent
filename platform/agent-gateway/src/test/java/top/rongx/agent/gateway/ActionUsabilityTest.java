@@ -3,6 +3,7 @@ package top.rongx.agent.gateway;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,29 @@ class ActionUsabilityTest {
         // 宿主模式下 L3 发布被 fail-closed 拦截是**正确行为**；本用例只验证令牌链路，
         // 用一个非 L3 的自定义动作来走完"登记→确认→带令牌执行"闭环。
         registry.add("agent.sandbox.allow-test-l3", () -> "true");
+        // 预置项目清单已从 application.yml 移除（项目统一走「项目接入」）；
+        // 本用例需要固定项目 RY 来验证接线，因此在测试内声明，不依赖本地 data/workspaces。
+        addTestProject(registry);
+    }
+
+    /** 测试用项目 RY：dev/test/prod 三个环境，满足控制器对项目与环境的校验。 */
+    static void addTestProject(DynamicPropertyRegistry registry) {
+        registry.add("agent.projects.items[0].id", () -> "RY");
+        registry.add("agent.projects.items[0].name", () -> "RuoYi-Vue-Plus");
+        registry.add("agent.projects.items[0].repo-url", () -> "https://gitee.com/dromara/RuoYi-Vue-Plus.git");
+        registry.add("agent.projects.items[0].repo-type", () -> "gitee");
+        registry.add("agent.projects.items[0].type", () -> "ruoyi-plus");
+        registry.add("agent.projects.items[0].port-range-start", () -> "8100");
+        registry.add("agent.projects.items[0].port-range-end", () -> "8199");
+        registry.add("agent.projects.items[0].envs[0].env", () -> "dev");
+        registry.add("agent.projects.items[0].envs[0].app-url", () -> "http://127.0.0.1:8180");
+        registry.add("agent.projects.items[0].envs[0].compose-dir", () -> "opt/apps/ry");
+        registry.add("agent.projects.items[0].envs[1].env", () -> "test");
+        registry.add("agent.projects.items[0].envs[1].app-url", () -> "http://127.0.0.1:8180");
+        registry.add("agent.projects.items[0].envs[1].compose-dir", () -> "opt/apps/ry");
+        registry.add("agent.projects.items[0].envs[2].env", () -> "prod");
+        registry.add("agent.projects.items[0].envs[2].app-url", () -> "http://127.0.0.1:8181");
+        registry.add("agent.projects.items[0].envs[2].compose-dir", () -> "opt/apps/ry");
     }
 
     @Autowired
@@ -115,7 +139,11 @@ class ActionUsabilityTest {
     @DisplayName("U1 列动作：来源指向仓库配方")
     void listActions() {
         var list = actionController.list("RY", "test");
-        assertEquals(3, list.size());
+        // 平台内置动作也会出现在列表里；这里只断言"仓库配方被识别"的部分
+        long fromRepo = list.stream()
+                .filter(a -> a.source() != null && a.source().startsWith("ci/actions.yml#"))
+                .count();
+        assertEquals(3, fromRepo, String.valueOf(list));
         var backend = list.stream().filter(a -> a.action().equals("backend_build")).findFirst().orElseThrow();
         assertEquals("ci/actions.yml#backend_build", backend.source());
         assertTrue(backend.humanAuthored(), "应识别为仓库配方");
@@ -134,6 +162,7 @@ class ActionUsabilityTest {
     @Test
     @DisplayName("U3 构建成功：产物与 sha256")
     void runBuild() {
+        Assumptions.assumeTrue(TestEnv.nodeAvailable(), "缺少 node，跳过真实动作执行");
         var run = actionController.run("backend_build", "RY", "test");
         assertEquals("SUCCEEDED", run.status(), "应构建成功，日志：" + run.logTail());
         assertEquals(1, run.artifacts().size(), "应收集到产物，日志：" + run.logTail());
@@ -145,6 +174,7 @@ class ActionUsabilityTest {
     @Test
     @DisplayName("U4 构建失败：E-101，日志尾部能定位错误")
     void runFailingBuild() {
+        Assumptions.assumeTrue(TestEnv.nodeAvailable(), "缺少 node，跳过真实动作执行");
         var run = actionController.run("frontend_build", "RY", "test");
         assertEquals("FAILED", run.status());
         assertEquals("E-101", run.errorCode());
@@ -190,6 +220,7 @@ class ActionUsabilityTest {
     @Test
     @DisplayName("U8-L3 闭环：登记 → 确认 → 带令牌执行 → 令牌不可复用")
     void approveThenApply() {
+        Assumptions.assumeTrue(TestEnv.nodeAvailable(), "缺少 node，跳过真实动作执行");
         ChangePlan plan = requestDeploy();
         assertNotNull(plan.planHash());
 

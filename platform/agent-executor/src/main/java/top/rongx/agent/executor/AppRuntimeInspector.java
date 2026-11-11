@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import top.rongx.agent.domain.runtime.RuntimeInspector;
 
 /**
  * 应用容器只读巡检：回答"应用起没起来、健康检查过没过、日志里报了什么"。
@@ -18,7 +19,7 @@ import java.util.regex.Pattern;
  * 不依赖容器命名规则的历史版本（{@code agent-deploy-<project>-<env>} 与
  * {@code <namespace>-<project>-<service>} 并存）。
  */
-public class AppRuntimeInspector {
+public class AppRuntimeInspector implements RuntimeInspector {
 
     private static final Path CWD = Path.of(".");
     private static final long TIMEOUT_MS = 20_000;
@@ -27,26 +28,6 @@ public class AppRuntimeInspector {
     private static final Pattern PORT_ENTRY = Pattern.compile("\"(\\d+/[a-z]+)\":\\[(.*?)]");
     private static final Pattern HOST_PORT =
             Pattern.compile("\"HostIp\":\"([^\"]*)\",\"HostPort\":\"([^\"]*)\"");
-
-    /** 一个应用容器的运行时事实。 */
-    public record ContainerStatus(
-            String name,
-            String project,
-            String env,
-            String service,
-            String status,
-            boolean running,
-            int restartCount,
-            String startedAt,
-            String image,
-            String imageId,
-            String health,
-            int exitCode,
-            String ports,
-            String runId,
-            String sha,
-            String composeProject) {
-    }
 
     /**
      * 列出某项目某环境的应用容器（不含中间件：中间件没有 {@code agent.project} 标签）。
@@ -74,11 +55,6 @@ public class AppRuntimeInspector {
             }
         }
         return result;
-    }
-
-    /** 一个宿主端口的使用者（运行中的容器）。 */
-    public record PortOwner(String container, String project, String env, String service,
-                            int hostPort) {
     }
 
     /**
@@ -258,13 +234,6 @@ public class AppRuntimeInspector {
         ProcessExecutor.StepOutcome outcome =
                 new ProcessExecutor().exec(CWD, argv, TIMEOUT_MS, sink, () -> false);
         return new Cmd(outcome.exitCode(), ProcessExecutor.redact(sink.toString()));
-    }
-
-    /** 容器服务名：多服务发布有 service 标签；单容器发布一个容器承担全部服务。 */
-    public static String serviceName(ContainerStatus status) {
-        return status != null && status.service() != null && !status.service().isBlank()
-                ? status.service()
-                : "app";
     }
 
     private record Cmd(int exitCode, String output) {
