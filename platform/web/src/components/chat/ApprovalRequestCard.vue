@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getChange, confirmChange, applyChange } from '../../api/change'
-import type { ChangeView } from '../../types'
+import { getChange, getChangePatch, confirmChange, applyChange } from '../../api/change'
+import type { ChangePatchView, ChangeView } from '../../types'
 
 /**
  * 变更确认卡（信息结构对齐 ruoyi-copilot 的 ApprovalRequestCard + 本项目 ConfirmTokenService）：
  * 加载变更单 → 确认（高危需密码）→ 带令牌执行，全部状态内聚在本组件。
+ * 补丁类变更额外展示 diff 与目标分支，避免"只看到一句摘要就确认"。
  */
 interface Props {
   changeId: string
@@ -20,16 +21,22 @@ const emit = defineEmits<{
 }>()
 
 const change = ref<ChangeView | null>(null)
+const patch = ref<ChangePatchView | null>(null)
 const password = ref('')
 const confirmToken = ref<string | null>(null)
 const applyResult = ref<string | null>(null)
+const applyLog = ref<string | null>(null)
 const applyBusy = ref(false)
 
 async function load(): Promise<void> {
   try {
     change.value = await getChange(props.changeId)
+    patch.value = change.value.kind.startsWith('patch:')
+      ? await getChangePatch(props.changeId)
+      : null
     confirmToken.value = null
     applyResult.value = null
+    applyLog.value = null
     password.value = ''
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载变更失败')
@@ -53,6 +60,7 @@ async function doApply(): Promise<void> {
   try {
     const result = await applyChange(change.value.changeId, confirmToken.value)
     applyResult.value = `${result.action} → ${result.status}（${result.durationMs} ms）`
+    applyLog.value = result.logTail || null
     ElMessage.success(`变更执行完毕：${result.status}`)
     emit('applied', result)
   } catch (error) {
@@ -86,6 +94,18 @@ defineExpose({ load })
       <div class="line"><span>计划哈希</span><b class="mono">{{ change.planHash.slice(0, 24) }}…</b></div>
     </div>
 
+    <div v-if="patch" class="card-body patch-box">
+      <div class="line"><span>基于提交</span><b class="mono">{{ patch.baseSha.slice(0, 12) }}</b></div>
+      <div class="line"><span>目标分支</span><b class="mono">{{ patch.branch }}</b></div>
+      <div class="line"><span>改动文件</span><b>{{ patch.files.join('、') }}</b></div>
+      <div class="line"><span>增删行</span><b>+{{ patch.added }} / -{{ patch.removed }}</b></div>
+      <el-collapse>
+        <el-collapse-item title="查看补丁 diff（应用前请核对）" name="diff">
+          <pre class="diff mono">{{ patch.diff }}</pre>
+        </el-collapse-item>
+      </el-collapse>
+    </div>
+
     <el-input
       v-if="change.highRisk && !confirmToken"
       v-model="password"
@@ -105,6 +125,11 @@ defineExpose({ load })
       type="success" :closable="false" show-icon
       title="已带令牌执行" :description="applyResult"
     />
+    <el-collapse v-if="applyLog" class="apply-log">
+      <el-collapse-item title="执行输出（含新提交 sha）" name="log">
+        <pre class="diff mono">{{ applyLog }}</pre>
+      </el-collapse-item>
+    </el-collapse>
 
     <div class="card-actions">
       <el-button size="small" @click="emit('dismiss')">忽略</el-button>
@@ -114,7 +139,7 @@ defineExpose({ load })
         :disabled="!confirmToken || applyBusy" :loading="applyBusy"
         @click="doApply"
       >
-        带令牌执行
+        {{ patch ? '带令牌应用补丁' : '带令牌执行' }}
       </el-button>
     </div>
   </div>
@@ -155,6 +180,24 @@ defineExpose({ load })
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.patch-box {
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.apply-log {
+  border-top: none;
+}
+.diff {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre;
+  background: var(--bg-soft, rgba(0, 0, 0, 0.04));
+  border-radius: var(--radius-sm, 6px);
 }
 .card-body .line {
   display: flex;

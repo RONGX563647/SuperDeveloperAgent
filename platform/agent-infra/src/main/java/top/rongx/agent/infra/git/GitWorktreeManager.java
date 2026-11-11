@@ -407,6 +407,105 @@ public class GitWorktreeManager {
         run(repoDir, List.of("git", "checkout", "--quiet", name), "git checkout " + name);
     }
 
+    // ---------------------------------------------------------------- 受限补丁（读内容 / 生成 diff / 提交）
+
+    /** 读取某个提交里的文件内容；文件不存在返回空串（新文件场景）。 */
+    public String showFile(Path repoDir, String ref, String path) {
+        Raw raw = exec(repoDir, List.of("git", "show", ref + ":" + path), "git show", 60);
+        return raw.exit() == 0 ? raw.output() : "";
+    }
+
+    /**
+     * 生成统一 diff（{@code git diff --no-index}）：把新旧内容写到临时目录再比。
+     *
+     * <p>放在 infra 的原因：tools 层不允许起进程（ArchUnit A7）。
+     * 退出码 0 = 无差异，1 = 有差异，其余按失败处理。
+     */
+    public String diffNoIndex(Path repoDir, String relPath, String oldText, String newText) {
+        Path tmp;
+        try {
+            tmp = Files.createTempDirectory("agent-patch-");
+        } catch (IOException e) {
+            throw new GitIntakeException("无法创建临时目录：" + e.getMessage());
+        }
+        try {
+            writeText(tmp.resolve("a").resolve(relPath), oldText);
+            writeText(tmp.resolve("b").resolve(relPath), newText);
+            Raw raw = exec(tmp, List.of("git", "diff", "--no-index", "--unified=3", "--no-color",
+                    "--", "a/" + relPath, "b/" + relPath), "git diff", 60);
+            if (raw.exit() > 1) {
+                throw new GitIntakeException("生成 diff 失败：\n" + raw.output());
+            }
+            return rewriteDiffHeaders(raw.output(), relPath);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /** 在指定仓库目录创建并切换到新分支。 */
+    public void createBranch(Path repoDir, String branch) {
+        String name = branch == null ? "" : branch.trim();
+        if (!name.matches("[A-Za-z0-9._/-]+") || name.startsWith("-") || name.contains("..")) {
+            throw new GitIntakeException("分支名不合法：" + branch);
+        }
+        run(repoDir, List.of("git", "checkout", "--quiet", "-b", name),
+                "git checkout -b " + name);
+    }
+
+    /** 暂存全部改动并提交，返回新提交 sha。 */
+    public String commitAll(Path repoDir, String message) {
+        run(repoDir, List.of("git", "add", "-A"), "git add -A");
+        run(repoDir, List.of("git", "-c", "user.name=agent", "-c", "user.email=agent@local",
+                "commit", "--quiet", "-m", message), "git commit");
+        return revParse(repoDir, "HEAD");
+    }
+
+    /** 把 --no-index 产出的 a/a/x、b/b/x 头改写为 a/x、b/x（供人工阅读）。 */
+    private static String rewriteDiffHeaders(String diff, String relPath) {
+        StringBuilder out = new StringBuilder();
+        for (String line : diff.split("\\R", -1)) {
+            // 丢弃 git 的行尾告警（CRLF 提示等），它们不属于补丁内容
+            if (line.startsWith("warning:") || line.startsWith("hint:")) {
+                continue;
+            }
+            String rewritten;
+            if (line.startsWith("diff --git ")) {
+                rewritten = "diff --git a/" + relPath + " b/" + relPath;
+            } else if (line.startsWith("--- ") && !line.startsWith("--- /dev/null")) {
+                rewritten = "--- a/" + relPath;
+            } else if (line.startsWith("+++ ") && !line.startsWith("+++ /dev/null")) {
+                rewritten = "+++ b/" + relPath;
+            } else {
+                rewritten = line;
+            }
+            out.append(rewritten).append('\n');
+        }
+        return out.toString();
+    }
+
+    private static void writeText(Path file, String text) {
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, text == null ? "" : text, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new GitIntakeException("写临时文件失败：" + file + "（" + e.getMessage() + "）");
+        }
+    }
+
+    private static void deleteRecursively(Path dir) {
+        try (var walk = Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                    // 临时目录清理失败不影响主流程
+                }
+            });
+        } catch (IOException ignored) {
+            // 同上
+        }
+    }
+
     // ---------------------------------------------------------------- 内部
 
     /** 跑一条 git 命令；失败抛 GitIntakeException（带原始报错）。 */
@@ -427,6 +526,24 @@ public class GitWorktreeManager {
     }
 
     private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds, boolean quiet) {
+        Raw raw = exec(dir, argv, what, timeoutSeconds);
+        if (raw.exit() != 0) {
+            String detail = raw.output().isBlank() ? ("exit " + raw.exit()) : raw.output();
+            if (!quiet) {
+                log.warn("git 命令失败 [{}]：{}", what, detail);
+            }
+            throw new GitIntakeException(what + " 失败：\n" + detail);
+        }
+        return new ActionResult(
+                top.rongx.agent.domain.run.StageResult.success("git", 0, List.of(), 0),
+                raw.output());
+    }
+
+    /** 执行结果（退出码 + 输出）；非零退出不抛异常，由调用方解释。 */
+    private record Raw(int exit, String output) {
+    }
+
+    private Raw exec(Path dir, List<String> argv, String what, long timeoutSeconds) {
         // 目录必须先存在：ProcessBuilder 对无效目录抛 CreateProcess error=267（目录名称无效），
         // 这种 OS 码对用户毫无意义——转成"先接入项目"的可读指引。
         if (dir == null || !Files.isDirectory(dir)) {
@@ -462,16 +579,7 @@ public class GitWorktreeManager {
                 throw new GitIntakeException(what + " 超时（" + timeoutSeconds + "s）："
                         + "远端不可达或网络过慢，请检查仓库地址/网络后重试");
             }
-            if (p.exitValue() != 0) {
-                String detail = output.isBlank() ? ("exit " + p.exitValue()) : output;
-                if (!quiet) {
-                    log.warn("git 命令失败 [{}]：{}", what, detail);
-                }
-                throw new GitIntakeException(what + " 失败：\n" + detail);
-            }
-            return new ActionResult(
-                    top.rongx.agent.domain.run.StageResult.success("git", 0, List.of(), 0),
-                    output);
+            return new Raw(p.exitValue(), output);
         } catch (IOException e) {
             throw new GitIntakeException(what + " 失败（无法启动 git）：" + e.getMessage());
         } catch (InterruptedException e) {

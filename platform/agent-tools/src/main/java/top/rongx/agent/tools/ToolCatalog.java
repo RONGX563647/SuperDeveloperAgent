@@ -13,7 +13,8 @@ import org.springframework.context.annotation.Primary;
  * <ul>
  *   <li>{@code readOnlyToolkit}：只含只读工具，供<b>生产环境</b>会话使用——
  *       写工具根本不在 schema 里（比"组未激活"更强的保证）；</li>
- *   <li>{@code fullToolkit}：只读工具 + 全部写工具，供<b>非生产环境</b>会话使用。</li>
+ *   <li>{@code fullToolkit}：只读工具 + 全部写工具（含受限补丁 {@code propose_patch}），
+ *       供<b>非生产环境</b>会话使用。</li>
  * </ul>
  * 这样"生产环境没有写工具"是装配层面的，而不是提示词层面的。
  *
@@ -53,7 +54,8 @@ public class ToolCatalog {
                                 DeployTools deployTools,
                                 EnvTools envTools,
                                 RepoQueryTools repoQueryTools,
-                                RuntimeTools runtimeTools) {
+                                RuntimeTools runtimeTools,
+                                PatchTools patchTools) {
         Toolkit toolkit = new Toolkit();
 
         // 只读工具
@@ -69,30 +71,46 @@ public class ToolCatalog {
         toolkit.registerTool(ciCommandTools);
         toolkit.registerTool(changeTools);
         toolkit.registerTool(actionCommandTools);
+        // 受限写：只能改 ci/、构建配置与测试代码，仍需人工确认后应用
+        toolkit.registerTool(patchTools);
 
         return toolkit;
     }
 
     /**
-     * 部署 Agent 专用工具面：环境状态 + 触发 + 固化 + 通用只读工具。
+     * 部署 Agent 专用工具面：环境状态 + 触发 + 固化 + 只读取证 + 受限修复能力。
      *
-     * <p>只给"部署这件事需要的最小集合"：它不需要变更单工具，也不需要随手改配方的能力。
+     * <p>修复能力来自两处：
+     * <ul>
+     *   <li>{@code request_confirmation}：需要人工确认时登记变更（不再"只能诊断、发不出请求"）；</li>
+     *   <li>{@code propose_patch}：只允许改 ci/、构建配置与测试代码，产出补丁 + 变更单，
+     *       人工确认后由确认卡片提交到新分支——这是本类唯一能改仓库内容的入口。</li>
+     * </ul>
+     * 只读取证（read_file / grep / git_diff 等）是提出有效补丁的前提。
      */
     @Bean
     @Qualifier("deployToolkit")
     public Toolkit deployToolkit(ProjectTools projectTools,
                                  CiQueryTools ciQueryTools,
                                  ActionQueryTools actionQueryTools,
+                                 RepoQueryTools repoQueryTools,
                                  DeployTools deployTools,
                                  EnvTools envTools,
-                                 RuntimeTools runtimeTools) {
+                                 RuntimeTools runtimeTools,
+                                 ChangeTools changeTools,
+                                 ActionCommandTools actionCommandTools,
+                                 PatchTools patchTools) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
+        toolkit.registerTool(repoQueryTools);
         toolkit.registerTool(envTools);
         toolkit.registerTool(deployTools);
         toolkit.registerTool(runtimeTools);
+        toolkit.registerTool(changeTools);
+        toolkit.registerTool(actionCommandTools);
+        toolkit.registerTool(patchTools);
         return toolkit;
     }
 }

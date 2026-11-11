@@ -70,7 +70,7 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         List<String> lines = new ArrayList<>();
         StringBuilder text = new StringBuilder();
         try {
-            chatService.stream(ctx, "recovery-" + context.runId(), task(context), "deploy")
+            chatService.stream(ctx, sessionId(context), task(context), "deploy")
                     .take(TIMEOUT)
                     .toIterable()
                     .forEach(event -> collect(event, lines, text));
@@ -79,6 +79,17 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         }
         flushText(text, lines);
         return limit(lines);
+    }
+
+    /**
+     * 同一次失败运行的诊断只做一次：会话按 (项目, 环境, 提交) 复用。
+     *
+     * <p>原先用 runId 生成会话，每次重跑都从零诊断，第二次还会把第一次的结论重做一遍。
+     */
+    private static String sessionId(Context context) {
+        String sha = context.gitSha() == null || context.gitSha().isBlank()
+                ? "nosha" : context.gitSha().trim();
+        return "recovery-" + context.projectId() + "-" + context.env() + "-" + sha;
     }
 
     /** 把事件转成一行可读步骤：工具调用/完成直接记录，文本增量累计到结尾。 */
@@ -128,7 +139,7 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         return oneLine.length() > 300 ? oneLine.substring(0, 300) + "…" : oneLine;
     }
 
-    /** 交给部署 Agent 的任务：不追问、先定位、能修就修、最多重试一次。 */
+    /** 交给部署 Agent 的任务：不追问、先定位、能修就修、需要确认就登记变更单。 */
     private static String task(Context context) {
         return """
                 流水线运行失败，请自动诊断并尽可能修复，不要向用户追问。
@@ -142,12 +153,17 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
                 %s
 
                 要求：
-                1. 先用 read_run_log / env_summary 定位根因，不要凭空猜测。
+                1. 先用 read_run_log / env_summary 定位根因，不要凭空猜测；需要看代码时用 read_file / grep。
                 2. 中间件缺失或不可用 → 调 env_ensure；变量缺失/端点写错 → 说明原因并再次 env_ensure 修正。
                 3. 若根因是流水线定义与产物不匹配（HOST 目标没有可运行 jar、前端静态产物选了 host），
-                   明确说明并直接 deploy_run 重试一次（不要传 deployTarget，让平台按产物自动选择）。
-                4. 最多重试一次发布；不允许操作生产环境；不要要求人工确认。
-                5. 最后用中文输出结论：根因 / 已执行的修复 / 下一步建议（各一行，尽量短）。
+                   直接 deploy_run 重试一次（不要传 deployTarget，让平台按产物自动选择）。
+                4. 若根因在仓库配置（构建/测试命令写错、e2e 用例不该在构建阶段跑、ci 定义不对），
+                   用 propose_patch 提交受限补丁（只能改 ci/**、Jenkinsfile、pom/build.gradle、src/test/**），
+                   base_sha 用本次运行的提交；工具会返回 changeId，把它写进结论，让用户到确认卡片确认。
+                5. 需要其它人工确认的动作，用 request_confirmation 登记变更，同样把 changeId 写进结论；
+                   不要假设任何人已经确认，也不要空等确认结果。
+                6. 最多重试一次发布；不允许操作生产环境。
+                7. 最后用中文输出结论：根因 / 已执行的修复（含 changeId，如有）/ 下一步建议（各一行，尽量短）。
                 """.formatted(context.projectId(), context.env(), context.pipelineId(),
                 context.gitSha(), context.runId(), context.log());
     }

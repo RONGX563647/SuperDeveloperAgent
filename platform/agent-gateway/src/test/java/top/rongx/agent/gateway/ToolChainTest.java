@@ -20,6 +20,7 @@ import top.rongx.agent.tools.ProjectTools;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -38,6 +39,8 @@ class ToolChainTest {
     static void props(DynamicPropertyRegistry registry) {
         registry.add("agent.model.api-key", () -> "test-key-not-used");
         registry.add("agent.sandbox.mode", () -> "process");
+        // 预置项目清单已从 application.yml 移除：本用例固定使用项目 RY，在测试内声明
+        ActionUsabilityTest.addTestProject(registry);
     }
 
     @Autowired
@@ -58,6 +61,9 @@ class ToolChainTest {
     @Autowired
     @Qualifier("readOnlyToolkit")
     private Toolkit readOnlyToolkit;
+    @Autowired
+    @Qualifier("deployToolkit")
+    private Toolkit deployToolkit;
 
     /** 构造与 ChatService.stream 相同形态的 RuntimeContext。 */
     private static RuntimeContext runtime(ProjectContext ctx) {
@@ -91,9 +97,10 @@ class ToolChainTest {
         String pipelines = ciQueryTools.listPipelines(ctx("test"));
         assertTrue(pipelines.contains("release"), pipelines);
 
-        // 未知 runId 必须报 err（不冒充 PENDING）
-        String bad = ciQueryTools.status("run-nonexistent");
-        assertTrue(bad.startsWith("err:"), bad);
+        // 未知 runId 必须明确报错（不冒充 PENDING）；工具层以异常表达，框架统一转成错误文本
+        IllegalArgumentException bad = assertThrows(IllegalArgumentException.class,
+                () -> ciQueryTools.status("run-nonexistent"));
+        assertTrue(bad.getMessage().contains("不存在"), bad.getMessage());
 
         String history = ciQueryTools.history(ctx("test"));
         assertNotNull(history);
@@ -155,10 +162,23 @@ class ToolChainTest {
         assertTrue(agentToolkit.getToolNames().contains("request_confirmation"));
         assertTrue(agentToolkit.getToolNames().contains("ci_run"));
         assertTrue(agentToolkit.getToolNames().contains("run_action"));
+        assertTrue(agentToolkit.getToolNames().contains("propose_patch"));
         // 生产只读面：写工具根本不存在
         assertFalse(readOnlyToolkit.getToolNames().contains("request_confirmation"));
         assertFalse(readOnlyToolkit.getToolNames().contains("ci_run"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("propose_patch"));
         assertTrue(readOnlyToolkit.getToolNames().contains("git_status"));
+    }
+
+    @Test
+    @DisplayName("T11 部署 Agent 工具面：具备取证、确认与受限补丁能力")
+    void deployToolkitHasRepairCapability() {
+        // 修复失败运行需要：只读取证 + 发起确认 + 白名单动作 + 改仓库配置
+        assertTrue(deployToolkit.getToolNames().contains("read_run_log"));
+        assertTrue(deployToolkit.getToolNames().contains("grep"));
+        assertTrue(deployToolkit.getToolNames().contains("request_confirmation"));
+        assertTrue(deployToolkit.getToolNames().contains("run_action"));
+        assertTrue(deployToolkit.getToolNames().contains("propose_patch"));
     }
 
     @Test

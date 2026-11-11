@@ -1,10 +1,16 @@
 package top.rongx.agent.gateway.web;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
+import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.patch.CodePatch;
+import top.rongx.agent.domain.port.CodePatcher;
+import top.rongx.agent.domain.port.PatchStore;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.gateway.security.PasswordVerifier;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.governance.ConfirmToken;
@@ -28,25 +34,34 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/changes")
 public class ChangeController {
 
+    /** 补丁类变更的 kind 前缀：{@code patch:<patchId>}。 */
+    private static final String PATCH_PREFIX = "patch:";
+
     private final ChangeStore registry;
     private final ConfirmTokenService tokens;
     private final PasswordVerifier passwordVerifier;
     private final ActionService actions;
     private final ProjectContextResolver contextResolver;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
+    private final CodePatcher codePatcher;
+    private final PatchStore patches;
 
     public ChangeController(ChangeStore registry,
                             ConfirmTokenService tokens,
                             PasswordVerifier passwordVerifier,
                             ActionService actions,
                             ProjectContextResolver contextResolver,
-                            top.rongx.agent.gateway.auth.CurrentUser currentUser) {
+                            top.rongx.agent.gateway.auth.CurrentUser currentUser,
+                            CodePatcher codePatcher,
+                            PatchStore patches) {
         this.registry = registry;
         this.tokens = tokens;
         this.passwordVerifier = passwordVerifier;
         this.actions = actions;
         this.contextResolver = contextResolver;
         this.currentUser = currentUser;
+        this.codePatcher = codePatcher;
+        this.patches = patches;
     }
 
     /**
@@ -72,7 +87,11 @@ public class ChangeController {
                 .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
         // 3. 消费令牌：一次性 + 未过期 + 绑定 changeId 与当前 planHash（防篡改复用）
         tokens.consume(confirmToken, changeId, plan.planHash());
-        // 4. 解析动作并解析项目上下文
+        // 4. 补丁类变更：把补丁提交到新分支（不碰用户当前分支）
+        if (plan.kind().startsWith(PATCH_PREFIX)) {
+            return applyPatch(plan);
+        }
+        // 5. 解析动作并解析项目上下文
         ActionId action = ActionId.fromWire(plan.kind())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "该变更不是可执行动作（kind=" + plan.kind() + "）"));
@@ -89,6 +108,51 @@ public class ChangeController {
         return new ChangeView(plan.changeId(), plan.projectId(), plan.env(), plan.kind(),
                 plan.summary(), plan.imageDigest(), plan.highRisk(), plan.planHash(),
                 plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN");
+    }
+
+    /** 补丁类变更的 diff（供确认卡片复核）。 */
+    @GetMapping("/{changeId}/patch")
+    public PatchView patch(@PathVariable String changeId) {
+        currentUser.requireUserId();
+        ChangePlan plan = registry.find(changeId)
+                .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
+        CodePatch patch = requirePatch(plan);
+        return new PatchView(patch.patchId(), patch.baseSha(), patch.branch(), patch.diff(),
+                patch.edits().stream().map(CodePatch.FileEdit::path).toList(),
+                patch.added(), patch.removed());
+    }
+
+    /** 带令牌应用补丁：提交到独立分支，返回新提交 sha（可直接用于重跑）。 */
+    private ActionController.RunView applyPatch(ChangePlan plan) {
+        CodePatch patch = requirePatch(plan);
+        long start = System.currentTimeMillis();
+        String commit = codePatcher.apply(patch);
+        patches.remove(patch.patchId());
+        long cost = System.currentTimeMillis() - start;
+        String log = """
+                patch: %s
+                branch: %s
+                commit: %s
+                files:
+                %s
+                """.formatted(patch.patchId(), patch.branch(), commit,
+                patch.edits().stream().map(e -> "- " + e.path())
+                        .collect(java.util.stream.Collectors.joining("\n")));
+        return ActionController.RunView.of(new ActionResult(
+                StageResult.success("patch", 0, List.of(), cost), log));
+    }
+
+    private CodePatch requirePatch(ChangePlan plan) {
+        if (!plan.kind().startsWith(PATCH_PREFIX)) {
+            throw new IllegalArgumentException("该变更不是代码补丁：" + plan.kind());
+        }
+        String patchId = plan.kind().substring(PATCH_PREFIX.length());
+        CodePatch patch = patches.find(patchId)
+                .orElseThrow(() -> new IllegalArgumentException("补丁不存在或已过期: " + patchId));
+        if (!patch.projectId().equals(plan.projectId())) {
+            throw new IllegalArgumentException("补丁与变更单的项目不一致");
+        }
+        return patch;
     }
 
     /**
@@ -128,6 +192,11 @@ public class ChangeController {
 
     /** 确认请求。 */
     public record ConfirmRequest(String password) {
+    }
+
+    /** 补丁视图（确认卡片复核用）。 */
+    public record PatchView(String patchId, String baseSha, String branch, String diff,
+                            List<String> files, int added, int removed) {
     }
 
     /** 确认响应。 */

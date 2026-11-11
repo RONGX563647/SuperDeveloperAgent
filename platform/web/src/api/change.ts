@@ -1,9 +1,14 @@
-import type { ChangeView, ConfirmResponse } from '../types'
+import type { ChangePatchView, ChangeView, ConfirmResponse } from '../types'
 import { apiFetch } from './http'
 
 /** 确认卡片数据。 */
 export function getChange(changeId: string): Promise<ChangeView> {
   return apiFetch<ChangeView>(`/api/v1/changes/${changeId}`)
+}
+
+/** 补丁类变更的 diff（供人工复核）。 */
+export function getChangePatch(changeId: string): Promise<ChangePatchView> {
+  return apiFetch<ChangePatchView>(`/api/v1/changes/${encodeURIComponent(changeId)}/patch`)
 }
 
 /**
