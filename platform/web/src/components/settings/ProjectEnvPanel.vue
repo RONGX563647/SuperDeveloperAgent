@@ -9,7 +9,7 @@ import {
   getEnvBinding, getLocalServiceLogs, listLocalServices, listPortLeases, restartLocalService,
   revealEffectiveEnvVar, saveEnvOverride, startLocalService, stopLocalService,
   type EffectiveEnvironmentView, type EnvBindingView, type EnvCheckView, type EnvVariableView,
-  type LocalServiceView, type PortLeaseView,
+  type LocalServiceView, type PortLeaseView, type SourceEnvVariableView,
 } from '../../api/settings'
 import { appStore } from '../../stores/app'
 import { formatTime } from '../../utils/status'
@@ -28,7 +28,7 @@ const BINDING_KEY = 'agent-env-binding'
 
 const projects = ref<ProjectRow[]>([])
 const projectId = ref('')
-const env = ref('test')
+const env = ref(appStore.env)
 const effective = ref<EffectiveEnvironmentView | null>(null)
 const envCheck = ref<EnvCheckView | null>(null)
 const leases = ref<PortLeaseView[]>([])
@@ -66,6 +66,8 @@ const projectName = computed(() =>
   projects.value.find((p) => p.id === projectId.value)?.name ?? projectId.value)
 
 const vars = computed<EnvVariableView[]>(() => effective.value?.vars ?? [])
+/** 项目源码里声明的变量：部署时自动注入，人工覆盖后以覆盖值为准。 */
+const sourceVars = computed<SourceEnvVariableView[]>(() => effective.value?.sourceVars ?? [])
 /** 健康只看被项目变量引用的资源；未引用（环境共享/其它项目）不计入分母。 */
 const referencedResources = computed(() =>
   (effective.value?.resources ?? []).filter((r) => r.referenced !== false))
@@ -79,29 +81,56 @@ const missingResources = computed(() =>
 const stoppedResources = computed(() =>
   referencedResources.value.filter((r) => r.status === 'STOPPED' || r.status === 'UNKNOWN'))
 
-const bindingKeys = computed<Array<{ key: string, source: string, secret: boolean }>>(() => {
-  if (!binding.value) return []
+interface BindingKey {
+  key: string
+  source: string
+  secret: boolean
+  required?: boolean
+  /** 值摘要：非空表示项目源码或有效环境里已有该变量；只在绑定记录里留哈希，不留明文 */
+  valueHash?: string
+}
+
+/** 解析草案；missing 由后端按「必填且无值」计算，旧草案缺失该字段时返回 null。 */
+function parseBindingMapping(): { keys: BindingKey[], missing: string[] | null } {
+  if (!binding.value) return { keys: [], missing: null }
   try {
     const parsed = JSON.parse(binding.value.mappingJson) as {
-      keys?: Array<{ key: string, source: string, secret: boolean }>
+      keys?: BindingKey[]
+      missing?: string[]
     }
-    return parsed.keys ?? []
+    return {
+      keys: parsed.keys ?? [],
+      missing: Array.isArray(parsed.missing) ? parsed.missing : null,
+    }
   } catch {
-    return []
+    return { keys: [], missing: null }
   }
+}
+
+const bindingMapping = computed(parseBindingMapping)
+const bindingKeys = computed(() => bindingMapping.value.keys)
+/** 来自项目源码 .env 的变量：上方「项目源码变量」已逐条展示，这里只给一行汇总，避免重复列表。 */
+const bindingSourceKeys = computed(() =>
+  bindingKeys.value.filter((k) => bindingSourceOf(k).cls === 'source'))
+/** 其它来源（覆盖 / 中间件 / 模板 / 未配置）仍逐条列出，便于核对是否错指环境。 */
+const bindingOtherKeys = computed(() =>
+  bindingKeys.value.filter((k) => bindingSourceOf(k).cls !== 'source'))
+
+/** 真正缺值：优先用后端 missing；旧草案回退为「未知来源且没有值哈希」。 */
+const bindingMissing = computed(() => {
+  const { keys, missing } = bindingMapping.value
+  if (missing) return keys.filter((k) => missing.includes(k.key))
+  return keys.filter((k) => k.source === 'UNKNOWN' && !k.valueHash)
 })
 
-const bindingMissing = computed<Array<{ key: string, source: string, secret: boolean }>>(() => {
-  if (!binding.value) return []
-  try {
-    const parsed = JSON.parse(binding.value.mappingJson) as {
-      keys?: Array<{ key: string, source: string, secret: boolean }>
-    }
-    return (parsed.keys ?? []).filter((k) => k.source === 'UNKNOWN')
-  } catch {
-    return []
-  }
-})
+/** 草案里的来源标签：源码 .env 里的值不会出现在有效变量里，但部署时会自动注入。 */
+function bindingSourceOf(k: BindingKey): { label: string, cls: string } {
+  if (k.source === 'OVERRIDE') return { label: '项目覆盖', cls: 'override' }
+  if (k.source === 'RESOURCE') return { label: '中间件', cls: 'resource' }
+  if (k.source === 'TEMPLATE') return { label: '环境模板', cls: 'template' }
+  if (k.source === 'SOURCE' || k.valueHash) return { label: '源码 .env', cls: 'source' }
+  return { label: '未配置', cls: 'missing' }
+}
 
 async function loadProjects(): Promise<void> {
   try {
@@ -307,6 +336,25 @@ function startOverride(v: EnvVariableView): void {
   formOpen.value = true
 }
 
+/** 源码变量没有 EnvVariableView 的元数据，覆盖时只需要变量名与敏感标记。 */
+function startOverrideSource(v: SourceEnvVariableView): void {
+  editing.value = null
+  form.key = v.key
+  form.value = ''
+  form.secret = v.secret
+  formOpen.value = true
+}
+
+/** 复制源码里明文变量的值；敏感变量只显示掩码，复制没有意义。 */
+async function copySourceValue(v: SourceEnvVariableView): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(v.value)
+    ElMessage.success(`已复制 ${v.key}`)
+  } catch {
+    ElMessage.warning(`复制失败，请手动选中 ${v.key} 的值`)
+  }
+}
+
 function closeForm(): void {
   formOpen.value = false
   editing.value = null
@@ -510,6 +558,8 @@ async function copyBinding(): Promise<void> {
 }
 
 watch([projectId, env], () => {
+  // 面板里切换环境也算"上一次使用的环境"，回到对话 / 流水线页时沿用。
+  appStore.env = env.value
   closeForm()
   binding.value = null
   confirmArmed.value = false
@@ -566,6 +616,7 @@ defineExpose({ load })
       </label>
       <span class="ep-count">
         {{ vars.length }} 个有效变量
+        <template v-if="sourceVars.length"> · 源码 {{ sourceVars.length }} 个可读取</template>
         <template v-if="effective">（模板 {{ effective.templateCount }} / 覆盖 {{ effective.overrideCount }}）</template>
       </span>
     </div>
@@ -730,12 +781,44 @@ defineExpose({ load })
           </button>
         </span>
       </div>
-      <p v-if="!loading && !vars.length" class="ep-empty">
+      <p v-if="!loading && !vars.length && !sourceVars.length" class="ep-empty">
         <el-icon><Key /></el-icon>
         {{ projectName }} / {{ envLabel(env) }} 还没有环境变量；先到「环境模板」配置默认值，
         或点「添加覆盖」配置项目专属值。
       </p>
       <p v-else-if="loading" class="ep-empty">加载中…</p>
+    </div>
+
+    <!-- 源码里能直接读到、部署时自动注入的变量；点「覆盖」可人工改值 -->
+    <div v-if="sourceVars.length" class="ep-table ep-source-table">
+      <div class="ep-row ep-row-head">
+        <span>项目源码变量</span>
+        <span>值</span>
+        <span>来源</span>
+        <span>类型</span>
+        <span>说明</span>
+        <span />
+      </div>
+      <div v-for="v in sourceVars" :key="`SOURCE:${v.key}`" class="ep-row">
+        <code class="ep-key mono">{{ v.key }}</code>
+        <code class="ep-value mono" :title="v.value">{{ v.value }}</code>
+        <span class="ep-source source">项目源码</span>
+        <span class="ep-secret" :class="v.secret ? 'secret' : 'plain'">
+          {{ v.secret ? '敏感' : '明文' }}
+        </span>
+        <span class="ep-updated">{{ v.overridden ? '已被有效值覆盖' : '部署时自动注入' }}</span>
+        <span class="ep-actions">
+          <button
+            v-if="!v.secret" type="button" class="ep-icon" title="复制值"
+            @click="copySourceValue(v)"
+          >
+            <el-icon><DocumentCopy /></el-icon>
+          </button>
+          <button type="button" class="ep-icon" title="用项目覆盖此值" @click="startOverrideSource(v)">
+            <el-icon><Edit /></el-icon>
+          </button>
+        </span>
+      </div>
     </div>
 
     <div class="ep-import">
@@ -774,7 +857,8 @@ defineExpose({ load })
       </div>
       <p class="ep-binding-desc">
         Agent 自主触发部署时，必须携带一份人工确认过的变量映射（bindingId）。
-        草案只包含变量名与来源，不含任何值。
+        草案只包含变量名与来源，不含任何值；来自项目 .env / .env.example 的变量显示为「源码 .env」，
+        部署时会自动注入，无需在设置页重复填写。
       </p>
 
       <div v-if="!binding" class="ep-binding-actions">
@@ -791,21 +875,26 @@ defineExpose({ load })
           <button type="button" class="ep-link" @click="copyBinding">复制 ID</button>
         </div>
 
-        <div v-if="bindingKeys.length" class="ep-binding-table">
-          <div v-for="k in bindingKeys" :key="k.key" class="ep-binding-row">
+        <div v-if="bindingOtherKeys.length" class="ep-binding-table">
+          <div v-for="k in bindingOtherKeys" :key="k.key" class="ep-binding-row">
             <code class="mono">{{ k.key }}</code>
-            <span class="ep-source" :class="k.source === 'UNKNOWN' ? 'missing' : k.source === 'OVERRIDE' ? 'override' : 'template'">
-              {{ k.source === 'UNKNOWN' ? '未配置' : k.source === 'OVERRIDE' ? '项目覆盖' : '环境模板' }}
+            <span class="ep-source" :class="bindingSourceOf(k).cls">
+              {{ bindingSourceOf(k).label }}
             </span>
             <span class="ep-secret" :class="k.secret ? 'secret' : 'plain'">
               {{ k.secret ? '敏感' : '明文' }}
             </span>
           </div>
         </div>
-        <p v-else class="ep-empty">项目里没有 .env.example，草案为空；运行仍会使用当前有效变量。</p>
+        <!-- 源码变量在「项目源码变量」里已有完整一行，这里不重复列出 -->
+        <p v-if="bindingSourceKeys.length" class="ep-binding-hint">
+          另有 {{ bindingSourceKeys.length }} 个变量来自项目源码 .env（部署时自动注入），
+          已在上方「项目源码变量」中列出。
+        </p>
+        <p v-else-if="!bindingKeys.length" class="ep-empty">项目里没有 .env.example，草案为空；运行仍会使用当前有效变量。</p>
 
         <p v-if="bindingMissing.length" class="ep-warn">
-          有 {{ bindingMissing.length }} 个变量尚未配置：{{ bindingMissing.map((k) => k.key).join('、') }}。
+          有 {{ bindingMissing.length }} 个必填变量尚未配置（源码和有效变量里都没有值）：{{ bindingMissing.map((k) => k.key).join('、') }}。
           建议先补齐再确认。
         </p>
 
@@ -1114,6 +1203,10 @@ a.ep-service-url:hover {
   color: var(--warn);
   background: var(--warn-soft);
 }
+.ep-source.source {
+  color: var(--success, #16a34a);
+  background: var(--success-soft, rgb(22 163 74 / 12%));
+}
 .ep-source.missing {
   color: var(--danger);
   background: var(--danger-soft);
@@ -1271,6 +1364,12 @@ a.ep-service-url:hover {
   font-size: 11px;
   line-height: 1.7;
   color: var(--ink-faint);
+}
+.ep-binding-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-muted);
 }
 .ep-binding-meta {
   display: flex;

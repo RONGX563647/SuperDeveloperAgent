@@ -281,6 +281,15 @@ export interface EnvVariableView {
   updatedAt: number
 }
 
+/** 项目源码里声明的变量（.env / .env.example）；敏感名的 value 为掩码。 */
+export interface SourceEnvVariableView {
+  key: string
+  value: string
+  secret: boolean
+  /** 有效变量里已有该键（模板/资源/覆盖优先于源码值） */
+  overridden: boolean
+}
+
 export interface EnvRuntimeResult {
   ok: boolean
   message: string
@@ -327,6 +336,8 @@ export interface EffectiveEnvironmentView {
   defaultPort: number
   healthPath: string
   vars: EnvVariableView[]
+  /** 项目源码（.env / .env.example）里声明的变量；部署时自动注入，人工覆盖优先 */
+  sourceVars: SourceEnvVariableView[]
   templateCount: number
   overrideCount: number
   /** 被本项目引用的中间件数量（健康分母） */

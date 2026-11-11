@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ArrowDown, Refresh, Setting, Warning } from '@element-plus/icons-vue'
-import { getEffectiveEnvironment, type EffectiveEnvironmentView } from '../../api/settings'
+import {
+  checkProjectEnv,
+  getEffectiveEnvironment,
+  type EffectiveEnvironmentView,
+  type EnvCheckView,
+} from '../../api/settings'
 import { envLabel } from '../../utils/pipelineLabels'
 
 /**
@@ -33,32 +38,45 @@ function loadOpen(): boolean {
 
 const open = ref(loadOpen())
 const effective = ref<EffectiveEnvironmentView | null>(null)
+const check = ref<EnvCheckView | null>(null)
 const loading = ref(false)
 const failed = ref(false)
+const checkFailed = ref(false)
 
-const resources = computed(() => effective.value?.resources ?? [])
+/** 只认被本项目引用的中间件：其它项目/环境共享的容器不计入健康。 */
+const resources = computed(() => (effective.value?.resources ?? []).filter((r) => r.referenced !== false))
+const shared = computed(() => (effective.value?.resources.length ?? 0) - resources.value.length)
 const total = computed(() => resources.value.length)
 const running = computed(() => resources.value.filter((r) => r.status === 'RUNNING').length)
 const missing = computed(() => resources.value.filter((r) => r.status === 'MISSING').length)
 const stopped = computed(() =>
   resources.value.filter((r) => r.status === 'STOPPED' || r.status === 'UNKNOWN').length)
 const varCount = computed(() => effective.value?.vars.length ?? 0)
+/** 本项目源码声明的必填变量；只有这些缺失才算"变量没配齐"。 */
+const missingVars = computed(() => check.value?.missingVars ?? [])
+const sourceProvided = computed(() => check.value?.sourceProvidedVars ?? [])
+const requiredCount = computed(() => check.value?.requiredCount ?? 0)
 
 /** 摘要：运行健康 / 有待处理 / 读取失败。 */
 const health = computed<'ok' | 'warn' | 'error' | 'loading'>(() => {
   if (loading.value && !effective.value) return 'loading'
   if (failed.value) return 'error'
+  if (missingVars.value.length > 0) return 'error'
   if (missing.value > 0) return 'error'
+  if (checkFailed.value) return 'warn'
   if (total.value > 0 && running.value < total.value) return 'warn'
   return 'ok'
 })
 
-const healthText = computed(() => ({
-  ok: '环境就绪',
-  warn: '部分未运行',
-  error: '需处理',
-  loading: '读取中'
-}[health.value]))
+const healthText = computed(() => {
+  if (health.value === 'loading') return '读取中'
+  if (failed.value) return '读取失败'
+  if (missingVars.value.length > 0) return '变量缺失'
+  if (missing.value > 0) return '中间件缺配置'
+  if (checkFailed.value) return '变量未校验'
+  if (health.value === 'warn') return '部分未运行'
+  return '环境就绪'
+})
 
 function toggle(): void {
   open.value = !open.value
@@ -82,22 +100,34 @@ function statusText(status: string): string {
 async function load(): Promise<void> {
   if (!props.projectId) {
     effective.value = null
+    check.value = null
     return
   }
   loading.value = true
   failed.value = false
-  try {
-    effective.value = await getEffectiveEnvironment(props.projectId, props.env)
-  } catch {
+  checkFailed.value = false
+  const [envResult, checkResult] = await Promise.allSettled([
+    getEffectiveEnvironment(props.projectId, props.env),
+    checkProjectEnv(props.projectId, props.env),
+  ])
+  if (envResult.status === 'fulfilled') {
+    effective.value = envResult.value
+  } else {
     effective.value = null
     failed.value = true
-  } finally {
-    loading.value = false
   }
+  if (checkResult.status === 'fulfilled') {
+    check.value = checkResult.value
+  } else {
+    check.value = null
+    checkFailed.value = true
+  }
+  loading.value = false
 }
 
 watch([() => props.projectId, () => props.env], () => {
   effective.value = null
+  check.value = null
   void load()
 })
 
@@ -117,6 +147,10 @@ onMounted(() => void load())
       <span class="env-health">{{ healthText }}</span>
       <span class="sep">·</span>
       <span class="env-count mono">中间件 {{ running }}/{{ total }}</span>
+      <template v-if="missingVars.length">
+        <span class="sep">·</span>
+        <span class="env-count mono danger">变量缺 {{ missingVars.length }}</span>
+      </template>
       <el-icon class="caret" :class="{ flip: open }"><ArrowDown /></el-icon>
     </button>
 
@@ -154,6 +188,14 @@ onMounted(() => void load())
           <span>注入变量</span><b class="mono">{{ varCount }}</b>
         </div>
         <div class="kv">
+          <span>必填变量</span>
+          <b class="mono" :class="{ danger: missingVars.length > 0 }">
+            <template v-if="checkFailed">未校验</template>
+            <template v-else-if="missingVars.length">缺 {{ missingVars.length }} / {{ requiredCount }}</template>
+            <template v-else>齐全<template v-if="requiredCount">（{{ requiredCount }}）</template></template>
+          </b>
+        </div>
+        <div class="kv">
           <span>中间件</span>
           <b class="mono">
             运行 {{ running }}
@@ -166,7 +208,15 @@ onMounted(() => void load())
         <p v-if="failed" class="note danger">
           <el-icon><Warning /></el-icon> 环境配置读取失败
         </p>
-        <p v-else-if="!total" class="note">该项目在当前环境没有登记中间件。</p>
+        <p v-else-if="missingVars.length" class="note danger">
+          <el-icon><Warning /></el-icon> 缺少必填变量：{{ missingVars.join('、') }}
+        </p>
+        <p v-else-if="sourceProvided.length" class="note">
+          源码已提供 {{ sourceProvided.length }} 个变量（部署时自动注入）
+        </p>
+        <p v-if="!total" class="note">
+          本项目在当前环境未引用中间件<template v-if="shared">；另有 {{ shared }} 个环境共享中间件，不计入健康</template>。
+        </p>
         <ul v-else class="mw-list">
           <li v-for="r in resources" :key="r.id" class="mw">
             <span class="dot" :class="r.status.toLowerCase()" />
@@ -245,6 +295,9 @@ onMounted(() => void load())
 .env-health,
 .env-count {
   color: var(--ink-muted);
+}
+.env-count.danger {
+  color: var(--danger);
 }
 .caret {
   font-size: 10px;
@@ -373,6 +426,9 @@ onMounted(() => void load())
   text-align: right;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+.kv b.danger {
+  color: var(--danger);
 }
 .note {
   display: flex;

@@ -13,6 +13,7 @@ import {
 } from '../api/project'
 import DirPickerDialog from '../components/DirPickerDialog.vue'
 import GiteeRepoPicker from '../components/GiteeRepoPicker.vue'
+import { appStore } from '../stores/app'
 import { applySelection } from '../utils/projectId'
 
 /**
@@ -192,6 +193,30 @@ function retry() {
   stopPoll()
   phase.value = 'FORM'
   status.value = null
+  report.value = null
+}
+
+/** 识别结果一行摘要：stack · Java 目录 · 前端目录 · 包管理器。 */
+const summaryLine = computed(() => {
+  const s = report.value?.summary
+  const stack = s?.stack ?? report.value?.stack ?? ''
+  if (!s) return stack
+  const parts = [stack]
+  if (s.javaDir !== undefined && s.javaDir !== null) {
+    parts.push(`Java: ${s.javaDir === '' ? '仓库根' : s.javaDir}`)
+  }
+  if (s.nodeDir !== undefined && s.nodeDir !== null) {
+    parts.push(`前端: ${s.nodeDir === '' ? '仓库根' : s.nodeDir}`)
+  }
+  if (s.packageManager) parts.push(s.packageManager)
+  return parts.filter(Boolean).join(' · ')
+})
+
+/** 预演：跳到流水线页，选「只检查构建（verify）」跑一次，不部署。 */
+function goPreview() {
+  if (!status.value) return
+  appStore.projectId = status.value.projectId
+  void router.push('/pipeline')
 }
 
 onMounted(loadBinding)
@@ -345,35 +370,83 @@ onUnmounted(stopPoll)
         <div class="report-card" v-if="report">
           <div class="report-line">
             <span>自检</span>
-            <span class="badge" :class="report.ready ? 'ok' : 'warn'">
-              {{ report.ready ? '就绪' : '有警告' }}
+            <span
+              class="badge"
+              :class="report.ready ? 'ok' : (report.blockers?.length ? 'bad' : 'warn')"
+            >
+              {{ report.ready ? '就绪' : (report.blockers?.length
+                ? `${report.blockers.length} 个阻塞项` : '有建议') }}
             </span>
           </div>
           <div class="report-line">
             <span>流水线</span>
             <span class="mono">
-              {{ report.pipeline ?? (report.scaffoldWritten?.length ? '已自动生成' : '缺失（可一键生成）') }}
+              {{ report.pipeline ?? (report.scaffoldWritten?.length ? '已自动生成（平台侧）' : '缺失（可一键生成）') }}
             </span>
           </div>
-          <div v-if="report.stack" class="report-line">
-            <span>识别</span>
-            <span class="mono">{{ report.stack }}</span>
-          </div>
+
+          <template v-if="report.summary">
+            <div class="report-line">
+              <span>识别</span>
+              <span class="mono">{{ summaryLine }}</span>
+            </div>
+            <div class="report-line">
+              <span>部署目标</span>
+              <span>
+                <span class="mono">{{ report.summary.deployTarget }}</span>
+                <span v-if="report.summary.targetReason" class="src-note">· {{ report.summary.targetReason }}</span>
+              </span>
+            </div>
+            <div class="report-line">
+              <span>端口</span>
+              <span>
+                <span class="mono">{{ report.summary.port }}</span>
+                <span class="src-note">· {{ report.summary.portSource }}</span>
+              </span>
+            </div>
+            <div class="report-line">
+              <span>健康路径</span>
+              <span>
+                <span class="mono">{{ report.summary.healthPath }}</span>
+                <span class="src-note">· {{ report.summary.healthSource }}</span>
+              </span>
+            </div>
+          </template>
+
           <div class="report-line">
             <span>Dockerfile</span>
-            <span>{{ report.dockerfile ? '✓ 已声明' : '✗ 缺失（DOCKER 目标不可用，可用 HOST）' }}</span>
+            <span>{{ report.dockerfile ? '✓ 已声明' : '✗ 缺失' }}</span>
           </div>
+
+          <details v-if="report.blockers?.length" class="warn-detail" open>
+            <summary class="grp-blocker">阻塞项（{{ report.blockers.length }}）</summary>
+            <div v-for="d in report.blockers" :key="d.code" class="diag-row blocker">
+              <div>{{ d.message }}</div>
+              <div v-if="d.fix" class="diag-fix">建议：{{ d.fix }}</div>
+            </div>
+          </details>
+
+          <details v-if="report.suggestions?.length" class="warn-detail" :open="!report.blockers?.length">
+            <summary class="grp-suggestion">建议（{{ report.suggestions.length }}）</summary>
+            <div v-for="d in report.suggestions" :key="d.code" class="diag-row suggestion">
+              <div>{{ d.message }}</div>
+              <div v-if="d.fix" class="diag-fix">建议：{{ d.fix }}</div>
+            </div>
+          </details>
+
+          <details v-if="report.info?.length" class="warn-detail">
+            <summary>说明（{{ report.info.length }}）</summary>
+            <div v-for="d in report.info" :key="d.code" class="diag-row info">{{ d.message }}</div>
+          </details>
+
           <details class="actions-detail">
             <summary>动作配方（{{ Object.keys(report.actions).length }}）</summary>
             <div v-for="(src, name) in report.actions" :key="name" class="action-row">
               <span class="mono">{{ name }}</span>
-              <span :class="src ? 'src-ok' : 'src-miss'">{{ src ?? '无配方（stage 跳过）' }}</span>
+              <span :class="src ? 'src-ok' : 'src-miss'">{{ src ?? '无配方（stage 会失败）' }}</span>
             </div>
           </details>
-          <details v-if="report.warnings?.length" class="warn-detail" :open="!report.ready">
-            <summary>提示（{{ report.warnings.length }}）</summary>
-            <div v-for="(w, i) in report.warnings" :key="i" class="warn-row">{{ w }}</div>
-          </details>
+
           <details v-if="report.scaffoldFiles?.length" class="tpl-detail" open>
             <summary>
               已生成的 ci/ 脚本
@@ -388,6 +461,9 @@ onUnmounted(stopPoll)
           </details>
         </div>
         <div class="form-actions">
+          <button type="button" class="primary-btn" @click="goPreview">
+            预演一次（只构建，不部署）
+          </button>
           <button type="button" class="ghost-btn" @click="retry">再接一个</button>
         </div>
       </template>

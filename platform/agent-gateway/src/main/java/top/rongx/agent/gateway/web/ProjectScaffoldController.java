@@ -48,19 +48,21 @@ public class ProjectScaffoldController {
     /**
      * 预览：扫描仓库结构并返回将生成的文件（不写盘）。
      *
-     * @param target 期望的部署目标（docker / host / server），默认 docker
+     * @param target 期望的部署目标（docker / host / server）；默认 auto = 按仓库能力自动选择
      */
     @GetMapping("/{id}/scaffold")
     public Map<String, Object> preview(@PathVariable String id,
-                                       @RequestParam(defaultValue = "docker") String target) {
+                                       @RequestParam(defaultValue = "auto") String target) {
         Path root = readableRepo(id);
-        DeployTarget deployTarget = DeployTarget.fromWire(target).orElse(DeployTarget.DOCKER);
+        DeployTarget deployTarget = parseTarget(target);
         ScaffoldPlan plan = scaffolder.plan(id, root, deployTarget);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("projectId", plan.projectId());
         out.put("stack", plan.stack());
         out.put("root", root.toString());
-        out.put("target", deployTarget.wireName());
+        out.put("target", plan.meta().getOrDefault("deployTarget",
+                deployTarget == null ? "auto" : deployTarget.wireName()));
+        out.put("meta", plan.meta());
         out.put("platformRoot", defStore.rootOf(id).toString());
         out.put("hasPlatformDefinition", defStore.exists(id));
         out.put("files", plan.files().stream()
@@ -78,18 +80,19 @@ public class ProjectScaffoldController {
      */
     @PostMapping("/{id}/scaffold")
     public Map<String, Object> apply(@PathVariable String id,
-                                     @RequestParam(defaultValue = "docker") String target,
+                                     @RequestParam(defaultValue = "auto") String target,
                                      @RequestParam(defaultValue = "platform") String mode,
                                      @RequestParam(defaultValue = "false") boolean overwrite) {
         Path root = readableRepo(id);
-        DeployTarget deployTarget = DeployTarget.fromWire(target).orElse(DeployTarget.DOCKER);
+        DeployTarget deployTarget = parseTarget(target);
         ScaffoldPlan plan = scaffolder.plan(id, root, deployTarget);
         Map<String, Object> out = new LinkedHashMap<>();
         boolean toRepo = "repo".equalsIgnoreCase(mode);
 
         if (toRepo) {
             List<String> written = scaffolder.apply(id, root, plan, overwrite);
-            log.info("项目 {} 脚手架写入仓库：target={} 写入={}", id, deployTarget.wireName(), written);
+            log.info("项目 {} 脚手架写入仓库：target={} 写入={}", id,
+                    plan.meta().getOrDefault("deployTarget", "auto"), written);
             out.put("savedTo", "repo");
             out.put("written", written);
             out.put("skipped", plan.files().stream()
@@ -114,19 +117,30 @@ public class ProjectScaffoldController {
                         recipes.invalidate(id, env);
                     }
                 }
-                log.info("项目 {} 脚手架保存到平台：target={} saved={}", id, deployTarget.wireName(), saved);
+                log.info("项目 {} 脚手架保存到平台：target={} saved={}", id,
+                        plan.meta().getOrDefault("deployTarget", "auto"), saved);
                 out.put("savedTo", "platform");
                 out.put("resetRecipes", saved && overwrite);
                 out.put("written", saved
-                        ? List.of("platform:" + defStore.rootOf(id).resolve("ci/pipeline.yml"),
-                        "platform:" + defStore.rootOf(id).resolve("ci/actions.yml"))
+                        ? List.of("platform:" + id + "/ci/pipeline.yml",
+                        "platform:" + id + "/ci/actions.yml")
                         : List.of());
                 out.put("skipped", List.of());
             }
         }
         out.put("stack", plan.stack());
+        out.put("target", plan.meta().getOrDefault("deployTarget", "auto"));
+        out.put("meta", plan.meta());
         out.put("notes", plan.notes());
         return out;
+    }
+
+    /** auto / 空 → null（按仓库能力自动选择）；未知值退回 docker，保持旧行为。 */
+    private static DeployTarget parseTarget(String raw) {
+        if (raw == null || raw.isBlank() || "auto".equalsIgnoreCase(raw.trim())) {
+            return null;
+        }
+        return DeployTarget.fromWire(raw).orElse(DeployTarget.DOCKER);
     }
 
     private static String fileContent(ScaffoldPlan plan, String path) {

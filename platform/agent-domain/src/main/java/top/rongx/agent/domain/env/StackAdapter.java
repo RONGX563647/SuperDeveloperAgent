@@ -3,6 +3,7 @@ package top.rongx.agent.domain.env;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 中间件资源 → 环境变量的默认映射。
@@ -127,6 +128,27 @@ public final class StackAdapter {
         return expected > 0 && resource.port() > 0 && expected == resource.port();
     }
 
+    /**
+     * 项目是否显式声明了该中间件的连接地址。
+     *
+     * <p>只有项目覆盖或项目仓库 {@code .env/.env.example} 里写了 {@code DB_HOST} /
+     * {@code REDIS_HOST} 等主机变量，才算本项目在用这个中间件。环境模板里由资源
+     * 自动派生的 {@code DB_*} 属于环境共享默认值，不能作为"项目引用"的依据，
+     * 否则同环境里每个数据库资源都会被所有项目误判为被引用。
+     */
+    public static boolean declaredByProject(EnvResource resource, Set<String> projectKeys,
+                                            Map<String, String> sourceValues) {
+        if (resource == null) {
+            return false;
+        }
+        String hostKey = hostKey(resource.kind());
+        if (projectKeys != null && projectKeys.contains(hostKey)) {
+            return true;
+        }
+        String fromSource = sourceValues == null ? null : sourceValues.get(hostKey);
+        return fromSource != null && !fromSource.isBlank();
+    }
+
     private static int intValue(String value) {
         if (value == null || value.isBlank()) {
             return 0;
@@ -170,6 +192,7 @@ public final class StackAdapter {
         return switch (k) {
             case "redis" -> "REDIS_HOST";
             case "rabbitmq" -> "RABBITMQ_HOST";
+            case "minio" -> "MINIO_ENDPOINT";
             default -> "DB_HOST";
         };
     }

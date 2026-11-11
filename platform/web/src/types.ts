@@ -56,6 +56,17 @@ export interface ConfirmResponse {
   meta: Record<string, string>
 }
 
+/** 补丁视图（GET /api/v1/changes/{id}/patch）。 */
+export interface ChangePatchView {
+  patchId: string
+  baseSha: string
+  branch: string
+  diff: string
+  files: string[]
+  added: number
+  removed: number
+}
+
 /* ---------------------------------------------------------------------------
  * 事件协议（对齐 ruoyi-copilot 的 harness 事件溯源模型 + 本项目 AgentEventMapper）
  *
@@ -110,6 +121,8 @@ export interface TraceStep {
   /** 估算耗时：本条到下一步（或轮次结束）的间隔，用于时间轴比例。 */
   durationMs: number
   status?: 'RUNNING' | 'COMPLETED' | 'FAILED'
+  /** 该步对应的模型费用（仅模型输出步有值，工具步为空） */
+  cost?: UsageCost
 }
 
 /**
@@ -142,6 +155,8 @@ export interface TraceTurn {
   segments: Array<'text' | 'tool'>
   /** 逐步明细：轨迹视图的列表展开与右侧详情。 */
   items: TraceStep[]
+  /** 本轮费用合计（轮内多次模型调用累加，仅 deepseek 系列有值） */
+  cost?: UsageCost
 }
 
 /** reducer 投影：消息列表 + 流式轮次 + 工具表 + 运行状态 + 最后序号。 */

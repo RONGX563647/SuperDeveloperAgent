@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { reactive, watch } from 'vue'
 
 /** 执行策略：只读诊断 / 每次确认 / 自动展开确认卡（后端变更单仍是最终门禁）。 */
 export type PermissionMode = 'readonly' | 'confirm' | 'auto'
@@ -15,6 +15,7 @@ export interface SessionItem {
 const SESSION_KEY = 'agent.sessions'
 const CURRENT_SESSION_KEY = 'agent.currentSession'
 const PERMISSION_KEY = 'agent.permission'
+const ENV_KEY = 'agent.env'
 const MAX_SESSIONS = 30
 const DEFAULT_PROJECT = 'RY'
 
@@ -47,6 +48,16 @@ function loadPermission(): PermissionMode {
       : 'confirm'
   } catch {
     return 'confirm'
+  }
+}
+
+/** 记住上一次使用的环境；没有记录或值非法时回退 test。 */
+function loadEnv(): string {
+  try {
+    const value = localStorage.getItem(ENV_KEY)
+    return value === 'dev' || value === 'test' || value === 'prod' ? value : 'test'
+  } catch {
+    return 'test'
   }
 }
 
@@ -94,7 +105,7 @@ persistCurrentSession(initialSessionId)
  */
 export const appStore = reactive({
   projectId: DEFAULT_PROJECT,
-  env: 'test',
+  env: loadEnv(),
   /** 当前会话使用的工作树（空 = 主仓库）；切换工作区时重置。 */
   worktree: '',
   sessionId: initialSessionId,
@@ -207,5 +218,18 @@ export const appStore = reactive({
       .slice(0, MAX_SESSIONS)
     persist(appStore.sessions)
     persistCurrentSession(id)
+  }
+})
+
+/**
+ * 记住上一次使用的环境：对话页与流水线页都读 appStore.env，
+ * 任何入口切换后立即落盘，刷新页面不会再回到 test。
+ * 切换项目时若该项目不支持该环境，ChatView 会回退 test 并同样落盘。
+ */
+watch(() => appStore.env, (value) => {
+  try {
+    localStorage.setItem(ENV_KEY, value)
+  } catch {
+    // 隐私模式下不可写，忽略
   }
 })

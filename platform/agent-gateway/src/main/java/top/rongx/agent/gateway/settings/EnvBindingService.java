@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -75,9 +76,14 @@ public class EnvBindingService implements EnvBindingPort {
             keys.add(row);
         }
         List<Map<String, Object>> warnings = new ArrayList<>();
+        Set<String> projectKeys = new HashSet<>();
+        for (EnvVariable v : envStore.overrides(projectId, env)) {
+            projectKeys.add(v.key());
+        }
         for (EnvResource r : effective.resources()) {
             // 容器没启动不算异常（部署时会自动启动）；只有缺连接信息才提示。
-            if (r.missingFields().isEmpty() || !StackAdapter.isReferenced(r, effective.values())) {
+            if (r.missingFields().isEmpty() || !StackAdapter.isReferenced(r, effective.values())
+                    || !StackAdapter.declaredByProject(r, projectKeys, sourceValues)) {
                 continue;
             }
             Map<String, Object> warning = new LinkedHashMap<>();
@@ -185,7 +191,8 @@ public class EnvBindingService implements EnvBindingPort {
         return ProjectEnvFiles.scan(repo);
     }
 
-    private static boolean looksSecret(String key) {
+    /** 变量名是否像敏感信息（设置页据此决定是否掩码）。 */
+    public static boolean looksSecret(String key) {
         String k = key.toUpperCase(java.util.Locale.ROOT);
         return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
                 || k.endsWith("_KEY");

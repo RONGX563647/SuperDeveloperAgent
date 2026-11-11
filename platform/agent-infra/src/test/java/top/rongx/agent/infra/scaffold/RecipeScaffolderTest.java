@@ -207,6 +207,87 @@ class RecipeScaffolderTest {
         assertTrue(Files.readString(repo.resolve("ci/pipeline.yml")).contains("name: release"));
     }
 
+    @Test
+    @DisplayName("无 Dockerfile 的纯 Java → 自动降级 HOST（不再生成必挂的 docker 目标）")
+    void pureJavaWithoutDockerfileDowngradesToHost(@TempDir Path repo) throws Exception {
+        Files.writeString(repo.resolve("pom.xml"), "<project/>");
+
+        ScaffoldPlan plan = scaffolder.plan("J", repo, DeployTarget.DOCKER);
+
+        assertTrue(content(plan, "ci/pipeline.yml").contains("target: host"),
+                content(plan, "ci/pipeline.yml"));
+        assertEquals("host", plan.meta().get("deployTarget"));
+        assertEquals(true, plan.meta().get("deployable"));
+        assertTrue(String.valueOf(plan.meta().get("targetReason")).contains("降级"),
+                String.valueOf(plan.meta().get("targetReason")));
+        assertFalse(content(plan, "ci/pipeline.yml").contains("action: image_package"));
+    }
+
+    @Test
+    @DisplayName("无 Dockerfile 但含前端静态产物 → 保留 docker 并报阻塞项（避免首次部署 E-501）")
+    void nodeWithoutDockerfileIsBlocker(@TempDir Path repo) throws Exception {
+        Files.createDirectories(repo.resolve("web"));
+        Files.writeString(repo.resolve("web/package.json"), "{}");
+
+        ScaffoldPlan plan = scaffolder.plan("W", repo, DeployTarget.DOCKER);
+
+        assertEquals(false, plan.meta().get("deployable"));
+        assertTrue(plan.notes().stream().anyMatch(n -> n.contains("E-501")), String.valueOf(plan.notes()));
+        // 同一根因只出一条：Dockerfile 缺失不应在 notes 里刷屏
+        assertEquals(1, plan.notes().stream().filter(n -> n.contains("E-501")).count());
+    }
+
+    @Test
+    @DisplayName("端口/健康路径按 application.yml 探测（server.port + actuator health），标注来源")
+    void detectsPortAndHealthFromApplicationConfig(@TempDir Path repo) throws Exception {
+        Files.createDirectories(repo.resolve("app/src/main/resources"));
+        Files.writeString(repo.resolve("pom.xml"), "<project/>");
+        Files.writeString(repo.resolve("app/src/main/resources/application.yml"), """
+                server:
+                  port: ${SERVER_PORT:8090}
+                  servlet:
+                    context-path: /api
+                management:
+                  endpoints:
+                    web:
+                      base-path: /actuator
+                      exposure:
+                        include: health,info
+                """);
+
+        ScaffoldPlan plan = scaffolder.plan("APP", repo, DeployTarget.HOST);
+
+        String pipeline = content(plan, "ci/pipeline.yml");
+        assertTrue(pipeline.contains("port: 8090"), pipeline);
+        assertTrue(pipeline.contains("healthPath: /api/actuator/health"), pipeline);
+        assertTrue(pipeline.contains("url: http://127.0.0.1:8090/api/actuator/health"), pipeline);
+        assertEquals(8090, plan.meta().get("port"));
+        assertTrue(String.valueOf(plan.meta().get("portSource")).contains("application.yml"),
+                String.valueOf(plan.meta().get("portSource")));
+        assertTrue(String.valueOf(plan.meta().get("healthSource")).contains("actuator"),
+                String.valueOf(plan.meta().get("healthSource")));
+        // 探测到了就不该再出现"默认值"建议
+        assertFalse(plan.notes().stream().anyMatch(n -> n.contains("未探测到应用端口")));
+    }
+
+    @Test
+    @DisplayName("pnpm 没有锁文件 → 安装命令降级为 pnpm install（--frozen-lockfile 会失败）")
+    void pnpmWithoutLockfileDowngradesInstall(@TempDir Path repo) throws Exception {
+        Files.createDirectories(repo.resolve("web"));
+        Files.writeString(repo.resolve("web/package.json"), "{}");
+        Files.writeString(repo.resolve("web/pnpm-lock.yaml"), "lockfileVersion: 9");
+        ScaffoldPlan withLock = scaffolder.plan("W", repo, DeployTarget.DOCKER);
+        assertTrue(content(withLock, "ci/actions.yml").contains("--frozen-lockfile"));
+
+        Files.delete(repo.resolve("web/pnpm-lock.yaml"));
+        ScaffoldPlan withoutLock = scaffolder.plan("W", repo, DeployTarget.DOCKER);
+        String actions = content(withoutLock, "ci/actions.yml");
+        assertFalse(actions.contains("--frozen-lockfile"), actions);
+        assertTrue(actions.contains("\"install\""), actions);
+        assertTrue(withoutLock.notes().stream().anyMatch(n -> n.contains("锁文件")),
+                String.valueOf(withoutLock.notes()));
+    }
+
     private String content(ScaffoldPlan plan, String path) {
         return plan.files().stream()
                 .filter(f -> f.path().equals(path))

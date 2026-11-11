@@ -11,6 +11,31 @@ export interface IntakeStatus {
   updatedAt: number
 }
 
+/** 一条接入诊断（blocker 会挡住部署，suggestion 建议改，info 是说明）。 */
+export interface Diagnostic {
+  level: 'blocker' | 'suggestion' | 'info' | string
+  code: string
+  message: string
+  fix?: string
+}
+
+/** 结构化识别结果：报告里"识别"卡片展示这些字段。 */
+export interface ScanSummary {
+  stack?: string
+  javaDir?: string | null
+  nodeDir?: string | null
+  workdirs?: string[]
+  packageManager?: string | null
+  dockerfile?: boolean
+  deployTarget?: string
+  targetReason?: string
+  deployable?: boolean
+  port?: number
+  portSource?: string
+  healthPath?: string
+  healthSource?: string
+}
+
 /** 自检报告（后端 recipeCheck 输出）。 */
 export interface RecipeReport {
   actions: Record<string, string | null>
@@ -22,8 +47,16 @@ export interface RecipeReport {
   /** 接入时实际落盘的文件（自动生成）。 */
   scaffoldWritten?: string[]
   stack?: string
+  /** 结构化识别结果（端口来源、健康路径来源、部署目标与理由）。 */
+  summary?: ScanSummary
   dockerfile: boolean
+  /** 没有阻塞项 = 可部署。 */
+  deployable?: boolean
   ready: boolean
+  blockers?: Diagnostic[]
+  suggestions?: Diagnostic[]
+  info?: Diagnostic[]
+  /** 旧字段：三个分组的扁平文本，保留兼容。 */
   warnings: string[]
 }
 
@@ -193,12 +226,13 @@ export interface ScaffoldFile {
   content: string
 }
 
-/** 脚手架预览结果。stack: JAVA / NODE / JAVA_NODE / UNKNOWN。 */
+/** 脚手架预览结果。stack: JAVA / NODE / JAVA_NODE / UNKNOWN。target 可能是 auto 选出的实际目标。 */
 export interface ScaffoldPlan {
   projectId: string
   stack: string
   root: string
   target: string
+  meta?: ScanSummary & { diagnostics?: Diagnostic[] }
   files: ScaffoldFile[]
   notes: string[]
 }

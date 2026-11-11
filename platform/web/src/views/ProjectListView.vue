@@ -38,7 +38,7 @@ const selectedId = computed(() => selected.value?.id ?? null)
 
 const scaffoldDialog = ref(false)
 const scaffoldPlan = shallowRef<ScaffoldPlan | null>(null)
-const scaffoldTarget = ref('docker')
+const scaffoldTarget = ref('auto')
 const scaffoldLoading = ref(false)
 const scaffoldApplying = ref(false)
 const scaffoldOverwrite = ref(false)
@@ -247,8 +247,15 @@ const overviewProject = computed(() =>
         <div class="sc-row">
           <span class="sc-label">项目</span>
           <b class="mono">{{ scaffoldProjectId || '—' }}</b>
-          <span v-if="scaffoldPlan" class="sc-stack">识别：{{ scaffoldPlan.stack }}</span>
+          <span v-if="scaffoldPlan" class="sc-stack">
+            识别：{{ scaffoldPlan.stack }}
+            <template v-if="scaffoldPlan.meta?.deployTarget"> · {{ scaffoldPlan.meta.deployTarget }}</template>
+            <template v-if="scaffoldPlan.meta?.port">
+              · {{ scaffoldPlan.meta.port }}{{ scaffoldPlan.meta.healthPath }}
+            </template>
+          </span>
           <el-select v-model="scaffoldTarget" size="small" class="sc-target" @change="reloadScaffold">
+            <el-option label="自动（按仓库能力）" value="auto" />
             <el-option label="本机 Docker 容器" value="docker" />
             <el-option label="本机直接运行" value="host" />
             <el-option label="远程服务器" value="server" />

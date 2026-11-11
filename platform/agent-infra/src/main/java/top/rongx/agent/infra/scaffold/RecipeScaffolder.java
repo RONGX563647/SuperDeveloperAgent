@@ -4,10 +4,18 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -22,12 +30,12 @@ import top.rongx.agent.domain.scaffold.ScaffoldPlan.ScaffoldFile;
  * <p>识别规则（只读扫描，不执行任何命令）：
  * <ul>
  *   <li>{@code pom.xml} / {@code build.gradle} → Java 构建（mvn / gradle 命令）</li>
- *   <li>{@code package.json} → Node 构建（按锁文件选 pnpm / npm）</li>
- *   <li>{@code Dockerfile} → 镜像打包 stage</li>
- *   <li>{@code backend/} + {@code frontend/} → monorepo，按子目录写 workdir</li>
+ *   <li>{@code package.json} → Node 构建（按锁文件选 pnpm / npm / yarn，缺锁文件自动降级 install）</li>
+ *   <li>{@code Dockerfile} → 镜像打包 stage；没有时按技术栈自动选择可用目标，选不了就明确报阻塞</li>
+ *   <li>{@code application*.yml/properties} → 端口与健康路径（优先于猜默认值）</li>
  * </ul>
  *
- * <p>生成结果必须"开箱可跑"：stage 只引用白名单动作，部署走平台 deploy 段。
+ * <p>生成结果必须"开箱可跑"：stage 只引用真实存在的动作，部署目标必须与仓库能力匹配。
  * 不覆盖已有文件（除非 overwrite=true），避免误吞人工调过的配置。
  */
 @Component
@@ -39,18 +47,24 @@ public class RecipeScaffolder implements ProjectScaffolder {
     private static final String PIPELINE_FILE = "ci/pipeline.yml";
     private static final String ACTIONS_FILE = "ci/actions.yml";
 
+    private static final String DEFAULT_PORT_NOTE = "默认值（未探测到 server.port，请确认）";
+    private static final String DEFAULT_HEALTH_NOTE = "默认值（未探测到健康端点，请确认）";
+
     @Override
     public ScaffoldPlan plan(String projectId, Path repoRoot, DeployTarget preferredTarget) {
-        List<String> notes = new ArrayList<>();
-        DeployTarget target = preferredTarget == null ? DeployTarget.DOCKER : preferredTarget;
+        List<Diag> diags = new ArrayList<>();
 
         // 识别工程根：根目录 → 约定子目录（backend/frontend）→ 一层子目录（如 RuoYi-Vue/）。
-        // 很多真实仓库是"仓库根 + 一个工程目录"，旧规则只认根/backend/frontend，会把它们误判成 UNKNOWN。
         String javaDir = detectJavaDir(repoRoot);
         String nodeDir = detectNodeDir(repoRoot, javaDir);
         boolean hasDockerfile = isFile(repoRoot.resolve("Dockerfile"));
         boolean dockerBuilds = hasDockerfile && buildsInsideDockerfile(repoRoot.resolve("Dockerfile"));
-        Ports ports = detectPorts(repoRoot.resolve("Dockerfile"), hasDockerfile);
+        ServerConfig server = detectServerConfig(repoRoot, javaDir, hasDockerfile);
+
+        DeployTarget requested = preferredTarget == null ? DeployTarget.DOCKER : preferredTarget;
+        TargetChoice choice = decideTarget(requested, hasDockerfile, javaDir, nodeDir);
+        DeployTarget target = choice.target();
+        diags.addAll(choice.diags());
 
         String stack;
         List<StageSpec> stages = new ArrayList<>();
@@ -59,82 +73,111 @@ public class RecipeScaffolder implements ProjectScaffolder {
         if (javaDir != null || nodeDir != null) {
             stack = javaDir != null && nodeDir != null ? "JAVA_NODE" : javaDir != null ? "JAVA" : "NODE";
             if (dockerBuilds) {
-                notes.add("Dockerfile 内已完成编译/打包（检测到 mvn / gradle / npm 等），"
-                        + "不再重复生成构建 stage");
+                diags.add(Diag.info("DOCKERFILE_BUILDS",
+                        "Dockerfile 内已完成编译/打包（检测到 mvn / gradle / npm 等），不重复生成构建 stage"));
             } else {
                 if (javaDir != null) {
                     Path javaRoot = javaDir.isEmpty() ? repoRoot : repoRoot.resolve(javaDir);
                     boolean gradle = isFile(javaRoot.resolve("build.gradle"))
                             || isFile(javaRoot.resolve("build.gradle.kts"));
-                    String workdir = javaDir.isEmpty() ? null : javaDir;
-                    // 一个 stage 完成"编译 + 测试 + 打包"：拆成 build/test 两个 stage 会让
-                    // Maven 把同一批源码编译两遍（先 -DskipTests package，再 test），纯浪费。
-                    stages.add(new StageSpec("build", "backend_build", "container", workdir, null));
+                    stages.add(new StageSpec("build", "backend_build", "container",
+                            workdirOf(javaDir), null));
                     actions.put("backend_build", gradle ? "gradle -q build" : "mvn -B -q verify");
                 }
                 if (nodeDir != null) {
                     Path nodeRoot = nodeDir.isEmpty() ? repoRoot : repoRoot.resolve(nodeDir);
                     String pm = detectPackageManager(nodeRoot);
-                    notes.add("前端包管理器识别为 " + pm);
-                    String workdir = nodeDir.isEmpty() ? null : nodeDir;
-                    stages.add(new StageSpec("frontend", "frontend_build", "container", workdir, null));
-                    actions.put("frontend_build", pm.equals("npm")
-                            ? "npm ci --ignore-scripts && npm run build"
-                            : pm + " install --frozen-lockfile --ignore-scripts && " + pm + " build");
-                    // 有真实 test 脚本才生成测试 stage：npm init 的占位脚本会直接失败
+                    boolean lock = hasLockFile(nodeRoot, pm);
+                    diags.add(Diag.info("PACKAGE_MANAGER", "前端包管理器识别为 " + pm
+                            + (lock ? "（已找到锁文件）" : "（未找到锁文件）")));
+                    if (!lock) {
+                        diags.add(Diag.info("NO_LOCKFILE",
+                                "未找到 " + pm + " 锁文件：安装命令已降级为 " + pm + " install（否则 --frozen-lockfile 会失败）",
+                                "建议提交锁文件，保证构建可复现"));
+                    }
+                    stages.add(new StageSpec("frontend", "frontend_build", "container",
+                            workdirOf(nodeDir), null));
+                    actions.put("frontend_build", installCommand(pm, lock) + " && " + pm + " build");
                     if (hasRealTestScript(nodeRoot)) {
-                        stages.add(new StageSpec("frontend-test", "frontend_test", "container", workdir, null));
+                        stages.add(new StageSpec("frontend-test", "frontend_test", "container",
+                                workdirOf(nodeDir), null));
                         actions.put("frontend_test", pm + " test");
                     } else {
-                        notes.add("package.json 没有可用的 test 脚本：已跳过前端测试 stage");
+                        diags.add(Diag.info("NO_FRONTEND_TEST",
+                                "package.json 没有可用的 test 脚本：已跳过前端测试 stage"));
                     }
                 }
             }
         } else {
             stack = "UNKNOWN";
-            notes.add("未识别出 Java/Node 工程：已生成骨架，请按需修改 stages/actions");
+            diags.add(Diag.suggestion("UNKNOWN_STACK",
+                    "未识别出 Java/Node 工程：已生成骨架，请按需修改 stages/actions",
+                    "确认仓库根是否含 pom.xml / package.json，或把对应的工程目录提交上来"));
         }
 
         if (hasDockerfile && target == DeployTarget.DOCKER) {
             stages.add(new StageSpec("image", "image_package", "host", null, null));
             actions.put("image_package", "docker build -q -t ${tag} .");
-        } else if (target == DeployTarget.DOCKER) {
-            notes.add("未找到 Dockerfile：已跳过 image stage；DOCKER 目标需要镜像，"
-                    + "部署会失败（E-501）。请补 Dockerfile，或改用 HOST / SERVER");
+        } else if (target == DeployTarget.HOST) {
+            diags.add(Diag.info("HOST_TARGET",
+                    "HOST 目标直接运行 Java jar；前端静态产物不会由平台托管"));
+        } else if (target == DeployTarget.SERVER) {
+            diags.add(Diag.info("SERVER_TARGET",
+                    "SERVER 目标需要配置 agent.deploy.server.host 与 key-path（见部署文档 §4）"));
         }
-        if (target == DeployTarget.HOST) {
-            notes.add("HOST 目标只在 Java jar 场景可用；前端静态产物请用 DOCKER");
+        if (server.portDefaulted()) {
+            diags.add(Diag.suggestion("PORT_DEFAULTED",
+                    "未探测到应用端口，暂用 " + server.port() + "（健康检查也按它拼）",
+                    "在 application.yml 里确认 server.port，或在平台侧 ci/pipeline.yml 里改 deploy.port"));
         }
-        if (target == DeployTarget.SERVER) {
-            notes.add("SERVER 目标需要配置 agent.deploy.server.host 与 key-path（见部署文档 §4）");
-        }
-        if (hasDockerfile) {
-            notes.add("按 Dockerfile 检测到端口 " + ports.port() + "、健康路径 " + ports.healthPath()
-                    + "（可用平台侧 ci/pipeline.yml 覆盖）");
+        if (server.healthDefaulted()) {
+            diags.add(Diag.suggestion("HEALTH_PATH_DEFAULTED",
+                    "未探测到健康端点，暂用 " + server.healthPath() + " 做健康门禁",
+                    "补 /actuator/health（暴露 health）或把 deploy.healthPath 改成实际端点"));
         }
 
         // 应用自己声明的必填 env（docker/.env.example 等）→ 写进 deploy.env-required，
         // 部署前由引擎做 E-509 预检；值本身仍归「设置 → 项目环境」，定义里只留名字。
         List<String> envRequired = detectRequiredEnv(repoRoot);
         if (!envRequired.isEmpty()) {
-            notes.add("按 .env.example 检测到 " + envRequired.size() + " 个必填环境变量："
-                    + String.join("、", envRequired)
-                    + "（已写入 deploy.env-required，部署前预检；请到「设置 → 项目环境」配置）");
+            diags.add(Diag.info("ENV_REQUIRED",
+                    "按 .env.example 检测到 " + envRequired.size() + " 个必填环境变量："
+                            + String.join("、", envRequired)
+                            + "（已写入 deploy.env-required，部署前预检；请到「设置 → 项目环境」配置）"));
         }
+
+        List<Diag> deduped = dedupe(diags);
 
         // 所有目标都走平台部署器 + 健康门禁（SERVER 亦同；未配置时 fail-closed）
         List<StageSpec> pipelineStages = new ArrayList<>(stages);
         pipelineStages.add(new StageSpec("deploy", "deploy", null, null, target));
         pipelineStages.add(new StageSpec("health", "health", null, null, target));
 
-        String pipelineYaml = renderPipeline(pipelineStages, target, ports, envRequired);
+        String pipelineYaml = renderPipeline(pipelineStages, target, server, envRequired);
         String actionsYaml = renderActions(actions);
 
         List<ScaffoldFile> files = List.of(
                 new ScaffoldFile(PIPELINE_FILE, pipelineYaml),
                 new ScaffoldFile(ACTIONS_FILE, actionsYaml));
 
-        return new ScaffoldPlan(projectId, stack, files, List.copyOf(notes));
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("stack", stack);
+        meta.put("javaDir", javaDir);
+        meta.put("nodeDir", nodeDir);
+        meta.put("workdirs", workdirs(javaDir, nodeDir));
+        meta.put("packageManager", nodeDir == null ? null : detectPackageManager(nodeOf(repoRoot, nodeDir)));
+        meta.put("dockerfile", hasDockerfile);
+        meta.put("deployTarget", target.wireName());
+        meta.put("targetReason", choice.reason());
+        meta.put("deployable", deduped.stream().noneMatch(d -> d.level() == Level.BLOCKER));
+        meta.put("port", server.port());
+        meta.put("portSource", server.portSource());
+        meta.put("healthPath", server.healthPath());
+        meta.put("healthSource", server.healthSource());
+        meta.put("diagnostics", deduped.stream().map(Diag::toMap).toList());
+
+        List<String> notes = deduped.stream().map(Diag::message).toList();
+        return new ScaffoldPlan(projectId, stack, files, notes, meta);
     }
 
     @Override
@@ -161,20 +204,55 @@ public class RecipeScaffolder implements ProjectScaffolder {
         return written;
     }
 
+    // ---------------------------------------------------------------- 目标选择
+
+    private TargetChoice decideTarget(DeployTarget requested, boolean hasDockerfile,
+                                      String javaDir, String nodeDir) {
+        List<Diag> diags = new ArrayList<>();
+        if (hasDockerfile) {
+            return new TargetChoice(requested, "仓库提供 Dockerfile：按请求目标 " + requested.wireName(), diags);
+        }
+        if (requested != DeployTarget.DOCKER) {
+            return new TargetChoice(requested, "按请求目标 " + requested.wireName() + "（不需要 Dockerfile）", diags);
+        }
+        if (javaDir != null && nodeDir == null) {
+            // 纯 Java 用 jar 直接跑：与其生成一个必然 E-501 的 docker 目标，不如按能力降级
+            diags.add(Diag.info("TARGET_DOWNGRADED",
+                    "未找到 Dockerfile：纯 Java 项目已自动改用 HOST（直接运行 jar）",
+                    "需要镜像部署时补 Dockerfile，再在项目页重新生成定义"));
+            return new TargetChoice(DeployTarget.HOST,
+                    "未找到 Dockerfile，纯 Java 项目自动降级为 HOST", diags);
+        }
+        String why = javaDir == null && nodeDir == null
+                ? "未识别出可构建工程且未找到 Dockerfile"
+                : "未找到 Dockerfile，但仓库包含前端静态产物";
+        diags.add(Diag.blocker("DOCKERFILE_MISSING",
+                why + "：DOCKER 目标无法打镜像，部署会失败（E-501）",
+                "补一个 Dockerfile 后重新生成定义，或改用 SERVER 目标（需先配置服务器）"));
+        return new TargetChoice(DeployTarget.DOCKER, why, diags);
+    }
+
     /** stage 描述（生成期中间结构）。 */
     private record StageSpec(String id, String action, String runner, String workdir, DeployTarget deployTarget) {
     }
 
-    private String renderPipeline(List<StageSpec> stages, DeployTarget target, Ports ports,
+    /** 目标选择结果 + 选择理由。 */
+    private record TargetChoice(DeployTarget target, String reason, List<Diag> diags) {
+    }
+
+    // ---------------------------------------------------------------- 渲染
+
+    private String renderPipeline(List<StageSpec> stages, DeployTarget target, ServerConfig server,
                                   List<String> envRequired) {
         StringBuilder sb = new StringBuilder();
-        sb.append("# 由平台脚手架生成（可自由修改，改动随代码 review）\n");
+        sb.append("# 由平台脚手架生成，可直接修改。\n");
+        sb.append("# 生效顺序：环境固化脚本 > 仓库 ci/pipeline.yml > 平台侧定义（本文件）> 自动生成\n");
         sb.append("name: release\n\n");
         sb.append("deploy:\n")
                 .append("  target: ").append(target.wireName()).append('\n')
-                .append("  port: ").append(ports.port()).append('\n')
-                .append("  containerPort: ").append(ports.port()).append('\n')
-                .append("  healthPath: ").append(ports.healthPath()).append('\n');
+                .append("  port: ").append(server.port()).append('\n')
+                .append("  containerPort: ").append(server.port()).append('\n')
+                .append("  healthPath: ").append(server.healthPath()).append('\n');
         if (envRequired != null && !envRequired.isEmpty()) {
             sb.append("  env-required:\n");
             for (String key : envRequired) {
@@ -189,8 +267,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
                 sb.append("    type: deploy\n");
             } else if ("health".equals(stage.id())) {
                 sb.append("    type: health\n")
-                        .append("    url: http://127.0.0.1:").append(ports.port())
-                        .append(ports.healthPath()).append('\n')
+                        .append("    url: http://127.0.0.1:").append(server.port())
+                        .append(server.healthPath()).append('\n')
                         .append("    expected: 200\n");
             } else {
                 sb.append("    type: action\n")
@@ -255,6 +333,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
         return sb.append(']').toString();
     }
 
+    // ---------------------------------------------------------------- 前端脚本
+
     /**
      * package.json 里是否有"真正的" test 脚本。
      *
@@ -286,6 +366,29 @@ public class RecipeScaffolder implements ProjectScaffolder {
         }
         return "npm";
     }
+
+    private boolean hasLockFile(Path dir, String pm) {
+        return switch (pm) {
+            case "pnpm" -> isFile(dir.resolve("pnpm-lock.yaml"));
+            case "yarn" -> isFile(dir.resolve("yarn.lock"));
+            default -> isFile(dir.resolve("package-lock.json"))
+                    || isFile(dir.resolve("npm-shrinkwrap.json"));
+        };
+    }
+
+    private String installCommand(String pm, boolean lock) {
+        return switch (pm) {
+            case "pnpm" -> lock
+                    ? "pnpm install --frozen-lockfile --ignore-scripts"
+                    : "pnpm install --ignore-scripts";
+            case "yarn" -> lock
+                    ? "yarn install --frozen-lockfile --ignore-scripts"
+                    : "yarn install --ignore-scripts";
+            default -> lock ? "npm ci --ignore-scripts" : "npm install --ignore-scripts";
+        };
+    }
+
+    // ---------------------------------------------------------------- 工程识别
 
     /** 常见前端子目录名（RuoYi 这类"Java 工程目录下再放一个 UI"的布局）。 */
     private static final List<String> UI_DIRS = List.of("ruoyi-ui", "ui", "web", "frontend", "admin-ui", "vue");
@@ -358,7 +461,7 @@ public class RecipeScaffolder implements ProjectScaffolder {
                         return !name.startsWith(".") && !"node_modules".equals(name)
                                 && !"target".equals(name) && !"dist".equals(name);
                     })
-                    .sorted(java.util.Comparator.comparing(p -> p.getFileName().toString()))
+                    .sorted(Comparator.comparing(p -> p.getFileName().toString()))
                     .limit(20)
                     .toList();
         } catch (IOException e) {
@@ -368,6 +471,25 @@ public class RecipeScaffolder implements ProjectScaffolder {
 
     private String relative(Path root, Path dir) {
         return root.relativize(dir).toString().replace('\\', '/');
+    }
+
+    private Path nodeOf(Path repoRoot, String nodeDir) {
+        return nodeDir == null || nodeDir.isEmpty() ? repoRoot : repoRoot.resolve(nodeDir);
+    }
+
+    private String workdirOf(String dir) {
+        return dir == null || dir.isEmpty() ? null : dir;
+    }
+
+    private List<String> workdirs(String javaDir, String nodeDir) {
+        Set<String> out = new LinkedHashSet<>();
+        if (javaDir != null && !javaDir.isEmpty()) {
+            out.add(javaDir);
+        }
+        if (nodeDir != null && !nodeDir.isEmpty()) {
+            out.add(nodeDir);
+        }
+        return List.copyOf(out);
     }
 
     /**
@@ -390,45 +512,344 @@ public class RecipeScaffolder implements ProjectScaffolder {
         return false;
     }
 
-    /** 从 Dockerfile 推断对外端口与健康检查路径（EXPOSE + HEALTHCHECK URL）。 */
-    private Ports detectPorts(Path dockerfile, boolean hasDockerfile) {
-        if (!hasDockerfile) {
-            return new Ports(8080, "/healthz");
-        }
-        String text;
-        try {
-            text = Files.readString(dockerfile, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            return new Ports(8080, "/");
-        }
-        Integer healthPort = null;
-        String healthPath = null;
-        java.util.regex.Matcher health = java.util.regex.Pattern
-                .compile("https?://(?:localhost|127\\.0\\.0\\.1):(\\d+)(/[^\\s\"'\\\\]*)?").matcher(text);
-        if (health.find()) {
-            healthPort = Integer.valueOf(health.group(1));
-            String path = health.group(2);
-            healthPath = path == null || path.isBlank() ? "/" : path;
-        }
-        List<Integer> exposed = new ArrayList<>();
-        java.util.regex.Matcher expose = java.util.regex.Pattern
-                .compile("(?im)^\\s*EXPOSE\\s+(.+)$").matcher(text);
-        while (expose.find()) {
-            for (String token : expose.group(1).trim().split("\\s+")) {
-                try {
-                    exposed.add(Integer.parseInt(token));
-                } catch (NumberFormatException ignored) {
-                    // EXPOSE 里可能有变量，忽略
+    // ---------------------------------------------------------------- 端口与健康路径
+
+    /**
+     * 探测对外端口与健康路径。
+     *
+     * <p>优先级：Dockerfile HEALTHCHECK 的 URL → application 配置的 server.port →
+     * Dockerfile EXPOSE → 默认 8080。健康路径：Dockerfile HEALTHCHECK → actuator health →
+     * 代码里的 health 映射 → 默认 {@code /}。每个结果都带来源，报告里如实展示。
+     */
+    private ServerConfig detectServerConfig(Path repoRoot, String javaDir, boolean hasDockerfile) {
+        Integer dockerHealthPort = null;
+        String dockerHealthPath = null;
+        Integer dockerExpose = null;
+        if (hasDockerfile) {
+            Path dockerfile = repoRoot.resolve("Dockerfile");
+            String text = readText(dockerfile);
+            Matcher health = Pattern
+                    .compile("https?://(?:localhost|127\\.0\\.0\\.1):(\\d+)(/[^\\s\"'\\\\]*)?").matcher(text);
+            if (health.find()) {
+                dockerHealthPort = Integer.valueOf(health.group(1));
+                String path = health.group(2);
+                dockerHealthPath = path == null || path.isBlank() ? "/" : path;
+            }
+            Matcher expose = Pattern.compile("(?im)^\\s*EXPOSE\\s+(.+)$").matcher(text);
+            while (expose.find() && dockerExpose == null) {
+                for (String token : expose.group(1).trim().split("\\s+")) {
+                    try {
+                        dockerExpose = Integer.parseInt(token);
+                        break;
+                    } catch (NumberFormatException ignored) {
+                        // EXPOSE 里可能有变量，忽略
+                    }
                 }
             }
         }
-        int port = healthPort != null ? healthPort : exposed.isEmpty() ? 8080 : exposed.get(0);
-        return new Ports(port, healthPath == null ? "/" : healthPath);
+
+        Integer appPort = null;
+        String appPortSource = null;
+        String appHealth = null;
+        String appHealthSource = null;
+        if (javaDir != null) {
+            Path javaRoot = javaDir.isEmpty() ? repoRoot : repoRoot.resolve(javaDir);
+            for (Path cfg : findAppConfigs(javaRoot)) {
+                Map<String, String> kv = readFlatConfig(cfg);
+                if (appPort == null) {
+                    Integer parsed = intOrDefault(kv.get("server.port"));
+                    if (parsed != null) {
+                        appPort = parsed;
+                        appPortSource = relative(repoRoot, cfg) + " · server.port";
+                    }
+                }
+                if (appHealth == null) {
+                    String exposure = kv.getOrDefault("management.endpoints.web.exposure.include", "")
+                            .toLowerCase(java.util.Locale.ROOT);
+                    boolean healthExposed = exposure.contains("health") || exposure.contains("*");
+                    if (healthExposed) {
+                        String ctx = kv.getOrDefault("server.servlet.context-path", "");
+                        String base = kv.getOrDefault("management.endpoints.web.base-path", "/actuator");
+                        appHealth = normalizePath(ctx + "/" + base + "/health");
+                        appHealthSource = relative(repoRoot, cfg) + " · actuator health";
+                    }
+                }
+            }
+            if (appHealth == null) {
+                String mapped = scanHealthMapping(javaRoot);
+                if (mapped != null) {
+                    appHealth = mapped;
+                    appHealthSource = relative(repoRoot, javaRoot) + " · 代码中的 health 映射";
+                }
+            }
+        }
+
+        if (dockerHealthPort != null) {
+            return new ServerConfig(dockerHealthPort, "Dockerfile HEALTHCHECK",
+                    dockerHealthPath, "Dockerfile HEALTHCHECK", false, false);
+        }
+        if (appPort != null) {
+            boolean healthDefaulted = appHealth == null;
+            return new ServerConfig(appPort, appPortSource,
+                    healthDefaulted ? "/" : appHealth,
+                    healthDefaulted ? DEFAULT_HEALTH_NOTE : appHealthSource,
+                    false, healthDefaulted);
+        }
+        if (dockerExpose != null) {
+            boolean healthDefaulted = dockerHealthPath == null;
+            return new ServerConfig(dockerExpose, "Dockerfile EXPOSE",
+                    healthDefaulted ? "/" : dockerHealthPath,
+                    healthDefaulted ? DEFAULT_HEALTH_NOTE : "Dockerfile HEALTHCHECK",
+                    false, healthDefaulted);
+        }
+        return new ServerConfig(8080, DEFAULT_PORT_NOTE, "/", DEFAULT_HEALTH_NOTE, true, true);
     }
 
-    /** 端口/健康路径（脚手架内部结构）。 */
-    private record Ports(int port, String healthPath) {
+    /** application 配置候选：{@code resources/} 下的 application*.yml/yaml/properties，按层级浅→深排序。 */
+    private List<Path> findAppConfigs(Path javaRoot) {
+        if (!Files.isDirectory(javaRoot)) {
+            return List.of();
+        }
+        long maxDepth = 8;
+        try (Stream<Path> stream = Files.walk(javaRoot, (int) maxDepth)) {
+            return stream
+                    .filter(Files::isRegularFile)
+                    .filter(this::isAppConfigName)
+                    .filter(p -> !p.toString().contains("node_modules"))
+                    .filter(p -> !p.toString().contains("/target/") && !p.toString().contains("\\target\\"))
+                    .filter(p -> !p.toString().contains("/dist/") && !p.toString().contains("\\dist\\"))
+                    .sorted(Comparator.comparingInt((Path p) -> p.getNameCount())
+                            .thenComparing(p -> p.getFileName().toString()))
+                    .limit(40)
+                    .toList();
+        } catch (IOException e) {
+            return List.of();
+        }
     }
+
+    private boolean isAppConfigName(Path p) {
+        String name = p.getFileName().toString();
+        if (!name.startsWith("application")) {
+            return false;
+        }
+        return name.endsWith(".yml") || name.endsWith(".yaml") || name.endsWith(".properties");
+    }
+
+    /**
+     * 极简扁平化：把 YAML 的缩进层级拼成 {@code a.b.c}，只取标量；
+     * properties 直接按 {@code =} 拆。列表值（如 exposure.include）用逗号拼接。
+     */
+    private Map<String, String> readFlatConfig(Path file) {
+        Map<String, String> out = new LinkedHashMap<>();
+        String name = file.getFileName().toString();
+        List<String> lines;
+        try {
+            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return out;
+        }
+        if (name.endsWith(".properties")) {
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                    continue;
+                }
+                int eq = trimmed.indexOf('=');
+                if (eq > 0) {
+                    out.put(trimmed.substring(0, eq).trim(), cleanValue(trimmed.substring(eq + 1)));
+                }
+            }
+            return out;
+        }
+        Deque<String> keys = new ArrayDeque<>();
+        Deque<Integer> indents = new ArrayDeque<>();
+        String lastListKey = null;
+        for (String line : lines) {
+            String withoutComment = stripComment(line);
+            if (withoutComment.isBlank() || withoutComment.trim().startsWith("-")
+                    || withoutComment.trim().equals("---") || withoutComment.trim().equals("...")) {
+                if (withoutComment.trim().startsWith("-") && lastListKey != null) {
+                    String item = cleanValue(withoutComment.trim().substring(1));
+                    out.merge(lastListKey, item, (a, b) -> a + "," + b);
+                }
+                continue;
+            }
+            int indent = indentOf(withoutComment);
+            while (!indents.isEmpty() && indent <= indents.peek()) {
+                indents.pop();
+                keys.pop();
+            }
+            String trimmed = withoutComment.trim();
+            int colon = trimmed.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            String key = trimmed.substring(0, colon).trim();
+            String value = trimmed.substring(colon + 1).trim();
+            String path = flatKey(keys, key);
+            if (value.isEmpty()) {
+                keys.push(key);
+                indents.push(indent);
+                lastListKey = path;
+            } else {
+                out.put(path, cleanValue(value));
+                lastListKey = null;
+            }
+        }
+        return out;
+    }
+
+    /** 把栈里的父级 key（push 顺序是从内到外）还原成 {@code a.b.c}。 */
+    private String flatKey(Deque<String> keys, String key) {
+        List<String> parts = new ArrayList<>(keys);
+        java.util.Collections.reverse(parts);
+        parts.add(key);
+        return String.join(".", parts);
+    }
+
+    private String stripComment(String line) {
+        // 只处理"整行注释"和"值前无引号"的常见情况，够用且不会误伤 URL 里的 #
+        int hash = line.indexOf('#');
+        return hash >= 0 ? line.substring(0, hash) : line;
+    }
+
+    private int indentOf(String line) {
+        int i = 0;
+        while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t')) {
+            i += line.charAt(i) == '\t' ? 2 : 1;
+        }
+        return i;
+    }
+
+    private String cleanValue(String raw) {
+        String value = raw.trim();
+        if ((value.startsWith("\"") && value.endsWith("\""))
+                || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
+    /** 解析整数；支持 {@code ${PORT:8090}} 这种占位符（取默认值）。解析不了返回 null。 */
+    private Integer intOrDefault(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String value = cleanValue(raw);
+        if (value.contains("${")) {
+            int colon = value.lastIndexOf(':');
+            int close = value.lastIndexOf('}');
+            if (colon < 0 || close < colon) {
+                return null;
+            }
+            value = value.substring(colon + 1, close).trim();
+        }
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 && parsed < 65536 ? parsed : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 代码里显式声明的健康端点（{@code @GetMapping("/health")} 之类），找不到返回 null。 */
+    private String scanHealthMapping(Path javaRoot) {
+        if (!Files.isDirectory(javaRoot)) {
+            return null;
+        }
+        Pattern mapping = Pattern.compile(
+                "@(?:Get|Request)Mapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(/[^\"]*health[^\"]*)\"");
+        try (Stream<Path> stream = Files.walk(javaRoot, 12)) {
+            for (Path file : stream.filter(p -> p.toString().endsWith(".java")).limit(400).toList()) {
+                String text = readText(file);
+                Matcher m = mapping.matcher(text);
+                if (m.find()) {
+                    return normalizePath(m.group(1));
+                }
+            }
+        } catch (IOException ignored) {
+            // 扫描失败就当没有：健康路径会退回默认值并在报告里标来源
+        }
+        return null;
+    }
+
+    private String normalizePath(String raw) {
+        String path = raw == null ? "" : raw.trim().replaceAll("/{2,}", "/");
+        if (path.isEmpty() || !path.startsWith("/")) {
+            path = "/" + path;
+        }
+        if (path.length() > 1 && path.endsWith("/")) {
+            path = path.substring(0, path.length() - 1);
+        }
+        return path;
+    }
+
+    private String readText(Path file) {
+        try {
+            return Files.readString(file, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    /** 端口/健康路径探测结果；*Defaulted 标记"没探测到，用了兜底值"。 */
+    private record ServerConfig(int port, String portSource, String healthPath, String healthSource,
+                                boolean portDefaulted, boolean healthDefaulted) {
+    }
+
+    // ---------------------------------------------------------------- 诊断
+
+    private enum Level { BLOCKER, SUGGESTION, INFO }
+
+    /** 一条面向人的诊断：同一根因只保留一条。 */
+    private record Diag(Level level, String code, String message, String fix) {
+
+        static Diag blocker(String code, String message, String fix) {
+            return new Diag(Level.BLOCKER, code, message, fix);
+        }
+
+        static Diag blocker(String code, String message) {
+            return new Diag(Level.BLOCKER, code, message, null);
+        }
+
+        static Diag suggestion(String code, String message, String fix) {
+            return new Diag(Level.SUGGESTION, code, message, fix);
+        }
+
+        static Diag suggestion(String code, String message) {
+            return new Diag(Level.SUGGESTION, code, message, null);
+        }
+
+        static Diag info(String code, String message) {
+            return new Diag(Level.INFO, code, message, null);
+        }
+
+        static Diag info(String code, String message, String fix) {
+            return new Diag(Level.INFO, code, message, fix);
+        }
+
+        Map<String, Object> toMap() {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("level", level.name().toLowerCase(java.util.Locale.ROOT));
+            out.put("code", code);
+            out.put("message", message);
+            if (fix != null && !fix.isBlank()) {
+                out.put("fix", fix);
+            }
+            return out;
+        }
+    }
+
+    /** 按 code 去重（同一根因只说一次），保持出现顺序。 */
+    private List<Diag> dedupe(List<Diag> diags) {
+        Map<String, Diag> unique = new LinkedHashMap<>();
+        for (Diag diag : diags) {
+            unique.putIfAbsent(diag.code(), diag);
+        }
+        return List.copyOf(unique.values());
+    }
+
+    // ---------------------------------------------------------------- 必填环境变量
 
     /**
      * 探测应用声明的必填环境变量：扫描 {@code docker/.env.example} 与 {@code .env.example}

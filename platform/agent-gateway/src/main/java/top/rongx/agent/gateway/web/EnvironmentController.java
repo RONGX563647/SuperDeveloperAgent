@@ -5,6 +5,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -388,12 +389,18 @@ public class EnvironmentController {
                                          @RequestParam(defaultValue = "test") String env) {
         requireRead();
         EffectiveEnvironment e = envStore.effective(projectId, env);
+        Map<String, String> projectSource = bindings.sourceValues(projectId);
+        Set<String> projectKeys = new HashSet<>();
+        for (EnvVariable v : envStore.overrides(projectId, env)) {
+            projectKeys.add(v.key());
+        }
         List<Map<String, Object>> resources = new ArrayList<>();
         int referencedCount = 0;
         int referencedRunning = 0;
         for (EnvResource r : e.resources()) {
             Map<String, Object> view = resourceView(r);
-            boolean referenced = StackAdapter.isReferenced(r, e.values());
+            boolean referenced = StackAdapter.isReferenced(r, e.values())
+                    && StackAdapter.declaredByProject(r, projectKeys, projectSource);
             view.put("referenced", referenced);
             if (referenced) {
                 referencedCount++;
@@ -410,6 +417,8 @@ public class EnvironmentController {
         out.put("defaultPort", e.defaultPort());
         out.put("healthPath", e.healthPath() == null ? "" : e.healthPath());
         out.put("vars", e.vars());
+        // 项目源码里能直接读到的变量：部署时自动注入；人工覆盖后以覆盖值为准。
+        out.put("sourceVars", sourceVars(projectSource, e.values()));
         out.put("templateCount", e.templateCount());
         out.put("overrideCount", e.overrideCount());
         out.put("referencedCount", referencedCount);
@@ -434,6 +443,10 @@ public class EnvironmentController {
         requireRead();
         EffectiveEnvironment e = envStore.effective(projectId, env);
         Map<String, String> sourceValues = bindings.sourceValues(projectId);
+        Set<String> projectKeys = new HashSet<>();
+        for (EnvVariable v : envStore.overrides(projectId, env)) {
+            projectKeys.add(v.key());
+        }
         List<String> required = requiredEnv(projectId);
         List<String> missingVars = new ArrayList<>();
         List<String> sourceProvided = new ArrayList<>();
@@ -455,7 +468,8 @@ public class EnvironmentController {
         int referencedCount = 0;
         int referencedRunning = 0;
         for (EnvResource r : e.resources()) {
-            if (!StackAdapter.isReferenced(r, e.values())) {
+            if (!StackAdapter.isReferenced(r, e.values())
+                    || !StackAdapter.declaredByProject(r, projectKeys, sourceValues)) {
                 continue;
             }
             referencedCount++;
@@ -506,6 +520,38 @@ public class EnvironmentController {
     private List<String> requiredEnv(String projectId) {
         // 直接读项目 .env.example 声明的变量名（不读值），避免网关层依赖执行层的 YAML 解析。
         return bindings.requiredKeys(projectId);
+    }
+
+    /**
+     * 项目源码里声明的变量值（{@code .env} / {@code .env.example}）。
+     *
+     * <p>部署时执行层从同一份扫描结果注入，设置页据此展示"从项目里直接读取"的值；
+     * 人工覆盖后该键进入有效变量并优先于源码值，这里标记 {@code overridden=true}。
+     * 敏感名的值只返回掩码，避免明文出现在列表接口里。
+     */
+    private List<Map<String, Object>> sourceVars(Map<String, String> sourceValues,
+                                                 Map<String, String> effectiveValues) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        sourceValues.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> {
+                    boolean secret = EnvBindingService.looksSecret(entry.getKey());
+                    String current = effectiveValues.get(entry.getKey());
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("key", entry.getKey());
+                    row.put("value", secret ? maskSourceValue(entry.getValue()) : entry.getValue());
+                    row.put("secret", secret);
+                    row.put("overridden", current != null && !current.isBlank());
+                    rows.add(row);
+                });
+        return rows;
+    }
+
+    private static String maskSourceValue(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value.length() > 4 ? "****" + value.substring(value.length() - 4) : "****";
     }
 
     private Map<String, Object> resourceBrief(EnvResource r) {

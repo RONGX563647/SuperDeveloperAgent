@@ -320,6 +320,39 @@
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
+.badge.bad {
+  color: var(--danger, #c0392b);
+  background: color-mix(in srgb, var(--danger, #c0392b) 12%, transparent);
+}
+.src-note {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.grp-blocker {
+  color: var(--danger, #c0392b);
+}
+.grp-suggestion {
+  color: var(--warn);
+}
+.diag-row {
+  padding: 5px 0 5px 14px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.diag-row.blocker {
+  color: var(--danger, #c0392b);
+}
+.diag-row.suggestion {
+  color: var(--warn);
+}
+.diag-row.info {
+  color: var(--ink-soft);
+}
+.diag-fix {
+  margin-top: 2px;
+  color: var(--ink-muted);
+}
 .actions-detail summary,
 .warn-detail summary,
 .tpl-detail summary {
