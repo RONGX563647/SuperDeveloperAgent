@@ -51,3 +51,13 @@ data/
 .workbuddy/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# Agent 运行数据与调试产物
+.agent/
+.screenshots/
+.playwright-cli/
+_research/*.png
+
+# 本地登录配置（可能含凭据）与临时校验脚本
+login.yaml
+platform/web/scripts/_tmp-*.mjs
