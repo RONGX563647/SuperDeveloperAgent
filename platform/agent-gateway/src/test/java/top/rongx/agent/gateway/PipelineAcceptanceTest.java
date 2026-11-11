@@ -96,9 +96,7 @@ class PipelineAcceptanceTest {
 
     @BeforeAll
     static void prepare() throws Exception {
-        Process p = new ProcessBuilder("docker", "info", "--format", "{{.ServerVersion}}")
-                .redirectErrorStream(true).start();
-        dockerReady = p.waitFor(5, TimeUnit.SECONDS) && p.exitValue() == 0;
+        dockerReady = TestEnv.dockerAvailable();
         Assumptions.assumeTrue(dockerReady, "Docker 守护进程不可用，跳过 CI/CD 验收");
         Process img = new ProcessBuilder("docker", "image", "inspect", TOOLCHAIN)
                 .redirectErrorStream(true).start();

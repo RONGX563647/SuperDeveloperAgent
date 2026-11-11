@@ -7,7 +7,6 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.action.ActionId;
-import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.port.PipelineDefAuthor;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectScaffolder;
@@ -183,8 +182,10 @@ public final class PipelineDefinitionResolver {
             return adopted.get();
         }
 
+        // preferredTarget=null：按仓库能力选目标（无 Dockerfile 的纯 Java 自动降级 HOST，
+        // 选不了时定义里会留阻塞项，而不是生成一个必然 E-501 的 docker 目标）
         ScaffoldPlan plan = scaffolder.plan(projectId, repoRoot != null && Files.isDirectory(repoRoot)
-                ? repoRoot : root, DeployTarget.DOCKER);
+                ? repoRoot : root, null);
         String pipelineYaml = fileContent(plan, "ci/pipeline.yml");
         String actionsYaml = fileContent(plan, "ci/actions.yml");
         String note = "按仓库结构自动生成（stack=" + plan.stack() + "）";

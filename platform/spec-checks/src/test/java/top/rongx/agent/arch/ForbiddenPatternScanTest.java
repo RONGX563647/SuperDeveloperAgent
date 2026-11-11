@@ -5,13 +5,15 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -106,23 +108,45 @@ class ForbiddenPatternScanTest {
     /** 收集生产代码：java 取 src/main/java，xml 取 src/main/resources。 */
     private static List<Path> collect(Path root, String scope) throws IOException {
         List<Path> files = new ArrayList<>();
-        try (Stream<Path> s = Files.walk(root)) {
-            s.filter(Files::isRegularFile)
-                    .filter(p -> !p.toString().contains("target"))
-                    .filter(p -> !p.toString().replace('\\', '/').contains("/.git/"))
-                    .filter(p -> !p.toString().replace('\\', '/').contains("/spec-checks/"))
-                    // 工作区（data/）存放的是"接入的第三方项目"，不是平台生产代码
-                    .filter(p -> !p.toString().replace('\\', '/').matches(".*(\\\\|/)data(\\\\|/).*"))
-                    .filter(p -> {
-                        String p2 = p.toString().replace('\\', '/');
-                        String name = p.getFileName().toString();
-                        boolean java = "java".equals(scope) || "both".equals(scope);
-                        boolean xml = "xml".equals(scope) || "both".equals(scope);
-                        return (java && p2.contains("/src/main/java/") && name.endsWith(".java"))
-                                || (xml && p2.contains("/src/main/resources/") && name.endsWith(".xml"));
-                    })
-                    .forEach(files::add);
-        }
+        boolean java = "java".equals(scope) || "both".equals(scope);
+        boolean xml = "xml".equals(scope) || "both".equals(scope);
+        // 用 walkFileTree 而不是 walk：容器里挂载 node_modules 后全量遍历要十几分钟，
+        // 而编译产物/依赖/工作区本来就不该被扫描，直接剪枝。
+        Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                if (!dir.equals(root)) {
+                    String name = dir.getFileName() == null ? "" : dir.getFileName().toString();
+                    if (name.equals("target") || name.equals(".git") || name.equals("node_modules")
+                            || name.equals(".agent") || name.equals("dist")
+                            // 工作区（data/）存放的是"接入的第三方项目"，不是平台生产代码
+                            || (name.equals("data") && root.equals(dir.getParent()))) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path p, BasicFileAttributes attrs) {
+                String normalized = p.toString().replace('\\', '/');
+                if (normalized.contains("/spec-checks/")) {
+                    return FileVisitResult.CONTINUE;
+                }
+                String name = p.getFileName().toString();
+                if ((java && normalized.contains("/src/main/java/") && name.endsWith(".java"))
+                        || (xml && normalized.contains("/src/main/resources/") && name.endsWith(".xml"))) {
+                    files.add(p);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException exc) {
+                // 挂载卷上的权限/符号链接错误不应让规约扫描整体失败：跳过该文件。
+                return FileVisitResult.CONTINUE;
+            }
+        });
         return files;
     }
 }

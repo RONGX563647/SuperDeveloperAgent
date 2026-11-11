@@ -271,6 +271,7 @@ public class LocalDevHostDeployer {
     public int mvnPackage(Path backendRoot, Path logFile) {
         // Windows 下 .cmd 不能直接 CreateProcess，必须走 cmd /c
         List<String> argv = isWindows()
+                // spec-ignore: R02 Windows 的 mvn 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
                 ? List.of("cmd", "/c", "mvn -q -DskipTests package")
                 : List.of("mvn", "-q", "-DskipTests", "package");
         return exec(argv, backendRoot, logFile, null, 15);
@@ -282,6 +283,7 @@ public class LocalDevHostDeployer {
         Map<String, String> extra = new TreeMap<>();
         extra.put("NODE_OPTIONS", "--openssl-legacy-provider");
         if (isWindows()) {
+            // spec-ignore: R02 Windows 的 npm 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
             argv = List.of("cmd", "/c", "npm run build:prod");
         } else {
             argv = List.of("npm", "run", "build:prod");

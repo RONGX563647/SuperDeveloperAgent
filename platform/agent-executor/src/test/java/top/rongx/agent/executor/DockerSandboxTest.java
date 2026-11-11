@@ -2,6 +2,8 @@ package top.rongx.agent.executor;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -49,6 +51,10 @@ class DockerSandboxTest {
     @Test
     @DisplayName("Windows 反斜杠路径转成 Docker 可识别的形式")
     void windowsPathNormalized() {
+        // 该断言只描述 Windows 宿主行为；Linux 容器构建里 Path 语义不同，跳过而不是误报失败。
+        Assumptions.assumeTrue(
+                System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"),
+                "仅在 Windows 宿主校验盘符路径归一化");
         String path = DockerSandbox.hostPath(Path.of("E:\\CODE\\Agent\\x"));
         assertEquals("E:/CODE/Agent/x", path);
     }

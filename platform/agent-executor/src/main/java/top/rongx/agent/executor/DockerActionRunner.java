@@ -3,6 +3,7 @@ package top.rongx.agent.executor;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 
@@ -25,9 +26,15 @@ public class DockerActionRunner extends AbstractActionRunner {
 
     @Override
     public ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled) {
+        return run(workspace, spec, cancelled, null);
+    }
+
+    @Override
+    public ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled,
+                            Consumer<String> live) {
         String container = sandbox.beginContainer();
         try {
-            return super.run(workspace, spec, cancelled);
+            return super.run(workspace, spec, cancelled, live);
         } finally {
             sandbox.endContainer(container);
         }

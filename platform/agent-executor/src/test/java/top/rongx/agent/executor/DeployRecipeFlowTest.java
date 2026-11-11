@@ -49,6 +49,12 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class DeployRecipeFlowTest {
 
+    /** 夹具只用 JDK 自带命令：容器构建镜像里没有 node，避免把环境缺失误报成流水线失败。 */
+    private static final String JAVA = Path.of(System.getProperty("java.home"), "bin",
+            System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java")
+            .toString().replace('\\', '/');
+
+
     private static final String PROJECT = "FLOW";
 
     @Test
@@ -343,7 +349,7 @@ class DeployRecipeFlowTest {
         public Optional<ActionSpec> resolve(Path repoRoot, ActionId action) {
             if (action == ActionId.BACKEND_BUILD || action == ActionId.BACKEND_TEST) {
                 return Optional.of(new ActionSpec(action,
-                        List.of(List.of("node", "-e", "console.log('ok')")),
+                        List.of(List.of(JAVA, "-version")),
                         List.of(), Duration.ofMinutes(1), ActionSource.builtin("test")));
             }
             return Optional.empty();

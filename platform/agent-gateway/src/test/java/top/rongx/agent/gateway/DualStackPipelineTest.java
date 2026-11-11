@@ -81,9 +81,7 @@ class DualStackPipelineTest {
 
     @BeforeAll
     static void prepare() throws Exception {
-        Process p = new ProcessBuilder("docker", "info", "--format", "{{.ServerVersion}}")
-                .redirectErrorStream(true).start();
-        dockerReady = p.waitFor(5, TimeUnit.SECONDS) && p.exitValue() == 0;
+        dockerReady = TestEnv.dockerAvailable();
         Assumptions.assumeTrue(dockerReady, "Docker 守护进程不可用，跳过双栈验收");
         for (String image : List.of(MAVEN_IMAGE, NODE_IMAGE)) {
             Process img = new ProcessBuilder("docker", "image", "inspect", image)

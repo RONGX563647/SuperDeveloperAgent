@@ -1,5 +1,6 @@
 package top.rongx.agent.executor;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -51,13 +52,26 @@ class DockerDeployerTest {
 
     @BeforeAll
     static void prepare() throws Exception {
-        Process info = new ProcessBuilder("docker", "info", "--format", "{{.ServerVersion}}")
-                .redirectErrorStream(true).start();
+        Process info;
+        try {
+            info = new ProcessBuilder("docker", "info", "--format", "{{.ServerVersion}}")
+                    .redirectErrorStream(true).start();
+        } catch (IOException e) {
+            // 构建容器里没有 docker CLI：这不是流水线失败，按环境依赖跳过真实部署验收。
+            Assumptions.assumeTrue(false, "Docker 不可用，跳过真实部署验收");
+            return;
+        }
         dockerReady = info.waitFor(5, TimeUnit.SECONDS) && info.exitValue() == 0;
         Assumptions.assumeTrue(dockerReady, "Docker 不可用，跳过真实部署验收");
 
-        Process img = new ProcessBuilder("docker", "image", "inspect", TOOLCHAIN)
-                .redirectErrorStream(true).start();
+        Process img;
+        try {
+            img = new ProcessBuilder("docker", "image", "inspect", TOOLCHAIN)
+                    .redirectErrorStream(true).start();
+        } catch (IOException e) {
+            Assumptions.assumeTrue(false, "缺少本地镜像 " + TOOLCHAIN);
+            return;
+        }
         Assumptions.assumeTrue(img.waitFor(5, TimeUnit.SECONDS) && img.exitValue() == 0,
                 "缺少本地镜像 " + TOOLCHAIN);
 

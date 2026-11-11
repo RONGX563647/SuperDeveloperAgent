@@ -38,6 +38,14 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class PipelineDefinitionGuardTest {
 
+    /**
+     * 夹具命令必须只依赖 JDK：容器构建（maven 镜像）里没有 node，
+     * 用 node 会把"缺可执行文件"误报成流水线失败。
+     */
+    private static final String JAVA = Path.of(System.getProperty("java.home"), "bin",
+            System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java")
+            .toString().replace('\\', '/');
+
     private static final String PROJECT = "GUARD";
 
     @Test
@@ -195,9 +203,9 @@ class PipelineDefinitionGuardTest {
         return """
                 actions:
                   backend_build:
-                    run: [["node", "-e", "console.log('built')"]]
+                    run: [["%s", "-version"]]
                     timeout: 1m
-                """;
+                """.formatted(JAVA);
     }
 
     private static ProjectScaffolder scaffolder(ScaffoldPlan plan) {
@@ -229,7 +237,7 @@ class PipelineDefinitionGuardTest {
         public Optional<ActionSpec> resolve(Path repoRoot, ActionId action) {
             if (action == ActionId.BACKEND_BUILD || action == ActionId.BACKEND_TEST) {
                 return Optional.of(new ActionSpec(action,
-                        List.of(List.of("node", "-e", "console.log('ok')")),
+                        List.of(List.of(JAVA, "-version")),
                         List.of(), Duration.ofMinutes(1), ActionSource.builtin("test")));
             }
             return Optional.empty();

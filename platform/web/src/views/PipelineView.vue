@@ -378,21 +378,22 @@ async function loadEnvs(): Promise<void> {
 }
 
 /** 构建历史：reset=true 重新取第一页，否则按已加载条数往后翻。 */
-async function loadHistory(reset = true): Promise<void> {
+async function loadHistory(reset = true, silent = false): Promise<void> {
   if (historyLoading.value && !reset) return
-  historyLoading.value = true
+  if (silent && historyLoading.value) return
+  if (!silent) historyLoading.value = true
   try {
     const offset = reset ? 0 : history.value.length
     const page = await getHistory(projectId.value, offset, HISTORY_PAGE)
     history.value = reset ? page : [...history.value, ...page]
     historyHasMore.value = page.length === HISTORY_PAGE
   } catch {
-    if (reset) {
+    if (reset && !silent) {
       history.value = []
       historyHasMore.value = false
     }
   } finally {
-    historyLoading.value = false
+    if (!silent) historyLoading.value = false
   }
 }
 
@@ -748,6 +749,8 @@ function syncUrl(id: string): void {
 
 const nowTick = ref(Date.now())
 let tickTimer: ReturnType<typeof setInterval> | null = null
+/** 轮询构建历史：Agent / 聊天等其它入口触发的运行不会主动推送到本页，靠它自动出现。 */
+let historyTimer: ReturnType<typeof setInterval> | null = null
 
 watch(running, (value) => {
   if (value && tickTimer === null) {
@@ -787,6 +790,9 @@ onMounted(async () => {
     loadPipelines(), loadHistory(), loadEnvs(), loadCommits(),
   ])
   await loadPreview()
+  historyTimer = setInterval(() => {
+    if (!document.hidden && !historyHasMore.value) void loadHistory(true, true)
+  }, 5000)
   const fromUrl = typeof route.query.runId === 'string' ? route.query.runId : ''
   if (fromUrl) {
     const item = history.value.find((h) => h.runId === fromUrl)
@@ -801,6 +807,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (tickTimer !== null) clearInterval(tickTimer)
+  if (historyTimer !== null) clearInterval(historyTimer)
 })
 
 /* ---------------------------------------------------------------- 小工具 */

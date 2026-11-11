@@ -13,6 +13,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
@@ -46,6 +47,12 @@ public abstract class AbstractActionRunner implements ActionRunner {
 
     @Override
     public ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled) {
+        return run(workspace, spec, cancelled, null);
+    }
+
+    @Override
+    public ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled,
+                            Consumer<String> live) {
         long started = System.nanoTime();
         StringBuilder sink = new StringBuilder();
         long budgetMillis = spec.timeout().toMillis();
@@ -61,7 +68,8 @@ public abstract class AbstractActionRunner implements ActionRunner {
             List<String> effective = effectiveArgv(workspace, argv);
             // 3. 执行并扣减预算
             long stepStart = System.nanoTime();
-            ProcessExecutor.StepOutcome outcome = executor.exec(workspace, effective, budgetMillis, sink, cancelled);
+            ProcessExecutor.StepOutcome outcome = executor.exec(workspace, effective, budgetMillis, sink,
+                    cancelled, live);
             budgetMillis -= Math.max(0, (System.nanoTime() - stepStart) / 1_000_000L);
             // 4. 失败直接返回（E-101/E-209/E-302/E-303 来自内核）
             if (outcome.errorCode() != null) {

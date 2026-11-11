@@ -2,6 +2,7 @@ package top.rongx.agent.domain.port;
 
 import java.nio.file.Path;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 
@@ -34,5 +35,15 @@ public interface ActionRunner {
      */
     default ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled) {
         return run(workspace, spec);
+    }
+
+    /**
+     * 带实时输出的可取消执行：{@code live} 在命令执行过程中逐段收到输出。
+     *
+     * <p>流水线用它在构建时边跑边写运行日志；不关心的调用方沿用三参数版本即可。
+     */
+    default ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled,
+                             Consumer<String> live) {
+        return run(workspace, spec, cancelled);
     }
 }

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,6 +69,8 @@ class DeployStageTest {
 
     @BeforeAll
     static void prepare() throws Exception {
+        Assumptions.assumeTrue(TestEnv.dockerAvailable(),
+                "Docker 不可用，跳过 deploy stage 验收（构建容器内没有 docker CLI）");
         Path repo = workspaces.resolve("RY-repo");
         Files.createDirectories(repo.resolve("ci"));
         Files.writeString(repo.resolve("app.txt"), "ok\n", StandardCharsets.UTF_8);

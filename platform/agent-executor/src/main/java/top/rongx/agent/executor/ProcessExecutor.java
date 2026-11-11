@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +36,15 @@ final class ProcessExecutor {
 
     StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
                      BooleanSupplier cancelled) {
+        return exec(dir, argv, budgetMillis, sink, cancelled, null);
+    }
+
+    /**
+     * @param live 实时输出回调：每读到一段就回传一次（用于运行日志边跑边看）；
+     *             为 {@code null} 时只在 {@code sink} 里攒尾部。
+     */
+    StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
+                     BooleanSupplier cancelled, Consumer<String> live) {
         long deadline = System.nanoTime() + Math.max(1, budgetMillis) * 1_000_000L;
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(dir.toFile())
@@ -49,7 +59,7 @@ final class ProcessExecutor {
                     "无法启动命令 " + argv.get(0) + "：" + e.getMessage());
         }
 
-        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink));
+        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink, live));
 
         boolean finished;
         try {
@@ -99,12 +109,17 @@ final class ProcessExecutor {
         return StepOutcome.ok();
     }
 
-    private void pump(InputStream in, StringBuilder sink) {
-        try (in) {
-            byte[] buffer = new byte[8192];
+    private void pump(InputStream in, StringBuilder sink, Consumer<String> live) {
+        // 按字符解码：日志里有中文时，按字节切块会把多字节字符切成两半（表现为乱码）。
+        try (var reader = new java.io.InputStreamReader(in, StandardCharsets.UTF_8)) {
+            char[] buffer = new char[4096];
             int read;
-            while ((read = in.read(buffer)) >= 0) {
-                append(sink, new String(buffer, 0, read, StandardCharsets.UTF_8));
+            while ((read = reader.read(buffer)) >= 0) {
+                String chunk = new String(buffer, 0, read);
+                append(sink, chunk);
+                if (live != null) {
+                    live.accept(chunk);
+                }
             }
         } catch (IOException ignored) {
             // 进程被终止时读会抛，属正常

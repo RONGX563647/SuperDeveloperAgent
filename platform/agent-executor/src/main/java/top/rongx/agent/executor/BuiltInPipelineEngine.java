@@ -22,6 +22,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.yaml.snakeyaml.Yaml;
 import top.rongx.agent.domain.action.ActionId;
@@ -1003,7 +1004,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public String logTail(String runId) {
         RunState s = runs.get(runId);
         if (s != null) {
-            return ProcessExecutor.redact(s.log.toString());
+            synchronized (s.log) {
+                return ProcessExecutor.redact(s.log.toString());
+            }
         }
         return history.list().stream()
                 .filter(h -> h.runId().equals(runId))
@@ -1018,11 +1021,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     @Override
     public LogSlice logFrom(String runId, int offset) {
         RunState s = runs.get(runId);
-        String raw = s != null
-                ? s.log.toString()
-                : history.list().stream()
-                        .filter(h -> h.runId().equals(runId))
-                        .findFirst().map(RunSnapshot::log).orElse("");
+        String raw;
+        if (s != null) {
+            synchronized (s.log) {
+                raw = s.log.toString();
+            }
+        } else {
+            raw = history.list().stream()
+                    .filter(h -> h.runId().equals(runId))
+                    .findFirst().map(RunSnapshot::log).orElse("");
+        }
         int from = Math.min(Math.max(0, offset), raw.length());
         String added = ProcessExecutor.redact(raw.substring(from));
         // 片段脱敏后长度可能变化，end 用「原始已读位置」表达，前端只用 offset 续传
@@ -1959,10 +1967,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                             .map(argv -> renderCommand(argv, shell))
                             .collect(Collectors.joining(" && ")))
                     .append('\n');
-            ActionResult result = runner.run(stageDir, substituted, () -> state.cancelled);
+            // 边跑边写：动作输出实时进入运行日志，页面轮询即可逐行看到构建进度。
+            StageLog live = new StageLog(state, stage.id());
+            ActionResult result = runner.run(stageDir, substituted, () -> state.cancelled, live);
+            live.flush();
 
-            state.log.append('[').append(stage.id()).append("] ")
-                    .append(result.logTail()).append('\n');
+            if (!live.streamed() || live.truncated()) {
+                synchronized (state.log) {
+                    state.log.append('[').append(stage.id()).append("] ")
+                            .append(result.logTail()).append('\n');
+                }
+            }
             // 失败时必须把错误码与原因写进运行日志：像"构建超时"这种没有命令输出的失败，
             // 否则日志只剩一个空的 [build]，Agent 和用户都无法诊断。
             StageResult stageResult = rename(result.result(), stage.id());
@@ -2934,6 +2949,79 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private long elapsed(long startNanos) {
         return (System.nanoTime() - startNanos) / 1_000_000L;
+    }
+
+    /**
+     * 把动作命令的实时输出按行写入运行日志。
+     *
+     * <p>命令输出按块到达，这里按换行切分、给每行补 {@code [stage] } 前缀，
+     * 避免块边界把前缀插到行中间；同时限制单阶段实时日志上限，防止大构建占满内存。
+     * 超过上限后不再转发（仍会保留动作尾部摘要），且标记为截断供引擎补日志尾部。
+     */
+    private static final class StageLog implements Consumer<String> {
+
+        private static final int MAX_LIVE_CHARS = 200_000;
+
+        private final RunState state;
+        private final String prefix;
+        private final StringBuilder pending = new StringBuilder();
+        private int written;
+        private boolean truncated;
+
+        StageLog(RunState state, String stageId) {
+            this.state = state;
+            this.prefix = "[" + stageId + "] ";
+        }
+
+        @Override
+        public void accept(String chunk) {
+            synchronized (pending) {
+                pending.append(chunk);
+                int start = 0;
+                int idx;
+                while ((idx = pending.indexOf("\n", start)) >= 0) {
+                    write(pending.substring(start, idx + 1));
+                    start = idx + 1;
+                }
+                if (start > 0) {
+                    pending.delete(0, start);
+                }
+            }
+        }
+
+        /** 收尾：最后一行可能没有换行符。 */
+        void flush() {
+            synchronized (pending) {
+                if (pending.length() > 0) {
+                    write(pending.toString());
+                    pending.setLength(0);
+                }
+            }
+        }
+
+        boolean streamed() {
+            return written > 0;
+        }
+
+        boolean truncated() {
+            return truncated;
+        }
+
+        private void write(String line) {
+            int room = MAX_LIVE_CHARS - written;
+            if (room <= 0) {
+                truncated = true;
+                return;
+            }
+            String text = line.length() <= room ? line : line.substring(0, room);
+            if (text.length() < line.length()) {
+                truncated = true;
+            }
+            synchronized (state.log) {
+                state.log.append(prefix).append(text);
+            }
+            written += text.length();
+        }
     }
 
     /** 一次运行的状态（构建历史）。 */
