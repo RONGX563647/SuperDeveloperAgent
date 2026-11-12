@@ -2164,9 +2164,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         String previous = lastGood.get(state.projectId);
         String image = rollback ? previous : currentImage;
         if (rollback && (image == null || image.isBlank())) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-507",
-                    "没有可回滚的上一版（本项目尚无成功发布记录）", elapsed(start)));
-            return false;
+            // 首次发布失败时会走到回滚：没有上一版不是错误，跳过即可，
+            // 否则一次失败会多出一条 E-507，误导成"第二个故障"。
+            state.log.append('[').append(stageId)
+                    .append("] 本项目尚无成功发布记录，无可回滚版本，跳过回滚\n");
+            state.stages.add(StageResult.success(stageId, 0, List.of(), elapsed(start)));
+            return true;
         }
 
         EffectiveEnvironment effective = envStore == null
@@ -2681,8 +2684,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // docker 容器若自带 HEALTHCHECK（前端 + 后端接口 + actuator 的组合探活），
         // 只认 HTTP 200 会在 nginx 静态页先起来时假通过（后端还在连库/迁移）。
         // 因此 docker 目标要等到容器 healthy 才算通过；等待窗口放宽到约 3 分钟（应用启动 + Flyway）。
-        int attempts = dockerTarget && resource != null ? 90 : 20;
-        long sleepMs = dockerTarget && resource != null ? 2000L : 300L;
+        // HOST 目标同样要给 Spring Boot 启动留时间：之前只等 6s，后端其实已起来却被判失败。
+        int attempts = dockerTarget && resource != null ? 90 : 60;
+        long sleepMs = dockerTarget && resource != null ? 2000L : 1000L;
         boolean waitingHealth = false;
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         String body = "";
@@ -2724,8 +2728,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 break;
             }
         }
-        String diag = healthDiagnostics(state, stage.id());
-        removeFailedContainer(state, stage.id());
+        // docker 才需要看容器日志/清理容器；HOST 目标探活对象是宿主机进程，
+        // 这里再走 docker 只会得到误导性的 "No such container: <sha>"。
+        String diag = dockerTarget ? healthDiagnostics(state, stage.id()) : null;
+        if (dockerTarget) {
+            removeFailedContainer(state, stage.id());
+        }
         String summary = "健康检查未通过：" + url
                 + (exitInfo == null ? " body=" + brief(body) : "（容器 " + exitInfo + "）")
                 + (diag == null ? "" : "；容器日志：" + diag);

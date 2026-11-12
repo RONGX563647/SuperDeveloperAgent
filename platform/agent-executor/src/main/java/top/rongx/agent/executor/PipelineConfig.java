@@ -34,9 +34,15 @@ public class PipelineConfig {
     @Primary
     public top.rongx.agent.domain.port.Deployer deployers(
             top.rongx.agent.domain.settings.DeployServerRepository servers,
-            top.rongx.agent.domain.settings.SshAccess sshAccess) {
+            top.rongx.agent.domain.settings.SshAccess sshAccess,
+            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+        // HOST 部署状态放在平台数据目录（跨运行稳定）：工作树随每次运行重建，
+        // 状态目录若落在里面，日志会消失、previous 指针永远为空（回滚 E-507）。
+        Path deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("deploy");
         return new Deployers(java.util.List.of(
-                new DockerDeployer(), new HostDeployer(), new ServerDeployer(servers, sshAccess)));
+                new DockerDeployer(), new HostDeployer(deployRoot),
+                new ServerDeployer(servers, sshAccess)));
     }
 
     /** SSH 访问实现（设置页测试连接与远程部署共用；known_hosts 留在平台工作区）。 */

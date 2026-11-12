@@ -17,8 +17,9 @@ import top.rongx.agent.domain.port.Deployer;
  *
  * <p>版本目录（方案 C 的可回滚要求）：
  * <pre>
- * &lt;workspace&gt;/.agent/deploy/&lt;project&gt;/
+ * &lt;deployRoot&gt;/&lt;project&gt;-&lt;env&gt;/   ← 平台数据目录，跨运行稳定（不再放进每次运行的临时工作树）
  *   ├── releases/&lt;sha&gt;/app.jar     ← 每次部署一份只读副本
+ *   ├── web/                        ← 前端 dist 副本（有则交给后端静态托管）
  *   ├── current                     ← 当前版本 sha（纯文本）
  *   ├── previous                    ← 上一版 sha（回滚锚点）
  *   ├── app.pid                    ← 当前进程 pid
@@ -28,12 +29,23 @@ import top.rongx.agent.domain.port.Deployer;
  * <p>部署顺序：落盘新版本 → 停旧进程 → 起新进程 → 成功后才轮转 current/previous。
  * 因此<b>启动失败不会污染回滚锚点</b>。
  *
- * <p>边界：只支持 Java jar（{@code java -jar}）。前端静态产物请选 DOCKER 目标；
- * 否则返回 E-504 明确指引，不静默成功。
+ * <p>边界：只支持 Java jar（{@code java -jar}）。有前端 dist 时复制到状态目录，
+ * 由后端通过 {@code AGENT_WEB_DIST} 静态托管，单端口同时提供页面与接口。
  */
 public class HostDeployer implements Deployer {
 
     private static final long STARTUP_PROBE_MS = 800;
+
+    /** 稳定的部署状态根（通常 platform/data/workspaces/_deploy）；null = 退回工作树内旧行为。 */
+    private final Path deployRoot;
+
+    public HostDeployer() {
+        this(null);
+    }
+
+    public HostDeployer(Path deployRoot) {
+        this.deployRoot = deployRoot;
+    }
 
     @Override
     public boolean supports(DeployTarget target) {
@@ -43,7 +55,13 @@ public class HostDeployer implements Deployer {
     @Override
     public DeployResult deploy(DeployRequest request) {
         Path workdir = Path.of(request.workspace());
-        Path stateDir = workdir.resolve(".agent/deploy").resolve(request.projectId());
+        // 状态目录必须跨运行稳定：放在本次运行的临时工作树里，会导致日志随工作树消失、
+        // 每次部署都看不到 previous（回滚永远 E-507）。
+        String suffix = request.envName() == null || request.envName().isBlank()
+                ? "" : "-" + request.envName().trim();
+        Path stateDir = deployRoot != null
+                ? deployRoot.resolve(request.projectId() + suffix)
+                : workdir.resolve(".agent/deploy").resolve(request.projectId());
         StringBuilder log = new StringBuilder();
 
         try {
@@ -79,6 +97,16 @@ public class HostDeployer implements Deployer {
             try {
                 Files.createDirectories(jar.getParent());
                 Files.copy(sourceJar, jar, StandardCopyOption.REPLACE_EXISTING);
+                // 前端 dist 与 jar 同版本落盘：回滚时页面与后端保持一致
+                Path dist = findWebDist(workdir);
+                if (dist != null) {
+                    Path web = jar.getParent().resolve("web");
+                    if (copyTree(dist, web)) {
+                        log.append("[host] 前端静态产物 ").append(rel(workdir, dist)).append('\n');
+                    } else {
+                        log.append("[host] 前端静态产物复制失败，仅部署后端\n");
+                    }
+                }
             } catch (IOException e) {
                 return DeployResult.failed(DeployTarget.HOST, "E-501",
                         "复制产物失败：" + e.getMessage(), "");
@@ -98,6 +126,12 @@ public class HostDeployer implements Deployer {
         pb.environment().put("CI", "true");
         // 平台「设置 → 项目环境」里的变量（与 DOCKER 目标同一份数据）
         request.env().forEach((key, value) -> pb.environment().put(key, value == null ? "" : value));
+        // 前端静态目录：后端同端口托管页面（SPA fallback 由网关实现），省掉第二个静态服务
+        Path webDist = jar.getParent().resolve("web");
+        if (Files.isDirectory(webDist)) {
+            pb.environment().put("AGENT_WEB_DIST", webDist.toAbsolutePath().toString());
+            log.append("[host] 前端由后端同端口托管 ").append(webDist.toAbsolutePath()).append('\n');
+        }
 
         try {
             Process process = pb.start();
@@ -237,5 +271,49 @@ public class HostDeployer implements Deployer {
             return "/";
         }
         return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
+    }
+
+    /** 本次构建的前端产物：优先 platform/web/dist，其次任意 dist/index.html（排除依赖目录）。 */
+    private static Path findWebDist(Path root) {
+        Path prefer = root.resolve("platform/web/dist");
+        if (Files.isRegularFile(prefer.resolve("index.html"))) {
+            return prefer;
+        }
+        try (var stream = Files.walk(root, 5)) {
+            return stream.filter(p -> p.getFileName().toString().equals("dist"))
+                    .filter(p -> !p.toString().replace('\\', '/').contains("node_modules"))
+                    .filter(p -> Files.isRegularFile(p.resolve("index.html")))
+                    .findFirst().orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static boolean copyTree(Path from, Path to) {
+        try {
+            Files.createDirectories(to);
+            try (var stream = Files.walk(from)) {
+                for (Path src : (Iterable<Path>) stream::iterator) {
+                    Path dst = to.resolve(from.relativize(src).toString());
+                    if (Files.isDirectory(src)) {
+                        Files.createDirectories(dst);
+                    } else {
+                        Files.createDirectories(dst.getParent());
+                        Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static String rel(Path root, Path path) {
+        try {
+            return root.relativize(path).toString();
+        } catch (IllegalArgumentException e) {
+            return path.toString();
+        }
     }
 }

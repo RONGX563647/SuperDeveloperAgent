@@ -41,7 +41,9 @@ public class SaTokenConfig {
     public WebMvcConfigurer saTokenWebConfigurer() {
         // 真正的校验逻辑：只认 REQUEST 转发，见下面的守卫
         SaInterceptor guard = new SaInterceptor(handle ->
-                SaRouter.match("/**")
+                // 只守接口：静态页面（登录页 / assets / SPA 路由）必须匿名可访问，
+                // 否则部署出来的前端会先被 401 拦在门口，连登录框都打不开。
+                SaRouter.match("/api/**")
                         .notMatch(WHITELIST)
                         .notMatch("/api/v1/webhooks/**")
                         .check(r -> StpUtil.checkLogin())
