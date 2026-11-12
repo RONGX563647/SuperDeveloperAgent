@@ -19,6 +19,7 @@ import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvVariable;
@@ -1436,9 +1437,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     private static void requireEnv(String env) {
-        if (!List.of("dev", "test", "prod").contains(env)) {
-            throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
-        }
+        EnvNames.requireExact(env);
     }
 
     private static void requireKey(String key) {

@@ -36,6 +36,7 @@ import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.PortLease;
@@ -997,7 +998,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return "test";
         }
         String normalized = env.trim().toLowerCase();
-        if (!List.of("dev", "test", "prod").contains(normalized)) {
+        if (!EnvNames.ALL.contains(normalized)) {
             throw new IllegalArgumentException(
                     "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
         }

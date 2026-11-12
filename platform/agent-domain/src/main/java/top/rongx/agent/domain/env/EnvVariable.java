@@ -42,8 +42,4 @@ public record EnvVariable(
                        String value, String source, long updatedAt) {
         this(projectId, env, key, secret, value, source, updatedAt, KIND_INLINE, null);
     }
-
-    public boolean isSecretRef() {
-        return KIND_SECRET_REF.equals(valueKind) && secretRef != null;
-    }
 }

@@ -50,11 +50,6 @@ public final class SecretRefs {
         return out;
     }
 
-    /** 是否为任意形式的密钥引用。 */
-    public static boolean isRef(String raw) {
-        return whole(raw) != null || !embedded(raw).isEmpty();
-    }
-
     /** 引用名是否合法。 */
     public static boolean validName(String name) {
         return name != null && name.matches(NAME);

@@ -46,10 +46,6 @@ public class EnvPolicyService implements PolicyPort {
         return policy(env).autoApplyAfterDryRun();
     }
 
-    public boolean requireBinding(String env) {
-        return policy(env).requireBinding();
-    }
-
     /** 统一门禁：DENY 直接拒绝；CONFIRM 由调用方走审批，不能在此静默放行。 */
     public void requireNotDenied(ProjectContext ctx, ToolLevel level, String operation) {
         PolicyDecision decision = decide(ctx.env(), level);
@@ -59,10 +55,6 @@ public class EnvPolicyService implements PolicyPort {
             throw new PolicyDeniedException("E-707",
                     where + " 的策略拒绝 " + operation + "（" + level + "=" + decision + "）");
         }
-    }
-
-    public boolean requiresConfirmation(String env, ToolLevel level) {
-        return decide(env, level) == PolicyDecision.CONFIRM;
     }
 
     public Map<String, Object> view() {
@@ -95,7 +87,4 @@ public class EnvPolicyService implements PolicyPort {
     private static String normalize(String env) {
         return env == null ? PROD : env.trim().toLowerCase(Locale.ROOT);
     }
-
-    /** 策略拒绝；HTTP 层映射为 403 / 409。 */
-    // 异常类型在 domain：tools/runtime 只能依赖 domain，但需要捕获/抛出同一类型。
 }

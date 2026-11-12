@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.SecretEntry;
 import top.rongx.agent.gateway.auth.CurrentUser;
@@ -36,14 +37,14 @@ public class SecretController {
     public List<Map<String, Object>> list(@PathVariable String projectId,
                                           @RequestParam(defaultValue = "test") String env) {
         currentUser.checkPermission("settings:read");
-        return envStore.secrets(projectId, normalizeEnv(env)).stream().map(this::view).toList();
+        return envStore.secrets(projectId, EnvNames.normalize(env)).stream().map(this::view).toList();
     }
 
     @PostMapping
     public Map<String, Object> save(@PathVariable String projectId,
                                     @RequestBody Map<String, Object> body) {
         currentUser.checkPermission("settings:write");
-        String env = normalizeEnv(str(body, "env"));
+        String env = EnvNames.normalize(str(body, "env"));
         String name = str(body, "name");
         String value = str(body, "value");
         return view(envStore.saveSecret(projectId, env, name, value));
@@ -53,7 +54,7 @@ public class SecretController {
     public Map<String, Object> rotate(@PathVariable String projectId, @PathVariable String name,
                                       @RequestBody Map<String, Object> body) {
         currentUser.checkPermission("settings:write");
-        String env = normalizeEnv(str(body, "env"));
+        String env = EnvNames.normalize(str(body, "env"));
         return view(envStore.rotateSecret(projectId, env, name, str(body, "value")));
     }
 
@@ -61,7 +62,7 @@ public class SecretController {
     public Map<String, Object> delete(@PathVariable String projectId, @PathVariable String name,
                                       @RequestParam(defaultValue = "test") String env) {
         currentUser.checkPermission("settings:write");
-        String normalized = normalizeEnv(env);
+        String normalized = EnvNames.normalize(env);
         envStore.deleteSecret(projectId, normalized, name);
         return Map.of("ok", true, "name", name, "env", normalized);
     }
@@ -75,14 +76,6 @@ public class SecretController {
         out.put("value", "****");
         out.put("updatedAt", entry.updatedAt());
         return out;
-    }
-
-    private static String normalizeEnv(String env) {
-        String value = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
-        if (!List.of("dev", "test", "prod").contains(value)) {
-            throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
-        }
-        return value;
     }
 
     private static String str(Map<String, Object> body, String key) {

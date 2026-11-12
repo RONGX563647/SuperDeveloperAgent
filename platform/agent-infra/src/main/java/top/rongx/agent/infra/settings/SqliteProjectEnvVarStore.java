@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.settings.ProjectEnvVar;
 import top.rongx.agent.domain.settings.ProjectEnvVarRepository;
 import top.rongx.agent.infra.security.SecretBox;
@@ -237,9 +238,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
     }
 
     private static void requireEnv(String env) {
-        if (!List.of("dev", "test", "prod").contains(env)) {
-            throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
-        }
+        EnvNames.requireExact(env);
     }
 
     private static void requireKey(String key) {

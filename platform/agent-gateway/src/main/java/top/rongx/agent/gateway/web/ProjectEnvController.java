@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.gateway.auth.CurrentUser;
@@ -47,7 +48,7 @@ public class ProjectEnvController {
     public List<Map<String, Object>> list(@PathVariable String projectId,
                                           @RequestParam(defaultValue = "test") String env) {
         currentUser.checkPermission("settings:read");
-        return envStore.overrides(projectId, normalizeEnv(env)).stream().map(this::view).toList();
+        return envStore.overrides(projectId, EnvNames.normalize(env)).stream().map(this::view).toList();
     }
 
     /**
@@ -60,7 +61,7 @@ public class ProjectEnvController {
     public Map<String, Object> save(@PathVariable String projectId,
                                     @RequestBody Map<String, Object> body) {
         currentUser.checkPermission("settings:write");
-        String env = normalizeEnv(str(body, "env"));
+        String env = EnvNames.normalize(str(body, "env"));
         String key = str(body, "key");
         if (key == null || key.isBlank()) {
             throw new IllegalArgumentException("变量名必填");
@@ -76,8 +77,8 @@ public class ProjectEnvController {
     public Map<String, Object> delete(@PathVariable String projectId, @PathVariable String key,
                                       @RequestParam(defaultValue = "test") String env) {
         currentUser.checkPermission("settings:write");
-        envStore.deleteOverride(projectId, normalizeEnv(env), key);
-        return Map.of("ok", true, "key", key, "env", normalizeEnv(env));
+        envStore.deleteOverride(projectId, EnvNames.normalize(env), key);
+        return Map.of("ok", true, "key", key, "env", EnvNames.normalize(env));
     }
 
     private Map<String, Object> view(EnvVariable v) {
@@ -93,14 +94,6 @@ public class ProjectEnvController {
         out.put("updatedBy", null);
         out.put("updatedAt", v.updatedAt());
         return out;
-    }
-
-    private static String normalizeEnv(String env) {
-        String value = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
-        if (!List.of("dev", "test", "prod").contains(value)) {
-            throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
-        }
-        return value;
     }
 
     private static String str(Map<String, Object> body, String key) {

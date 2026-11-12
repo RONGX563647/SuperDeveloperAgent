@@ -11,13 +11,9 @@ import top.rongx.agent.domain.tool.ToolLevel;
  */
 public interface PolicyPort {
 
-    EnvPolicy policy(String env);
-
     PolicyDecision decide(String env, ToolLevel level);
 
     boolean canAutoApply(String env);
-
-    boolean requireBinding(String env);
 
     /** DENY 直接抛 {@link PolicyDeniedException}；CONFIRM 由调用方走审批。 */
     void requireNotDenied(ProjectContext ctx, ToolLevel level, String operation);

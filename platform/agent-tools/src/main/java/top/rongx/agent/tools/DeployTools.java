@@ -12,6 +12,7 @@ import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.deploy.RecipeRenderer;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -218,7 +219,7 @@ public class DeployTools {
 
     private static String normalize(String env) {
         String value = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
-        if (!List.of("dev", "test", "prod").contains(value)) {
+        if (!EnvNames.ALL.contains(value)) {
             throw new IllegalArgumentException(
                     "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
         }
