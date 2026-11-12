@@ -419,4 +419,26 @@ onMounted(load)
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
 }
+
+/* 手机：收紧留白，长路径 / URL 允许换行，避免把卡片撑出横向滚动 */
+@media (max-width: 720px) {
+  .detail-body {
+    padding: 12px 14px 20px;
+    gap: 10px;
+  }
+  .card {
+    padding: 14px;
+  }
+  .s-line,
+  .wt-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .url {
+    max-width: 100%;
+  }
+  .wt-head {
+    display: none;
+  }
+}
 </style>

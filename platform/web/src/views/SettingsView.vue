@@ -221,4 +221,21 @@ async function refresh(): Promise<void> {
     flex: 1 1 180px;
   }
 }
+
+/* 手机：导航卡占满整行，卡片内边距收紧 */
+@media (max-width: 600px) {
+  .settings-body {
+    padding: 0 12px calc(16px + env(safe-area-inset-bottom));
+  }
+  .settings-card {
+    padding: 16px 14px 18px;
+  }
+  .nav-card {
+    flex: 1 1 100%;
+    padding: 10px 12px;
+  }
+  .nav-desc {
+    display: none;
+  }
+}
 </style>

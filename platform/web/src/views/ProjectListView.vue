@@ -467,4 +467,29 @@ const overviewProject = computed(() =>
 .sc-overwrite {
   margin-right: auto;
 }
+
+/* 移动端：文档树与详情面板上下堆叠，分隔条隐藏（拖拽在触屏上没有意义） */
+@media (max-width: 900px) {
+  .wb-body {
+    flex-direction: column;
+  }
+  .wb-left {
+    width: 100% !important;
+    height: 45%;
+    flex: none;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .wb-body :deep(.resizer) {
+    display: none;
+  }
+  .wb-right {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .wb-empty {
+    padding: 24px 16px;
+  }
+}
 </style>

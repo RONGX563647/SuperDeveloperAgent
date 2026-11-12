@@ -119,6 +119,7 @@ body {
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
 }
 
 /* 等宽：路径、digest、时间、日志。数字用 tabular 保持纵向对齐 */
@@ -182,6 +183,7 @@ body {
 }
 
 .el-dialog {
+  max-width: calc(100vw - 24px);
   border-radius: var(--radius-lg);
 }
 
@@ -216,5 +218,29 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ============ 移动端全局校正 ============ */
+@media (max-width: 600px) {
+  /* 固定宽度的 el-dialog（如 720px 的脚本预览）在小屏上不能溢出 */
+  .el-dialog {
+    width: calc(100vw - 20px) !important;
+    margin: 6vh auto;
+  }
+  .el-dialog__body {
+    max-height: 68vh;
+    overflow-y: auto;
+  }
+  .el-message-box {
+    max-width: calc(100vw - 32px);
+  }
+  /* iOS 聚焦输入框时若字号 <16px 会强制放大页面 */
+  .el-input__inner,
+  .el-textarea__inner,
+  input,
+  textarea,
+  select {
+    font-size: 16px;
   }
 }

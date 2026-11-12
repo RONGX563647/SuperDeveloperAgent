@@ -14,8 +14,17 @@ import { clearHistory } from '../../state/sessionHistory'
  *
  * 层级全靠白度差：侧栏 #f5f6f8 比主区 #f3f4f6 略亮一档，只在对主区一侧画一条发丝线。
  */
-const props = defineProps<{ collapsed: boolean }>()
-const emit = defineEmits<{ 'update:collapsed': [value: boolean] }>()
+const props = defineProps<{ collapsed: boolean; mobileOpen?: boolean }>()
+const emit = defineEmits<{
+  'update:collapsed': [value: boolean]
+  close: []
+}>()
+
+/** ≤900px 时侧栏是离屏抽屉：折叠按钮改为关闭抽屉，而不是压缩宽度。 */
+function onFold(): void {
+  if (window.matchMedia('(max-width: 900px)').matches) emit('close')
+  else toggle()
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -197,7 +206,7 @@ onMounted(() => void loadProjects())
 </script>
 
 <template>
-  <aside class="aside" :class="{ collapsed }">
+  <aside class="aside" :class="{ collapsed, 'mobile-open': mobileOpen }">
     <div class="aside-inner">
       <!-- 品牌行 -->
       <div class="aside-top">
@@ -205,7 +214,7 @@ onMounted(() => void loadProjects())
           <span class="brand-mark" aria-hidden="true">运</span>
           <span class="brand-text">研发运维智能体</span>
         </div>
-        <button type="button" class="icon-btn" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggle">
+        <button type="button" class="icon-btn" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="onFold">
           <el-icon><component :is="collapsed ? Expand : Fold" /></el-icon>
         </button>
       </div>
@@ -388,17 +397,38 @@ onMounted(() => void loadProjects())
   min-height: 0;
 }
 
-/* 窄屏（≤900px）：侧栏不再常驻 —— 260px 会把主区挤到只剩一百来像素。
-   这里让侧栏收缩为 0，入口靠浏览器前进/后退与路由保持可达；
-   折叠按钮在此宽度下隐藏，避免用户对着一个 0 宽侧栏点开。 */
+/* 窄屏（≤900px）：侧栏变成离屏抽屉 —— 260px 常驻会把主区挤到只剩一百来像素。
+   抽屉由 PageHeader 的菜单按钮打开，遮罩 / 路由跳转 / Esc 关闭（见 AppLayout）。 */
 @media (max-width: 900px) {
   .aside {
-    flex-basis: 0;
-    width: 0;
-    border-right: none;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 80;
+    flex-basis: auto;
+    width: min(86vw, 300px);
+    border-right: 1px solid var(--line-soft);
+    box-shadow: var(--shadow-2);
+    transform: translateX(-100%);
+    transition: transform var(--dur-base) var(--ease-out);
+  }
+  .aside.mobile-open {
+    transform: translateX(0);
+  }
+  /* 桌面折叠状态在手机上不生效：抽屉打开时必须完整可见 */
+  .aside.collapsed {
+    flex-basis: auto;
+    width: min(86vw, 300px);
+    border-right: 1px solid var(--line-soft);
+    transform: translateX(-100%);
+  }
+  .aside.collapsed.mobile-open {
+    transform: translateX(0);
   }
   .aside-inner {
-    display: none;
+    display: flex;
+    width: 100%;
   }
 }
 

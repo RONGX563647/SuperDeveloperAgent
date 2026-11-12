@@ -1055,11 +1055,28 @@ watch(projectId, (value, old) => {
     padding-right: 14px;
     padding-left: 14px;
   }
+  .composer-wrap {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
   .metric {
     display: none;
   }
   .session-cost {
     display: none;
+  }
+}
+
+/* 手机：底栏工具条空间有限，范围说明让位给环境选择与发送按钮 */
+@media (max-width: 480px) {
+  .bar-scope {
+    display: none;
+  }
+  .composer {
+    padding: 10px 10px 6px 12px;
+  }
+  .welcome {
+    padding-right: 4px;
+    padding-left: 4px;
   }
 }
 </style>

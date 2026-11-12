@@ -1692,10 +1692,31 @@ async function copyDigest(digest: string): Promise<void> {
   }
   .wp-left {
     width: 100% !important;
-    height: auto;
-    max-height: 50%;
+    height: 50%;
+    flex: none;
+    max-height: none;
     border-right: 0;
     border-bottom: 1px solid var(--line-soft);
+  }
+}
+
+/* 手机：左侧上下文区压缩，产物行去掉摘要列，避免横向溢出 */
+@media (max-width: 720px) {
+  .wp-left {
+    height: 44%;
+  }
+  .wp-left-inner {
+    padding: 10px;
+  }
+  .run-bar {
+    padding: 8px 10px;
+  }
+  .artifact-row {
+    grid-template-columns: 52px minmax(0, 1fr) 60px 64px;
+    gap: 8px;
+  }
+  .art-digest {
+    display: none;
   }
 }
 </style>
