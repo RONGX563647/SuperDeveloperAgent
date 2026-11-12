@@ -9,9 +9,9 @@ import {
   getLocalServiceLogs, listLocalServices, listPolicies, listPortLeases, listProjectSecrets,
   resolveProjectConfig, restartLocalService, revealEffectiveEnvVar, saveEnvOverride,
   startLocalService, stopLocalService,
-  type ConfigResolutionView, type EffectiveEnvironmentView, type EnvCheckView,
-  type EnvPolicyView, type EnvVariableView, type LocalServiceView, type PortLeaseView,
-  type ProjectSecret, type SourceEnvVariableView,
+  type ConfigCandidateView, type ConfigResolutionView, type EffectiveEnvironmentView,
+  type EnvCheckView, type EnvPolicyView, type EnvVariableView, type LocalServiceView,
+  type PortLeaseView, type ProjectSecret, type SourceEnvVariableView,
 } from '../../api/settings'
 import { appStore } from '../../stores/app'
 import { formatTime } from '../../utils/status'
@@ -63,6 +63,8 @@ const secrets = ref<ProjectSecret[]>([])
 const resolveOpen = ref(false)
 const resolving = ref(false)
 const resolution = ref<ConfigResolutionView | null>(null)
+/** 正在采纳的候选变量名（按钮 loading）。 */
+const adopting = ref('')
 
 /** 分环境策略矩阵（只读，由后端代码默认值提供）。 */
 const policies = ref<Record<string, EnvPolicyView>>({})
@@ -429,6 +431,20 @@ async function save(): Promise<void> {
   }
 }
 
+/** 重新解析当前项目/环境（弹窗内采纳候选后也要刷新）。 */
+async function refreshResolution(): Promise<void> {
+  if (!projectId.value) return
+  resolving.value = true
+  try {
+    resolution.value = await resolveProjectConfig(projectId.value, env.value)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '配置解析失败')
+    resolution.value = null
+  } finally {
+    resolving.value = false
+  }
+}
+
 /** 配置解析：项目环境优先，其次仓库声明，最后全量扫描候选。 */
 async function openResolve(): Promise<void> {
   if (!projectId.value) {
@@ -436,15 +452,29 @@ async function openResolve(): Promise<void> {
     return
   }
   resolveOpen.value = true
-  resolving.value = true
   resolution.value = null
+  await refreshResolution()
+  if (!resolution.value) resolveOpen.value = false
+}
+
+/**
+ * 采纳扫描候选：写为项目覆盖（人工点击即确认，Agent 不会自动调用）。
+ * 候选值是密钥时不允许采纳——必须到「密钥库」新建后用 secret:// 引用。
+ */
+async function adoptCandidate(key: string, option: ConfigCandidateView): Promise<void> {
+  if (!projectId.value || option.secret || !option.value) return
+  adopting.value = key
   try {
-    resolution.value = await resolveProjectConfig(projectId.value, env.value)
+    await saveEnvOverride(projectId.value, {
+      env: env.value, key, value: option.value, secret: false
+    })
+    ElMessage.success(`已采纳 ${key} 到项目环境`)
+    await load()
+    await refreshResolution()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '配置解析失败')
-    resolveOpen.value = false
+    ElMessage.error(e instanceof Error ? e.message : '采纳失败')
   } finally {
-    resolving.value = false
+    adopting.value = ''
   }
 }
 
@@ -960,6 +990,17 @@ defineExpose({ load })
                   <span class="ep-cand-src">
                     {{ o.source }}<template v-if="o.envHint"> · {{ o.envHint }}</template>
                   </span>
+                  <el-button
+                    v-if="!o.secret && o.value" link type="primary" size="small"
+                    :loading="adopting === group.key"
+                    title="写入项目覆盖（人工确认，Agent 不会自动采纳）"
+                    @click="adoptCandidate(group.key, o)"
+                  >
+                    采纳
+                  </el-button>
+                  <span v-else-if="o.secret" class="ep-cand-src" title="密钥需到密钥库新建后引用">
+                    需建密钥
+                  </span>
                 </span>
               </span>
             </div>
@@ -1453,6 +1494,15 @@ a.ep-service-url:hover {
   flex-direction: column;
   gap: 14px;
   min-height: 80px;
+  /* 全量扫描候选可能很多，弹窗内部滚动，避免撑破页面。 */
+  max-height: 62vh;
+  overflow-y: auto;
+}
+/* 解析摘要本身是多行文本（project/env/missing/ask），保留换行便于直接阅读。 */
+.ep-resolve :deep(.el-alert__description) {
+  white-space: pre-line;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }
 .ep-resolve-badges {
   display: flex;

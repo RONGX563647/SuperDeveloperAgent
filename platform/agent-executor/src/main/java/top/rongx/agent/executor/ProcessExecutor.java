@@ -4,7 +4,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -177,6 +180,31 @@ final class ProcessExecutor {
         // 3. 形如 -----BEGIN ... PRIVATE KEY----- 的 PEM 块
         text = text.replaceAll("(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "***PEM***");
         return text;
+    }
+
+    /**
+     * 值级脱敏：在形态匹配之外，把本次注入过的密钥明文整段替换掉。
+     *
+     * <p>形态匹配挡不住 {@code echo $TOKEN} 这类没有关键字前缀的输出；
+     * 运行日志写盘前用环境里的真实密钥值兜底，避免明文进入证据链。
+     */
+    static String redact(String text, Collection<String> sensitiveValues) {
+        String out = redact(text);
+        if (out == null || out.isEmpty() || sensitiveValues == null || sensitiveValues.isEmpty()) {
+            return out;
+        }
+        List<String> values = sensitiveValues.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                // 太短的值（如 "1"、"true"）替换会把正常日志打碎，且不构成有效密钥。
+                .filter(v -> v.length() >= 4)
+                .distinct()
+                .sorted(Comparator.comparingInt(String::length).reversed())
+                .toList();
+        for (String value : values) {
+            out = out.replace(value, "***");
+        }
+        return out;
     }
 
     static void warn(String message) {

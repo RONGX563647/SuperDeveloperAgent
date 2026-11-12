@@ -41,4 +41,25 @@ class ProcessExecutorRedactTest {
         assertFalse(bearer.contains("abcdefghijklmnopqrstuvwxyz"), bearer);
         assertFalse(password.contains("supersecret123"), password);
     }
+
+    @Test
+    @DisplayName("值级脱敏：无关键字的 echo $TOKEN 也按真实密钥替换")
+    void redactsKnownSecretValues() {
+        String out = ProcessExecutor.redact(
+                "step: 1\nplain db pass is s3cr3t-value-42\nplain token is s3cr3t-value-42\n",
+                java.util.List.of("s3cr3t-value-42"));
+
+        assertFalse(out.contains("s3cr3t-value-42"), out);
+        assertTrue(out.contains("***"), out);
+        assertTrue(out.contains("step: 1"), out);
+    }
+
+    @Test
+    @DisplayName("值级脱敏：过短的值不替换，避免打碎正常日志")
+    void skipsTooShortValues() {
+        String out = ProcessExecutor.redact("build ok, env=dev, code=1", java.util.List.of("dev", "1"));
+
+        assertTrue(out.contains("dev"), out);
+        assertTrue(out.contains("code=1"), out);
+    }
 }

@@ -417,12 +417,12 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 1. **配置解析优先级**（`ConfigResolver`，工具与 HTTP 共用）：
    项目环境 `effective(projectId, env)` → 仓库 `.env`/`.env.example` 声明（只读 key + 非敏感值）→ 全量扫描 README/docs/compose/application（候选带 `path:line`、envHint，最多 300 条/40 组）。结果分 `resolved / missing / conflicts / candidates`；缺失或候选冲突返回 `NEED_USER_INPUT` 摘要，`config_resolve` 与系统提示要求 **Agent 停止执行、把摘要交给用户并等待回答**，禁止猜测；扫描候选不自动写环境。密钥类声明值一律 `****`。
 2. **密钥引用**（`SecretEntry`/`SecretRefs`/`EnvironmentStore`）：
-   SQLite `secrets` 表按 `project_id+env+name` 存 AES-GCM 密文与版本；环境变量支持整值 `secret://name` 与嵌入 `${secret:name}`。`effective()` 在服务端解析，接口与工具只看得到 `secret://name` 或 `****`；缺失引用进入 `missingSecrets`，部署预检 **E-704 fail-closed**（不把占位符原样注入）。轮换只增版本（v+1），`digestValues()` 以 `ref@version` 参与 env-snapshot，明文不进摘要。管理入口：`/settings/projects/{id}/secrets`（列表只回名称/版本/掩码）。
+   SQLite `secrets` 表按 `project_id+env+name` 存 AES-GCM 密文与版本；环境变量支持整值 `secret://name` 与嵌入 `${secret:name}`。`effective()` 在服务端解析，接口与工具只看得到 `secret://name` 或 `****`；缺失引用进入 `missingSecrets`，部署预检 **E-704 fail-closed**（不把占位符原样注入）。轮换只增版本（v+1），`digestValues()` 以 `ref@version` 参与 env-snapshot，明文不进摘要。管理入口：`/settings/projects/{id}/secrets`（列表只回名称/版本/掩码）。运行日志除形态脱敏（Bearer/token/password/裸 hex/PEM）外，`RunState` 还保存本次注入的密钥明文集合，`ProcessExecutor.redact(text, sensitiveValues)` 在写盘前整段替换（覆盖 `echo $TOKEN` 这类无关键字输出）。
 3. **分环境策略**（domain `PolicyPort` + governance `EnvPolicyService`）：
    默认矩阵 dev(L0–L2 ALLOW, L3 DENY) / test(L0–L2 ALLOW, L3 CONFIRM) / prod(L0–L1 ALLOW, L2 DENY, L3 CONFIRM)，prod L3 构造期即拒绝 ALLOW；未知环境按 prod 处理。`ActionService`、`CiCommandTools`、`AgentFactory` 均改为经 `PolicyPort` 判定，替换硬编码 `isProduction()`；拒绝抛 `PolicyDeniedException`（E-707）。只读视图 `GET /policies`。
 4. **dry-run 阶段门控**（`PipelineEngine.dryRun`）：
    只读预检复用 `preview`，额外检查 `missingSecrets`、`deploy.env-required` 缺失（E-509）、可执行阶段为空、image/docker 类型所需 Docker 可用性（5s 超时），产出 `ok/blockers/warnings/stages + fingerprint + reportHash`，零 outward 变更。`POST /ci/pipelines/{id}/dry-run` 与工具 `ci_dry_run` 调用；`run` 与 `ci_run` 执行前先 dry-run，未通过 **E-708**，传入的 `dryRunHash` 与当前不一致 **E-706**（代码/配方/环境/密钥版本变化即失效）。指纹与报告哈希随 trigger params 进入证据链。
-5. **前端**：设置页新增「密钥库」（增删/轮换）；项目环境表单支持「直接填值 / 引用密钥」，并提供「配置解析」弹窗展示 resolved/missing/conflicts/candidates；流水线运行卡新增「预检」按钮与报告面板（阻塞项/警告/哈希）。
+5. **前端**：设置页新增「密钥库」（增删/轮换）；项目环境表单支持「直接填值 / 引用密钥」，并提供「配置解析」弹窗展示 resolved/missing/conflicts/candidates，非密钥候选可一键「采纳」写为项目覆盖（人工点击即确认，Agent 不会自动调用）；流水线运行卡新增「预检」按钮与报告面板（阻塞项/警告/阶段可执行性/哈希）。
 
 ---
 

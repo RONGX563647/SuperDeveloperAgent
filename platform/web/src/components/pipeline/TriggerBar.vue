@@ -322,6 +322,15 @@ const runLabel = computed(() =>
       <p v-if="!dryRun.blockers.length && !dryRun.warnings.length" class="dr-meta">
         没有阻塞项与警告，可以运行。
       </p>
+      <div v-if="dryRun.stages.length" class="dr-stages">
+        <span
+          v-for="s in dryRun.stages" :key="s.id"
+          class="dr-stage" :class="{ off: !s.runnable }"
+          :title="s.reason || s.command || s.action"
+        >
+          {{ s.id }}
+        </span>
+      </div>
     </div>
   </section>
 </template>
@@ -640,6 +649,27 @@ const runLabel = computed(() =>
 }
 .dr-list.warn {
   color: var(--warning-ink, #a06a00);
+}
+.dr-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.dr-stage {
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 18px;
+  color: var(--ink-muted);
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+}
+.dr-stage.off {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  text-decoration: line-through;
 }
 .rc-last {
   padding: 0;

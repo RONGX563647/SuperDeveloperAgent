@@ -144,7 +144,8 @@ public class ConfigResolver {
             }
             String declaredValue = declared.values().get(key);
             if (declaredValue != null && !declaredValue.isBlank()) {
-                resolved.put(key, looksSecret(key) ? "****" : declaredValue);
+                boolean secretValue = looksSecret(key) || looksSecretValue(declaredValue);
+                resolved.put(key, secretValue ? "****" : declaredValue);
                 sources.put(key, "REPO_DECLARED");
                 continue;
             }
@@ -239,7 +240,7 @@ public class ConfigResolver {
     }
 
     private static Candidate candidate(String key, String value, String source, String hint) {
-        boolean secret = looksSecret(key) || highEntropy(value);
+        boolean secret = looksSecret(key) || looksSecretValue(value);
         return new Candidate(key, secret ? "" : value, source, secret, hint);
     }
 
@@ -265,6 +266,17 @@ public class ConfigResolver {
         String upper = key.toUpperCase(Locale.ROOT);
         return upper.contains("PASSWORD") || upper.contains("SECRET") || upper.contains("TOKEN")
                 || upper.endsWith("_KEY") || upper.contains("PRIVATE_KEY") || upper.contains("CREDENTIAL");
+    }
+
+    /** 值本身的凭据特征：连接串内嵌用户名/密码，或高熵长串。 */
+    private static boolean looksSecretValue(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        if (value.matches("(?i)^[a-z][a-z0-9+.-]*://[^/\\s:@]+:[^/\\s]+@.*")) {
+            return true;
+        }
+        return highEntropy(value);
     }
 
     private static boolean highEntropy(String value) {

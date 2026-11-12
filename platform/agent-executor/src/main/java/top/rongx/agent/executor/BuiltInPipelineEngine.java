@@ -13,11 +13,13 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -35,6 +37,7 @@ import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvResource;
+import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
@@ -1072,7 +1075,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         RunState s = runs.get(runId);
         if (s != null) {
             synchronized (s.log) {
-                return ProcessExecutor.redact(s.log.toString());
+                return ProcessExecutor.redact(s.log.toString(), s.sensitiveValues);
             }
         }
         return history.list().stream()
@@ -1099,7 +1102,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     .findFirst().map(RunSnapshot::log).orElse("");
         }
         int from = Math.min(Math.max(0, offset), raw.length());
-        String added = ProcessExecutor.redact(raw.substring(from));
+        String added = ProcessExecutor.redact(raw.substring(from),
+                s == null ? Set.of() : s.sensitiveValues);
         // 片段脱敏后长度可能变化，end 用「原始已读位置」表达，前端只用 offset 续传
         return new LogSlice(from, raw.length(), added);
     }
@@ -2241,6 +2245,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
         EffectiveEnvironment effective = envStore == null
                 ? null : envStore.effective(state.projectId, state.env);
+        state.sensitiveValues = secretValues(effective);
         Map<String, String> deployEnv = effective != null
                 ? effective.values() : loadDeployEnv(state);
         String network = effective == null ? null : effective.network();
@@ -2293,6 +2298,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return false;
             }
             effective = envStore.effective(state.projectId, state.env);
+            state.sensitiveValues = secretValues(effective);
             deployEnv = effective.values();
             network = effective.network();
         }
@@ -2725,6 +2731,24 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
     }
 
+    /** 本次会注入的密钥明文（只取 secret 变量；空值不参与），用于运行日志值级脱敏。 */
+    private static Set<String> secretValues(EffectiveEnvironment effective) {
+        if (effective == null) {
+            return Set.of();
+        }
+        Set<String> out = new HashSet<>();
+        for (EnvVariable var : effective.vars()) {
+            if (!var.secret()) {
+                continue;
+            }
+            String value = effective.values().get(var.key());
+            if (value != null && !value.isBlank()) {
+                out.add(value);
+            }
+        }
+        return Set.copyOf(out);
+    }
+
     /** 部署声明里的必填变量与已配置 env 求差：返回缺失（或值为空）的变量名。 */
     private static List<String> missingRequiredEnv(PipelineDefinition.DeploySpec spec,
                                                    Map<String, String> deployEnv) {
@@ -3125,6 +3149,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         final List<StageResult> stages = new ArrayList<>();
         final List<ArtifactRef> artifacts = new ArrayList<>();
         final StringBuilder log = new StringBuilder();
+        /**
+         * 本次运行注入过的密钥明文：写日志前整段替换。
+         * 只放在内存，不落库；空集合表示尚未解析环境。
+         */
+        volatile Set<String> sensitiveValues = Set.of();
         volatile StageStatus status = StageStatus.PENDING;
         /** 构建序号（项目 + 环境内从 1 开始）：历史顺序与镜像版本 vN。 */
         volatile int seq;
@@ -3160,7 +3189,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         RunSnapshot snapshot() {
             return new RunHistoryStore.RunSnapshot(runId, projectId, env, pipelineId, gitSha,
                     status, createdAt, seq, List.copyOf(stages), List.copyOf(artifacts),
-                    ProcessExecutor.redact(log.toString()),
+                    ProcessExecutor.redact(log.toString(), sensitiveValues),
                     definitionSource == null ? null : definitionSource.name(), definitionNote);
         }
 
