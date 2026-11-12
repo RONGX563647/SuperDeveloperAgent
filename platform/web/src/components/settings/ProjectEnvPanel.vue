@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, DocumentCopy, Edit, Hide, Key, Lock, Plus, Refresh, View } from '@element-plus/icons-vue'
+import { Delete, DocumentCopy, Edit, Hide, Key, Plus, Refresh, View } from '@element-plus/icons-vue'
 import { ApiError } from '../../api/http'
 import { listProjects, type ProjectRow } from '../../api/project'
 import {
-  checkProjectEnv, confirmEnvBinding, deleteEnvOverride, draftEnvBinding, getEffectiveEnvironment,
-  getEnvBinding, getLocalServiceLogs, listLocalServices, listPortLeases, restartLocalService,
+  checkProjectEnv, deleteEnvOverride, getEffectiveEnvironment,
+  getLocalServiceLogs, listLocalServices, listPortLeases, restartLocalService,
   revealEffectiveEnvVar, saveEnvOverride, startLocalService, stopLocalService,
-  type EffectiveEnvironmentView, type EnvBindingView, type EnvCheckView, type EnvVariableView,
+  type EffectiveEnvironmentView, type EnvCheckView, type EnvVariableView,
   type LocalServiceView, type PortLeaseView, type SourceEnvVariableView,
 } from '../../api/settings'
 import { appStore } from '../../stores/app'
@@ -16,15 +16,15 @@ import { formatTime } from '../../utils/status'
 import { envLabel } from '../../utils/pipelineLabels'
 
 /**
- * 项目环境（覆盖 + 有效视图 + Agent 绑定）。
+ * 项目环境（覆盖 + 注入视图）。
  *
  * <p>「设置 → 环境模板」提供 dev/test/prod 的默认变量与中间件；这里只写项目差异，
- * 右侧展示的是部署时真正注入的合并结果（模板 + 覆盖），与实际部署读取同一份数据。
+ * 右侧展示的是部署时真正注入的合并结果（模板 + 中间件 + 覆盖 + 源码 .env），
+ * 与实际部署读取同一份数据，避免同一批变量在多张表里各列一遍。
  *
- * <p>Agent 触发部署前必须有人确认一份映射草案（bindingId），避免模型擅自把变量指向错环境。
+ * <p>「重新检测」会重扫当前环境并对比上一次结果，用来排查"某个环境的变量/来源对不上"。
  */
 const ENVS = ['dev', 'test', 'prod']
-const BINDING_KEY = 'agent-env-binding'
 
 const projects = ref<ProjectRow[]>([])
 const projectId = ref('')
@@ -49,7 +49,7 @@ const canReveal = computed(() => {
 })
 
 const formOpen = ref(false)
-const editing = ref<EnvVariableView | null>(null)
+const editing = ref<EnvRowView | null>(null)
 const form = reactive({ key: '', value: '', secret: true })
 
 const importOpen = ref(false)
@@ -57,10 +57,10 @@ const importText = ref('')
 const importSecret = ref(true)
 const importing = ref(false)
 
-const binding = ref<EnvBindingView | null>(null)
-const bindingBusy = ref(false)
-/** 人工确认采用"两步点击"，避免误点直接把映射交给 Agent。 */
-const confirmArmed = ref(false)
+/** 「重新检测」进行中：重扫源码 .env / 中间件 / 自检，并对比与上一次的差异。 */
+const detecting = ref(false)
+/** 最近一次检测结果（常驻在变量列表上方，比一闪而过的 toast 更好核对）。 */
+const detectNote = ref('')
 
 const projectName = computed(() =>
   projects.value.find((p) => p.id === projectId.value)?.name ?? projectId.value)
@@ -81,56 +81,48 @@ const missingResources = computed(() =>
 const stoppedResources = computed(() =>
   referencedResources.value.filter((r) => r.status === 'STOPPED' || r.status === 'UNKNOWN'))
 
-interface BindingKey {
+/** 列表行：把「有效变量」与「源码 .env 变量」合并成一张部署注入清单，避免两张表重复列同一批键。 */
+interface EnvRowView {
   key: string
-  source: string
+  value: string
   secret: boolean
-  required?: boolean
-  /** 值摘要：非空表示项目源码或有效环境里已有该变量；只在绑定记录里留哈希，不留明文 */
-  valueHash?: string
+  source: 'TEMPLATE' | 'RESOURCE' | 'OVERRIDE' | 'SOURCE'
+  updatedAt: number
+  /** 源码 .env 里也声明了同名变量（部署以当前行为准） */
+  alsoSource: boolean
 }
 
-/** 解析草案；missing 由后端按「必填且无值」计算，旧草案缺失该字段时返回 null。 */
-function parseBindingMapping(): { keys: BindingKey[], missing: string[] | null } {
-  if (!binding.value) return { keys: [], missing: null }
-  try {
-    const parsed = JSON.parse(binding.value.mappingJson) as {
-      keys?: BindingKey[]
-      missing?: string[]
-    }
-    return {
-      keys: parsed.keys ?? [],
-      missing: Array.isArray(parsed.missing) ? parsed.missing : null,
-    }
-  } catch {
-    return { keys: [], missing: null }
+const rows = computed<EnvRowView[]>(() => {
+  const sourceKeys = new Set(sourceVars.value.map((v) => v.key))
+  const list: EnvRowView[] = vars.value.map((v) => ({
+    key: v.key,
+    value: v.value,
+    secret: v.secret,
+    source: v.source,
+    updatedAt: v.updatedAt,
+    alsoSource: sourceKeys.has(v.key),
+  }))
+  const known = new Set(list.map((r) => r.key))
+  for (const s of sourceVars.value) {
+    if (known.has(s.key)) continue
+    list.push({
+      key: s.key,
+      value: s.value,
+      secret: s.secret,
+      source: 'SOURCE',
+      updatedAt: 0,
+      alsoSource: false,
+    })
   }
-}
-
-const bindingMapping = computed(parseBindingMapping)
-const bindingKeys = computed(() => bindingMapping.value.keys)
-/** 来自项目源码 .env 的变量：上方「项目源码变量」已逐条展示，这里只给一行汇总，避免重复列表。 */
-const bindingSourceKeys = computed(() =>
-  bindingKeys.value.filter((k) => bindingSourceOf(k).cls === 'source'))
-/** 其它来源（覆盖 / 中间件 / 模板 / 未配置）仍逐条列出，便于核对是否错指环境。 */
-const bindingOtherKeys = computed(() =>
-  bindingKeys.value.filter((k) => bindingSourceOf(k).cls !== 'source'))
-
-/** 真正缺值：优先用后端 missing；旧草案回退为「未知来源且没有值哈希」。 */
-const bindingMissing = computed(() => {
-  const { keys, missing } = bindingMapping.value
-  if (missing) return keys.filter((k) => missing.includes(k.key))
-  return keys.filter((k) => k.source === 'UNKNOWN' && !k.valueHash)
+  return list
 })
 
-/** 草案里的来源标签：源码 .env 里的值不会出现在有效变量里，但部署时会自动注入。 */
-function bindingSourceOf(k: BindingKey): { label: string, cls: string } {
-  if (k.source === 'OVERRIDE') return { label: '项目覆盖', cls: 'override' }
-  if (k.source === 'RESOURCE') return { label: '中间件', cls: 'resource' }
-  if (k.source === 'TEMPLATE') return { label: '环境模板', cls: 'template' }
-  if (k.source === 'SOURCE' || k.valueHash) return { label: '源码 .env', cls: 'source' }
-  return { label: '未配置', cls: 'missing' }
-}
+/** 各来源计数：头部一句话说明「这些变量从哪来」。 */
+const sourceCounts = computed(() => {
+  const counts = { RESOURCE: 0, OVERRIDE: 0, TEMPLATE: 0, SOURCE: 0 }
+  for (const row of rows.value) counts[row.source] += 1
+  return counts
+})
 
 async function loadProjects(): Promise<void> {
   try {
@@ -161,13 +153,47 @@ async function load(): Promise<void> {
       leases.value = []
     }
     await loadServices()
-    restoreBinding()
   } catch (e) {
     effective.value = null
     envCheck.value = null
     ElMessage.error(e instanceof Error ? e.message : '加载项目环境失败')
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 重新检测：重扫当前环境的源码 .env、中间件与注入前自检，并把结果和上一次对比。
+ * 后端每次都是现读磁盘，所以这里除了重新拉取，还会明确告诉用户“变没变”。
+ */
+async function redetect(): Promise<void> {
+  if (detecting.value || !projectId.value) return
+  detecting.value = true
+  const before = new Map(rows.value.map((row) => [row.key, row.source]))
+  try {
+    await load()
+    if (!effective.value) return
+    const added = rows.value.filter((row) => !before.has(row.key)).length
+    const removed = [...before.keys()].filter((key) => !rows.value.some((row) => row.key === key)).length
+    const changed = rows.value.filter((row) =>
+      before.has(row.key) && before.get(row.key) !== row.source).length
+    const delta = added || removed || changed
+      ? `，新增 ${added} / 消失 ${removed} / 来源变化 ${changed}`
+      : '，与上次一致'
+    const check = envCheck.value
+    const checkText = !check
+      ? '，自检无结果'
+      : check.ok ? '，自检通过' : `，自检未通过：${check.problems[0] ?? ''}`
+    const c = sourceCounts.value
+    const now = new Date()
+    const at = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+    detectNote.value = `重新检测于 ${at}：${rows.value.length} 个变量`
+      + `（中间件 ${c.RESOURCE} · 覆盖 ${c.OVERRIDE} · 模板 ${c.TEMPLATE} · 源码 .env ${c.SOURCE}）`
+      + `${delta}${checkText}`
+  } catch (e) {
+    detectNote.value = `重新检测失败：${e instanceof Error ? e.message : '未知错误'}`
+  } finally {
+    detecting.value = false
   }
 }
 
@@ -282,36 +308,6 @@ async function loadLogs(): Promise<void> {
   }
 }
 
-/** 只恢复"当前项目 + 当前环境"的绑定，避免把别的环境确认结果带进来。 */
-function restoreBinding(): void {
-  const raw = sessionStorage.getItem(BINDING_KEY)
-  if (!raw) {
-    binding.value = null
-    return
-  }
-  try {
-    const stored = JSON.parse(raw) as EnvBindingView
-    if (stored.projectId === projectId.value && stored.env === env.value) {
-      binding.value = stored
-      void refreshBinding(stored.id)
-    } else {
-      binding.value = null
-    }
-  } catch {
-    binding.value = null
-  }
-}
-
-async function refreshBinding(id: string): Promise<void> {
-  try {
-    const latest = await getEnvBinding(projectId.value, id)
-    binding.value = latest
-  } catch {
-    binding.value = null
-    sessionStorage.removeItem(BINDING_KEY)
-  }
-}
-
 function startCreate(): void {
   editing.value = null
   form.key = ''
@@ -320,38 +316,30 @@ function startCreate(): void {
   formOpen.value = true
 }
 
-function startEdit(v: EnvVariableView): void {
-  editing.value = v
-  form.key = v.key
+function startEdit(row: EnvRowView): void {
+  editing.value = row
+  form.key = row.key
   form.value = ''
-  form.secret = v.secret
+  form.secret = row.secret
   formOpen.value = true
 }
 
-function startOverride(v: EnvVariableView): void {
+/** 用项目覆盖当前行：源码 / 模板 / 中间件来源的行都走这里。 */
+function startOverride(row: EnvRowView): void {
   editing.value = null
-  form.key = v.key
+  form.key = row.key
   form.value = ''
-  form.secret = v.secret
+  form.secret = row.secret
   formOpen.value = true
 }
 
-/** 源码变量没有 EnvVariableView 的元数据，覆盖时只需要变量名与敏感标记。 */
-function startOverrideSource(v: SourceEnvVariableView): void {
-  editing.value = null
-  form.key = v.key
-  form.value = ''
-  form.secret = v.secret
-  formOpen.value = true
-}
-
-/** 复制源码里明文变量的值；敏感变量只显示掩码，复制没有意义。 */
-async function copySourceValue(v: SourceEnvVariableView): Promise<void> {
+/** 复制源码里明文变量的值；敏感变量只返回掩码，复制没有意义。 */
+async function copyValue(row: EnvRowView): Promise<void> {
   try {
-    await navigator.clipboard.writeText(v.value)
-    ElMessage.success(`已复制 ${v.key}`)
+    await navigator.clipboard.writeText(varDisplay(row))
+    ElMessage.success(`已复制 ${row.key}`)
   } catch {
-    ElMessage.warning(`复制失败，请手动选中 ${v.key} 的值`)
+    ElMessage.warning(`复制失败，请手动选中 ${row.key} 的值`)
   }
 }
 
@@ -388,7 +376,7 @@ async function save(): Promise<void> {
   }
 }
 
-async function remove(v: EnvVariableView): Promise<void> {
+async function remove(v: EnvRowView): Promise<void> {
   const ok = await ElMessageBox.confirm(
     `取消 ${v.key} 的项目覆盖？删除后会回退到模板值（若模板也没有则不注入）。`,
     '删除项目覆盖',
@@ -405,7 +393,7 @@ async function remove(v: EnvVariableView): Promise<void> {
 }
 
 /** 点眼睛查看敏感变量最终注入值的明文；再点收起。明文变量不需要解密。 */
-async function toggleReveal(v: EnvVariableView): Promise<void> {
+async function toggleReveal(v: EnvRowView): Promise<void> {
   const id = `${v.source}:${v.key}`
   if (revealed.value[id] !== undefined) {
     const next = { ...revealed.value }
@@ -432,29 +420,20 @@ async function toggleReveal(v: EnvVariableView): Promise<void> {
   }
 }
 
-/** 复制当前显示的值；明文变量直接复制，敏感变量需先点眼睛。 */
-async function copyValue(v: EnvVariableView): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(varDisplay(v))
-    ElMessage.success(`已复制 ${v.key}`)
-  } catch {
-    ElMessage.warning(`复制失败，请手动选中 ${v.key} 的值`)
-  }
-}
-
-function varDisplay(v: EnvVariableView): string {
+function varDisplay(v: EnvRowView): string {
   return revealed.value[`${v.source}:${v.key}`] ?? v.value
 }
 
 function sourceLabel(source: string): string {
   if (source === 'RESOURCE') return '中间件'
   if (source === 'OVERRIDE') return '项目覆盖'
+  if (source === 'SOURCE') return '源码 .env'
   return '环境模板'
 }
 
 /** 解析 .env 文本：支持 export、注释、单/双引号包裹。 */
 function parseEnvText(text: string): Array<{ key: string, value: string }> {
-  const rows: Array<{ key: string, value: string }> = []
+  const parsed: Array<{ key: string, value: string }> = []
   for (const raw of text.split(/\r?\n/)) {
     let line = raw.trim()
     if (!line || line.startsWith('#')) continue
@@ -468,31 +447,31 @@ function parseEnvText(text: string): Array<{ key: string, value: string }> {
       || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1)
     }
-    rows.push({ key, value })
+    parsed.push({ key, value })
   }
-  return rows
+  return parsed
 }
 
 async function importAll(): Promise<void> {
-  const rows = parseEnvText(importText.value)
-  if (!rows.length) {
+  const entries = parseEnvText(importText.value)
+  if (!entries.length) {
     ElMessage.warning('没有解析到 KEY=VALUE 行')
     return
   }
   importing.value = true
   let ok = 0
   const failed: string[] = []
-  for (const row of rows) {
+  for (const entry of entries) {
     try {
       await saveEnvOverride(projectId.value, {
         env: env.value,
-        key: row.key,
-        value: row.value,
+        key: entry.key,
+        value: entry.value,
         secret: importSecret.value,
       })
       ok += 1
     } catch (e) {
-      failed.push(`${row.key}: ${e instanceof Error ? e.message : String(e)}`)
+      failed.push(`${entry.key}: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
   importing.value = false
@@ -506,63 +485,11 @@ async function importAll(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------- Agent 绑定
-
-async function makeDraft(): Promise<void> {
-  bindingBusy.value = true
-  confirmArmed.value = false
-  try {
-    const draft = await draftEnvBinding(projectId.value, env.value)
-    binding.value = draft
-    sessionStorage.setItem(BINDING_KEY, JSON.stringify(draft))
-    if (!draft.mappingJson.includes('"key"')) {
-      ElMessage.info('项目里没有 .env.example，草案为空；可直接确认（运行仍用当前有效变量）')
-    } else {
-      ElMessage.success('已生成映射草案，请核对后确认')
-    }
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '生成草案失败')
-  } finally {
-    bindingBusy.value = false
-  }
-}
-
-async function confirmBinding(): Promise<void> {
-  if (!binding.value) return
-  if (!confirmArmed.value) {
-    confirmArmed.value = true
-    return
-  }
-  confirmArmed.value = false
-  bindingBusy.value = true
-  try {
-    const confirmed = await confirmEnvBinding(projectId.value, binding.value.id)
-    binding.value = confirmed
-    sessionStorage.setItem(BINDING_KEY, JSON.stringify(confirmed))
-    ElMessage.success(`已确认，绑定 ${confirmed.id}`)
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '确认失败')
-  } finally {
-    bindingBusy.value = false
-  }
-}
-
-async function copyBinding(): Promise<void> {
-  if (!binding.value) return
-  try {
-    await navigator.clipboard.writeText(binding.value.id)
-    ElMessage.success('bindingId 已复制')
-  } catch {
-    ElMessage.warning(`请手动复制：${binding.value.id}`)
-  }
-}
-
 watch([projectId, env], () => {
   // 面板里切换环境也算"上一次使用的环境"，回到对话 / 流水线页时沿用。
   appStore.env = env.value
+  detectNote.value = ''
   closeForm()
-  binding.value = null
-  confirmArmed.value = false
   if (env.value === 'dev') startServicePolling()
   else stopServicePolling()
   void load()
@@ -590,11 +517,11 @@ defineExpose({ load })
       <div class="ep-title-row">
         <h2 class="ep-title">项目环境</h2>
         <el-button size="small" type="primary" :icon="Plus" @click="startCreate">添加覆盖</el-button>
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
+        <el-button size="small" :icon="Refresh" :loading="detecting" @click="redetect">重新检测</el-button>
       </div>
       <p class="ep-sub">
-        下面的列表是部署时真正注入的变量（环境模板 + 中间件连接信息 + 项目覆盖）。值 AES-GCM 加密落库，
-        不进入 <code>pipeline.yml</code> / 仓库；列表默认掩码，可点眼睛查看明文。
+        下面的列表是部署时真正注入的变量（环境模板 + 中间件连接信息 + 项目覆盖 + 项目源码 .env）。
+        值 AES-GCM 加密落库，不进入 <code>pipeline.yml</code> / 仓库；列表默认掩码，可点眼睛查看明文。
       </p>
     </header>
 
@@ -615,11 +542,15 @@ defineExpose({ load })
         </el-select>
       </label>
       <span class="ep-count">
-        {{ vars.length }} 个有效变量
-        <template v-if="sourceVars.length"> · 源码 {{ sourceVars.length }} 个可读取</template>
-        <template v-if="effective">（模板 {{ effective.templateCount }} / 覆盖 {{ effective.overrideCount }}）</template>
+        {{ rows.length }} 个注入变量
+        <template v-if="effective">
+          （中间件 {{ sourceCounts.RESOURCE }} / 覆盖 {{ sourceCounts.OVERRIDE }}
+          / 模板 {{ sourceCounts.TEMPLATE }} / 源码 .env {{ sourceCounts.SOURCE }}）
+        </template>
       </span>
     </div>
+
+    <p v-if="detectNote" class="ep-detect-note">{{ detectNote }}</p>
 
     <div v-if="effective" class="ep-summary">
       <span class="ep-chip">网络 {{ effective.network || '默认' }}</span>
@@ -730,7 +661,7 @@ defineExpose({ load })
         <span>更新</span>
         <span />
       </div>
-      <div v-for="v in vars" :key="`${v.source}:${v.key}`" class="ep-row">
+      <div v-for="v in rows" :key="`${v.source}:${v.key}`" class="ep-row">
         <code class="ep-key mono">{{ v.key }}</code>
         <code
           class="ep-value mono" :class="{ revealed: revealed[`${v.source}:${v.key}`] !== undefined }"
@@ -738,87 +669,75 @@ defineExpose({ load })
         >
           {{ varDisplay(v) }}
         </code>
-        <span class="ep-source" :class="v.source === 'OVERRIDE' ? 'override' : v.source === 'RESOURCE' ? 'resource' : 'template'">
+        <span
+          class="ep-source"
+          :class="v.source === 'OVERRIDE' ? 'override'
+            : v.source === 'RESOURCE' ? 'resource' : v.source === 'SOURCE' ? 'source' : 'template'"
+        >
           {{ sourceLabel(v.source) }}
         </span>
         <span class="ep-secret" :class="v.secret ? 'secret' : 'plain'">
           {{ v.secret ? '敏感' : '明文' }}
         </span>
-        <span class="ep-updated">{{ formatTime(v.updatedAt) }}</span>
+        <span class="ep-updated">
+          <template v-if="v.source === 'SOURCE'">部署时注入</template>
+          <template v-else>
+            {{ formatTime(v.updatedAt) }}<template v-if="v.alsoSource"> · 源码亦有</template>
+          </template>
+        </span>
         <span class="ep-actions">
-          <!-- 敏感值才需要解密查看；明文变量给「复制」，避免点了没变化像失效 -->
-          <button
-            v-if="v.secret"
-            type="button" class="ep-icon"
-            :title="!canReveal ? '需要管理员权限才能查看明文'
-              : revealed[`${v.source}:${v.key}`] !== undefined ? '隐藏明文' : '查看明文（写审计日志）'"
-            :disabled="!canReveal || revealingKey === `${v.source}:${v.key}`" @click="toggleReveal(v)"
-          >
-            <el-icon :class="{ 'ep-spin': revealingKey === `${v.source}:${v.key}` }">
-              <Hide v-if="revealed[`${v.source}:${v.key}`] !== undefined" /><View v-else />
-            </el-icon>
-          </button>
-          <button v-else type="button" class="ep-icon" title="复制值" @click="copyValue(v)">
-            <el-icon><DocumentCopy /></el-icon>
-          </button>
-          <button
-            v-if="v.source === 'OVERRIDE'" type="button" class="ep-icon" title="编辑覆盖"
-            @click="startEdit(v)"
-          >
-            <el-icon><Edit /></el-icon>
-          </button>
-          <button
-            v-else type="button" class="ep-icon" title="用项目覆盖此值"
-            @click="startOverride(v)"
-          >
-            <el-icon><Edit /></el-icon>
-          </button>
-          <button
-            v-if="v.source === 'OVERRIDE'" type="button" class="ep-icon danger" title="删除覆盖"
-            @click="remove(v)"
-          >
-            <el-icon><Delete /></el-icon>
-          </button>
+          <!-- 源码 .env 的敏感值无法解密，只给覆盖；明文可直接复制 -->
+          <template v-if="v.source === 'SOURCE'">
+            <button v-if="!v.secret" type="button" class="ep-icon" title="复制源码值" @click="copyValue(v)">
+              <el-icon><DocumentCopy /></el-icon>
+            </button>
+            <button type="button" class="ep-icon" title="用项目覆盖此值" @click="startOverride(v)">
+              <el-icon><Edit /></el-icon>
+            </button>
+          </template>
+          <template v-else>
+            <!-- 敏感值才需要解密查看；明文变量给「复制」，避免点了没变化像失效 -->
+            <button
+              v-if="v.secret"
+              type="button" class="ep-icon"
+              :title="!canReveal ? '需要管理员权限才能查看明文'
+                : revealed[`${v.source}:${v.key}`] !== undefined ? '隐藏明文' : '查看明文（写审计日志）'"
+              :disabled="!canReveal || revealingKey === `${v.source}:${v.key}`" @click="toggleReveal(v)"
+            >
+              <el-icon :class="{ 'ep-spin': revealingKey === `${v.source}:${v.key}` }">
+                <Hide v-if="revealed[`${v.source}:${v.key}`] !== undefined" /><View v-else />
+              </el-icon>
+            </button>
+            <button v-else type="button" class="ep-icon" title="复制值" @click="copyValue(v)">
+              <el-icon><DocumentCopy /></el-icon>
+            </button>
+            <button
+              v-if="v.source === 'OVERRIDE'" type="button" class="ep-icon" title="编辑覆盖"
+              @click="startEdit(v)"
+            >
+              <el-icon><Edit /></el-icon>
+            </button>
+            <button
+              v-else type="button" class="ep-icon" title="用项目覆盖此值"
+              @click="startOverride(v)"
+            >
+              <el-icon><Edit /></el-icon>
+            </button>
+            <button
+              v-if="v.source === 'OVERRIDE'" type="button" class="ep-icon danger" title="删除覆盖"
+              @click="remove(v)"
+            >
+              <el-icon><Delete /></el-icon>
+            </button>
+          </template>
         </span>
       </div>
-      <p v-if="!loading && !vars.length && !sourceVars.length" class="ep-empty">
+      <p v-if="!loading && !rows.length" class="ep-empty">
         <el-icon><Key /></el-icon>
         {{ projectName }} / {{ envLabel(env) }} 还没有环境变量；先到「环境模板」配置默认值，
         或点「添加覆盖」配置项目专属值。
       </p>
       <p v-else-if="loading" class="ep-empty">加载中…</p>
-    </div>
-
-    <!-- 源码里能直接读到、部署时自动注入的变量；点「覆盖」可人工改值 -->
-    <div v-if="sourceVars.length" class="ep-table ep-source-table">
-      <div class="ep-row ep-row-head">
-        <span>项目源码变量</span>
-        <span>值</span>
-        <span>来源</span>
-        <span>类型</span>
-        <span>说明</span>
-        <span />
-      </div>
-      <div v-for="v in sourceVars" :key="`SOURCE:${v.key}`" class="ep-row">
-        <code class="ep-key mono">{{ v.key }}</code>
-        <code class="ep-value mono" :title="v.value">{{ v.value }}</code>
-        <span class="ep-source source">项目源码</span>
-        <span class="ep-secret" :class="v.secret ? 'secret' : 'plain'">
-          {{ v.secret ? '敏感' : '明文' }}
-        </span>
-        <span class="ep-updated">{{ v.overridden ? '已被有效值覆盖' : '部署时自动注入' }}</span>
-        <span class="ep-actions">
-          <button
-            v-if="!v.secret" type="button" class="ep-icon" title="复制值"
-            @click="copySourceValue(v)"
-          >
-            <el-icon><DocumentCopy /></el-icon>
-          </button>
-          <button type="button" class="ep-icon" title="用项目覆盖此值" @click="startOverrideSource(v)">
-            <el-icon><Edit /></el-icon>
-          </button>
-        </span>
-      </div>
     </div>
 
     <div class="ep-import">
@@ -842,79 +761,6 @@ defineExpose({ load })
           </el-button>
         </div>
       </div>
-    </div>
-
-    <!-- Agent 绑定 -->
-    <div class="ep-binding">
-      <div class="ep-binding-head">
-        <span class="ep-binding-title">
-          <el-icon><Lock /></el-icon>
-          Agent 部署绑定
-        </span>
-        <span v-if="binding" class="ep-binding-state" :class="binding.status === 'CONFIRMED' ? 'ok' : 'draft'">
-          {{ binding.status === 'CONFIRMED' ? '已确认' : '草案待确认' }}
-        </span>
-      </div>
-      <p class="ep-binding-desc">
-        Agent 自主触发部署时，必须携带一份人工确认过的变量映射（bindingId）。
-        草案只包含变量名与来源，不含任何值；来自项目 .env / .env.example 的变量显示为「源码 .env」，
-        部署时会自动注入，无需在设置页重复填写。
-      </p>
-
-      <div v-if="!binding" class="ep-binding-actions">
-        <el-button size="small" :loading="bindingBusy" @click="makeDraft">生成绑定草案</el-button>
-      </div>
-
-      <template v-else>
-        <div class="ep-binding-meta">
-          <span>ID <code class="mono">{{ binding.id }}</code></span>
-          <span v-if="binding.confirmedBy">
-            确认人 {{ binding.confirmedBy }} · {{ formatTime(binding.confirmedAt) }}
-          </span>
-          <span v-if="binding.expiresAt">有效期至 {{ formatTime(binding.expiresAt) }}</span>
-          <button type="button" class="ep-link" @click="copyBinding">复制 ID</button>
-        </div>
-
-        <div v-if="bindingOtherKeys.length" class="ep-binding-table">
-          <div v-for="k in bindingOtherKeys" :key="k.key" class="ep-binding-row">
-            <code class="mono">{{ k.key }}</code>
-            <span class="ep-source" :class="bindingSourceOf(k).cls">
-              {{ bindingSourceOf(k).label }}
-            </span>
-            <span class="ep-secret" :class="k.secret ? 'secret' : 'plain'">
-              {{ k.secret ? '敏感' : '明文' }}
-            </span>
-          </div>
-        </div>
-        <!-- 源码变量在「项目源码变量」里已有完整一行，这里不重复列出 -->
-        <p v-if="bindingSourceKeys.length" class="ep-binding-hint">
-          另有 {{ bindingSourceKeys.length }} 个变量来自项目源码 .env（部署时自动注入），
-          已在上方「项目源码变量」中列出。
-        </p>
-        <p v-else-if="!bindingKeys.length" class="ep-empty">项目里没有 .env.example，草案为空；运行仍会使用当前有效变量。</p>
-
-        <p v-if="bindingMissing.length" class="ep-warn">
-          有 {{ bindingMissing.length }} 个必填变量尚未配置（源码和有效变量里都没有值）：{{ bindingMissing.map((k) => k.key).join('、') }}。
-          建议先补齐再确认。
-        </p>
-
-        <p v-if="confirmArmed && binding.status !== 'CONFIRMED'" class="ep-warn">
-          再次点击确认后，{{ projectName }} / {{ envLabel(env) }} 的映射将交给 Agent 使用，
-          24 小时内有效；变量变更需重新生成。
-          <button type="button" class="ep-link" @click="confirmArmed = false">取消</button>
-        </p>
-
-        <div class="ep-binding-actions">
-          <el-button
-            v-if="binding.status !== 'CONFIRMED'" size="small"
-            :type="confirmArmed ? 'danger' : 'primary'"
-            :loading="bindingBusy" @click="confirmBinding"
-          >
-            {{ confirmArmed ? '再次点击确认绑定' : '确认绑定（人工）' }}
-          </el-button>
-          <el-button size="small" :loading="bindingBusy" @click="makeDraft">重新生成草案</el-button>
-        </div>
-      </template>
     </div>
 
     <div v-if="formOpen" class="ep-form">
@@ -1009,6 +855,15 @@ defineExpose({ load })
   padding-bottom: 6px;
   font-size: 11.5px;
   color: var(--ink-faint);
+}
+.ep-detect-note {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
 }
 .ep-summary {
   display: flex;
@@ -1322,81 +1177,6 @@ a.ep-service-url:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-}
-.ep-binding {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  background: var(--surface-sunken);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-md);
-}
-.ep-binding-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.ep-binding-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.ep-binding-state {
-  padding: 1px 8px;
-  font-size: 10px;
-  border-radius: var(--radius-pill);
-}
-.ep-binding-state.ok {
-  color: var(--success, #16a34a);
-  background: var(--success-soft, rgb(22 163 74 / 12%));
-}
-.ep-binding-state.draft {
-  color: var(--warn);
-  background: var(--warn-soft);
-}
-.ep-binding-desc {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.7;
-  color: var(--ink-faint);
-}
-.ep-binding-hint {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--ink-muted);
-}
-.ep-binding-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--ink-muted);
-}
-.ep-binding-table {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 6px;
-}
-.ep-binding-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  font-size: 11.5px;
-  background: var(--panel);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-}
-.ep-binding-actions {
-  display: flex;
-  gap: 8px;
 }
 .ep-form {
   display: flex;

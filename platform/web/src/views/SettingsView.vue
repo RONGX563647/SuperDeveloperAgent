@@ -35,7 +35,7 @@ const SECTIONS: SectionMeta[] = [
   { key: 'servers', label: '服务器', desc: '连接与运行环境', icon: Monitor },
   { key: 'models', label: '模型连接', desc: '推理服务与密钥', icon: Cpu },
   { key: 'envTemplates', label: '环境模板', desc: 'dev/test/prod 默认值', icon: Files },
-  { key: 'envs', label: '项目环境', desc: '覆盖 · 有效变量 · Agent 绑定', icon: Key },
+  { key: 'envs', label: '项目环境', desc: '覆盖 · 注入变量 · 重新检测', icon: Key },
   { key: 'repos', label: '代码仓库', desc: '授权与连接', icon: Connection }
 ]
 
