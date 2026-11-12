@@ -2,11 +2,15 @@ package top.rongx.agent.gateway.deploy;
 
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.ThinkingBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
-import io.agentscope.core.event.ToolResultStartEvent;
+import io.agentscope.core.event.ToolResultEndEvent;
+import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -26,20 +30,33 @@ import top.rongx.agent.runtime.ChatService;
  * <ul>
  *   <li>只处理 dev/test（生产必须人工确认）；</li>
  *   <li>只处理 UI 触发的运行（执行器已过滤 agent 自触发，避免递归）；</li>
- *   <li>最长等 3 分钟，超时后把已收集的步骤带回去，不阻塞流水线控制器。</li>
+ *   <li>最长等 5 分钟（此前 3 分钟经常在 60+ 步探索时被截断，导致结论缺失），
+ *       超时后把已收集的步骤带回去，不阻塞流水线控制器。</li>
  * </ul>
  */
 @Component
 public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
 
     /** 一次自动诊断的等待上限（模型多轮工具调用 + 一次重试发布）。 */
-    private static final Duration TIMEOUT = Duration.ofSeconds(180);
+    private static final Duration TIMEOUT = Duration.ofSeconds(300);
 
     /** 文本块累计上限（避免把整段报告塞进运行日志）。 */
     private static final int MAX_TEXT = 4000;
 
-    /** 追加到运行日志的最大行数。 */
-    private static final int MAX_LINES = 40;
+    /** 追加到运行日志的最大行数；超出时保留开头与结尾（结论必须保留）。 */
+    private static final int MAX_LINES = 120;
+
+    /** 超出上限时保留的开头行数。 */
+    private static final int HEAD_LINES = 12;
+
+    /** 单条工具结果摘要的最大字符数。 */
+    private static final int MAX_RESULT_LINE = 240;
+
+    /** 单个工具结果累计的最大字符数。 */
+    private static final int MAX_RESULT = 800;
+
+    /** 思考过程累计的最大字符数。 */
+    private static final int MAX_THINKING = 1200;
 
     private final ChatService chatService;
     private final ProjectRepository projects;
@@ -69,14 +86,19 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
 
         List<String> lines = new ArrayList<>();
         StringBuilder text = new StringBuilder();
+        StringBuilder thinking = new StringBuilder();
+        Map<String, String> toolNames = new LinkedHashMap<>();
+        Map<String, StringBuilder> toolResults = new LinkedHashMap<>();
         try {
             chatService.stream(ctx, sessionId(context), task(context), "deploy")
                     .take(TIMEOUT)
                     .toIterable()
-                    .forEach(event -> collect(event, lines, text));
+                    .forEach(event -> collect(event, lines, text, thinking, toolNames, toolResults));
         } catch (Exception e) {
             lines.add("诊断中断：" + safe(e.getMessage()));
         }
+        // 先放诊断思路，再放最终结论；limit() 会保留结尾，避免结论被截掉。
+        flushThinking(thinking, lines);
         flushText(text, lines);
         return limit(lines);
     }
@@ -92,16 +114,46 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         return "recovery-" + context.projectId() + "-" + context.env() + "-" + sha;
     }
 
-    /** 把事件转成一行可读步骤：工具调用/完成直接记录，文本增量累计到结尾。 */
-    private static void collect(AgentEvent event, List<String> lines, StringBuilder text) {
+    /** 把事件转成一行可读步骤：工具调用/结果直接记录，文本与思考增量累计到结尾。 */
+    private static void collect(AgentEvent event, List<String> lines, StringBuilder text,
+                                StringBuilder thinking, Map<String, String> toolNames,
+                                Map<String, StringBuilder> toolResults) {
         if (event instanceof ToolCallStartEvent call) {
-            lines.add("调用工具 " + nullToDash(call.getToolCallName()));
-        } else if (event instanceof ToolResultStartEvent result) {
-            lines.add("工具完成 " + nullToDash(result.getToolCallName()));
+            String name = nullToDash(call.getToolCallName());
+            toolNames.put(call.getToolCallId(), name);
+            lines.add("调用工具 " + name);
+        } else if (event instanceof ToolResultTextDeltaEvent delta) {
+            // 工具返回是流式的：按 toolCallId 累积，结束时压成一行摘要。
+            if (delta.getDelta() != null) {
+                StringBuilder buf = toolResults.computeIfAbsent(
+                        delta.getToolCallId(), k -> new StringBuilder());
+                if (buf.length() < MAX_RESULT) {
+                    buf.append(delta.getDelta());
+                }
+            }
+        } else if (event instanceof ToolResultEndEvent end) {
+            String name = nullToDash(end.getToolCallName() == null
+                    ? toolNames.get(end.getToolCallId()) : end.getToolCallName());
+            String state = end.getState() == null ? "" : end.getState().name();
+            String summary = oneLine(toolResults.remove(end.getToolCallId()), MAX_RESULT_LINE);
+            lines.add("工具结果 " + name + (state.isEmpty() ? "" : " [" + state + "]")
+                    + (summary.isEmpty() ? "" : "：" + summary));
         } else if (event instanceof TextBlockDeltaEvent delta) {
             if (delta.getDelta() != null && text.length() < MAX_TEXT) {
                 text.append(delta.getDelta());
             }
+        } else if (event instanceof ThinkingBlockDeltaEvent delta) {
+            if (delta.getDelta() != null && thinking.length() < MAX_THINKING) {
+                thinking.append(delta.getDelta());
+            }
+        }
+    }
+
+    /** 思考过程压成一行，帮助复盘模型为什么这么判断。 */
+    private static void flushThinking(StringBuilder thinking, List<String> lines) {
+        String line = oneLine(thinking, 600);
+        if (!line.isEmpty()) {
+            lines.add("诊断思路：" + line);
         }
     }
 
@@ -118,12 +170,24 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         }
     }
 
-    private static List<String> limit(List<String> lines) {
+    /** 空白折叠为单行并截断；用于工具结果与思考摘要。 */
+    static String oneLine(CharSequence value, int max) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        String one = value.toString().replaceAll("\\s+", " ").trim();
+        return one.length() > max ? one.substring(0, max) + "…" : one;
+    }
+
+    /** 超长时保留开头与结尾：结尾通常是 Agent 的最终结论，不能丢。 */
+    static List<String> limit(List<String> lines) {
         if (lines.size() <= MAX_LINES) {
             return lines;
         }
-        List<String> out = new ArrayList<>(lines.subList(0, MAX_LINES));
-        out.add("…（后续步骤已省略，共 " + lines.size() + " 条）");
+        int tail = MAX_LINES - HEAD_LINES - 1;
+        List<String> out = new ArrayList<>(lines.subList(0, HEAD_LINES));
+        out.add("…（中间省略 " + (lines.size() - HEAD_LINES - tail) + " 条步骤，以下为最新进展与结论）");
+        out.addAll(lines.subList(lines.size() - tail, lines.size()));
         return out;
     }
 

@@ -55,7 +55,9 @@ public class RecipeActionResolver implements ActionResolver {
 
     /** 内置默认配方（仓库没有覆盖时使用）。 */
     private static final Map<ActionId, List<List<String>>> BUILTIN_STEPS = Map.of(
-            ActionId.BACKEND_BUILD, List.of(List.of("mvn", "-B", "-q", "verify")),
+            // 构建只负责编译打包：测试交给 backend_test 阶段（10m 预算跑全量测试必然 E-302，
+            // 且与 test 阶段重复执行两遍；聚合工程也要先 package 才有子模块 target/*.jar）
+            ActionId.BACKEND_BUILD, List.of(List.of("mvn", "-B", "-q", "-DskipTests", "package")),
             ActionId.BACKEND_TEST, List.of(List.of("mvn", "-B", "-q", "test")),
             ActionId.FRONTEND_BUILD, List.of(
                     List.of("pnpm", "install", "--frozen-lockfile", "--ignore-scripts"),
@@ -64,7 +66,8 @@ public class RecipeActionResolver implements ActionResolver {
 
     /** 动作级默认超时：测试给足 20m，构建/镜像 10~20m，其余 15m。 */
     private static final Map<ActionId, Duration> DEFAULT_TIMEOUTS = Map.of(
-            ActionId.BACKEND_BUILD, Duration.ofMinutes(10),
+            // 聚合工程冷启动编译 + 打包在 2 核构建容器里实测 10m 不够（RuoYi 约 12m），与测试统一给 20m
+            ActionId.BACKEND_BUILD, Duration.ofMinutes(20),
             ActionId.BACKEND_TEST, Duration.ofMinutes(20),
             ActionId.FRONTEND_BUILD, Duration.ofMinutes(10),
             ActionId.FRONTEND_TEST, Duration.ofMinutes(20),

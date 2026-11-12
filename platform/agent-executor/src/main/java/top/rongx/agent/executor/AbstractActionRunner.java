@@ -90,7 +90,8 @@ public abstract class AbstractActionRunner implements ActionRunner {
         if (!spec.produce().isEmpty() && artifacts.isEmpty()) {
             long costMs = (System.nanoTime() - started) / 1_000_000L;
             return new ActionResult(StageResult.failed(spec.action().wireName(), 404, "E-401",
-                    "声明的产物未生成，可能配方过期或构建未产出：" + spec.produce(), costMs),
+                    "声明的产物未生成，可能配方过期或构建未产出：" + spec.produce()
+                            + artifactHint(workspace), costMs),
                     ProcessExecutor.tail(sink));
         }
         long costMs = (System.nanoTime() - started) / 1_000_000L;
@@ -135,27 +136,72 @@ public abstract class AbstractActionRunner implements ActionRunner {
 
     // ---------------------------------------------------------------- 产物
 
+    /**
+     * E-401 时补充扫描现场：扫的是哪个目录、有没有 target、有多少 jar。
+     *
+     * <p>没有这些信息时，用户只能看到"产物未生成"，无法区分「构建没跑完」和
+     * 「构建产物落在别的目录」，自动修复 Agent 也只能盲猜。
+     */
+    private static String artifactHint(Path workspace) {
+        try {
+            List<String> targets = new ArrayList<>();
+            try (Stream<Path> stream = Files.walk(workspace, 4)) {
+                stream.filter(Files::isDirectory)
+                        .filter(p -> p.getFileName() != null && "target".equals(p.getFileName().toString()))
+                        .limit(6)
+                        .forEach(p -> targets.add(workspace.relativize(p).toString()));
+            }
+            long jars;
+            try (Stream<Path> stream = Files.walk(workspace, 6)) {
+                jars = stream.filter(Files::isRegularFile)
+                        .filter(p -> p.getFileName().toString().endsWith(".jar"))
+                        .limit(1000)
+                        .count();
+            }
+            return "（扫描 " + workspace + "：target 目录 " + targets.size()
+                    + (targets.isEmpty() ? "" : " - " + String.join(", ", targets))
+                    + "；jar 文件 " + (jars >= 1000 ? "1000+" : jars) + " 个）";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     private List<ArtifactRef> expandArtifacts(Path workspace, List<String> patterns) {
         if (patterns.isEmpty()) {
             return List.of();
         }
-        FileSystem fs = FileSystems.getDefault();
         List<ArtifactRef> found = new ArrayList<>();
         for (String pattern : patterns) {
-            PathMatcher matcher = fs.getPathMatcher("glob:" + pattern);
-            try (Stream<Path> stream = Files.walk(workspace)) {
-                stream.filter(Files::isRegularFile)
-                        .filter(file -> matcher.matches(workspace.relativize(file)))
-                        .limit(MAX_ARTIFACTS - found.size())
-                        .forEach(file -> found.add(toArtifact(workspace, file)));
-            } catch (IOException e) {
-                ProcessExecutor.warn("扫描产物失败 " + pattern + ": " + e.getMessage());
+            int limit = MAX_ARTIFACTS - found.size();
+            List<ArtifactRef> direct = matchArtifacts(workspace, pattern, limit);
+            if (direct.isEmpty() && !pattern.startsWith("**/")) {
+                // Maven 聚合工程：可运行 jar 在子模块的 target 下，而默认声明是 target/*.jar。
+                // 直接匹配为空时按「任意深度」再匹配一次，避免正常构建被误判成 E-401。
+                direct = matchArtifacts(workspace, "**/" + pattern, limit);
             }
+            found.addAll(direct);
             if (found.size() >= MAX_ARTIFACTS) {
                 break;
             }
         }
         return found;
+    }
+
+    private List<ArtifactRef> matchArtifacts(Path workspace, String glob, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + glob);
+        List<ArtifactRef> matched = new ArrayList<>();
+        try (Stream<Path> stream = Files.walk(workspace)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(file -> matcher.matches(workspace.relativize(file)))
+                    .limit(limit)
+                    .forEach(file -> matched.add(toArtifact(workspace, file)));
+        } catch (IOException e) {
+            ProcessExecutor.warn("扫描产物失败 " + glob + ": " + e.getMessage());
+        }
+        return matched;
     }
 
     private ArtifactRef toArtifact(Path workspace, Path file) {

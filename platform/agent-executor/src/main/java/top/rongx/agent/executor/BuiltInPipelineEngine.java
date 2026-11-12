@@ -1838,7 +1838,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /** 可运行 jar：优先含 BOOT-INF 的 Spring Boot 包，多个取最新。 */
-    private static Path findRunnableJar(Path backendRoot) {
+    static Path findRunnableJar(Path backendRoot) {
         try (var stream = Files.walk(backendRoot, 4)) {
             List<Path> candidates = stream
                     .filter(Files::isRegularFile)
@@ -2446,18 +2446,22 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return Files.isRegularFile(runDir.resolve(artifact).normalize());
         }
         Path target = runDir.resolve("target");
-        if (!Files.isDirectory(target)) {
-            return false;
+        if (Files.isDirectory(target)) {
+            try (var stream = Files.list(target)) {
+                boolean any = stream.anyMatch(p -> {
+                    String name = p.getFileName().toString();
+                    return name.endsWith(".jar") && !name.endsWith("-sources.jar")
+                            && !name.endsWith("-javadoc.jar");
+                });
+                if (any) {
+                    return true;
+                }
+            } catch (java.io.IOException ignored) {
+                // 根 target 读不了时继续按子模块找
+            }
         }
-        try (var stream = Files.list(target)) {
-            return stream.anyMatch(p -> {
-                String name = p.getFileName().toString();
-                return name.endsWith(".jar") && !name.endsWith("-sources.jar")
-                        && !name.endsWith("-javadoc.jar");
-            });
-        } catch (java.io.IOException e) {
-            return false;
-        }
+        // Maven 聚合工程：jar 在子模块 target 下
+        return findRunnableJar(runDir) != null;
     }
 
     /**

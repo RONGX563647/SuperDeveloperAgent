@@ -38,6 +38,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * </ul>
  */
 @SpringBootTest
+// 真实模型评测会消耗 token 并依赖外部密钥：必须显式 AGENT_LIVE_MODEL=true 才跑，
+// 避免 CI 构建结果随外部密钥状态（过期/401）漂移。
+@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(
+        named = "AGENT_LIVE_MODEL", matches = "true")
 class LiveModelToolEvalTest {
 
     @DynamicPropertySource

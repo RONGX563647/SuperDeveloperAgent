@@ -200,20 +200,24 @@ public class HostDeployer implements Deployer {
         Path base = request.workdir() == null || request.workdir().isBlank()
                 ? workdir : workdir.resolve(request.workdir()).normalize();
         Path target = base.resolve("target");
-        if (!Files.isDirectory(target)) {
-            return null;
+        if (Files.isDirectory(target)) {
+            try (var stream = Files.list(target)) {
+                Path found = stream
+                        .filter(p -> p.getFileName().toString().endsWith(".jar"))
+                        .filter(p -> !p.getFileName().toString().endsWith("-sources.jar"))
+                        .filter(p -> !p.getFileName().toString().endsWith("-javadoc.jar"))
+                        .sorted()
+                        .findFirst()
+                        .orElse(null);
+                if (found != null) {
+                    return found;
+                }
+            } catch (IOException ignored) {
+                // 根 target 读不了时继续按子模块找
+            }
         }
-        try (var stream = Files.list(target)) {
-            return stream
-                    .filter(p -> p.getFileName().toString().endsWith(".jar"))
-                    .filter(p -> !p.getFileName().toString().endsWith("-sources.jar"))
-                    .filter(p -> !p.getFileName().toString().endsWith("-javadoc.jar"))
-                    .sorted()
-                    .findFirst()
-                    .orElse(null);
-        } catch (IOException e) {
-            return null;
-        }
+        // Maven 聚合工程：可运行 jar 在子模块的 target 下（如 ruoyi-admin/target/*.jar）
+        return BuiltInPipelineEngine.findRunnableJar(base);
     }
 
     private String tailOf(Path logFile) {

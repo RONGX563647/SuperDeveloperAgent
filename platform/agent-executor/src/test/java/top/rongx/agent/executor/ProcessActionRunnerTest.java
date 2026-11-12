@@ -80,6 +80,34 @@ class ProcessActionRunnerTest {
     }
 
     @Test
+    @DisplayName("聚合工程：jar 在多层子模块 target 下也按 target/*.jar 命中（不再误报 E-401）")
+    void artifactsInSubModule(@TempDir Path dir) throws Exception {
+        Path target = dir.resolve("ruoyi-common").resolve("ruoyi-common-core").resolve("target");
+        Files.createDirectories(target);
+        Files.writeString(target.resolve("ruoyi-common-core-6.1.0.jar"), "fake-jar-content");
+
+        ActionResult result = runner.run(dir, spec(ActionId.BACKEND_BUILD,
+                List.of("java", "-version"), List.of("target/*.jar"), Duration.ofMinutes(2)));
+
+        assertEquals(StageStatus.SUCCEEDED, result.result().status());
+        assertEquals(1, result.result().artifacts().size());
+        assertEquals("ruoyi-common/ruoyi-common-core/target/ruoyi-common-core-6.1.0.jar",
+                result.result().artifacts().get(0).ref());
+    }
+
+    @Test
+    @DisplayName("声明了产物但构建未产出 → E-401，并附带扫描现场")
+    void missingArtifacts(@TempDir Path dir) {
+        ActionResult result = runner.run(dir, spec(ActionId.BACKEND_BUILD,
+                List.of("java", "-version"), List.of("target/*.jar"), Duration.ofMinutes(2)));
+
+        assertEquals(StageStatus.FAILED, result.result().status());
+        assertEquals("E-401", result.result().errorCode());
+        assertTrue(result.result().errorSummary().contains("扫描"), "应说明扫描目录");
+        assertTrue(result.result().errorSummary().contains("target 目录 0"), "应说明没有 target 目录");
+    }
+
+    @Test
     @DisplayName("超时 → E-302，进程被终止")
     void timeout() {
         Assumptions.assumeTrue(System.getProperty("os.name").toLowerCase().contains("win"),

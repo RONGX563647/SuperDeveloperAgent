@@ -34,12 +34,14 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.env.StackAdapter;
+import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.settings.EnvBindingService;
 import top.rongx.agent.gateway.settings.EnvironmentDiscoveryService;
+import top.rongx.agent.executor.PipelineDefinition;
 import top.rongx.agent.gateway.settings.LocalServiceManager;
 
 /**
@@ -62,6 +64,7 @@ public class EnvironmentController {
     private final EnvRuntime envRuntime;
     private final LocalServiceManager localServices;
     private final CurrentUser currentUser;
+    private final PipelineDefStore pipelineDefs;
 
     /** 发现候选暂存：密码留在后端，前端只拿 candidateId。 */
     private final Map<String, EnvResource> candidates = new ConcurrentHashMap<>();
@@ -69,7 +72,8 @@ public class EnvironmentController {
     public EnvironmentController(EnvironmentStore envStore, EnvironmentDiscoveryService discovery,
                                  EnvBindingService bindings, DeployServerRepository servers,
                                  SshAccess ssh, EnvRuntime envRuntime,
-                                 LocalServiceManager localServices, CurrentUser currentUser) {
+                                 LocalServiceManager localServices, CurrentUser currentUser,
+                                 PipelineDefStore pipelineDefs) {
         this.envStore = envStore;
         this.discovery = discovery;
         this.bindings = bindings;
@@ -78,6 +82,7 @@ public class EnvironmentController {
         this.envRuntime = envRuntime;
         this.localServices = localServices;
         this.currentUser = currentUser;
+        this.pipelineDefs = pipelineDefs;
     }
 
     // ---------------------------------------------------------------- 模板
@@ -414,8 +419,15 @@ public class EnvironmentController {
         out.put("projectId", projectId);
         out.put("env", env);
         out.put("network", e.network() == null ? "" : e.network());
-        out.put("defaultPort", e.defaultPort());
-        out.put("healthPath", e.healthPath() == null ? "" : e.healthPath());
+        // 部署端口/健康路径以流水线定义为准（真正生效的是它），模板默认值只在没有定义时兜底，
+        // 否则页面会显示一套、部署用另一套。
+        PipelineDefinition.DeploySpec deploy = pipelineDeploy(projectId);
+        boolean deployOverrides = deploy != null;
+        out.put("defaultPort", deployOverrides && deploy.port() > 0 ? deploy.port() : e.defaultPort());
+        out.put("healthPath", deployOverrides && deploy.healthPath() != null
+                && !deploy.healthPath().isBlank() ? deploy.healthPath()
+                : (e.healthPath() == null ? "" : e.healthPath()));
+        out.put("deployTarget", deployOverrides && deploy.target() != null ? deploy.target() : "");
         out.put("vars", e.vars());
         // 项目源码里能直接读到的变量：部署时自动注入；人工覆盖后以覆盖值为准。
         out.put("sourceVars", sourceVars(projectSource, e.values()));
@@ -425,6 +437,19 @@ public class EnvironmentController {
         out.put("referencedRunningCount", referencedRunning);
         out.put("resources", resources);
         return out;
+    }
+
+    /** 读取平台侧流水线的 deploy 段；缺失或 YAML 不合法时返回 null（退回环境模板默认值）。 */
+    private PipelineDefinition.DeploySpec pipelineDeploy(String projectId) {
+        try {
+            return pipelineDefs.read(projectId)
+                    .map(yaml -> PipelineDefinition.parse(yaml, "平台侧定义").deploy())
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            log.debug("流水线定义解析失败，端口/健康路径退回环境模板 projectId={}：{}",
+                    projectId, e.getMessage());
+            return null;
+        }
     }
 
     /**
