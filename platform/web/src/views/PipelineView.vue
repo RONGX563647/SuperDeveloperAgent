@@ -12,9 +12,10 @@ import HistoryList from '../components/pipeline/HistoryList.vue'
 import StageTimeline from '../components/pipeline/StageTimeline.vue'
 import RunLog from '../components/pipeline/RunLog.vue'
 import {
-  artifactFilePath, deleteHistory, getHistory, getRun, isTerminalStatus, listPipelines, previewPipeline,
-  retryStage, stopLocalDeploy, triggerPipeline,
-  type ArtifactView, type HistoryItem, type PreviewStage, type RunView, type StageView,
+  artifactFilePath, deleteHistory, dryRunPipeline, getHistory, getRun, isTerminalStatus,
+  listPipelines, previewPipeline, retryStage, stopLocalDeploy, triggerPipeline,
+  type ArtifactView, type DryRunReportView, type HistoryItem, type PreviewStage,
+  type RunView, type StageView,
 } from '../api/pipeline'
 import { apiBlob } from '../api/http'
 import { gitCommits, listProjects, type GitCommit, type ProjectRow } from '../api/project'
@@ -77,6 +78,9 @@ const pipelineId = ref('')
 const sha = ref('')
 const triggerBusy = ref(false)
 const pipelinesLoading = ref(false)
+/** 最近一次 dry-run 报告（只读预检）；代码/环境/提交变化后清空。 */
+const dryRun = ref<DryRunReportView | null>(null)
+const dryRunBusy = ref(false)
 
 const deployTarget = ref(defaultTarget(appStore.env))
 
@@ -547,6 +551,31 @@ async function doAction(): Promise<void> {
   await doPrimary()
 }
 
+/** 部署预检（dry-run）：只读检查配置/密钥/Docker，不产生任何变更。 */
+async function preflight(): Promise<void> {
+  if (!shaValid.value || dryRunBusy.value) return
+  dryRunBusy.value = true
+  topError.value = ''
+  dryRun.value = null
+  try {
+    const target = action.value === 'verify' ? 'verify' : pipelineId.value
+    const report = await dryRunPipeline(target, projectId.value, env.value, sha.value)
+    dryRun.value = report
+    if (report.ok) {
+      ElMessage.success('预检通过')
+    } else {
+      ElMessage.warning(`预检未通过：${report.blockers[0] ?? '见运行卡'}`)
+    }
+  } catch (e) {
+    topError.value = `预检失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    dryRunBusy.value = false
+  }
+}
+
+// 代码/环境/流水线/动作变化后，旧报告不再有参考价值。
+watch([sha, env, pipelineId, action], () => { dryRun.value = null })
+
 /** 从失败阶段继续：后端复用失败现场，只重跑该阶段及其后续。 */
 async function retryFailedStage(): Promise<void> {
   const stage = failedStage.value
@@ -905,7 +934,10 @@ async function copyDigest(digest: string): Promise<void> {
             :last-good-sha="lastGoodSha"
             :hint="runHint"
             :can-run="canRun"
+            :dry-run="dryRun"
+            :dry-run-busy="dryRunBusy"
             @run="doAction"
+            @dryrun="preflight"
             @refresh-commits="loadCommits"
             @stop-local="stopLocalServices"
           />

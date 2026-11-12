@@ -423,6 +423,73 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
     }
 
+    @Override
+    public DryRunReport dryRun(String projectId, String pipelineId, String env, String gitSha) {
+        String normalized = normalizeEnv(env == null || env.isBlank() ? "test" : env);
+        List<StagePreview> previews = preview(projectId, pipelineId, normalized, gitSha);
+        List<String> blockers = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        List<StageDryRun> stages = new ArrayList<>();
+
+        top.rongx.agent.domain.env.EffectiveEnvironment effective =
+                envStore.effective(projectId, normalized);
+        if (!effective.missingSecrets().isEmpty()) {
+            blockers.add("E-704 密钥引用无法解析：" + String.join("、", effective.missingSecrets()));
+        }
+        Path repo = resolveRepoForRead(projectId);
+        if (repo != null) {
+            top.rongx.agent.domain.env.ProjectEnvFiles.Declared declared =
+                    top.rongx.agent.domain.env.ProjectEnvFiles.scan(repo);
+            List<String> missing = declared.required().stream()
+                    .filter(k -> !effective.values().containsKey(k))
+                    .toList();
+            if (!missing.isEmpty()) {
+                blockers.add("E-509 缺少必需环境变量：" + String.join("、", missing));
+            }
+        }
+        if (previews.isEmpty()) {
+            blockers.add("没有可执行的阶段：请检查 ci/pipeline.yml 或配方是否存在");
+        }
+        boolean needsDocker = previews.stream().anyMatch(p ->
+                "image".equalsIgnoreCase(p.type()) || "docker".equalsIgnoreCase(p.runner()));
+        if (needsDocker && !dockerAvailable()) {
+            blockers.add("Docker 不可用：镜像/容器部署无法执行（L3 fail-closed）");
+        }
+        for (StagePreview p : previews) {
+            boolean runnable = p.skipReason() == null || p.skipReason().isBlank();
+            stages.add(new StageDryRun(p.id(), p.type(), p.action(), runnable,
+                    runnable ? "" : p.skipReason(), p.command() == null ? "" : p.command(),
+                    p.scriptSha() == null ? "" : p.scriptSha(), p.builtin()));
+        }
+        String envDigest = envDigest(effective.digestValues());
+        String fingerprint = String.join("|", projectId, normalized, pipelineId,
+                gitSha == null ? "" : gitSha, envDigest,
+                previews.stream().map(p -> p.scriptSha() == null ? "" : p.scriptSha())
+                        .reduce("", (a, b) -> a + "," + b));
+        String reportHash = sha256Short(fingerprint);
+        boolean ok = blockers.isEmpty();
+        return new DryRunReport(projectId, normalized, pipelineId,
+                gitSha == null ? "" : gitSha, reportHash, fingerprint, ok,
+                blockers, warnings, stages, System.currentTimeMillis());
+    }
+
+    private static boolean dockerAvailable() {
+        try {
+            Process process = new ProcessBuilder("docker", "version", "--format", "{{.Server.Version}}")
+                    .redirectErrorStream(true).start();
+            if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return false;
+            }
+            return process.exitValue() == 0;
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return false;
+        }
+    }
+
     /**
      * 只读预览：把指定提交里的定义文件取到临时目录（不检出 worktree、不改工作区），
      * 交给同一套解析逻辑。取不到（该提交没有 {@code ci/pipeline.yml}）返回 null，回退工作区。
@@ -2230,6 +2297,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             network = effective.network();
         }
 
+        if (effective != null && !effective.missingSecrets().isEmpty()) {
+            state.stages.add(StageResult.failed(stageId, 1, "E-704",
+                    "密钥引用无法解析：" + String.join("、", effective.missingSecrets())
+                            + "。请先在「设置 → 项目环境 → 密钥」创建或轮换对应密钥",
+                    elapsed(start)));
+            return false;
+        }
+
         // 应用也是容器：必须和中间件同处一个环境网络，才能用「容器名:容器端口」连接。
         if (target == DeployTarget.DOCKER && (network == null || network.isBlank())) {
             String namespace = template == null || template.namespace() == null
@@ -2317,7 +2392,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // 只存来源、key 与值哈希，既可追溯"这次用了哪套变量"，又不泄露明文。
         if (effective != null) {
             long secretCount = effective.vars().stream().filter(v -> v.secret()).count();
-            String digest = envDigest(deployEnv);
+            String digest = envDigest(effective.digestValues());
+            Map<String, String> snapshotValues = effective.digestValues();
             state.log.append("[env] 环境=").append(state.env)
                     .append("，变量 ").append(deployEnv.size())
                     .append("（模板 ").append(effective.templateCount())
@@ -2339,7 +2415,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 snapshot.put("bindingId", state.bindingId);
                 snapshot.put("confirmedBy", state.confirmedBy == null ? "" : state.confirmedBy);
             }
-            deployEnv.entrySet().stream()
+            snapshotValues.entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
                     .forEach(e -> snapshot.put("keyHash:" + e.getKey(), sha256(e.getValue())));
             state.artifacts.add(new ArtifactRef("env-snapshot", "env:" + state.env, digest, 0, snapshot));

@@ -86,6 +86,49 @@ export function triggerPipeline(
   })
 }
 
+/** dry-run 单个阶段的预检结果。 */
+export interface DryRunStageView {
+  id: string
+  type: string
+  action: string
+  /** false 表示这一步本次不会执行（reason 给出原因）。 */
+  runnable: boolean
+  reason: string
+  command: string
+  scriptSha: string
+  builtin: boolean
+}
+
+/**
+ * 部署预检报告（只读，零 outward 变更）。
+ *
+ * <p>blockers 非空时后端会拒绝 apply（E-708）；reportHash/fingerprint 绑定
+ * 代码、配方、环境与密钥版本，任何变化都会让旧报告失效。
+ */
+export interface DryRunReportView {
+  projectId: string
+  env: string
+  pipelineId: string
+  gitSha: string
+  reportHash: string
+  fingerprint: string
+  ok: boolean
+  blockers: string[]
+  warnings: string[]
+  createdAt: number
+  stages: DryRunStageView[]
+}
+
+/** 部署预检：不执行任何变更，只返回阻塞项与阶段可执行性。 */
+export function dryRunPipeline(
+  pipelineId: string, projectId: string, env: string, gitSha: string
+): Promise<DryRunReportView> {
+  return apiFetch<DryRunReportView>(
+    `/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/dry-run`,
+    { method: 'POST', body: JSON.stringify({ projectId, env, gitSha }) }
+  )
+}
+
 /** 查询一次运行的状态 / stage / 产物；withLog=false 时不传输整段日志（配合增量日志端点）。 */
 export function getRun(runId: string, withLog = true): Promise<RunView> {
   const q = withLog ? '' : '?withLog=false'

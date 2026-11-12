@@ -99,7 +99,7 @@ public class EnvBindingService implements EnvBindingPort {
         mapping.put("keys", keys);
         mapping.put("missing", missing);
         mapping.put("warnings", warnings);
-        mapping.put("effectiveHash", valuesDigest(effective.values()));
+        mapping.put("effectiveHash", valuesDigest(effective));
         String mappingJson;
         try {
             mappingJson = json.writeValueAsString(mapping);
@@ -137,7 +137,7 @@ public class EnvBindingService implements EnvBindingPort {
         }
         String expected = bindingHash(binding.mappingJson());
         if (expected != null) {
-            String actual = valuesDigest(envStore.effective(projectId, env).values());
+            String actual = valuesDigest(envStore.effective(projectId, env));
             if (!expected.equals(actual)) {
                 throw new IllegalArgumentException(
                         "E-703 环境变量在确认后已变更：请重新生成并确认绑定");
@@ -156,10 +156,10 @@ public class EnvBindingService implements EnvBindingPort {
         }
     }
 
-    /** 对 key + 值哈希做摘要，部署时与运行日志里的 env-snapshot 使用同一算法。 */
-    static String valuesDigest(Map<String, String> values) {
+    /** 对 key + 摘要材料做摘要；密钥引用只参与“引用名@版本”，不哈希明文。 */
+    static String valuesDigest(top.rongx.agent.domain.env.EffectiveEnvironment effective) {
         StringBuilder canonical = new StringBuilder();
-        values.entrySet().stream()
+        effective.digestValues().entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .forEach(e -> canonical.append(e.getKey()).append('=').append(sha256(e.getValue())).append('\n'));
         return sha256(canonical.toString());

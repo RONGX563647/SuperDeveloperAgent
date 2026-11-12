@@ -33,13 +33,15 @@ public class ToolCatalog {
                                    CiQueryTools ciQueryTools,
                                    ActionQueryTools actionQueryTools,
                                    RepoQueryTools repoQueryTools,
-                                   RuntimeTools runtimeTools) {
+                                   RuntimeTools runtimeTools,
+                                   ConfigTools configTools) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
         toolkit.registerTool(repoQueryTools);
         toolkit.registerTool(runtimeTools);
+        toolkit.registerTool(configTools);
         return toolkit;
     }
 
@@ -55,6 +57,7 @@ public class ToolCatalog {
                                 EnvTools envTools,
                                 RepoQueryTools repoQueryTools,
                                 RuntimeTools runtimeTools,
+                                ConfigTools configTools,
                                 PatchTools patchTools) {
         Toolkit toolkit = new Toolkit();
 
@@ -66,6 +69,7 @@ public class ToolCatalog {
         toolkit.registerTool(deployTools);
         toolkit.registerTool(repoQueryTools);
         toolkit.registerTool(runtimeTools);
+        toolkit.registerTool(configTools);
 
         // 写操作工具：直接注册，保证非生产会话始终可见（确认交给变更单 / 确认卡）
         toolkit.registerTool(ciCommandTools);
@@ -97,6 +101,7 @@ public class ToolCatalog {
                                  DeployTools deployTools,
                                  EnvTools envTools,
                                  RuntimeTools runtimeTools,
+                                 ConfigTools configTools,
                                  ChangeTools changeTools,
                                  ActionCommandTools actionCommandTools,
                                  PatchTools patchTools) {
@@ -108,6 +113,7 @@ public class ToolCatalog {
         toolkit.registerTool(envTools);
         toolkit.registerTool(deployTools);
         toolkit.registerTool(runtimeTools);
+        toolkit.registerTool(configTools);
         toolkit.registerTool(changeTools);
         toolkit.registerTool(actionCommandTools);
         toolkit.registerTool(patchTools);

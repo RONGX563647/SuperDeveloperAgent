@@ -88,6 +88,8 @@ public class ProjectEnvController {
         out.put("secret", v.secret());
         out.put("value", v.value());
         out.put("source", v.source());
+        out.put("valueKind", v.valueKind());
+        out.put("secretRef", v.secretRef());
         out.put("updatedBy", null);
         out.put("updatedAt", v.updatedAt());
         return out;

@@ -18,6 +18,8 @@ import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.tool.ToolLevel;
+import top.rongx.agent.domain.policy.PolicyPort;
 
 /**
  * 动作编排服务（工具与 HTTP 共用同一套门禁，避免两条路径行为不一致）。
@@ -43,6 +45,7 @@ public class ActionService {
     private final ActionResolver resolver;
     private final ActionRunner runner;
     private final ChangeStore changes;
+    private final PolicyPort policy;
     private final String workspaceRoot;
     /** 仅供测试：让可用性测试在无 Docker 环境也能验证 L3 令牌闭环。生产恒为 false。 */
     private final boolean allowTestL3;
@@ -50,11 +53,13 @@ public class ActionService {
     public ActionService(ActionResolver resolver,
                          ActionRunner runner,
                          ChangeStore changes,
+                         PolicyPort policy,
                          @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
                          @Value("${agent.sandbox.allow-test-l3:false}") boolean allowTestL3) {
         this.resolver = resolver;
         this.runner = runner;
         this.changes = changes;
+        this.policy = policy;
         this.workspaceRoot = workspaceRoot;
         this.allowTestL3 = allowTestL3;
     }
@@ -93,9 +98,7 @@ public class ActionService {
             throw new IllegalStateException(action.wireName()
                     + " 属 L3（影响生产），不能直接执行。请先 request → confirm → apply。");
         }
-        if (ctx.isProduction()) {
-            throw new IllegalStateException("生产环境不允许直接执行动作，请先在测试环境验证。");
-        }
+        policy.requireNotDenied(ctx, ToolLevel.L2_EXECUTE_ISOLATED, action.wireName());
         Path root = requireWorkspace(ctx);
         ActionSpec spec = plan(ctx, action);
         ActionSpec bound = bindParams(spec, overrides);
@@ -110,6 +113,7 @@ public class ActionService {
         if (action.autoExecutable()) {
             throw new IllegalArgumentException(action.wireName() + " 属 L2，可直接执行，无需审批。");
         }
+        policy.requireNotDenied(ctx, ToolLevel.L3_EXECUTE_PROD, action.wireName());
         ActionSpec spec = plan(ctx, action);
         String hash = specHash(ctx, spec);
         return changes.registerWithHash(ctx.projectId(), ctx.env(), action.wireName(),
@@ -136,6 +140,7 @@ public class ActionService {
         if (action.autoExecutable()) {
             throw new IllegalStateException(action.wireName() + " 属 L2，请直接执行。");
         }
+        policy.requireNotDenied(ctx, ToolLevel.L3_EXECUTE_PROD, action.wireName());
         Path root = requireWorkspace(ctx);
         ActionSpec spec = plan(ctx, action);
         String actual = specHash(ctx, spec);

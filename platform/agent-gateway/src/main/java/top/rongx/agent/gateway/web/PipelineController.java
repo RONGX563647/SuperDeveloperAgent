@@ -87,6 +87,47 @@ public class PipelineController {
                         .toList());
     }
 
+    private static Map<String, Object> dryRunView(PipelineEngine.DryRunReport report) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("projectId", report.projectId());
+        out.put("env", report.env());
+        out.put("pipelineId", report.pipelineId());
+        out.put("gitSha", report.gitSha());
+        out.put("reportHash", report.reportHash());
+        out.put("fingerprint", report.fingerprint());
+        out.put("ok", report.ok());
+        out.put("blockers", report.blockers());
+        out.put("warnings", report.warnings());
+        out.put("createdAt", report.createdAt());
+        out.put("stages", report.stages().stream().map(s -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", s.id());
+            row.put("type", s.type());
+            row.put("action", s.action() == null ? "" : s.action());
+            row.put("runnable", s.runnable());
+            row.put("reason", s.reason() == null ? "" : s.reason());
+            row.put("command", s.command() == null ? "" : s.command());
+            row.put("scriptSha", s.scriptSha() == null ? "" : s.scriptSha());
+            row.put("builtin", s.builtin());
+            return row;
+        }).toList());
+        return out;
+    }
+
+    @PostMapping("/pipelines/{pipelineId}/dry-run")
+    public Map<String, Object> dryRun(@PathVariable String pipelineId,
+                                      @RequestBody Map<String, String> params) {
+        String projectId = params.get("projectId");
+        if (projectId == null || projectId.isBlank()) {
+            throw new IllegalArgumentException("projectId 必填");
+        }
+        currentUser.checkPermission("ci:run");
+        String env = params.getOrDefault("env", "test");
+        PipelineEngine.DryRunReport report = engine.dryRun(projectId, pipelineId, env,
+                params.get("gitSha"));
+        return dryRunView(report);
+    }
+
     @PostMapping("/pipelines/{pipelineId}/run")
     public Map<String, Object> run(@PathVariable String pipelineId,
                                    @RequestBody Map<String, String> params) {
@@ -102,6 +143,18 @@ public class PipelineController {
         // 环境：缺省 test（绝不让"没传环境"落到生产）
         String env = params.get("env");
         String normalizedEnv = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
+        // 阶段门控：先 dry-run（只读预检），不通过不允许 apply；指定的报告哈希必须与当前一致。
+        PipelineEngine.DryRunReport dryRun = engine.dryRun(projectId, pipelineId,
+                normalizedEnv, sha);
+        if (!dryRun.ok()) {
+            throw new IllegalArgumentException("E-708 dry-run 未通过："
+                    + String.join("；", dryRun.blockers()));
+        }
+        String requestedHash = params.get("dryRunHash");
+        if (requestedHash != null && !requestedHash.isBlank()
+                && !requestedHash.equals(dryRun.reportHash())) {
+            throw new IllegalArgumentException("E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+        }
         // 服务器（prod）操作：测试证据 + 一次性人工确认令牌，两个入口（这里 / deploy/replay）共用同一校验
         deployGate.requireIfNeeded(projectId, normalizedEnv, sha, params.get("confirmToken"));
         // Agent 触发：必须带已人工确认的环境绑定（普通 UI 触发不强制）
@@ -114,6 +167,8 @@ public class PipelineController {
         Map<String, String> triggerParams = new LinkedHashMap<>();
         triggerParams.put("gitSha", sha);
         triggerParams.put("env", normalizedEnv);
+        triggerParams.put("dryRunHash", dryRun.reportHash());
+        triggerParams.put("dryRunFingerprint", dryRun.fingerprint());
         triggerParams.put("actor", bindingId == null || bindingId.isBlank() ? "ui:" + actor : "agent");
         if (bindingId != null && !bindingId.isBlank()) {
             triggerParams.put("bindingId", bindingId);

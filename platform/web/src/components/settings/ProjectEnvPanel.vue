@@ -6,10 +6,12 @@ import { ApiError } from '../../api/http'
 import { listProjects, type ProjectRow } from '../../api/project'
 import {
   checkProjectEnv, deleteEnvOverride, getEffectiveEnvironment,
-  getLocalServiceLogs, listLocalServices, listPortLeases, restartLocalService,
-  revealEffectiveEnvVar, saveEnvOverride, startLocalService, stopLocalService,
-  type EffectiveEnvironmentView, type EnvCheckView, type EnvVariableView,
-  type LocalServiceView, type PortLeaseView, type SourceEnvVariableView,
+  getLocalServiceLogs, listLocalServices, listPolicies, listPortLeases, listProjectSecrets,
+  resolveProjectConfig, restartLocalService, revealEffectiveEnvVar, saveEnvOverride,
+  startLocalService, stopLocalService,
+  type ConfigResolutionView, type EffectiveEnvironmentView, type EnvCheckView,
+  type EnvPolicyView, type EnvVariableView, type LocalServiceView, type PortLeaseView,
+  type ProjectSecret, type SourceEnvVariableView,
 } from '../../api/settings'
 import { appStore } from '../../stores/app'
 import { formatTime } from '../../utils/status'
@@ -51,6 +53,30 @@ const canReveal = computed(() => {
 const formOpen = ref(false)
 const editing = ref<EnvRowView | null>(null)
 const form = reactive({ key: '', value: '', secret: true })
+/** 值的写法：直接填明文 / 引用密钥库（secret://名称）。 */
+const formMode = ref<'value' | 'ref'>('value')
+const formRefName = ref('')
+/** 当前项目环境的密钥（只含名称与版本）。 */
+const secrets = ref<ProjectSecret[]>([])
+
+/** 配置解析弹窗：展示「项目环境优先 + 全量扫描候选」，缺失时提示需要用户回答。 */
+const resolveOpen = ref(false)
+const resolving = ref(false)
+const resolution = ref<ConfigResolutionView | null>(null)
+
+/** 分环境策略矩阵（只读，由后端代码默认值提供）。 */
+const policies = ref<Record<string, EnvPolicyView>>({})
+const currentPolicy = computed(() => policies.value[env.value] ?? null)
+/** 当前环境 L0–L3 的可执行级别，用于顶部一句话说明。 */
+const policyRows = computed(() => {
+  const p = currentPolicy.value
+  if (!p) return []
+  return (['L0', 'L1', 'L2', 'L3'] as const).map((level) => ({
+    level,
+    decision: p[level],
+    text: p[level] === 'ALLOW' ? '允许' : p[level] === 'CONFIRM' ? '需确认' : '禁止',
+  }))
+})
 
 const importOpen = ref(false)
 const importText = ref('')
@@ -151,6 +177,16 @@ async function load(): Promise<void> {
       leases.value = await listPortLeases(projectId.value, env.value)
     } catch {
       leases.value = []
+    }
+    try {
+      secrets.value = await listProjectSecrets(projectId.value, env.value)
+    } catch {
+      secrets.value = []
+    }
+    try {
+      policies.value = (await listPolicies()).policies
+    } catch {
+      policies.value = {}
     }
     await loadServices()
   } catch (e) {
@@ -313,7 +349,16 @@ function startCreate(): void {
   form.key = ''
   form.value = ''
   form.secret = true
+  formMode.value = 'value'
+  formRefName.value = ''
   formOpen.value = true
+}
+
+/** 当前行是密钥引用时，编辑态直接切到「引用密钥」并选中对应名称。 */
+function applyRefMode(row: EnvRowView): void {
+  const match = /^secret:\/\/([A-Za-z0-9._-]{1,128})$/.exec(row.value)
+  formMode.value = match ? 'ref' : 'value'
+  formRefName.value = match ? match[1] : ''
 }
 
 function startEdit(row: EnvRowView): void {
@@ -321,6 +366,7 @@ function startEdit(row: EnvRowView): void {
   form.key = row.key
   form.value = ''
   form.secret = row.secret
+  applyRefMode(row)
   formOpen.value = true
 }
 
@@ -330,6 +376,7 @@ function startOverride(row: EnvRowView): void {
   form.key = row.key
   form.value = ''
   form.secret = row.secret
+  applyRefMode(row)
   formOpen.value = true
 }
 
@@ -354,17 +401,23 @@ async function save(): Promise<void> {
     ElMessage.warning('变量名必填')
     return
   }
-  if (!form.value) {
+  if (formMode.value === 'ref' && !formRefName.value) {
+    ElMessage.warning('请选择要引用的密钥，或先到「设置 → 密钥库」新建')
+    return
+  }
+  if (formMode.value === 'value' && !form.value) {
     ElMessage.warning('请填写值（覆盖模板默认值）')
     return
   }
+  const value = formMode.value === 'ref' ? `secret://${formRefName.value}` : form.value
+  const secret = formMode.value === 'ref' ? true : form.secret
   saving.value = true
   try {
     await saveEnvOverride(projectId.value, {
       env: env.value,
       key,
-      value: form.value,
-      secret: form.secret,
+      value,
+      secret,
     })
     ElMessage.success('已保存项目覆盖')
     closeForm()
@@ -373,6 +426,25 @@ async function save(): Promise<void> {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+/** 配置解析：项目环境优先，其次仓库声明，最后全量扫描候选。 */
+async function openResolve(): Promise<void> {
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  resolveOpen.value = true
+  resolving.value = true
+  resolution.value = null
+  try {
+    resolution.value = await resolveProjectConfig(projectId.value, env.value)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '配置解析失败')
+    resolveOpen.value = false
+  } finally {
+    resolving.value = false
   }
 }
 
@@ -517,12 +589,22 @@ defineExpose({ load })
       <div class="ep-title-row">
         <h2 class="ep-title">项目环境</h2>
         <el-button size="small" type="primary" :icon="Plus" @click="startCreate">添加覆盖</el-button>
+        <el-button size="small" :icon="Key" @click="openResolve">配置解析</el-button>
         <el-button size="small" :icon="Refresh" :loading="detecting" @click="redetect">重新检测</el-button>
       </div>
       <p class="ep-sub">
         下面的列表是部署时真正注入的变量（环境模板 + 中间件连接信息 + 项目覆盖 + 项目源码 .env）。
         值 AES-GCM 加密落库，不进入 <code>pipeline.yml</code> / 仓库；列表默认掩码，可点眼睛查看明文。
       </p>
+      <div v-if="policyRows.length" class="ep-policy" aria-label="分环境策略">
+        <span class="ep-policy-label">本环境策略</span>
+        <span
+          v-for="row in policyRows" :key="row.level"
+          class="ep-policy-chip" :class="row.decision.toLowerCase()"
+        >
+          {{ row.level }} {{ row.text }}
+        </span>
+      </div>
     </header>
 
     <div class="ep-context">
@@ -778,22 +860,117 @@ defineExpose({ load })
           />
         </label>
         <label class="ep-field">
+          <span>写法</span>
+          <el-radio-group v-model="formMode" size="small">
+            <el-radio-button label="value">直接填值</el-radio-button>
+            <el-radio-button label="ref">引用密钥</el-radio-button>
+          </el-radio-group>
+        </label>
+        <label v-if="formMode === 'value'" class="ep-field">
           <span>值</span>
           <el-input
             v-model="form.value" size="default" type="password" show-password
             placeholder="变量值" class="mono"
           />
         </label>
-        <label class="ep-secret-toggle">
+        <label v-else class="ep-field">
+          <span>密钥</span>
+          <el-select v-model="formRefName" size="default" filterable placeholder="选择密钥">
+            <el-option
+              v-for="s in secrets" :key="s.name"
+              :label="`${s.name}（v${s.version}）`" :value="s.name"
+            />
+          </el-select>
+        </label>
+        <label v-if="formMode === 'value'" class="ep-secret-toggle">
           <el-switch v-model="form.secret" />
           <span>敏感（列表默认掩码，可点眼睛查看）</span>
         </label>
+        <p v-else class="ep-form-hint">
+          保存为 <code>secret://{{ formRefName || '名称' }}</code>；密钥只写不读，
+          没有可选密钥时先到「设置 → 密钥库」新建。
+        </p>
       </div>
       <div class="ep-form-actions">
         <el-button @click="closeForm">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
     </div>
+
+    <!-- 配置解析：项目环境优先 + 全量扫描候选；缺失/冲突时明确提示需要用户回答 -->
+    <el-dialog v-model="resolveOpen" title="配置解析" width="760px" append-to-body>
+      <div v-loading="resolving" class="ep-resolve">
+        <template v-if="resolution">
+          <div class="ep-resolve-badges">
+            <span class="ep-chip" :class="resolution.status === 'READY' ? 'ok' : 'danger'">
+              {{ resolution.status === 'READY' ? '配置齐全' : '需要你确认' }}
+            </span>
+            <span class="ep-chip">项目环境已解析 {{ Object.keys(resolution.resolved).length }}</span>
+            <span class="ep-chip">扫描 {{ resolution.scannedFiles }} 个文件</span>
+            <span v-if="resolution.missing.length" class="ep-chip danger">
+              缺失 {{ resolution.missing.length }}
+            </span>
+            <span v-if="resolution.conflicts.length" class="ep-chip danger">
+              冲突 {{ resolution.conflicts.length }}
+            </span>
+          </div>
+
+          <el-alert
+            v-if="resolution.status === 'NEED_USER_INPUT'"
+            type="warning" :closable="false" show-icon
+            title="缺配置或存在多个候选：Agent 会停下来向你提问，确认前不会继续"
+            :description="resolution.summary"
+          />
+
+          <div v-if="resolution.missing.length" class="ep-resolve-block">
+            <b>缺失（项目环境与仓库声明都没有）</b>
+            <div class="ep-resolve-tags">
+              <code v-for="k in resolution.missing" :key="k" class="mono">{{ k }}</code>
+            </div>
+          </div>
+
+          <div v-if="resolution.conflicts.length" class="ep-resolve-block">
+            <b>冲突（同一变量有多个不同候选）</b>
+            <ul class="ep-resolve-list">
+              <li v-for="c in resolution.conflicts" :key="c">{{ c }}</li>
+            </ul>
+          </div>
+
+          <div v-if="Object.keys(resolution.resolved).length" class="ep-resolve-block">
+            <b>已解析（项目环境优先，敏感值只显示掩码）</b>
+            <div class="ep-resolve-table">
+              <div
+                v-for="(v, k) in resolution.resolved" :key="k"
+                class="ep-resolve-row"
+              >
+                <code class="mono ep-resolve-key">{{ k }}</code>
+                <code class="mono ep-resolve-value">{{ v || '—' }}</code>
+                <span class="ep-resolve-source">{{ resolution.resolvedSource[k] }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="resolution.candidates.length" class="ep-resolve-block">
+            <b>扫描到的候选（不会自动写入项目环境）</b>
+            <div v-for="group in resolution.candidates" :key="group.key" class="ep-cand">
+              <code class="mono ep-cand-key">{{ group.key }}</code>
+              <span class="ep-cand-opts">
+                <span v-for="(o, i) in group.options" :key="i" class="ep-cand-opt">
+                  <code class="mono">{{ o.value || '****' }}</code>
+                  <span class="ep-cand-src">
+                    {{ o.source }}<template v-if="o.envHint"> · {{ o.envHint }}</template>
+                  </span>
+                </span>
+              </span>
+            </div>
+          </div>
+        </template>
+        <p v-else-if="!resolving" class="ep-services-hint">没有解析结果。</p>
+      </div>
+      <template #footer>
+        <el-button @click="resolveOpen = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -832,6 +1009,40 @@ defineExpose({ load })
   font-size: 11px;
   background: var(--surface-sunken);
   border-radius: var(--radius-xs);
+}
+.ep-policy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ep-policy-label {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.ep-policy-chip {
+  padding: 1px 7px;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+}
+.ep-policy-chip.allow {
+  color: var(--success, #2f7d5a);
+  background: color-mix(in srgb, var(--success, #2f9e6e) 10%, transparent);
+  border-color: transparent;
+}
+.ep-policy-chip.confirm {
+  color: var(--warning-ink, #9a6a00);
+  background: color-mix(in srgb, #d9a300 12%, transparent);
+  border-color: transparent;
+}
+.ep-policy-chip.deny {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: transparent;
 }
 .ep-context {
   display: flex;
@@ -1205,6 +1416,21 @@ a.ep-service-url:hover {
   align-items: flex-end;
   gap: 10px;
 }
+.ep-form-hint {
+  flex: 1 1 240px;
+  padding-bottom: 7px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+.ep-form-hint code {
+  padding: 1px 4px;
+  font-size: 10.5px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius-xs);
+}
 .ep-secret-toggle {
   display: flex;
   flex: 0 0 auto;
@@ -1220,5 +1446,109 @@ a.ep-service-url:hover {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+/* 配置解析弹窗 */
+.ep-resolve {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 80px;
+}
+.ep-resolve-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ep-resolve-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.ep-resolve-block > b {
+  font-size: 11.5px;
+  color: var(--ink);
+}
+.ep-resolve-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ep-resolve-tags code {
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-radius: var(--radius-pill);
+}
+.ep-resolve-list {
+  padding-left: 18px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-muted);
+}
+.ep-resolve-table {
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.ep-resolve-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.4fr) 90px;
+  gap: 10px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  border-top: 1px solid var(--line-soft);
+}
+.ep-resolve-row:first-child {
+  border-top: 0;
+}
+.ep-resolve-key {
+  color: var(--ink);
+}
+.ep-resolve-value {
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ep-resolve-source {
+  color: var(--ink-faint);
+}
+.ep-cand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 11.5px;
+  border-top: 1px dashed var(--line-soft);
+}
+.ep-cand:first-of-type {
+  border-top: 0;
+}
+.ep-cand-key {
+  flex: 0 0 150px;
+  color: var(--ink);
+}
+.ep-cand-opts {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.ep-cand-opt {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.ep-cand-opt code {
+  font-size: 11px;
+  color: var(--accent-ink);
+}
+.ep-cand-src {
+  font-size: 10.5px;
+  color: var(--ink-faint);
 }
 </style>

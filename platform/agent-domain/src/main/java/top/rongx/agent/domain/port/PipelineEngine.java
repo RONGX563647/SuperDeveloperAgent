@@ -127,6 +127,32 @@ public interface PipelineEngine {
     }
 
     /**
+     * Dry-run：只做解析与只读预检，不创建/启动容器、不部署、不推送镜像。
+     *
+     * <p>{@code reportHash} 是 apply 审批的绑定对象；配方/提交/环境/密钥版本任一变化
+     * 都应产生不同哈希，旧报告与令牌自动失效。
+     */
+    default DryRunReport dryRun(String projectId, String pipelineId, String env, String gitSha) {
+        return new DryRunReport(projectId, env, pipelineId, gitSha, "", "", false,
+                List.of("当前引擎不支持 dry-run"), List.of(), List.of(), 0);
+    }
+
+    record DryRunReport(String projectId, String env, String pipelineId, String gitSha,
+                        String reportHash, String fingerprint, boolean ok,
+                        List<String> blockers, List<String> warnings,
+                        List<StageDryRun> stages, long createdAt) {
+        public DryRunReport {
+            blockers = blockers == null ? List.of() : List.copyOf(blockers);
+            warnings = warnings == null ? List.of() : List.copyOf(warnings);
+            stages = stages == null ? List.of() : List.copyOf(stages);
+        }
+    }
+
+    record StageDryRun(String id, String type, String action, boolean runnable, String reason,
+                       String command, String scriptSha, boolean builtin) {
+    }
+
+    /**
      * 从指定阶段继续执行（复用失败运行保留的构建现场）。
      *
      * <p>只允许对终态失败的运行调用；不支持或现场已清理时抛 {@link IllegalArgumentException}。

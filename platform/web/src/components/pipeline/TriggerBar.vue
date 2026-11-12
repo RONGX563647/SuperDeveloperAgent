@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import type { GitCommit } from '../../api/project'
-import type { PreviewStage } from '../../api/pipeline'
+import type { DryRunReportView, PreviewStage } from '../../api/pipeline'
 import { previewLabel } from '../../utils/pipelineLabels'
 
 /**
@@ -36,6 +36,9 @@ interface Props {
   lastGoodSha?: string
   hint?: string
   canRun: boolean
+  /** 最近一次 dry-run 报告：展示阻塞项 / 警告，不产生任何变更。 */
+  dryRun?: DryRunReportView | null
+  dryRunBusy?: boolean
 }
 
 const props = defineProps<Props>()
@@ -45,6 +48,7 @@ const emit = defineEmits<{
   (e: 'update:deployTarget', v: string): void
   (e: 'update:action', v: 'release' | 'verify'): void
   (e: 'run'): void
+  (e: 'dryrun'): void
   (e: 'refreshCommits'): void
   (e: 'stopLocal'): void
 }>()
@@ -284,6 +288,13 @@ const runLabel = computed(() =>
       >
         {{ runLabel }}
       </el-button>
+      <el-button
+        size="large" :loading="dryRunBusy" :disabled="!canRun"
+        title="只读预检：检查配置/密钥/Docker，不执行任何变更"
+        @click="emit('dryrun')"
+      >
+        预检
+      </el-button>
       <button
         v-if="lastGoodSha"
         type="button" class="rc-last mono"
@@ -292,6 +303,25 @@ const runLabel = computed(() =>
       >
         上次成功 {{ lastGoodSha.slice(0, 8) }}
       </button>
+    </div>
+
+    <!-- dry-run 报告：阻塞项必须处理，警告可继续；不触发任何外部变更 -->
+    <div v-if="dryRun" class="dr-panel" :class="{ bad: !dryRun.ok }">
+      <div class="dr-head">
+        <span class="dr-title">预检{{ dryRun.ok ? '通过' : '未通过' }}</span>
+        <span class="dr-meta mono">report {{ dryRun.reportHash.slice(0, 10) }}</span>
+        <span class="dr-meta mono">fp {{ dryRun.fingerprint.slice(0, 10) }}</span>
+        <span class="dr-meta">{{ dryRun.env }} · {{ dryRun.gitSha.slice(0, 8) }}</span>
+      </div>
+      <ul v-if="dryRun.blockers.length" class="dr-list bad">
+        <li v-for="(b, i) in dryRun.blockers" :key="i">{{ b }}</li>
+      </ul>
+      <ul v-if="dryRun.warnings.length" class="dr-list warn">
+        <li v-for="(w, i) in dryRun.warnings" :key="i">{{ w }}</li>
+      </ul>
+      <p v-if="!dryRun.blockers.length && !dryRun.warnings.length" class="dr-meta">
+        没有阻塞项与警告，可以运行。
+      </p>
     </div>
   </section>
 </template>
@@ -569,6 +599,47 @@ const runLabel = computed(() =>
   display: flex;
   align-items: center;
   gap: 10px;
+}
+/* dry-run 报告 */
+.dr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--success, #2f9e6e);
+  border-radius: var(--radius-sm);
+}
+.dr-panel.bad {
+  border-left-color: var(--danger);
+}
+.dr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.dr-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.dr-meta {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.dr-list {
+  padding-left: 18px;
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.dr-list.bad {
+  color: var(--danger);
+}
+.dr-list.warn {
+  color: var(--warning-ink, #a06a00);
 }
 .rc-last {
   padding: 0;

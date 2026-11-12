@@ -63,6 +63,22 @@ public interface EnvironmentStore {
 
     void deleteOverride(String projectId, String env, String key);
 
+    // ---------------------------------------------------------------- 密钥引用
+
+    /** 某项目某环境的密钥清单（只回名称/版本，不回值）。 */
+    List<SecretEntry> secrets(String projectId, String env);
+
+    /** 新建或覆盖密钥；value 为明文，落库前必须加密。 */
+    SecretEntry saveSecret(String projectId, String env, String name, String value);
+
+    /** 轮换密钥：版本 +1。 */
+    SecretEntry rotateSecret(String projectId, String env, String name, String value);
+
+    void deleteSecret(String projectId, String env, String name);
+
+    /** 解析密钥明文；仅执行面与显式查看接口调用。 */
+    Optional<String> secretValue(String projectId, String env, String name);
+
     // ---------------------------------------------------------------- 有效环境
 
     /** 环境模板 + 项目覆盖；values 含明文，只给执行面用。 */

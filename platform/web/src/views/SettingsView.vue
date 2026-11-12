@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Cpu, Connection, Files, Key, Monitor, Refresh } from '@element-plus/icons-vue'
+import { Cpu, Connection, Files, Key, Lock, Monitor, Refresh } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import ServerPanel from '../components/settings/ServerPanel.vue'
 import ModelPanel from '../components/settings/ModelPanel.vue'
 import RepoPanel from '../components/settings/RepoPanel.vue'
 import ProjectEnvPanel from '../components/settings/ProjectEnvPanel.vue'
 import EnvTemplatePanel from '../components/settings/EnvTemplatePanel.vue'
+import SecretPanel from '../components/settings/SecretPanel.vue'
 
 /**
  * 设置页（布局对齐「云端工作台」式工作台）：
@@ -22,7 +23,7 @@ import EnvTemplatePanel from '../components/settings/EnvTemplatePanel.vue'
  * 左侧是"分区导航"而不是 Tabs：设置项会越来越多（服务器/模型/仓库/通知），
  * 纵向分组可扩展、也能承载每个分区的说明文字。
  */
-type Section = 'servers' | 'models' | 'envTemplates' | 'envs' | 'repos'
+type Section = 'servers' | 'models' | 'envTemplates' | 'envs' | 'secrets' | 'repos'
 
 interface SectionMeta {
   key: Section
@@ -36,6 +37,7 @@ const SECTIONS: SectionMeta[] = [
   { key: 'models', label: '模型连接', desc: '推理服务与密钥', icon: Cpu },
   { key: 'envTemplates', label: '环境模板', desc: 'dev/test/prod 默认值', icon: Files },
   { key: 'envs', label: '项目环境', desc: '覆盖 · 注入变量 · 重新检测', icon: Key },
+  { key: 'secrets', label: '密钥库', desc: 'secret:// 引用与轮换', icon: Lock },
   { key: 'repos', label: '代码仓库', desc: '授权与连接', icon: Connection }
 ]
 
@@ -47,6 +49,7 @@ const serverRef = ref<InstanceType<typeof ServerPanel> | null>(null)
 const modelRef = ref<InstanceType<typeof ModelPanel> | null>(null)
 const envRef = ref<InstanceType<typeof ProjectEnvPanel> | null>(null)
 const envTemplateRef = ref<InstanceType<typeof EnvTemplatePanel> | null>(null)
+const secretRef = ref<InstanceType<typeof SecretPanel> | null>(null)
 const repoRef = ref<InstanceType<typeof RepoPanel> | null>(null)
 const refreshing = ref(false)
 
@@ -58,6 +61,7 @@ watch(active, (value) => {
   else if (value === 'models') void modelRef.value?.load()
   else if (value === 'envTemplates') void envTemplateRef.value?.load()
   else if (value === 'envs') void envRef.value?.load()
+  else if (value === 'secrets') void secretRef.value?.load()
   else void repoRef.value?.load()
 })
 
@@ -68,6 +72,7 @@ async function refresh(): Promise<void> {
     else if (active.value === 'models') await modelRef.value?.load()
     else if (active.value === 'envTemplates') await envTemplateRef.value?.load()
     else if (active.value === 'envs') await envRef.value?.load()
+    else if (active.value === 'secrets') await secretRef.value?.load()
     else await repoRef.value?.load()
   } finally {
     refreshing.value = false
@@ -107,6 +112,7 @@ async function refresh(): Promise<void> {
           <ModelPanel v-show="active === 'models'" ref="modelRef" />
           <EnvTemplatePanel v-show="active === 'envTemplates'" ref="envTemplateRef" />
           <ProjectEnvPanel v-show="active === 'envs'" ref="envRef" />
+          <SecretPanel v-show="active === 'secrets'" ref="secretRef" />
           <RepoPanel v-show="active === 'repos'" ref="repoRef" />
         </section>
       </div>

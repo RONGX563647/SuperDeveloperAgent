@@ -3,8 +3,11 @@ package top.rongx.agent.tools;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.util.Map;
+import top.rongx.agent.domain.policy.PolicyDecision;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.tool.ToolLevel;
+import top.rongx.agent.domain.policy.PolicyPort;
 import org.springframework.stereotype.Component;
 
 /**
@@ -22,9 +25,11 @@ import org.springframework.stereotype.Component;
 public class CiCommandTools {
 
     private final PipelineEngine engine;
+    private final PolicyPort policy;
 
-    public CiCommandTools(PipelineEngine engine) {
+    public CiCommandTools(PipelineEngine engine, PolicyPort policy) {
         this.engine = engine;
+        this.policy = policy;
     }
 
     @Tool(name = "ci_run",
@@ -53,12 +58,19 @@ public class CiCommandTools {
         if (gitSha == null || !gitSha.matches("[0-9a-f]{7,40}")) {
             return "err: git_sha 格式非法（需 7-40 位小写十六进制）";
         }
-        if (ctx.isProduction()) {
-            return "err: 生产环境不允许直接触发构建，请先在测试环境验证";
+        if (policy.decide(ctx.env(), ToolLevel.L2_EXECUTE_ISOLATED) == PolicyDecision.DENY) {
+            return "err: 生产环境 " + ctx.env() + " 的策略不允许直接触发构建（E-707），请先在测试环境验证";
         }
         String runId;
         try {
-            runId = engine.trigger(ctx.projectId(), pipelineId, Map.of("gitSha", gitSha));
+            PipelineEngine.DryRunReport dryRun = engine.dryRun(ctx.projectId(), pipelineId,
+                    ctx.env(), gitSha);
+            if (!dryRun.ok()) {
+                return "err: E-708 dry-run 未通过：" + String.join("；", dryRun.blockers());
+            }
+            runId = engine.trigger(ctx.projectId(), pipelineId,
+                    Map.of("gitSha", gitSha, "env", ctx.env(),
+                            "dryRunHash", dryRun.reportHash()));
         } catch (IllegalArgumentException e) {
             // 前置校验（缺定义/参数非法）应作为可读错误回给模型，而不是抛异常打断对话
             return "err: " + e.getMessage();
@@ -69,6 +81,50 @@ public class CiCommandTools {
                 status: %s
                 evidence: run:%s
                 """.formatted(runId, pipelineId, engine.status(runId), runId);
+    }
+
+    @Tool(name = "ci_dry_run",
+            description = """
+                    只读预检：解析流水线、渲染命令、检查环境变量/密钥/必需配置与 Docker 可用性。
+                    不创建容器、不部署、不推送镜像，对真实系统零变更。
+                    apply 之前必须先 dry-run；若 ok=false，把 blockers 原样告诉用户，不要重试到通过为止。
+                    report_hash 可用于人工审批绑定；代码/配方/环境/密钥版本变化后旧报告自动失效。""",
+            readOnly = true, concurrencySafe = true)
+    public String dryRun(
+            @ToolParam(name = "pipeline_id", description = "流水线标识，必须来自 ci_list_pipelines") String pipelineId,
+            @ToolParam(name = "git_sha", description = "要预检的提交短 sha（7-40 位十六进制）") String gitSha,
+            ProjectContext ctx) {
+        if (pipelineId == null || pipelineId.isBlank()) {
+            return "err: pipeline_id 不能为空";
+        }
+        if (gitSha == null || !gitSha.matches("[0-9a-f]{7,40}")) {
+            return "err: git_sha 格式非法（需 7-40 位小写十六进制）";
+        }
+        PipelineEngine.DryRunReport report;
+        try {
+            report = engine.dryRun(ctx.projectId(), pipelineId, ctx.env(), gitSha);
+        } catch (IllegalArgumentException e) {
+            return "err: " + e.getMessage();
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("ok: ").append(report.ok()).append('\n')
+                .append("reportHash: ").append(report.reportHash()).append('\n')
+                .append("fingerprint: ").append(report.fingerprint()).append('\n');
+        if (!report.blockers().isEmpty()) {
+            sb.append("blockers:\n");
+            report.blockers().forEach(b -> sb.append("  - ").append(b).append('\n'));
+        }
+        if (!report.warnings().isEmpty()) {
+            sb.append("warnings:\n");
+            report.warnings().forEach(w -> sb.append("  - ").append(w).append('\n'));
+        }
+        sb.append("stages:\n");
+        report.stages().forEach(s -> sb.append("  ").append(s.id())
+                .append(" [").append(s.type()).append(s.action() == null ? "" : ":" + s.action())
+                .append("] ").append(s.runnable() ? "RUN" : "SKIP")
+                .append(s.reason() == null || s.reason().isBlank() ? "" : " — " + s.reason())
+                .append('\n'));
+        return sb.toString();
     }
 
     @Tool(name = "ci_cancel",

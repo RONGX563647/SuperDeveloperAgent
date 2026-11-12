@@ -25,6 +25,8 @@ import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.env.RuntimeMode;
+import top.rongx.agent.domain.env.SecretEntry;
+import top.rongx.agent.domain.env.SecretRefs;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.infra.security.SecretBox;
@@ -82,6 +84,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 is_secret  INTEGER NOT NULL DEFAULT 1,
                 source     TEXT,
                 updated_at INTEGER NOT NULL,
+                value_kind TEXT NOT NULL DEFAULT 'INLINE',
+                secret_ref TEXT,
                 PRIMARY KEY (env, var_key)
             );
             CREATE TABLE IF NOT EXISTS project_env_overrides (
@@ -92,7 +96,21 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 value_iv   TEXT NOT NULL,
                 is_secret  INTEGER NOT NULL DEFAULT 1,
                 updated_at INTEGER NOT NULL,
+                value_kind TEXT NOT NULL DEFAULT 'INLINE',
+                secret_ref TEXT,
                 PRIMARY KEY (project_id, env, var_key)
+            );
+            CREATE TABLE IF NOT EXISTS secrets (
+                id         TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                env        TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                value_enc  TEXT NOT NULL,
+                value_iv   TEXT NOT NULL,
+                version    INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                rotated_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (project_id, env, name)
             );
             CREATE TABLE IF NOT EXISTS env_bindings (
                 id           TEXT PRIMARY KEY,
@@ -163,6 +181,11 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         ensureColumn(st, "env_resources", "container_port",
                 "container_port INTEGER NOT NULL DEFAULT 0");
         ensureColumn(st, "env_resources", "internal_host", "internal_host TEXT");
+        ensureColumn(st, "env_vars", "value_kind", "value_kind TEXT NOT NULL DEFAULT 'INLINE'");
+        ensureColumn(st, "env_vars", "secret_ref", "secret_ref TEXT");
+        ensureColumn(st, "project_env_overrides", "value_kind",
+                "value_kind TEXT NOT NULL DEFAULT 'INLINE'");
+        ensureColumn(st, "project_env_overrides", "secret_ref", "secret_ref TEXT");
     }
 
     private void ensureColumn(Statement st, String table, String column, String ddl)
@@ -455,18 +478,22 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         List<EnvVariable> out = new ArrayList<>();
         try (Connection conn = open();
              PreparedStatement st = conn.prepareStatement(
-                     "SELECT var_key, is_secret, source, updated_at FROM env_vars "
-                             + "WHERE env = ? ORDER BY var_key")) {
+                     "SELECT var_key, is_secret, source, updated_at, value_kind, secret_ref "
+                             + "FROM env_vars WHERE env = ? ORDER BY var_key")) {
             st.setString(1, env);
             try (ResultSet rs = st.executeQuery()) {
                 while (rs.next()) {
                     String key = rs.getString("var_key");
                     boolean secret = rs.getInt("is_secret") == 1;
+                    String kind = rs.getString("value_kind");
+                    String ref = rs.getString("secret_ref");
                     String value = plain.getOrDefault(key, "");
-                    out.add(new EnvVariable(null, env, key, secret,
-                            secret ? secretBox.mask(value) : value,
+                    String shown = EnvVariable.KIND_SECRET_REF.equals(kind) && ref != null
+                            ? "secret://" + ref
+                            : secret ? secretBox.mask(value) : value;
+                    out.add(new EnvVariable(null, env, key, secret, shown,
                             rs.getString("source") == null ? "TEMPLATE" : rs.getString("source"),
-                            rs.getLong("updated_at")));
+                            rs.getLong("updated_at"), kind, ref));
                 }
                 return out;
             }
@@ -480,6 +507,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireEnv(env);
         requireKey(key);
         long now = System.currentTimeMillis();
+        String ref = SecretRefs.whole(value);
+        boolean refMode = ref != null;
         try (Connection conn = open()) {
             boolean keep = value == null || value.isEmpty();
             if (keep && !exists(conn, "env_vars", "env", env, "var_key", key)) {
@@ -496,23 +525,27 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                     st.executeUpdate();
                 }
             } else {
-                SecretBox.Sealed sealed = secretBox.encrypt(value);
+                SecretBox.Sealed sealed = secretBox.encrypt(refMode ? "" : value);
                 try (PreparedStatement st = conn.prepareStatement("""
                         INSERT INTO env_vars
-                            (env, var_key, value_enc, value_iv, is_secret, source, updated_at)
-                        VALUES (?,?,?,?,?,?,?)
+                            (env, var_key, value_enc, value_iv, is_secret, source, updated_at,
+                             value_kind, secret_ref)
+                        VALUES (?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(env, var_key) DO UPDATE SET
                             value_enc=excluded.value_enc, value_iv=excluded.value_iv,
                             is_secret=excluded.is_secret, source=excluded.source,
-                            updated_at=excluded.updated_at
+                            updated_at=excluded.updated_at, value_kind=excluded.value_kind,
+                            secret_ref=excluded.secret_ref
                         """)) {
                     st.setString(1, env);
                     st.setString(2, key);
                     st.setString(3, sealed.cipherB64());
                     st.setString(4, sealed.ivB64());
-                    st.setInt(5, secret ? 1 : 0);
+                    st.setInt(5, refMode || secret ? 1 : 0);
                     st.setString(6, source == null ? "TEMPLATE" : source);
                     st.setLong(7, now);
+                    st.setString(8, refMode ? EnvVariable.KIND_SECRET_REF : EnvVariable.KIND_INLINE);
+                    st.setString(9, ref);
                     st.executeUpdate();
                 }
             }
@@ -660,7 +693,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         List<EnvVariable> out = new ArrayList<>();
         try (Connection conn = open();
              PreparedStatement st = conn.prepareStatement(
-                     "SELECT var_key, is_secret, updated_at FROM project_env_overrides "
+                     "SELECT var_key, is_secret, updated_at, value_kind, secret_ref "
+                             + "FROM project_env_overrides "
                              + "WHERE project_id=? AND env=? ORDER BY var_key")) {
             st.setString(1, projectId);
             st.setString(2, env);
@@ -668,10 +702,14 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 while (rs.next()) {
                     String key = rs.getString("var_key");
                     boolean secret = rs.getInt("is_secret") == 1;
+                    String kind = rs.getString("value_kind");
+                    String ref = rs.getString("secret_ref");
                     String value = plain.getOrDefault(key, "");
-                    out.add(new EnvVariable(projectId, env, key, secret,
-                            secret ? secretBox.mask(value) : value, "OVERRIDE",
-                            rs.getLong("updated_at")));
+                    String shown = EnvVariable.KIND_SECRET_REF.equals(kind) && ref != null
+                            ? "secret://" + ref
+                            : secret ? secretBox.mask(value) : value;
+                    out.add(new EnvVariable(projectId, env, key, secret, shown, "OVERRIDE",
+                            rs.getLong("updated_at"), kind, ref));
                 }
                 return out;
             }
@@ -686,6 +724,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireEnv(env);
         requireKey(key);
         long now = System.currentTimeMillis();
+        String ref = SecretRefs.whole(value);
+        boolean refMode = ref != null;
         try (Connection conn = open()) {
             boolean keep = value == null || value.isEmpty();
             if (keep && !overrideExists(conn, projectId, env, key)) {
@@ -704,22 +744,26 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                     st.executeUpdate();
                 }
             } else {
-                SecretBox.Sealed sealed = secretBox.encrypt(value);
+                SecretBox.Sealed sealed = secretBox.encrypt(refMode ? "" : value);
                 try (PreparedStatement st = conn.prepareStatement("""
                         INSERT INTO project_env_overrides
-                            (project_id, env, var_key, value_enc, value_iv, is_secret, updated_at)
-                        VALUES (?,?,?,?,?,?,?)
+                            (project_id, env, var_key, value_enc, value_iv, is_secret, updated_at,
+                             value_kind, secret_ref)
+                        VALUES (?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(project_id, env, var_key) DO UPDATE SET
                             value_enc=excluded.value_enc, value_iv=excluded.value_iv,
-                            is_secret=excluded.is_secret, updated_at=excluded.updated_at
+                            is_secret=excluded.is_secret, updated_at=excluded.updated_at,
+                            value_kind=excluded.value_kind, secret_ref=excluded.secret_ref
                         """)) {
                     st.setString(1, projectId);
                     st.setString(2, env);
                     st.setString(3, key);
                     st.setString(4, sealed.cipherB64());
                     st.setString(5, sealed.ivB64());
-                    st.setInt(6, secret ? 1 : 0);
+                    st.setInt(6, refMode || secret ? 1 : 0);
                     st.setLong(7, now);
+                    st.setString(8, refMode ? EnvVariable.KIND_SECRET_REF : EnvVariable.KIND_INLINE);
+                    st.setString(9, ref);
                     st.executeUpdate();
                 }
             }
@@ -747,6 +791,191 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         }
     }
 
+    // ---------------------------------------------------------------- 密钥引用
+
+    @Override
+    public List<SecretEntry> secrets(String projectId, String env) {
+        requireProject(projectId);
+        requireEnv(env);
+        List<SecretEntry> out = new ArrayList<>();
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement("""
+                     SELECT project_id, env, name, version, rotated_at, created_at
+                     FROM secrets WHERE project_id=? AND env=? ORDER BY name
+                     """)) {
+            st.setString(1, projectId);
+            st.setString(2, env);
+            try (ResultSet rs = st.executeQuery()) {
+                while (rs.next()) {
+                    long updated = Math.max(rs.getLong("rotated_at"), rs.getLong("created_at"));
+                    out.add(new SecretEntry(rs.getString("project_id"), rs.getString("env"),
+                            rs.getString("name"), rs.getInt("version"), updated));
+                }
+            }
+            return out;
+        } catch (SQLException e) {
+            throw new IllegalStateException("密钥查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public SecretEntry saveSecret(String projectId, String env, String name, String value) {
+        requireProject(projectId);
+        requireEnv(env);
+        requireSecretName(name);
+        if (value == null || value.isEmpty()) {
+            throw new IllegalArgumentException("密钥值不能为空：" + name);
+        }
+        long now = System.currentTimeMillis();
+        SecretBox.Sealed sealed = secretBox.encrypt(value);
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement("""
+                     INSERT INTO secrets
+                         (id, project_id, env, name, value_enc, value_iv, version, created_at, rotated_at)
+                     VALUES (?,?,?,?,?,?,1,?,0)
+                     ON CONFLICT(project_id, env, name) DO UPDATE SET
+                         value_enc=excluded.value_enc, value_iv=excluded.value_iv,
+                         version=secrets.version + 1, rotated_at=excluded.created_at
+                     """)) {
+            st.setString(1, java.util.UUID.randomUUID().toString());
+            st.setString(2, projectId);
+            st.setString(3, env);
+            st.setString(4, name);
+            st.setString(5, sealed.cipherB64());
+            st.setString(6, sealed.ivB64());
+            st.setLong(7, now);
+            st.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("密钥保存失败：" + e.getMessage(), e);
+        }
+        return secrets(projectId, env).stream()
+                .filter(s -> s.name().equals(name)).findFirst().orElseThrow();
+    }
+
+    @Override
+    public SecretEntry rotateSecret(String projectId, String env, String name, String value) {
+        requireProject(projectId);
+        requireEnv(env);
+        requireSecretName(name);
+        if (secretValue(projectId, env, name).isEmpty()) {
+            throw new IllegalArgumentException("密钥不存在，无法轮换：" + name);
+        }
+        return saveSecret(projectId, env, name, value);
+    }
+
+    @Override
+    public void deleteSecret(String projectId, String env, String name) {
+        requireProject(projectId);
+        requireEnv(env);
+        requireSecretName(name);
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "DELETE FROM secrets WHERE project_id=? AND env=? AND name=?")) {
+            st.setString(1, projectId);
+            st.setString(2, env);
+            st.setString(3, name);
+            st.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("密钥删除失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public Optional<String> secretValue(String projectId, String env, String name) {
+        requireProject(projectId);
+        requireEnv(env);
+        requireSecretName(name);
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "SELECT value_enc, value_iv FROM secrets WHERE project_id=? AND env=? AND name=?")) {
+            st.setString(1, projectId);
+            st.setString(2, env);
+            st.setString(3, name);
+            try (ResultSet rs = st.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(secretBox.decrypt(rs.getString("value_enc"),
+                        rs.getString("value_iv")));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("密钥读取失败：" + e.getMessage(), e);
+        }
+    }
+
+    private int secretVersion(String projectId, String env, String name) {
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "SELECT version FROM secrets WHERE project_id=? AND env=? AND name=?")) {
+            st.setString(1, projectId);
+            st.setString(2, env);
+            st.setString(3, name);
+            try (ResultSet rs = st.executeQuery()) {
+                return rs.next() ? rs.getInt("version") : 0;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("密钥版本读取失败：" + e.getMessage(), e);
+        }
+    }
+
+    private void requireSecretName(String name) {
+        if (!SecretRefs.validName(name)) {
+            throw new IllegalArgumentException("密钥引用名只允许字母、数字、点、下划线与短横线：" + name);
+        }
+    }
+
+    private record StoredValue(String value, String kind, String ref) {
+    }
+
+    private Map<String, StoredValue> storedEnvVars(String env) {
+        return storedValues("SELECT var_key, value_enc, value_iv, value_kind, secret_ref "
+                + "FROM env_vars WHERE env = ?", env);
+    }
+
+    private Map<String, StoredValue> storedOverrides(String projectId, String env) {
+        Map<String, StoredValue> out = new LinkedHashMap<>();
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "SELECT var_key, value_enc, value_iv, value_kind, secret_ref "
+                             + "FROM project_env_overrides WHERE project_id=? AND env=? "
+                             + "ORDER BY var_key")) {
+            st.setString(1, projectId);
+            st.setString(2, env);
+            try (ResultSet rs = st.executeQuery()) {
+                while (rs.next()) {
+                    String kind = rs.getString("value_kind");
+                    String ref = rs.getString("secret_ref");
+                    String value = EnvVariable.KIND_SECRET_REF.equals(kind)
+                            ? "" : secretBox.decrypt(rs.getString("value_enc"), rs.getString("value_iv"));
+                    out.put(rs.getString("var_key"), new StoredValue(value, kind, ref));
+                }
+            }
+            return out;
+        } catch (SQLException e) {
+            throw new IllegalStateException("项目覆盖查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    private Map<String, StoredValue> storedValues(String sql, String env) {
+        Map<String, StoredValue> out = new LinkedHashMap<>();
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(sql)) {
+            st.setString(1, env);
+            try (ResultSet rs = st.executeQuery()) {
+                while (rs.next()) {
+                    String kind = rs.getString("value_kind");
+                    String ref = rs.getString("secret_ref");
+                    String value = EnvVariable.KIND_SECRET_REF.equals(kind)
+                            ? "" : secretBox.decrypt(rs.getString("value_enc"), rs.getString("value_iv"));
+                    out.put(rs.getString("var_key"), new StoredValue(value, kind, ref));
+                }
+            }
+            return out;
+        } catch (SQLException e) {
+            throw new IllegalStateException("环境变量读取失败：" + e.getMessage(), e);
+        }
+    }
+
     // ---------------------------------------------------------------- 有效环境
 
     @Override
@@ -760,38 +989,101 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         Map<String, String> derived = StackAdapter.derive(resources);
         // RESOURCE 来源只是"资源连接信息的落库镜像"，派生值才是权威：
         // 资源被编辑后即使还没同步变量，也不会把旧主机注入容器。
-        Map<String, String> allVars = plainEnvVars(env);
+        Map<String, StoredValue> allVars = storedEnvVars(env);
         Map<String, String> sources = envVarSources(env);
-        Map<String, String> templateVars = new LinkedHashMap<>();
-        for (Map.Entry<String, String> e : allVars.entrySet()) {
+        Map<String, StoredValue> templateVars = new LinkedHashMap<>();
+        for (Map.Entry<String, StoredValue> e : allVars.entrySet()) {
             if (!"RESOURCE".equals(sources.get(e.getKey()))) {
                 templateVars.put(e.getKey(), e.getValue());
             }
         }
-        Map<String, String> overrides = plainOverrides(projectId, env);
+        Map<String, StoredValue> overrides = storedOverrides(projectId, env);
 
         Map<String, String> values = new LinkedHashMap<>();
+        Map<String, String> refs = new LinkedHashMap<>();
         values.putAll(derived);
-        values.putAll(templateVars);
-        values.putAll(overrides);
+        for (Map.Entry<String, StoredValue> e : templateVars.entrySet()) {
+            values.put(e.getKey(), e.getValue().value());
+            if (EnvVariable.KIND_SECRET_REF.equals(e.getValue().kind())
+                    && e.getValue().ref() != null) {
+                refs.put(e.getKey(), e.getValue().ref());
+            }
+        }
+        for (Map.Entry<String, StoredValue> e : overrides.entrySet()) {
+            values.put(e.getKey(), e.getValue().value());
+            if (EnvVariable.KIND_SECRET_REF.equals(e.getValue().kind())
+                    && e.getValue().ref() != null) {
+                refs.put(e.getKey(), e.getValue().ref());
+            } else {
+                refs.remove(e.getKey());
+            }
+        }
+
+        // 密钥解析：整值引用 + 嵌入占位符；缺失不抛异常，交给部署预检 fail-closed。
+        java.util.Set<String> missingSecrets = new java.util.LinkedHashSet<>();
+        java.util.Set<String> embeddedSecretKeys = new java.util.HashSet<>();
+        Map<String, Integer> secretVersions = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : values.entrySet()) {
+            String key = e.getKey();
+            String ref = refs.get(key);
+            if (ref != null) {
+                Optional<String> secret = secretValue(projectId, env, ref);
+                if (secret.isEmpty()) {
+                    missingSecrets.add(ref);
+                    values.put(key, "");
+                } else {
+                    values.put(key, secret.get());
+                }
+                secretVersions.put(key, secretVersion(projectId, env, ref));
+                continue;
+            }
+            String raw = e.getValue();
+            List<String> embedded = SecretRefs.embedded(raw);
+            if (!embedded.isEmpty()) {
+                embeddedSecretKeys.add(key);
+                String resolved = raw;
+                for (String name : embedded) {
+                    Optional<String> secret = secretValue(projectId, env, name);
+                    if (secret.isEmpty()) {
+                        missingSecrets.add(name);
+                        resolved = resolved.replace("${secret:" + name + "}", "");
+                    } else {
+                        resolved = resolved.replace("${secret:" + name + "}", secret.get());
+                    }
+                    secretVersions.put(key, secretVersion(projectId, env, name));
+                }
+                values.put(key, resolved);
+            }
+        }
 
         List<EnvVariable> vars = new ArrayList<>();
         for (Map.Entry<String, String> e : values.entrySet()) {
             String key = e.getKey();
             String value = e.getValue();
+            String ref = refs.get(key);
             String source = overrides.containsKey(key) ? "OVERRIDE"
                     : templateVars.containsKey(key) ? "TEMPLATE" : "RESOURCE";
-            boolean secret = overrides.containsKey(key)
+            boolean secret = ref != null || embeddedSecretKeys.contains(key)
+                    || (overrides.containsKey(key)
                     ? isSecretOverride(projectId, env, key)
                     : templateVars.containsKey(key)
                     ? isSecretEnvVar(env, key)
-                    : looksSecret(key);
-            vars.add(new EnvVariable(projectId, env, key, secret,
-                    secret ? secretBox.mask(value) : value, source, 0));
+                    : looksSecret(key));
+            String shown;
+            if (ref != null) {
+                shown = "secret://" + ref;
+            } else if (secret) {
+                shown = secretBox.mask(value);
+            } else {
+                shown = value;
+            }
+            vars.add(new EnvVariable(projectId, env, key, secret, shown, source, 0,
+                    ref == null ? EnvVariable.KIND_INLINE : EnvVariable.KIND_SECRET_REF, ref));
         }
         return new EffectiveEnvironment(projectId, env, template.network(),
                 template.defaultPort(), template.healthPath(), vars, values, resources,
-                templateVars.size() + derived.size(), overrides.size());
+                templateVars.size() + derived.size(), overrides.size(), missingSecrets,
+                secretVersions);
     }
 
     private boolean isSecretEnvVar(String env, String key) {

@@ -38,7 +38,8 @@ _research/     市场调研与源码能力盘点（含采集脚本）
 | 15 | [发布编排 + 平台部署器 v1](docs/发布编排与平台部署器-v1.md) | HOST / DOCKER / SERVER 三种部署语义 |
 | 16 | [设置：服务器与模型连接 v1](docs/设置-服务器与模型连接-v1.md) | 设置页数据模型、密钥加密与连通性探测 |
 | 17 | [项目接入设计 v2](docs/项目接入设计-v2.md) | DIRECT 本地引用 / MANAGED bare + worktree |
-| 18 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
+| 18 | [环境配置事实层与分环境门控 · 方案 v1](docs/环境配置事实层与分环境门控-方案-v1.md) | 配置解析优先级、`secret://` 引用、分环境策略与 dry-run 门控（已落地） |
+| 19 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
 
 **背景与推演**（按时间顺序，记录结论如何演化）：
 

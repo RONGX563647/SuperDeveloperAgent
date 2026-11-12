@@ -634,3 +634,118 @@ export function restartLocalService(
     { method: 'POST' }
   )
 }
+
+// ---------------------------------------------------------------- 项目密钥库
+
+/**
+ * 项目密钥条目（只返回名称 + 版本 + 掩码，明文永远不出服务端）。
+ *
+ * <p>环境变量写 `secret://name` 即可引用；轮换后版本号 +1，
+ * 部署预检会用新版本，摘要也随版本变化。
+ */
+export interface ProjectSecret {
+  projectId: string
+  env: string
+  name: string
+  version: number
+  /** 固定为 **** */
+  value: string
+  updatedAt: number
+}
+
+export function listProjectSecrets(projectId: string, env: string): Promise<ProjectSecret[]> {
+  const q = new URLSearchParams({ env })
+  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/secrets?${q}`)
+}
+
+export function saveProjectSecret(
+  projectId: string, input: { env: string, name: string, value: string }
+): Promise<ProjectSecret> {
+  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/secrets`, {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function rotateProjectSecret(
+  projectId: string, name: string, env: string, value: string
+): Promise<ProjectSecret> {
+  return apiFetch(
+    `/api/v1/settings/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}/rotate`,
+    { method: 'POST', body: JSON.stringify({ env, value }) }
+  )
+}
+
+export function deleteProjectSecret(
+  projectId: string, name: string, env: string
+): Promise<void> {
+  const q = new URLSearchParams({ env })
+  return apiFetch(
+    `/api/v1/settings/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}?${q}`,
+    { method: 'DELETE' }
+  )
+}
+
+// ---------------------------------------------------------------- 配置解析（事实层）
+
+export interface ConfigCandidateView {
+  value: string
+  source: string
+  secret: boolean
+  envHint: string
+}
+
+export interface ConfigCandidateGroup {
+  key: string
+  options: ConfigCandidateView[]
+}
+
+/**
+ * 配置解析结果：项目环境优先，其次仓库声明，最后全量扫描的候选。
+ *
+ * <p>`NEED_USER_INPUT` 表示还缺配置或存在多个候选——此时 Agent 会停下来提问，
+ * 用户回答后再把选择写入项目环境覆盖（或建密钥引用）。
+ */
+export interface ConfigResolutionView {
+  status: 'READY' | 'NEED_USER_INPUT'
+  projectId: string
+  env: string
+  resolved: Record<string, string>
+  resolvedSource: Record<string, string>
+  missing: string[]
+  conflicts: string[]
+  scannedFiles: number
+  candidates: ConfigCandidateGroup[]
+  summary: string
+}
+
+export function resolveProjectConfig(
+  projectId: string, env: string, keys?: string[]
+): Promise<ConfigResolutionView> {
+  const q = new URLSearchParams({ env })
+  if (keys && keys.length) q.set('keys', keys.join(','))
+  return apiFetch(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/config/resolve?${q}`
+  )
+}
+
+// ---------------------------------------------------------------- 分环境策略
+
+export interface EnvPolicyView {
+  L0: string
+  L1: string
+  L2: string
+  L3: string
+  autoApplyAfterDryRun: boolean
+  requireBinding: boolean
+}
+
+export interface PoliciesView {
+  envs: string[]
+  /** env → 分级策略（ALLOW / CONFIRM / DENY）。 */
+  policies: Record<string, EnvPolicyView>
+}
+
+export function listPolicies(): Promise<PoliciesView> {
+  return apiFetch('/api/v1/policies')
+}

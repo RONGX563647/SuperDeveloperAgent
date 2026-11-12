@@ -85,23 +85,24 @@ npm run build      # vue-tsc strict + 产物
 | 对话 + SSE 流式 | ✅ `POST /api/v1/chat`；三套 Toolkit 按环境切换（生产只读 / 非生产全量 / 发布 Agent） |
 | 动作契约（方案 D） | ✅ `list_actions` / `plan_action` / `run_action`；配方优先级 `ci/actions.yml → Taskfile.yml → Makefile → 内置默认`，命令 argv 直 exec |
 | L3 审批闭环 | ✅ `request` → `/changes/{id}/confirm` 拿一次性令牌（5 分钟、绑定 planHash）→ `/changes/{id}/apply` |
-| 流水线引擎 | ✅ checkout 指定 sha → 构建/测试 → 镜像 → 部署 → 健康 → 失败 `on-failure`；命令级预览、失败续跑、产物下载、历史删除 |
+| 流水线引擎 | ✅ checkout 指定 sha → 构建/测试 → 镜像 → 部署 → 健康 → 失败 `on-failure`；命令级预览、**dry-run 预检门控（E-708/E-706）**、失败续跑、产物下载、历史删除 |
 | dev 本机部署 | ✅ dev **固定本机**（后端 jar + 前端 dist），显式传 `deployTarget=docker` 也不生效；可一键停止交还 IDE |
 | test / prod 部署 | ✅ 容器替换式发布 / SSH 远程发布；部署前中间件按需供给、Docker 网络确保、端口租约 |
-| 环境子系统 | ✅ 环境模板、中间件发现/登记/启停、项目覆盖、有效视图；部署前 E-509 必填 / E-701 资源 / E-702 供给预检 |
+| 环境子系统 | ✅ 环境模板、中间件发现/登记/启停、项目覆盖、有效视图；**项目密钥库（`secret://` 引用、轮换、缺失 E-704 拦截）**；**配置解析（项目环境优先 → 仓库 `.env` → 全量扫描，缺失主动询问）**；部署前 E-509 必填 / E-701 资源 / E-702 供给预检 |
+| 分环境策略 | ✅ `dev/test/prod × L0–L3` 矩阵（dev L3 禁止、test L3 需确认、prod L2 禁止/L3 需确认），`GET /api/v1/policies` 只读查看 |
 | 项目接入 | ✅ 本地 DIRECT（不复制仓库）/ 远程 clone（bare + worktree）；配方自检 + 平台侧生成 `ci/` 定义 |
 | 受限补丁 | ✅ `propose_patch` 只登记变更单；人工确认后提交到 `patch/<projectId>` 独立分支，永不 push |
 | 失败恢复 | ✅ 规则化 `RunRecoveryAdvisor` 给出根因/候选动作/是否可补丁修复；`POST /deploy/{projectId}/agent` 一键自动部署（仅 dev/test） |
 | 运行时取证 | ✅ `env_runtime_status`（容器/进程事实）、`app_logs`（docker logs / HOST `app.log` / dev 进程日志）、`port_check` |
 | 认证与授权 | ✅ Sa-Token（Bearer，30 天）、角色权限码、设置面板读写与明文回显（`settings:reveal` + 审计） |
 | Gitee | ✅ OAuth / PAT 绑定、仓库浏览、push webhook 触发 verify（Token/HMAC + 同 commit 幂等） |
-| 设置 | ✅ 服务器与模型连接 CRUD/测试/默认切换，密钥 AES-GCM 加密落库、接口只回掩码 |
+| 设置 | ✅ 服务器与模型连接 CRUD/测试/默认切换，密钥 AES-GCM 加密落库、接口只回掩码；**项目密钥库 CRUD/轮换** |
 
 ## HTTP API 与工具
 
 - 完整接口清单见 [Code Wiki §6](../docs/Code-Wiki.md#6-http-api-一览)；前缀 `/api/v1`，错误统一 `{code, message, traceId}`。
 - 主要入口：`/chat`（SSE）、`/actions`、`/changes`、`/ci/*`、`/deploy/*`、`/projects/*`、`/settings/*`、`/gitee/*`、`/webhooks/gitee/*`。
-- 模型工具：31 个 `@Tool` 方法 / 11 个工具类，分 L0 只读、L1 计划、L2 隔离执行、L3 生产四级；**没有 `confirm` 工具**，确认只能由人经 HTTP 完成。
+- 模型工具：33 个 `@Tool` 方法 / 12 个工具类，分 L0 只读、L1 计划、L2 隔离执行、L3 生产四级；新增只读工具 `config_resolve`（配置解析/主动询问）与 `ci_dry_run`（部署预检）；**没有 `confirm` 工具**，确认只能由人经 HTTP 完成。
 
 ## 规约检查（已接入构建）
 

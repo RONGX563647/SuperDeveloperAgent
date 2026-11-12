@@ -206,7 +206,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `settings` | `SqliteModelConnectionStore` / `SqliteDeployServerStore` | 模型连接/服务器配置 SQLite 存储，密钥加密落库、接口只回掩码 |
 | | `SqliteProjectEnvVarStore` | 旧表 `project_env_vars` 上的 `ProjectEnvVarRepository` 实现（兼容旧链路） |
 
-### 4.3 agent-governance —— 变更确认守门（5 类，仅依赖 domain）
+### 4.3 agent-governance —— 变更确认守门（6 类，仅依赖 domain）
 
 | 类 | 职责 |
 |---|---|
@@ -214,6 +214,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `ConfirmToken` | 一次性确认令牌（record） |
 | `ChangeRegistry` | 变更单存储（内存实现，`ChangeStore` 端口） |
 | `PatchRegistry` | 待确认补丁存储（内存实现 `PatchStore`，2026-11 新增）：只保存与查询，签发确认令牌仍只能由登录用户经 `/changes/{id}/confirm` 完成 |
+| `EnvPolicyService` | `PolicyPort` 实现（2026-11 新增）：dev/test/prod × L0–L3 默认矩阵（dev L3 DENY、test L3 CONFIRM、prod L2 DENY/L3 CONFIRM，prod L3 禁止 ALLOW），未知环境按 prod fail-closed；`requireNotDenied` 抛 E-707 |
 | `ActionGate` | 历史空壳，已废弃（勿引用） |
 
 ### 4.4 agent-executor —— 执行面（23 类，仅依赖 domain，无 LLM）
@@ -254,7 +255,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `AppRuntimeInspector` | `RuntimeInspector` 实现（2026-11 新增）：按环境运行时分流——test/prod 用 `docker inspect` 读实例事实（状态/重启数/镜像 digest/端口映射/健康），dev 读平台进程日志尾部；只回答事实，不判失败原因 |
 | `JschSsh` / `SshExec` | 纯 Java SSH 实现（JSch）：连通性探测、远程命令、文件上传；`SshExec` 实现 domain 的 `SshAccess` 端口（探测 docker 版本用 `{{.Server.Version}}` 模板并兜底 `docker info`） |
 
-### 4.5 agent-tools —— 工具层（13 类）
+### 4.5 agent-tools —— 工具层（15 类）
 
 | 类 | 职责 |
 |---|---|
@@ -262,7 +263,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `ActionQueryTools` | 只读工具：`list_actions`、`plan_action` |
 | `ActionCommandTools` | 写工具（L2 仅测试环境）：`run_action` |
 | `CiQueryTools` | 流水线只读（L0）：`ci_list_pipelines`、`ci_status`、`read_run_log`（日志尾部，已脱敏）、`wait_run`（阻塞等终态，替代高频轮询）、`ci_history`、`release_trace`（按 sha 串提交→构建→配方→容器链路，缺失环节显式列 missing） |
-| `CiCommandTools` | 流水线写（L2）：`ci_run`、`ci_cancel` |
+| `CiCommandTools` | 流水线写（L2）：`ci_run`（内部先 `dryRun`，未通过 E-708）、`ci_cancel`；预检 `ci_dry_run`（L0 只读） |
 | `RepoQueryTools` | 仓库只读取证（L0，2026-11 新增，经 `RepoInspector` 端口）：`git_status`、`grep`（正则检索，跳过构建目录/二进制）、`git_commits`、`git_diff`（from..to 提交+stat）、`list_files`、`read_file`（限仓库内文本，约 8000 字符截断） |
 | `RuntimeTools` | 运行时取证（L0，2026-11 新增，经 `RuntimeInspector` 端口）：`env_runtime_status`（应用容器/进程事实：状态/重启数/镜像 digest/端口/网络）、`app_logs`（test/prod 读 `docker logs` 时间窗；HOST 部署读状态目录持久化的 `app.log`；dev 读平台托管进程日志尾部，均已脱敏）、`port_check`（宿主端口占用与归属） |
 | `ChangeTools` | `request_confirmation`（L1）：只产出 changeId+planHash，**模型不能自己确认** |
@@ -270,7 +271,9 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `DeployTools` | 部署 agent 专用：`deploy_env_status`、`deploy_run`、`deploy_save_recipe`——「把某个环境跑通并固化」；`deploy_run` 必须携带人工确认过的 `binding_id`（由 `env_mapping_draft` 生成，经 `EnvBindingPort.requireForRun` 校验，E-703） |
 | `EnvTools` | 环境工具：`env_summary`（L0 只读：变量数/网络/端口/中间件健康，**不返回值**）、`env_var_probe`（L0 只读：变量指向的 host:port 属于本项目中间件/共享实例/外部地址，**不返回变量值**）、`env_mapping_draft`（L2 写：生成 DRAFT 绑定草案，prod 拒绝，须人工确认后才能 `deploy_run`）、`env_ensure`（L2 写：确保当前环境中间件容器存在并运行，缺失按需创建并写回覆盖变量，经 `EnvProvisioner`，E-702） |
 | `ProjectTools` | 项目只读（L0）：`project_info`、`list_envs` |
-| `ToolCatalog` | 工具装配：三套无状态 `Toolkit` 按环境二选一（避免运行时改共享 Toolkit 激活集——会话状态 `activatedGroups` 会覆盖激活集，新会话写工具会整体消失）——`readOnlyToolkit`（生产会话：ProjectTools/CiQueryTools/ActionQueryTools/RepoQueryTools/RuntimeTools，**不含 EnvTools 写能力**）、`agentToolkit`（@Primary，非生产：只读组+环境组全量含写，含 PatchTools）、`deployToolkit`（发布 Agent：ProjectTools/CiQueryTools/ActionQueryTools/RepoQueryTools/EnvTools/DeployTools/RuntimeTools/ChangeTools/ActionCommandTools/PatchTools） |
+| `ConfigTools` | 配置解析（L0，2026-11 新增）：`config_resolve`——项目环境优先，其次仓库 `.env` 声明，最后全量扫描 README/docs/compose/application；缺失或候选冲突返回 `NEED_USER_INPUT` 摘要，**要求 Agent 停止执行并等待用户回答**；密钥类声明值一律 `****` |
+| `ConfigResolver` | 配置解析服务（非 @Tool）：优先级与全量扫描的唯一实现，工具与 `GET /projects/{id}/config/resolve` 共用；扫描候选带 `path:line` 与 envHint，不自动写环境 |
+| `ToolCatalog` | 工具装配：三套无状态 `Toolkit` 按环境二选一（避免运行时改共享 Toolkit 激活集——会话状态 `activatedGroups` 会覆盖激活集，新会话写工具会整体消失）——`readOnlyToolkit`（生产会话：ProjectTools/CiQueryTools/ActionQueryTools/RepoQueryTools/RuntimeTools/ConfigTools，**不含 EnvTools 写能力**）、`agentToolkit`（@Primary，非生产：只读组+环境组全量含写，含 PatchTools）、`deployToolkit`（发布 Agent：ProjectTools/CiQueryTools/ActionQueryTools/RepoQueryTools/EnvTools/DeployTools/RuntimeTools/ChangeTools/ActionCommandTools/PatchTools/ConfigTools） |
 
 ### 4.6 agent-runtime —— Agent 装配与对话（7 类）
 
@@ -294,14 +297,17 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | | `AgentEventMapper` | AgentScope 事件 → 前端 DTO（骨架期用反射映射）；`ModelCallEndEvent` 的 payload 补当前模型名（前端据此本地算 DeepSeek 费用，仅展示用途） |
 | | `ActionController` | 动作 HTTP 接口（不经模型也能用）：list / plan / run / request；注释明确"不再接受请求头伪造身份" |
 | | `ChangeController` | **整个平台唯一签发确认令牌的地方**：`GET /{id}`（确认卡片数据）、`GET /{id}/patch`（补丁 diff 供确认卡片复核，2026-11 新增）、`POST /{id}/confirm`、`POST /{id}/apply`；apply 对补丁类变更（kind=`patch:<id>`）走 `CodePatcher` 提交到 `patch/<projectId>` 分支并返回新 commit sha（可直接用于重跑），其余仍走 `ActionService.apply` |
-| | `PipelineController` | 流水线运行查询与触发：pipelines/preview（触发前**命令级预览**，可带 `gitSha` 按历史提交渲染）/run/status/log（offset 增量续拉）/cancel/history（含 durationMs/stageCount）/**DELETE history/{runId}（删除单条）**/**POST runs/{runId}/retry（从失败阶段续跑）**/**GET runs/{runId}/artifacts/{index}/file（jar/dist 产物下载）**/**POST deploy/host/stop（停平台托管的本机前后端）**/deploy targets；run 可带 `bindingId`（Agent 代触发时校验绑定），trigger params 记录 `actor`（`ui:<user>` 或 `agent`）与 `confirmedBy` |
+| | `PipelineController` | 流水线运行查询与触发：pipelines/preview（触发前**命令级预览**，可带 `gitSha` 按历史提交渲染）/**POST `pipelines/{id}/dry-run`（只读预检）**/run/status/log（offset 增量续拉）/cancel/history（含 durationMs/stageCount）/**DELETE history/{runId}（删除单条）**/**POST runs/{runId}/retry（从失败阶段续跑）**/**GET runs/{runId}/artifacts/{index}/file（jar/dist 产物下载）**/**POST deploy/host/stop（停平台托管的本机前后端）**/deploy targets；**run 先 dry-run，未通过 E-708；带 `dryRunHash` 且与当前不一致抛 E-706**；run 可带 `bindingId`（Agent 代触发时校验绑定），trigger params 记录 `actor`（`ui:<user>` 或 `agent`）、`confirmedBy`、`dryRunHash`/`dryRunFingerprint` |
 | | `DeployAgentController` | `POST /deploy/{projectId}/agent`（SSE，2026-11 新增）：一键自动部署——发布 Agent 自主探索闭环（env_summary→env_mapping_draft→人确认绑定→deploy_run→wait_run→read_run_log→propose_patch→deploy_save_recipe）；仅放行 dev/test，生产直接拒绝；复用 ChatController 的 SSE 映射与虚拟线程模式 |
 | | `DeployController` | 环境视角部署：envs / confirm（上服务器一次人工确认）/ replay / recipes / activate / ports（端口租约查询，排障与审计） |
 | | `ProjectIntakeController` | 项目接入与 git 管理（v2）：intake validate/local/remote/status、git status/diff/sync/remotes/commits/**checkout（切分支/工作树）**、worktrees、列表/删除/**GET /{id}/envs（项目环境列表）** |
 | | `ProjectScaffoldController` | 脚手架：GET 预览 / POST 落盘流水线定义；覆盖保存（overwrite）时联动 `RecipeStore.invalidate` 失效 dev/test/prod 当前固化脚本（响应含 `resetRecipes`） |
 | | `SettingsController` | 设置：服务器 CRUD+测试+默认、模型连接 CRUD+测试+默认+options；默认服务器可直接删除（自动提升下一台启用服务器为默认）；编辑态"测试"沿用库中密钥并把结果写回该行 |
 | | `EnvironmentController` | **环境模板/资源/变量/覆盖/绑定**（`/settings/envs*`、`/settings/projects/{id}/overrides`、`/effective`、`/env-binding/*`，权限 settings:read/write）：模板 CRUD、中间件发现（本机/远程 Docker 只读探测，候选暂存内存、密码不出后端）与导入、手工登记、健康检查、**资源 start/stop（经 `EnvProvisioner`，E-702）**、模板变量、项目覆盖、有效视图、绑定草案/确认/查询、**`GET /projects/{id}/env-check`（部署前体检：缺失变量/未引用资源/健康汇总）**、**明文回显 `GET /envs/{env}/vars/{key}/reveal` 与 `GET /projects/{id}/effective/reveal`（单独授权 `settings:reveal`，管理员与运维可看，每次回显写审计日志）**、**本机 dev 服务管理 `GET/POST /projects/{id}/services[/{service}/start|stop|restart]` 与 `…/services/{service}/logs`（委托 `LocalServiceManager`）** |
-| | `ProjectEnvController` | `/settings/projects/{id}/envs`：项目环境变量读写（已统一写 `project_env_overrides`，经 `EnvironmentStore`；value 留空=保持原值） |
+| | `ProjectEnvController` | `/settings/projects/{id}/envs`：项目环境变量读写（已统一写 `project_env_overrides`，经 `EnvironmentStore`；value 留空=保持原值；视图带 `valueKind`/`secretRef`） |
+| | `SecretController` | **项目密钥库（2026-11 新增）**：`GET/POST /settings/projects/{id}/secrets`、`POST …/{name}/rotate`、`DELETE …/{name}`（权限 settings:read/write）；只回名称/版本/`****`，明文只写不读 |
+| | `ConfigController` | **配置解析（2026-11 新增）**：`GET /projects/{id}/config/resolve?env&keys`，与 `config_resolve` 工具共用 `ConfigResolver`；返回 `READY` / `NEED_USER_INPUT`、resolved/missing/conflicts/candidates/summary |
+| | `PolicyController` | **分环境策略只读视图（2026-11 新增）**：`GET /api/v1/policies` 返回 dev/test/prod × L0–L3 的 ALLOW/CONFIRM/DENY 矩阵 |
 | | `GiteeBrowserController` | Gitee OAuth（start/callback，state 防 CSRF）+ PAT 绑定（AES-GCM 加密落库，接口永不回明文）+ 仓库列表；上游鉴权失败回 400/502（401 专指本平台会话失效，避免前端误清登录态） |
 | | `GiteeWebhookController` | push 事件自动触发 verify 流水线；Token/HMAC-SHA256 校验（未配置密钥即拒）；同 commit 幂等去重 |
 | | `FsBrowserController` | 本地目录浏览（供前端选文件夹）：ls / probe / roots |
@@ -405,6 +411,19 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 - 流水线失败时 `BuiltInPipelineEngine` 调 `RunRecoveryAdvisor`（gateway 实现 `ChatRunRecoveryAdvisor`）：按阶段类型+日志关键词规则化产出 Advice（根因一句话/候选动作/是否可 propose_patch 修/下一步提示），随运行状态返回给前端与 Agent；
 - `POST /deploy/{projectId}/agent`（`DeployAgentController`，SSE）驱动发布 Agent 闭环：`env_summary`→`env_mapping_draft`（无绑定先请人确认）→`deploy_run`（带 binding_id）→`wait_run` 等终态→失败 `read_run_log` 定位→根因在配置则 `propose_patch`→跑通后 `deploy_save_recipe` 固化；仅 dev/test，生产拒绝。
 
+### 5.14 配置事实层、密钥引用与分环境门控（2026-11 新增）
+设计文档：`docs/环境配置事实层与分环境门控-方案-v1.md`。目标：Agent 不再猜配置、密钥不落明文、不同环境给不同自由度。
+
+1. **配置解析优先级**（`ConfigResolver`，工具与 HTTP 共用）：
+   项目环境 `effective(projectId, env)` → 仓库 `.env`/`.env.example` 声明（只读 key + 非敏感值）→ 全量扫描 README/docs/compose/application（候选带 `path:line`、envHint，最多 300 条/40 组）。结果分 `resolved / missing / conflicts / candidates`；缺失或候选冲突返回 `NEED_USER_INPUT` 摘要，`config_resolve` 与系统提示要求 **Agent 停止执行、把摘要交给用户并等待回答**，禁止猜测；扫描候选不自动写环境。密钥类声明值一律 `****`。
+2. **密钥引用**（`SecretEntry`/`SecretRefs`/`EnvironmentStore`）：
+   SQLite `secrets` 表按 `project_id+env+name` 存 AES-GCM 密文与版本；环境变量支持整值 `secret://name` 与嵌入 `${secret:name}`。`effective()` 在服务端解析，接口与工具只看得到 `secret://name` 或 `****`；缺失引用进入 `missingSecrets`，部署预检 **E-704 fail-closed**（不把占位符原样注入）。轮换只增版本（v+1），`digestValues()` 以 `ref@version` 参与 env-snapshot，明文不进摘要。管理入口：`/settings/projects/{id}/secrets`（列表只回名称/版本/掩码）。
+3. **分环境策略**（domain `PolicyPort` + governance `EnvPolicyService`）：
+   默认矩阵 dev(L0–L2 ALLOW, L3 DENY) / test(L0–L2 ALLOW, L3 CONFIRM) / prod(L0–L1 ALLOW, L2 DENY, L3 CONFIRM)，prod L3 构造期即拒绝 ALLOW；未知环境按 prod 处理。`ActionService`、`CiCommandTools`、`AgentFactory` 均改为经 `PolicyPort` 判定，替换硬编码 `isProduction()`；拒绝抛 `PolicyDeniedException`（E-707）。只读视图 `GET /policies`。
+4. **dry-run 阶段门控**（`PipelineEngine.dryRun`）：
+   只读预检复用 `preview`，额外检查 `missingSecrets`、`deploy.env-required` 缺失（E-509）、可执行阶段为空、image/docker 类型所需 Docker 可用性（5s 超时），产出 `ok/blockers/warnings/stages + fingerprint + reportHash`，零 outward 变更。`POST /ci/pipelines/{id}/dry-run` 与工具 `ci_dry_run` 调用；`run` 与 `ci_run` 执行前先 dry-run，未通过 **E-708**，传入的 `dryRunHash` 与当前不一致 **E-706**（代码/配方/环境/密钥版本变化即失效）。指纹与报告哈希随 trigger params 进入证据链。
+5. **前端**：设置页新增「密钥库」（增删/轮换）；项目环境表单支持「直接填值 / 引用密钥」，并提供「配置解析」弹窗展示 resolved/missing/conflicts/candidates；流水线运行卡新增「预检」按钮与报告面板（阻塞项/警告/哈希）。
+
 ---
 
 ## 6. HTTP API 一览
@@ -443,6 +462,10 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 | | GET `/settings/projects/{projectId}/services`、GET `…/services/{service}/logs`、POST `…/services/{service}/start|stop|restart` | **本机 dev 前后端服务管理（LocalServiceManager，2026-11 新增）** |
 | | POST `/settings/projects/{projectId}/env-binding/draft`、POST `…/env-binding/{bindingId}/confirm`、GET `…/env-binding/{bindingId}` | Agent 绑定草案 / 人工确认 / 查询 |
 | ProjectEnvController | GET/PUT `/settings/projects/{projectId}/envs?env`、DELETE `…/envs/{key}` | 项目环境变量（统一写 project_env_overrides；value 空=保持原值） |
+| SecretController | GET/POST `/settings/projects/{projectId}/secrets?env`、POST `…/{name}/rotate`、DELETE `…/{name}` | **项目密钥库：只写不读，引用写法 `secret://name`；轮换版本 +1** |
+| ConfigController | GET `/projects/{projectId}/config/resolve?env&keys` | **配置解析：项目环境优先 → 仓库声明 → 全量扫描；`NEED_USER_INPUT` 时需用户回答** |
+| PolicyController | GET `/policies` | **分环境策略矩阵（dev/test/prod × L0–L3）** |
+| PipelineController | POST `/ci/pipelines/{pipelineId}/dry-run` | **部署预检（只读，零变更）：blockers/warnings/reportHash/fingerprint/stages** |
 | GiteeBrowserController | GET `/gitee/oauth/start` `/oauth/callback`、POST/DELETE/GET `/gitee/bind`、GET `/bind/status`、GET `/repos` | OAuth 授权、PAT 绑定（永不回明文）、仓库浏览 |
 | GiteeWebhookController | POST `/webhooks/gitee/push`、GET `/webhooks/gitee/history` | push 自动触发 verify（Token/HMAC + 幂等） |
 | FsBrowserController | GET `/fs/ls` `/fs/probe` `/fs/roots` | 服务端目录浏览（受 shared-root 边界约束） |
@@ -452,9 +475,9 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 
 ---
 
-## 7. 模型工具（@Tool）一览 —— 31 个方法 / 11 个工具类
+## 7. 模型工具（@Tool）一览 —— 33 个方法 / 12 个工具类
 
-AgentScope `Toolkit` 注册（`ToolCatalog` 装配三套无状态单例，按环境二选一：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent；`agent-tools` 模块共 13 类，其中 11 个是 @Tool 类，另含 `ToolCatalog` 与 `ActionService`）：
+AgentScope `Toolkit` 注册（`ToolCatalog` 装配三套无状态单例，按环境二选一：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent；`agent-tools` 模块共 15 类，其中 12 个是 @Tool 类，另含 `ToolCatalog`、`ActionService` 与 `ConfigResolver`）：
 
 | 工具 | 级别 | 所在类 | 作用 |
 |---|---|---|---|
@@ -468,7 +491,9 @@ AgentScope `Toolkit` 注册（`ToolCatalog` 装配三套无状态单例，按环
 | `env_runtime_status` / `app_logs` / `port_check` | L0 只读 | RuntimeTools | 运行时取证（经 `RuntimeInspector`：容器/进程事实；`app_logs` 依次读 docker logs / HOST `app.log` / dev 进程日志；端口占用归属） |
 | `list_actions` / `plan_action` | L0/L1 | ActionQueryTools | 动作目录 / 执行计划 |
 | `run_action` | L2 | ActionCommandTools | 执行隔离动作（仅测试环境） |
-| `ci_run` / `ci_cancel` | L2 | CiCommandTools | 流水线触发/取消 |
+| `ci_run` / `ci_cancel` | L2 | CiCommandTools | 流水线触发/取消（`ci_run` 内部先 dry-run，未通过 E-708） |
+| `ci_dry_run` | L0 只读 | CiCommandTools | **部署预检：返回 ok/blockers/warnings/reportHash/fingerprint/stages，不产生任何变更** |
+| `config_resolve` | L0 只读 | ConfigTools | **配置解析：项目环境优先 + 全量扫描候选；`NEED_USER_INPUT` 必须停止并等待用户回答** |
 | `deploy_env_status` / `deploy_save_recipe` | L2 | DeployTools | 环境跑通与固化 |
 | `deploy_run` | L2 | DeployTools | 触发运行（仅 dev/test；**必须带人工确认过的 `binding_id`**） |
 | `env_summary` | L0 只读 | EnvTools | 环境摘要：变量数/网络/端口/中间件健康（**不返回变量值**） |
@@ -494,7 +519,7 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 | `/projects` | `ProjectListView.vue` | 项目列表 |
 | `/projects/intake` | `ProjectIntakeView.vue` | 项目接入向导（本地目录/Gitee 仓库选择） |
 | `/projects/:id` | `ProjectDetailView.vue` | 项目详情（文件树 + 预览） |
-| `/settings` | `SettingsView.vue` | 设置（服务器/模型/环境模板/项目环境/Gitee 仓库分区；支持 `?section=` 深链） |
+| `/settings` | `SettingsView.vue` | 设置（服务器/模型/环境模板/项目环境/**密钥库**/Gitee 仓库分区；支持 `?section=` 深链） |
 
 路由守卫：无 token → `/login`；有 token 未加载身份 → 调 `/auth/me` 校验（失效清 token）；任意接口返回 401 经 `setUnauthorizedHandler` 统一收口（清身份 + 跳登录并带 redirect）。
 
@@ -502,9 +527,9 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 
 | 目录 | 内容 |
 |---|---|
-| `src/api/` | `http.ts`（统一 fetch + Bearer）、`auth.ts`、`chat.ts`、`agent.ts`（`GET /agent/profile`，2026-11 新增）、`sse.ts`（fetch+ReadableStream 解析 SSE，支持 POST 单流与 GET 续传流、`Last-Event-ID`/`afterSequence`、4xx 不重试）、`action.ts`、`change.ts`（含 `getChangePatch` 补丁复核）、`pipeline.ts`（含 `retryStage`/`artifactFilePath`/`deleteHistory`/`stopLocalDeploy`）、`deploy.ts`、`project.ts`（含 `projectEnvs`/`gitCheckout`/`fsRead`）、`settings.ts`（含资源 start/stop、services 本机服务管理、reveal 明文回显、env-check） |
+| `src/api/` | `http.ts`（统一 fetch + Bearer）、`auth.ts`、`chat.ts`、`agent.ts`（`GET /agent/profile`，2026-11 新增）、`sse.ts`（fetch+ReadableStream 解析 SSE，支持 POST 单流与 GET 续传流、`Last-Event-ID`/`afterSequence`、4xx 不重试）、`action.ts`、`change.ts`（含 `getChangePatch` 补丁复核）、`pipeline.ts`（含 `retryStage`/`artifactFilePath`/`deleteHistory`/`stopLocalDeploy`/**`dryRunPipeline`**）、`deploy.ts`、`project.ts`（含 `projectEnvs`/`gitCheckout`/`fsRead`）、`settings.ts`（含资源 start/stop、services 本机服务管理、reveal 明文回显、env-check、**密钥库 CRUD/轮换、`resolveProjectConfig`、`listPolicies`**） |
 | `src/views/` | 7 个页面（见上表） |
-| `src/components/` | `chat/`（ConversationTimeline、MessageItem、ToolCallCard、ApprovalRequestCard、MarkdownView、**ThinkingBlock 流式思考块（默认折叠、完成后摘要"思考 N 步"）**、**ChatStatusStrip 底部状态条（连接/模型/费用/工具数）**、**ChatTraceRail 轨迹侧栏（按轮折叠）**、**ChatTraceView 轨迹视图（系统提示词+工具面+逐轮步骤，数据仅本地会话）**、**EnvironmentStatusBar 对话页环境状态条（中间件/应用/端口/最近运行，只读）**）、`pipeline/`（TriggerBar 运行卡（提交+命令级阶段预览+运行）、StageTimeline、RunLog、HistoryList（环境筛选/删除/耗时）、EnvStateBand 环境胶囊切换条、EnvSummary 运行前环境摘要（变量/引用健康/体检结论，只读不返回值））、`project/`（ProjectTree、ProjectOverview、TreeNodeRow、useProjectTree、FilePreview、TabbedFiles、ResizableSplitter）、`settings/`（ModelPanel、ServerPanel、RepoPanel、EnvTemplatePanel 环境模板（模板/发现/登记/健康检查/启停/模板变量/reveal）、ProjectEnvPanel 项目环境（覆盖/有效视图/端口租约/本机服务/Agent 绑定两步确认））、`DirPickerDialog.vue`、`GiteeRepoPicker.vue`。**ActionPanel 已删除**（工作台不再展示动作面板） |
+| `src/components/` | `chat/`（ConversationTimeline、MessageItem、ToolCallCard、ApprovalRequestCard、MarkdownView、**ThinkingBlock 流式思考块（默认折叠、完成后摘要"思考 N 步"）**、**ChatStatusStrip 底部状态条（连接/模型/费用/工具数）**、**ChatTraceRail 轨迹侧栏（按轮折叠）**、**ChatTraceView 轨迹视图（系统提示词+工具面+逐轮步骤，数据仅本地会话）**、**EnvironmentStatusBar 对话页环境状态条（中间件/应用/端口/最近运行，只读）**）、`pipeline/`（TriggerBar 运行卡（提交+命令级阶段预览+运行+**预检/dry-run 报告**）、StageTimeline、RunLog、HistoryList（环境筛选/删除/耗时）、EnvStateBand 环境胶囊切换条、EnvSummary 运行前环境摘要（变量/引用健康/体检结论，只读不返回值））、`project/`（ProjectTree、ProjectOverview、TreeNodeRow、useProjectTree、FilePreview、TabbedFiles、ResizableSplitter）、`settings/`（ModelPanel、ServerPanel、RepoPanel、EnvTemplatePanel 环境模板（模板/发现/登记/健康检查/启停/模板变量/reveal）、ProjectEnvPanel 项目环境（覆盖/有效视图/端口租约/本机服务/Agent 绑定两步确认/**密钥引用与配置解析**）、**SecretPanel 项目密钥库（增删/轮换，只回名称与版本）**）、`DirPickerDialog.vue`、`GiteeRepoPicker.vue`。**ActionPanel 已删除**（工作台不再展示动作面板） |
 | `src/composables/` | `useAgentChat.ts`（对话事件消费）、`useRunTracker.ts`（运行轮询 + 日志 offset 增量拉取）、`useFollowScroll.ts` |
 | `src/state/` | `agentEventReducer.ts`（SSE 事件 → 消息状态归约，含同名 `.test.ts` 单测）、`sessionHistory.ts`（**会话时间线按 projectId+env 存 localStorage，每会话上限 200 条，重启不丢**） |
 | `src/stores/` | `app.ts`（登录身份、**会话权限模式 readonly/confirm/auto（纯前端确认策略，服务端门禁不受影响）**等全局状态；无 Pinia，轻量 store 模块） |
@@ -691,7 +716,7 @@ npm run typecheck
 | 部署门禁 | `agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java` |
 | 环境端口/存储 | `agent-domain/src/main/java/top/rongx/agent/domain/env/EnvironmentStore.java`、`agent-infra/src/main/java/top/rongx/agent/infra/env/SqliteEnvironmentStore.java` |
 | 环境 HTTP/绑定 | `agent-gateway/src/main/java/top/rongx/agent/gateway/web/EnvironmentController.java`、`agent-gateway/src/main/java/top/rongx/agent/gateway/settings/EnvBindingService.java` |
-| 环境前端面板 | `web/src/components/settings/EnvTemplatePanel.vue`、`web/src/components/settings/ProjectEnvPanel.vue` |
+| 环境前端面板 | `web/src/components/settings/EnvTemplatePanel.vue`、`web/src/components/settings/ProjectEnvPanel.vue`、`web/src/components/settings/SecretPanel.vue` |
 | 中间件供给/运行时 | `agent-domain/.../domain/env/EnvProvisioner.java`、`agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvProvisioner.java` |
 | dev 本机直跑 | `agent-executor/src/main/java/top/rongx/agent/executor/LocalDevHostDeployer.java`、`agent-infra/src/main/java/top/rongx/agent/infra/env/LocalProcessServiceRuntime.java` |
 | 受限补丁 | `agent-domain/.../domain/patch/CodePatch.java`、`agent-infra/src/main/java/top/rongx/agent/infra/patch/WorkspaceCodePatcher.java`、`agent-tools/src/main/java/top/rongx/agent/tools/PatchTools.java` |
