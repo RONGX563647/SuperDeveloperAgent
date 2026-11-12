@@ -31,7 +31,6 @@ import top.rongx.agent.gateway.deploy.DeployGate;
 public class DeployController {
 
     private static final Logger log = LoggerFactory.getLogger(DeployController.class);
-    private static final String PIPELINE = "release";
 
     private final RecipeStore recipes;
     private final PipelineEngine engine;
@@ -147,8 +146,23 @@ public class DeployController {
         Map<String, String> params = new LinkedHashMap<>();
         params.put("gitSha", sha);
         params.put("env", env);
-        String runId = engine.trigger(projectId, PIPELINE, params);
+        String runId = engine.trigger(projectId, releasePipeline(projectId), params);
         return Map.of("runId", runId, "env", env, "status", engine.status(runId).name());
+    }
+
+    /**
+     * 回放用的流水线名：优先 release，其次定义里实际的发布流水线。
+     * 以前固定 "release"，项目把 name 改成别的（或只剩自定义流水线）时回放直接不在白名单。
+     */
+    private String releasePipeline(String projectId) {
+        List<String> names = engine.pipelines(projectId);
+        if (names.contains("release")) {
+            return "release";
+        }
+        return names.stream()
+                .filter(name -> !"verify".equals(name))
+                .findFirst()
+                .orElse("release");
     }
 
     /** 脚本版本列表（回滚脚本用，不含部署）。 */

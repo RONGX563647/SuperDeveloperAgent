@@ -367,6 +367,32 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
+     * 当前生效的发布摘要：与 {@link #pipelines(String)} 用同一份定义解析，
+     * 保证设置页展示的端口/健康路径就是执行时会用的值。
+     */
+    @Override
+    public Optional<DeploySummary> deploySummary(String projectId) {
+        Path repoDir = resolveRepoForRead(projectId);
+        try {
+            PipelineDefinition def;
+            if (resolver != null) {
+                def = resolver.resolveForRead(projectId, repoDir).definition();
+            } else if (repoDir != null && Files.isRegularFile(repoDir.resolve(PIPELINE_FILE))) {
+                def = PipelineDefinition.load(repoDir);
+            } else {
+                return Optional.empty();
+            }
+            if (def.deploy() == null) {
+                return Optional.empty();
+            }
+            PipelineDefinition.DeploySpec deploy = def.deploy();
+            return Optional.of(new DeploySummary(deploy.target(), deploy.port(), deploy.healthPath()));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
      * 阶段预览：与执行路径共用同一份定义解析，保证"看到的"就是"会跑的"。
      *
      * <p>verify 与执行期一样裁掉部署/健康检查/回滚 stage（以及没有 Dockerfile 时的镜像 stage）。
@@ -965,13 +991,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return runId;
     }
 
-    /** 环境名规范化：只认 dev/test/prod，缺省按 test（绝不让"没传环境"落到生产）。 */
+    /** 环境名规范化：只认 dev/test/prod；缺省按 test（绝不让"没传环境"落到生产），未知值 fail-fast。 */
     private String normalizeEnv(String env) {
         if (env == null || env.isBlank()) {
             return "test";
         }
         String normalized = env.trim().toLowerCase();
-        return List.of("dev", "test", "prod").contains(normalized) ? normalized : "test";
+        if (!List.of("dev", "test", "prod").contains(normalized)) {
+            throw new IllegalArgumentException(
+                    "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
+        }
+        return normalized;
     }
 
     /**
@@ -2169,6 +2199,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (definition.deploy() == null) {
             return true; // 纯构建流水线不受约束
         }
+        if (!"prod".equals(state.env)) {
+            // dev/test 本来就是迭代环境：要求"改 YAML 先合并默认分支"只会让 agent 无法自愈。
+            // 受审约束只保留在生产发布上。
+            state.log.append("[guard] 环境=").append(state.env)
+                    .append("，跳过'部署配置与默认分支一致'校验（仅 prod 要求）\n");
+            return true;
+        }
         if (state.definitionSource != null && state.definitionSource != PipelineDefinitionResolver.Source.REPO) {
             // 定义来自平台（自动生成/人工维护），仓库里没有可比对的版本：
             // 受审校验的对象是"仓库里的 deploy 配置"，对平台定义不适用。
@@ -2461,6 +2498,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return false;
         }
         state.deployTargetUsed = target.wireName();
+        state.deployEndpoint = result.endpoint();
         // 部署器可能在远端重新分配端口（ServerDeployer），以实际 endpoint 为准回写租约，
         // 否则下次发布会继续按旧端口检查，端点漂移且日志对不上。
         int actualPort = portOf(result.endpoint());
@@ -2617,6 +2655,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
         }
         state.deployTargetUsed = "docker";
+        state.deployEndpoint = primaryEndpoint;
         state.deployHostPort = primaryPort;
         state.log.append("[deploy] 对外端点 ").append(primaryEndpoint)
                 .append("（容器 ").append(primaryResource).append("）\n");
@@ -2749,6 +2788,25 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return Set.copyOf(out);
     }
 
+    /**
+     * 把健康检查 URL 的 scheme/host/port 换成部署 endpoint，只保留原 URL 的 path/query。
+     * 用于 SERVER 目标：pipeline 里的 127.0.0.1 只是占位。
+     */
+    private static String rebase(String url, String endpoint) {
+        try {
+            URI base = URI.create(endpoint);
+            URI path = URI.create(url);
+            if (base.getHost() == null) {
+                return url;
+            }
+            return new URI(base.getScheme() == null ? "http" : base.getScheme(),
+                    base.getUserInfo(), base.getHost(), base.getPort(),
+                    path.getRawPath(), path.getRawQuery(), null).toString();
+        } catch (Exception e) {
+            return url;
+        }
+    }
+
     /** 部署声明里的必填变量与已配置 env 求差：返回缺失（或值为空）的变量名。 */
     private static List<String> missingRequiredEnv(PipelineDefinition.DeploySpec spec,
                                                    Map<String, String> deployEnv) {
@@ -2779,6 +2837,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 url = actual;
             }
         }
+        // SERVER 目标：pipeline 里写的 127.0.0.1 是"服务器本机"的占位，探活必须发到
+        // 部署器返回的真实 endpoint（host/port/scheme），否则永远连的是平台自己。
+        if ("server".equals(state.deployTargetUsed)
+                && state.deployEndpoint != null && !state.deployEndpoint.isBlank()) {
+            String actual = rebase(url, state.deployEndpoint);
+            if (!actual.equals(url)) {
+                state.log.append("[health] 服务器目标，健康检查 URL ").append(url)
+                        .append(" → ").append(actual).append('\n');
+                url = actual;
+            }
+        }
         String resource = deployedResource(state);
         boolean dockerTarget = "docker".equals(state.deployTargetUsed);
         // docker 容器若自带 HEALTHCHECK（前端 + 后端接口 + actuator 的组合探活），
@@ -2797,13 +2866,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                         .timeout(Duration.ofSeconds(2)).GET().build();
                 HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
                 body = response.body();
-                if (response.statusCode() == stage.expected() && containerReady(state, resource, dockerTarget)) {
+                boolean statusOk = stage.expected() == 0
+                        ? response.statusCode() >= 200 && response.statusCode() < 300
+                        : response.statusCode() == stage.expected();
+                if (statusOk && containerReady(state, resource, dockerTarget)) {
                     state.log.append("[health] ").append(response.statusCode()).append(' ')
                             .append(body.length() > 500 ? body.substring(0, 500) + "…" : body).append('\n');
                     state.stages.add(StageResult.success(stage.id(), 0, List.of(), elapsed(start)));
                     return true;
                 }
-                if (response.statusCode() == stage.expected() && !waitingHealth) {
+                if (statusOk && !waitingHealth) {
                     waitingHealth = true;
                     state.log.append("[health] HTTP 已 ").append(response.statusCode())
                             .append("，继续等待容器 HEALTHCHECK 通过（避免静态页假通过）\n");
@@ -3162,6 +3234,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile String deployTargetOverride;
         /** 本次运行已生效的部署目标（回滚复用）。 */
         volatile String deployTargetUsed;
+        /** 部署器返回的真实 endpoint（SERVER 健康检查据此改写 host/port）。 */
+        volatile String deployEndpoint;
         /** 检查构建是否保留镜像打包（触发参数 verifyImage，默认 false：最贵的一步且与"能不能编过"无关）。 */
         volatile boolean verifyImage;
         /** 端口租约分配出的宿主端口（0 = 尚未分配，health 用 pipeline 里的端口）。 */

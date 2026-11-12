@@ -152,4 +152,29 @@ class PipelineDefinitionTest {
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> PipelineDefinition.load(repo));
     }
+
+    @Test
+    @DisplayName("health.expected：2xx 解析为任意 2xx（0），非法写法 fail-fast")
+    void parsesHealthExpected(@TempDir Path repo) throws Exception {
+        Files.createDirectories(repo.resolve("ci"));
+        Files.writeString(repo.resolve("ci/pipeline.yml"), """
+                name: release
+                stages:
+                  - id: health
+                    type: health
+                    url: http://127.0.0.1:8080/actuator/health
+                    expected: 2xx
+                """);
+        assertEquals(0, PipelineDefinition.load(repo).stages().get(0).expected());
+
+        Files.writeString(repo.resolve("ci/pipeline.yml"), """
+                name: release
+                stages:
+                  - id: health
+                    type: health
+                    expected: ok
+                """);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> PipelineDefinition.load(repo));
+    }
 }

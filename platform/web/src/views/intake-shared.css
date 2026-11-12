@@ -477,3 +477,46 @@
   font-family: var(--font-mono);
   font-size: 12px;
 }
+
+/* ============ 移动端 ============ */
+@media (max-width: 900px) {
+  .intake-page {
+    padding: 16px;
+  }
+  .account-card {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 600px) {
+  .intake-page {
+    padding: 12px 12px calc(16px + env(safe-area-inset-bottom));
+  }
+  .page-title {
+    font-size: 17px;
+  }
+  .form-card {
+    padding: 14px;
+    gap: 12px;
+  }
+  .account-card {
+    padding: 12px;
+  }
+  .form-actions {
+    flex-wrap: wrap;
+  }
+  .form-actions .primary-btn {
+    flex: 1;
+  }
+  .tl-msg {
+    display: block;
+    margin-left: 0;
+    font-size: 12px;
+  }
+  .err-body {
+    max-height: 40vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+}

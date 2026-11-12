@@ -7,37 +7,27 @@
  * <p>标题 14px/600；副标题与标题基线对齐、弱化到 --ink-muted；
  * 右侧操作区用 gap 8px 紧凑排布。
  *
- * <p>窄屏（≤900px）侧栏会整体收起，此时 Header 左侧才出现导航切换按钮 ——
+ * <p>窄屏（≤900px）侧栏变为离屏抽屉，此时 Header 左侧出现菜单按钮打开导航 ——
  * 侧栏消失不等于导航消失。
  */
-import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Notebook } from '@element-plus/icons-vue'
+import { Menu } from '@element-plus/icons-vue'
+import { openNav } from '../navDrawer'
 
 defineProps<{ title: string; subtitle?: string }>()
-
-const route = useRoute()
-const router = useRouter()
-
-/** 两个主页面之间互切：窄屏下这是唯一入口。 */
-const switchTarget = computed(() =>
-  route.name === 'chat'
-    ? { to: '/pipeline', label: '流水线', icon: Notebook }
-    : { to: '/chat', label: '对话', icon: ChatDotRound }
-)
 </script>
 
 <template>
   <header class="page-header">
     <div class="head-left">
-      <!-- 窄屏导航：侧栏 900px 以下收起，这里兜住可达性 -->
+      <!-- 窄屏导航：侧栏 900px 以下变为抽屉，这里负责打开它 -->
       <button
         type="button"
         class="nav-switch"
-        :title="`切换到${switchTarget.label}`"
-        @click="router.push(switchTarget.to)"
+        title="打开导航"
+        aria-label="打开导航"
+        @click="openNav"
       >
-        <el-icon><component :is="switchTarget.icon" /></el-icon>
+        <el-icon><Menu /></el-icon>
       </button>
       <h1 class="head-title">
         {{ title }}
@@ -63,16 +53,19 @@ const switchTarget = computed(() =>
 }
 .head-left {
   display: flex;
+  flex: 1 1 auto;
   align-items: baseline;
   gap: 10px;
   min-width: 0;
 }
 .head-title {
   margin: 0;
+  overflow: hidden;
   font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--ink);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 /* DSH 的会话标题后面紧跟一串轻量元信息，用竖点分隔而不是胶囊 */
@@ -101,11 +94,11 @@ const switchTarget = computed(() =>
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   margin-right: 2px;
-  font-size: 15px;
+  font-size: 16px;
   color: var(--ink-soft);
   cursor: pointer;
   background: none;
@@ -121,9 +114,21 @@ const switchTarget = computed(() =>
 @media (max-width: 900px) {
   .nav-switch {
     display: flex;
+    align-self: center;
   }
   .page-header {
-    padding: 0 14px;
+    gap: 8px;
+    padding: 0 12px;
+  }
+}
+
+/* 手机：副标题让位给标题与操作按钮，避免顶栏横向溢出 */
+@media (max-width: 600px) {
+  .head-subtitle {
+    display: none;
+  }
+  .head-right {
+    gap: 6px;
   }
 }
 </style>

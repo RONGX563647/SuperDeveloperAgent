@@ -249,7 +249,7 @@ public final class ProjectEnvFiles {
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     String name = file.getFileName().toString();
                     int depth = depth(root, file);
-                    if ((".env".equals(name) || ".env.example".equals(name)) && depth <= ENV_MAX_DEPTH) {
+                    if (isEnvFile(name) && depth <= ENV_MAX_DEPTH) {
                         envFiles.add(file);
                     } else if ("entrypoint.sh".equals(name) && depth <= ENV_MAX_DEPTH) {
                         entrypoints.add(file);
@@ -267,7 +267,14 @@ public final class ProjectEnvFiles {
     }
 
     private static boolean isExample(Path file) {
-        return file.getFileName().toString().endsWith(".example");
+        String name = file.getFileName().toString();
+        return name.endsWith(".example") || name.endsWith(".sample") || name.endsWith(".template");
+    }
+
+    /** .env 的常见声明文件名：真实值、示例值、模板值。 */
+    private static boolean isEnvFile(String name) {
+        return ".env".equals(name) || ".env.example".equals(name)
+                || ".env.sample".equals(name) || ".env.template".equals(name);
     }
 
     private static boolean isCompose(String name) {

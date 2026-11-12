@@ -267,28 +267,43 @@ public class LocalDevHostDeployer {
 
     // ------------------------------------------------------------------ 本机构建
 
-    /** {@code mvn -q -DskipTests package}（工作目录 = 后端根）。@return 退出码；-1 = 命令无法启动。 */
+    /** 优先仓库自带的 {@code ./mvnw}，否则用 PATH 里的 mvn；构建阶段跳过测试。 */
     public int mvnPackage(Path backendRoot, Path logFile) {
-        // Windows 下 .cmd 不能直接 CreateProcess，必须走 cmd /c
-        List<String> argv = isWindows()
-                // spec-ignore: R02 Windows 的 mvn 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
-                ? List.of("cmd", "/c", "mvn -q -DskipTests package")
-                : List.of("mvn", "-q", "-DskipTests", "package");
+        boolean wrapper = Files.isRegularFile(backendRoot.resolve(isWindows() ? "mvnw.cmd" : "mvnw"));
+        List<String> argv;
+        if (isWindows()) {
+            // spec-ignore: R02 Windows 的 mvn/mvnw 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
+            argv = List.of("cmd", "/c", (wrapper ? "mvnw.cmd" : "mvn") + " -q -DskipTests package");
+        } else {
+            argv = wrapper
+                    ? List.of("./mvnw", "-q", "-DskipTests", "package")
+                    : List.of("mvn", "-q", "-DskipTests", "package");
+        }
         return exec(argv, backendRoot, logFile, null, 15);
     }
 
-    /** 前端打包（vue-cli 4 / webpack 4 在新 Node 下需要 legacy provider）。@return 退出码。 */
+    /** 前端打包：按 package.json 实际脚本选择 build:prod / build。@return 退出码。 */
     public int buildFrontend(Path frontendRoot, Path logFile) {
+        String script = hasBuildProdScript(frontendRoot) ? "build:prod" : "build";
         List<String> argv;
         Map<String, String> extra = new TreeMap<>();
         extra.put("NODE_OPTIONS", "--openssl-legacy-provider");
         if (isWindows()) {
             // spec-ignore: R02 Windows 的 npm 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
-            argv = List.of("cmd", "/c", "npm run build:prod");
+            argv = List.of("cmd", "/c", "npm run " + script);
         } else {
-            argv = List.of("npm", "run", "build:prod");
+            argv = List.of("npm", "run", script);
         }
         return exec(argv, frontendRoot, logFile, extra, 20);
+    }
+
+    private boolean hasBuildProdScript(Path frontendRoot) {
+        try {
+            return Files.readString(frontendRoot.resolve("package.json"),
+                    StandardCharsets.UTF_8).contains("\"build:prod\"");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private int exec(List<String> argv, Path workdir, Path logFile, Map<String, String> extraEnv,

@@ -244,8 +244,12 @@ async function copyRepo(): Promise<void> {
 
 <style scoped>
 .proj-overview {
+  flex: 1 1 0;
+  min-height: 0;
   padding: 24px 28px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .po-head {
   display: flex;
@@ -325,6 +329,26 @@ async function copyRepo(): Promise<void> {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 14px;
   margin-bottom: 14px;
+}
+
+/* 手机：卡片单列、头部操作换行，避免 320px 卡片撑出横向滚动 */
+@media (max-width: 600px) {
+  .proj-overview {
+    padding: 14px 12px calc(20px + env(safe-area-inset-bottom));
+  }
+  .po-head {
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .po-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .po-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
 }
 .po-card {
   padding: 16px 18px;
