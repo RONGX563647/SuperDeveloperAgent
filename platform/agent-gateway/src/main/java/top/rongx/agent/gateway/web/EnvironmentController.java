@@ -43,6 +43,7 @@ import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.settings.EnvBindingService;
+import top.rongx.agent.gateway.settings.EnvDocumentService;
 import top.rongx.agent.gateway.settings.EnvironmentDiscoveryService;
 import top.rongx.agent.gateway.settings.LocalServiceManager;
 
@@ -67,6 +68,7 @@ public class EnvironmentController {
     private final LocalServiceManager localServices;
     private final CurrentUser currentUser;
     private final PipelineEngine pipelineEngine;
+    private final EnvDocumentService documentService;
 
     /** 发现候选暂存：密码留在后端，前端只拿 candidateId。 */
     private final Map<String, EnvResource> candidates = new ConcurrentHashMap<>();
@@ -75,7 +77,7 @@ public class EnvironmentController {
                                  EnvBindingService bindings, DeployServerRepository servers,
                                  SshAccess ssh, EnvRuntime envRuntime,
                                  LocalServiceManager localServices, CurrentUser currentUser,
-                                 PipelineEngine pipelineEngine) {
+                                 PipelineEngine pipelineEngine, EnvDocumentService documentService) {
         this.envStore = envStore;
         this.discovery = discovery;
         this.bindings = bindings;
@@ -85,6 +87,7 @@ public class EnvironmentController {
         this.localServices = localServices;
         this.currentUser = currentUser;
         this.pipelineEngine = pipelineEngine;
+        this.documentService = documentService;
     }
 
     // ---------------------------------------------------------------- 模板
@@ -150,6 +153,31 @@ public class EnvironmentController {
         // 形态/命名空间变化会改变中间件寻址，变量必须跟着重算。
         syncResourceVars(env);
         return envStore.template(env).orElseThrow();
+    }
+
+    // ---------------------------------------------------------------- 文档视图
+
+    /**
+     * 环境模板 Markdown 文档：模板参数 + 中间件镜像 + 模板变量 + 场景词条在同一份文件里。
+     *
+     * <p>敏感值只给掩码；Agent 与设置页读的是同一份数据。
+     */
+    @GetMapping("/envs/{env}/document")
+    public Map<String, Object> document(@PathVariable String env) {
+        requireRead();
+        syncResourceVars(env);
+        return documentService.document(EnvNames.normalize(env));
+    }
+
+    /** 把编辑后的文档写回模板 / 中间件 / 变量（删除行 = 删除条目）。 */
+    @PutMapping("/envs/{env}/document")
+    public Map<String, Object> applyDocument(@PathVariable String env,
+                                             @RequestBody Map<String, Object> body) {
+        requireWrite();
+        Map<String, Object> result = documentService.apply(EnvNames.normalize(env),
+                str(body, "markdown", null));
+        syncResourceVars(env);
+        return result;
     }
 
     // ---------------------------------------------------------------- 场景配置词条

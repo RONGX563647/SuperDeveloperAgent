@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, DocumentCopy, Hide, Plus, Refresh, Search, VideoPause, VideoPlay, View } from '@element-plus/icons-vue'
+import { Delete, Document, DocumentCopy, Hide, Plus, Refresh, Search, VideoPause, VideoPlay, View } from '@element-plus/icons-vue'
 import { ApiError } from '../../api/http'
 import {
-  checkEnvResource, deleteEnvResource, deleteEnvTemplateVar, discoverEnvResources,
-  getEnvDetail, importEnvResources, importScenario, listEnvTemplates, listScenarios, listServers,
-  revealEnvVar, saveEnvResource, saveEnvTemplate, saveEnvTemplateVar, startEnvResource, stopEnvResource,
+  applyEnvDocument, checkEnvResource, deleteEnvResource, deleteEnvTemplateVar, discoverEnvResources,
+  getEnvDetail, getEnvDocument, importEnvResources, importScenario, listEnvTemplates, listScenarios,
+  listServers, revealEnvVar, saveEnvResource, saveEnvTemplate, saveEnvTemplateVar,
+  startEnvResource, stopEnvResource,
   type DeployServer, type EnvResourceView, type EnvTemplate, type EnvTemplateRow,
   type EnvVariableView, type RuntimeMode, type ScenarioView,
 } from '../../api/settings'
@@ -456,6 +457,83 @@ function scenarioKeyConfigured(key: string): boolean {
   return vars.value.some((v) => v.key === key)
 }
 
+// ---------------------------------------------------------------- 文档视图
+
+/**
+ * 一份 Markdown 同时承载：模板参数、中间件镜像、模板变量、场景词条。
+ * 编辑器里的改动点「同步到平台」才会写回；敏感值显示为 ****，保留即为不修改。
+ */
+const docDialog = ref(false)
+const docLoading = ref(false)
+const docSaving = ref(false)
+const docText = ref('')
+const docSaved = ref('')
+const docDirty = computed(() => docText.value !== docSaved.value)
+
+async function openDoc(): Promise<void> {
+  docDialog.value = true
+  await loadDoc()
+}
+
+async function loadDoc(): Promise<void> {
+  docLoading.value = true
+  try {
+    const view = await getEnvDocument(env.value)
+    docText.value = view.markdown
+    docSaved.value = view.markdown
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载文档失败')
+    docDialog.value = false
+  } finally {
+    docLoading.value = false
+  }
+}
+
+async function copyDoc(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(docText.value)
+    ElMessage.success('文档已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动全选复制')
+  }
+}
+
+async function saveDoc(): Promise<void> {
+  if (!docDirty.value) {
+    ElMessage.info('文档没有修改，无需同步')
+    return
+  }
+  const ok = await ElMessageBox.confirm(
+    `将按文档覆盖${envLabel(env.value)}模板：概览参数、中间件镜像、模板变量都会被文档内容替换；`
+    + '删除表格行会删除对应条目。确定同步？',
+    '同步文档到平台',
+    { confirmButtonText: '同步', cancelButtonText: '取消', type: 'warning' },
+  ).then(() => true).catch(() => false)
+  if (!ok) return
+  docSaving.value = true
+  try {
+    const result = await applyEnvDocument(env.value, docText.value)
+    const parts: string[] = []
+    if (result.templateChanged) parts.push('概览已更新')
+    const res = result.resources
+    if (res.created || res.updated || res.deleted) {
+      parts.push(`镜像 +${res.created} ~${res.updated} -${res.deleted}`)
+    }
+    const v = result.vars
+    if (v.created || v.updated || v.deleted) {
+      parts.push(`变量 +${v.created} ~${v.updated} -${v.deleted}`)
+    }
+    if (result.scenarioFilled) parts.push(`词条补值 ${result.scenarioFilled}`)
+    ElMessage.success(parts.length ? `已同步：${parts.join('，')}` : '已同步（无变化）')
+    docDialog.value = false
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '同步失败')
+  } finally {
+    docSaving.value = false
+  }
+}
+
 function kindLabel(kind: string): string {
   const map: Record<string, string> = {
     mysql: 'MySQL', mariadb: 'MariaDB', postgres: 'PostgreSQL', redis: 'Redis',
@@ -535,7 +613,12 @@ defineExpose({ load })
           项目差异在「项目环境」里覆盖；Agent 通过 config_catalog 读取同一份词条。敏感值加密保存，列表默认掩码。
         </p>
       </div>
-      <el-button size="small" :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
+      <div class="et-head-actions">
+        <el-button size="small" type="primary" plain :icon="Document" @click="openDoc">
+          文档视图
+        </el-button>
+        <el-button size="small" :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
+      </div>
     </header>
 
     <div class="et-cards">
@@ -558,11 +641,14 @@ defineExpose({ load })
           端口 {{ row.template.defaultPort || '未配置' }} · 变量 {{ row.varCount }} 个
           <template v-if="row.secretCount">（{{ row.secretCount }} 敏感）</template>
         </span>
-        <span class="et-card-line et-card-image" :title="row.images.join(' · ')">
-          镜像 {{ row.images.length ? row.images.slice(0, 2).join(' · ') : '未声明' }}
-          <template v-if="row.images.length > 2"> +{{ row.images.length - 2 }}</template>
+        <span class="et-card-line et-card-images" :title="row.images.join(' · ') || '未声明镜像'">
+          <template v-if="row.images.length">
+            <span class="et-img-chip mono">{{ row.images[0] }}</span>
+            <span v-if="row.images.length > 1" class="et-img-chip">+{{ row.images.length - 1 }}</span>
+          </template>
+          <template v-else>镜像未声明</template>
         </span>
-        <span class="et-card-line">
+        <span class="et-card-line et-card-runtime">
           容器 运行 {{ row.runningCount }} · 未启动 {{ row.stoppedCount }}（不算异常）
         </span>
       </button>
@@ -917,6 +1003,35 @@ defineExpose({ load })
       </template>
     </el-dialog>
 
+    <!-- 文档视图：模板参数 / 中间件 / 变量 / 词条 同一份 Markdown -->
+    <el-dialog
+      v-model="docDialog" :title="`环境模板文档 · ${envLabel(env)}`" width="880px" top="3vh"
+      destroy-on-close
+    >
+      <div class="et-doc-bar">
+        <span class="et-doc-tip">
+          编辑后点「同步到平台」写回概览参数、中间件镜像与模板变量。<code>****</code> 表示保留原值，
+          删除表格行 = 删除对应条目；场景词条区同名键以「模板变量」表为准。
+        </span>
+        <span class="et-doc-actions">
+          <el-tag v-if="docDirty" size="small" type="warning" effect="light">有未同步修改</el-tag>
+          <el-button size="small" :icon="Refresh" :loading="docLoading" @click="loadDoc">重新生成</el-button>
+          <el-button size="small" :icon="DocumentCopy" @click="copyDoc">复制</el-button>
+        </span>
+      </div>
+      <el-input
+        v-model="docText" type="textarea" class="et-doc-editor"
+        :autosize="{ minRows: 24, maxRows: 32 }" spellcheck="false"
+        :disabled="docLoading" placeholder="正在生成环境模板文档…"
+      />
+      <template #footer>
+        <el-button @click="docDialog = false">关闭</el-button>
+        <el-button type="primary" :loading="docSaving" :disabled="!docDirty" @click="saveDoc">
+          同步到平台
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 添加变量 -->
     <el-dialog v-model="varDialog" title="添加模板变量" width="480px">
       <div class="et-dialog-grid">
@@ -1267,11 +1382,29 @@ defineExpose({ load })
   cursor: pointer;
   user-select: none;
 }
-.et-card-image {
+.et-head-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.et-card-images {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
-  color: var(--ink-soft);
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.et-img-chip {
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--accent-ink);
+  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: var(--radius-xs);
+}
+.et-card-runtime {
+  opacity: 0.85;
 }
 .et-cell-stack {
   flex-direction: column;
@@ -1349,6 +1482,60 @@ defineExpose({ load })
 }
 .et-required.ok {
   color: var(--success, #16a34a);
+}
+.et-block-title b {
+  position: relative;
+  padding-left: 8px;
+}
+.et-block-title b::before {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 2px;
+  content: '';
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 2px;
+}
+.et-table .et-row:not(.et-row-head):hover {
+  background: var(--surface-hover);
+}
+.et-scenario {
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.et-scenario:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 5%);
+}
+.et-doc-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.et-doc-tip {
+  max-width: 560px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+}
+.et-doc-tip code {
+  padding: 0 3px;
+  background: var(--surface-sunken);
+  border-radius: 3px;
+}
+.et-doc-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+.et-doc-editor :deep(.el-textarea__inner) {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.65;
+  tab-size: 2;
 }
 @media (max-width: 900px) {
   .et-cards {

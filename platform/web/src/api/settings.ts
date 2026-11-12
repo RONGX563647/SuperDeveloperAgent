@@ -432,6 +432,42 @@ export function importScenario(
   })
 }
 
+// ---------------------------------------------------------------- 环境模板文档
+
+export interface EnvDocumentView {
+  env: string
+  markdown: string
+  updatedAt: number
+}
+
+export interface EnvDocumentChange {
+  created: number
+  updated: number
+  deleted: number
+}
+
+export interface EnvDocumentApplyResult {
+  ok: boolean
+  env: string
+  templateChanged: boolean
+  resources: EnvDocumentChange
+  vars: EnvDocumentChange
+  scenarioFilled: number
+}
+
+/** 模板参数 + 中间件镜像 + 模板变量 + 场景词条的 Markdown 视图。 */
+export function getEnvDocument(env: string): Promise<EnvDocumentView> {
+  return apiFetch(`/api/v1/settings/envs/${encodeURIComponent(env)}/document`)
+}
+
+/** 用编辑后的 Markdown 覆盖模板 / 中间件 / 变量（删除行即删除条目）。 */
+export function applyEnvDocument(env: string, markdown: string): Promise<EnvDocumentApplyResult> {
+  return apiFetch(`/api/v1/settings/envs/${encodeURIComponent(env)}/document`, {
+    method: 'PUT',
+    body: JSON.stringify({ markdown })
+  })
+}
+
 export function saveEnvTemplate(
   env: string,
   input: {
