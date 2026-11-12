@@ -49,6 +49,11 @@ public class RecipeScaffolder implements ProjectScaffolder {
 
     private static final String DEFAULT_PORT_NOTE = "默认值（未探测到 server.port，请确认）";
     private static final String DEFAULT_HEALTH_NOTE = "默认值（未探测到健康端点，请确认）";
+    /** 前端构建镜像：默认 Maven 镜像里没有 Node，必须显式指定。 */
+    private static final String NODE_IMAGE = "node:20-bookworm";
+    /** Dockerfile 探测顺序：根目录优先，其次是常见的前后端分离目录。 */
+    private static final List<String> DOCKERFILE_DIRS = List.of(
+            "", "backend", "frontend", "deploy", "docker");
 
     @Override
     public ScaffoldPlan plan(String projectId, Path repoRoot, DeployTarget preferredTarget) {
@@ -57,9 +62,10 @@ public class RecipeScaffolder implements ProjectScaffolder {
         // 识别工程根：根目录 → 约定子目录（backend/frontend）→ 一层子目录（如 RuoYi-Vue/）。
         String javaDir = detectJavaDir(repoRoot);
         String nodeDir = detectNodeDir(repoRoot, javaDir);
-        boolean hasDockerfile = isFile(repoRoot.resolve("Dockerfile"));
-        boolean dockerBuilds = hasDockerfile && buildsInsideDockerfile(repoRoot.resolve("Dockerfile"));
-        ServerConfig server = detectServerConfig(repoRoot, javaDir, hasDockerfile);
+        Path dockerfile = findDockerfile(repoRoot);
+        boolean hasDockerfile = dockerfile != null;
+        boolean dockerBuilds = hasDockerfile && buildsInsideDockerfile(dockerfile);
+        ServerConfig server = detectServerConfig(repoRoot, javaDir, dockerfile);
 
         DeployTarget requested = preferredTarget == null ? DeployTarget.DOCKER : preferredTarget;
         TargetChoice choice = decideTarget(requested, hasDockerfile, javaDir, nodeDir);
@@ -81,8 +87,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
                     boolean gradle = isFile(javaRoot.resolve("build.gradle"))
                             || isFile(javaRoot.resolve("build.gradle.kts"));
                     stages.add(new StageSpec("build", "backend_build", "container",
-                            workdirOf(javaDir), null));
-                    actions.put("backend_build", gradle ? "gradle -q build" : "mvn -B -q verify");
+                            workdirOf(javaDir), null, null));
+                    actions.put("backend_build", backendBuildCommand(javaRoot, gradle));
                 }
                 if (nodeDir != null) {
                     Path nodeRoot = nodeDir.isEmpty() ? repoRoot : repoRoot.resolve(nodeDir);
@@ -95,12 +101,13 @@ public class RecipeScaffolder implements ProjectScaffolder {
                                 "未找到 " + pm + " 锁文件：安装命令已降级为 " + pm + " install（否则 --frozen-lockfile 会失败）",
                                 "建议提交锁文件，保证构建可复现"));
                     }
+                    // 前端必须用 Node 工具链镜像：默认沙箱镜像是 Maven，里面没有 node/npm。
                     stages.add(new StageSpec("frontend", "frontend_build", "container",
-                            workdirOf(nodeDir), null));
-                    actions.put("frontend_build", installCommand(pm, lock) + " && " + pm + " build");
+                            workdirOf(nodeDir), NODE_IMAGE, null));
+                    actions.put("frontend_build", frontendBuildCommand(nodeRoot, pm, lock));
                     if (hasRealTestScript(nodeRoot)) {
                         stages.add(new StageSpec("frontend-test", "frontend_test", "container",
-                                workdirOf(nodeDir), null));
+                                workdirOf(nodeDir), NODE_IMAGE, null));
                         actions.put("frontend_test", pm + " test");
                     } else {
                         diags.add(Diag.info("NO_FRONTEND_TEST",
@@ -116,8 +123,12 @@ public class RecipeScaffolder implements ProjectScaffolder {
         }
 
         if (hasDockerfile && target == DeployTarget.DOCKER) {
-            stages.add(new StageSpec("image", "image_package", "host", null, null));
-            actions.put("image_package", "docker build -q -t ${tag} .");
+            stages.add(new StageSpec("image", "image_package", "host", null, null, null));
+            String dockerfileRel = relative(repoRoot, dockerfile);
+            String context = dockerfile.getParent().equals(repoRoot)
+                    ? "." : relative(repoRoot, dockerfile.getParent());
+            actions.put("image_package",
+                    "docker build -q -f " + dockerfileRel + " -t ${tag} " + context);
         } else if (target == DeployTarget.HOST) {
             diags.add(Diag.info("HOST_TARGET",
                     "HOST 目标直接运行 Java jar；前端静态产物不会由平台托管"));
@@ -150,8 +161,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
 
         // 所有目标都走平台部署器 + 健康门禁（SERVER 亦同；未配置时 fail-closed）
         List<StageSpec> pipelineStages = new ArrayList<>(stages);
-        pipelineStages.add(new StageSpec("deploy", "deploy", null, null, target));
-        pipelineStages.add(new StageSpec("health", "health", null, null, target));
+        pipelineStages.add(new StageSpec("deploy", "deploy", null, null, null, target));
+        pipelineStages.add(new StageSpec("health", "health", null, null, null, target));
 
         String pipelineYaml = renderPipeline(pipelineStages, target, server, envRequired);
         String actionsYaml = renderActions(actions);
@@ -223,7 +234,16 @@ public class RecipeScaffolder implements ProjectScaffolder {
             return new TargetChoice(DeployTarget.HOST,
                     "未找到 Dockerfile，纯 Java 项目自动降级为 HOST", diags);
         }
-        String why = javaDir == null && nodeDir == null
+        if (javaDir != null) {
+            // Java + 前端同仓：HOST 只能跑后端，前端产物仍需镜像/静态托管。
+            // 仍然降级而不是阻塞：至少后端可以部署，诊断里明确提示前端归属。
+            diags.add(Diag.info("TARGET_DOWNGRADED",
+                    "未找到 Dockerfile：Java+Node 项目已自动改用 HOST（仅部署后端 jar）",
+                    "需要同时托管前端时，补一个根目录/backend/frontend Dockerfile 后重新生成定义"));
+            return new TargetChoice(DeployTarget.HOST,
+                    "未找到 Dockerfile，Java+Node 项目降级为 HOST（仅后端）", diags);
+        }
+        String why = nodeDir == null
                 ? "未识别出可构建工程且未找到 Dockerfile"
                 : "未找到 Dockerfile，但仓库包含前端静态产物";
         diags.add(Diag.blocker("DOCKERFILE_MISSING",
@@ -233,7 +253,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
     }
 
     /** stage 描述（生成期中间结构）。 */
-    private record StageSpec(String id, String action, String runner, String workdir, DeployTarget deployTarget) {
+    private record StageSpec(String id, String action, String runner, String workdir,
+                             String image, DeployTarget deployTarget) {
     }
 
     /** 目标选择结果 + 选择理由。 */
@@ -269,12 +290,15 @@ public class RecipeScaffolder implements ProjectScaffolder {
                 sb.append("    type: health\n")
                         .append("    url: http://127.0.0.1:").append(server.port())
                         .append(server.healthPath()).append('\n')
-                        .append("    expected: 200\n");
+                        .append("    expected: 2xx\n");
             } else {
                 sb.append("    type: action\n")
                         .append("    action: ").append(stage.action()).append('\n')
                         .append("    runner: ").append(stage.runner() == null ? "container" : stage.runner())
                         .append('\n');
+                if (stage.image() != null && !stage.image().isBlank()) {
+                    sb.append("    image: ").append(stage.image()).append('\n');
+                }
                 if (stage.workdir() != null) {
                     sb.append("    workdir: ").append(stage.workdir()).append('\n');
                 }
@@ -521,12 +545,11 @@ public class RecipeScaffolder implements ProjectScaffolder {
      * Dockerfile EXPOSE → 默认 8080。健康路径：Dockerfile HEALTHCHECK → actuator health →
      * 代码里的 health 映射 → 默认 {@code /}。每个结果都带来源，报告里如实展示。
      */
-    private ServerConfig detectServerConfig(Path repoRoot, String javaDir, boolean hasDockerfile) {
+    private ServerConfig detectServerConfig(Path repoRoot, String javaDir, Path dockerfile) {
         Integer dockerHealthPort = null;
         String dockerHealthPath = null;
         Integer dockerExpose = null;
-        if (hasDockerfile) {
-            Path dockerfile = repoRoot.resolve("Dockerfile");
+        if (dockerfile != null) {
             String text = readText(dockerfile);
             Matcher health = Pattern
                     .compile("https?://(?:localhost|127\\.0\\.0\\.1):(\\d+)(/[^\\s\"'\\\\]*)?").matcher(text);
@@ -852,53 +875,171 @@ public class RecipeScaffolder implements ProjectScaffolder {
     // ---------------------------------------------------------------- 必填环境变量
 
     /**
-     * 探测应用声明的必填环境变量：扫描 {@code docker/.env.example} 与 {@code .env.example}
-     * （含一层子目录，如 {@code RuoYi-Vue/docker/.env.example}），取 {@code KEY=} 行的名字清单。
+     * 探测应用声明的必填环境变量（只取名字，不取值）。
      *
-     * <p>只取名字、不取值：示例值多为占位符，真实值归「设置 → 项目环境」加密维护。
+     * <p>来源合并：
+     * <ul>
+     *   <li>{@code .env.example / .env.sample / .env.template / .env}（根目录与一层子目录、docker/）；</li>
+     *   <li>{@code application*.yml/properties} 中的 {@code ${VAR}}（带默认值的 {@code ${VAR:default}} 视为可选）；</li>
+     *   <li>{@code docker-compose*.yml} 中的 {@code ${VAR}}（无默认值即必填）；</li>
+     *   <li>Dockerfile 的 {@code ENV KEY=...}。</li>
+     * </ul>
+     *
+     * <p>值本身归「设置 → 项目环境」，这里只产出 {@code deploy.env-required} 的键名。
      */
     private List<String> detectRequiredEnv(Path repoRoot) {
-        List<Path> candidates = new ArrayList<>();
-        candidates.add(repoRoot.resolve("docker").resolve(".env.example"));
-        candidates.add(repoRoot.resolve(".env.example"));
+        Set<String> required = new LinkedHashSet<>();
+        List<Path> envFiles = new ArrayList<>();
+        for (String dir : DOCKERFILE_DIRS) {
+            Path base = dir.isEmpty() ? repoRoot : repoRoot.resolve(dir);
+            for (String name : List.of(".env.example", ".env.sample", ".env.template", ".env")) {
+                Path candidate = base.resolve(name);
+                if (Files.isRegularFile(candidate)) {
+                    envFiles.add(candidate);
+                }
+            }
+        }
+        // 子目录也常放 .env.example（如 RuoYi-Vue/docker/.env.example）
         try (var dirs = Files.list(repoRoot)) {
             dirs.filter(Files::isDirectory)
                     .filter(d -> !d.getFileName().toString().startsWith("."))
                     .forEach(d -> {
-                        candidates.add(d.resolve("docker").resolve(".env.example"));
-                        candidates.add(d.resolve(".env.example"));
+                        for (String name : List.of(".env.example", ".env.sample", ".env.template")) {
+                            Path candidate = d.resolve(name);
+                            if (Files.isRegularFile(candidate)) {
+                                envFiles.add(candidate);
+                            }
+                            Path nested = d.resolve("docker").resolve(name);
+                            if (Files.isRegularFile(nested)) {
+                                envFiles.add(nested);
+                            }
+                        }
                     });
         } catch (IOException ignored) {
-            // 列不出子目录：只查根级候选
+            // 列不出子目录：只用根级候选
         }
+        for (Path file : envFiles) {
+            for (String key : keysOfEnvFile(file)) {
+                required.add(key);
+            }
+        }
+
+        // 配置文件 / compose 中的 ${VAR}
+        scanVariableRefs(repoRoot, required);
+
+        // Dockerfile ENV
+        Path dockerfile = findDockerfile(repoRoot);
+        if (dockerfile != null) {
+            Matcher env = Pattern.compile("(?im)^\\s*ENV\\s+([A-Za-z_][A-Za-z0-9_]*)[=\\s]")
+                    .matcher(readText(dockerfile));
+            while (env.find()) {
+                required.add(env.group(1));
+            }
+        }
+        return List.copyOf(required);
+    }
+
+    /** 解析 env 文件的 KEY=（忽略注释、空行与没有 = 的行）。 */
+    private List<String> keysOfEnvFile(Path file) {
         List<String> out = new ArrayList<>();
-        for (Path file : candidates) {
-            if (!Files.isRegularFile(file)) {
-                continue;
-            }
-            try {
-                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                    String trimmed = line.trim();
-                    if (trimmed.isEmpty() || trimmed.startsWith("#")) {
-                        continue;
-                    }
-                    int eq = trimmed.indexOf('=');
-                    if (eq <= 0) {
-                        continue;
-                    }
-                    String key = trimmed.substring(0, eq).trim();
-                    if (key.matches("[A-Za-z_][A-Za-z0-9_]*") && !out.contains(key)) {
-                        out.add(key);
-                    }
+        try {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
                 }
-            } catch (IOException e) {
-                log.warn("读取 {} 失败：{}", file, e.getMessage());
+                int eq = trimmed.indexOf('=');
+                if (eq <= 0) {
+                    continue;
+                }
+                String key = trimmed.substring(0, eq).trim();
+                if (key.matches("[A-Za-z_][A-Za-z0-9_]*") && !out.contains(key)) {
+                    out.add(key);
+                }
             }
+        } catch (IOException e) {
+            log.warn("读取 {} 失败：{}", file, e.getMessage());
         }
-        return List.copyOf(out);
+        return out;
+    }
+
+    /**
+     * 从 application*.yml/properties 与 docker-compose*.yml 里提取 {@code ${VAR}}。
+     * 带默认值（{@code ${VAR:default}}）的引用视为可选，不进入必填清单。
+     */
+    private void scanVariableRefs(Path repoRoot, Set<String> required) {
+        Pattern ref = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)([:}?])");
+        try (Stream<Path> stream = Files.walk(repoRoot, 6)) {
+            List<Path> files = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        return (name.startsWith("application") || name.startsWith("docker-compose"))
+                                && (name.endsWith(".yml") || name.endsWith(".yaml")
+                                || name.endsWith(".properties"));
+                    })
+                    .filter(p -> !p.toString().contains("node_modules"))
+                    .filter(p -> !p.toString().contains("/target/") && !p.toString().contains("\\target\\"))
+                    .limit(80)
+                    .toList();
+            for (Path file : files) {
+                Matcher m = ref.matcher(readText(file));
+                while (m.find()) {
+                    if (":".equals(m.group(2))) {
+                        continue; // ${VAR:default} → 可选
+                    }
+                    required.add(m.group(1));
+                }
+            }
+        } catch (IOException ignored) {
+            // 扫描失败不阻塞生成：env-required 少列几个比整体失败更可接受
+        }
     }
 
     private boolean isFile(Path path) {
         return Files.isRegularFile(path);
+    }
+
+    /** 按约定顺序找唯一可用的 Dockerfile；找不到返回 null。 */
+    private Path findDockerfile(Path repoRoot) {
+        for (String dir : DOCKERFILE_DIRS) {
+            Path candidate = dir.isEmpty()
+                    ? repoRoot.resolve("Dockerfile") : repoRoot.resolve(dir).resolve("Dockerfile");
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 后端构建命令：优先仓库自带的 wrapper，构建阶段跳过测试（测试应由独立 stage 承担）。
+     * 这样不依赖宿主机/镜像里预装的 mvn/gradle 版本。
+     */
+    private String backendBuildCommand(Path javaRoot, boolean gradle) {
+        if (gradle) {
+            return isFile(javaRoot.resolve("gradlew"))
+                    ? "./gradlew build -x test" : "gradle build -x test";
+        }
+        return isFile(javaRoot.resolve("mvnw"))
+                ? "./mvnw -B -q -DskipTests package" : "mvn -B -q -DskipTests package";
+    }
+
+    /** 前端构建：pnpm/yarn 先 corepack enable（Node 镜像默认不带全局包管理器），再安装、构建。 */
+    private String frontendBuildCommand(Path nodeRoot, String pm, boolean lock) {
+        String install = installCommand(pm, lock);
+        if (!"npm".equals(pm)) {
+            install = "corepack enable && " + install;
+        }
+        return install + " && " + pm + " run " + detectBuildScript(nodeRoot);
+    }
+
+    /** 读取 package.json 的 scripts，优先 build:prod，其次 build；都读不到就按 build。 */
+    private String detectBuildScript(Path nodeRoot) {
+        String content = readText(nodeRoot.resolve("package.json"));
+        if (content.contains("\"build:prod\"")) {
+            return "build:prod";
+        }
+        return "build";
     }
 }

@@ -44,7 +44,9 @@ class RecipeScaffolderTest {
 
         String actions = content(plan, "ci/actions.yml");
         assertTrue(actions.contains("backend_build:"), actions);
-        assertTrue(actions.contains("\"verify\""), actions);
+        // 构建阶段跳过测试（测试由独立门禁承担，避免把 e2e 当构建门槛）
+        assertTrue(actions.contains("\"package\""), actions);
+        assertTrue(actions.contains("\"-DskipTests\""), actions);
         // 动作级超时：构建 10m、镜像 20m
         assertTrue(actions.contains("timeout: 10m"), actions);
         assertTrue(actions.contains("timeout: 20m"), actions);
@@ -71,6 +73,10 @@ class RecipeScaffolderTest {
 
         String actions = content(plan, "ci/actions.yml");
         assertTrue(actions.contains("pnpm"), actions);
+        // 前端 stage 必须显式用 Node 镜像，否则默认 Maven 沙箱里没有 node/npm
+        assertTrue(pipeline.contains("image: node:20-bookworm"), pipeline);
+        // pnpm 不是 Node 镜像自带的全局命令：先 corepack enable
+        assertTrue(actions.contains("corepack"), actions);
         // package.json 是空对象：没有 test 脚本，不生成前端测试 stage
         assertFalse(pipeline.contains("action: frontend_test"), pipeline);
     }
@@ -286,6 +292,41 @@ class RecipeScaffolderTest {
         assertTrue(actions.contains("\"install\""), actions);
         assertTrue(withoutLock.notes().stream().anyMatch(n -> n.contains("锁文件")),
                 String.valueOf(withoutLock.notes()));
+    }
+
+    @Test
+    @DisplayName("Java + 前端同仓且无 Dockerfile → 降级 HOST 并提示前端不托管（不再留 DOCKER 等 E-501）")
+    void javaNodeWithoutDockerfileDowngradesToHost(@TempDir Path repo) throws Exception {
+        Files.createDirectories(repo.resolve("backend"));
+        Files.createDirectories(repo.resolve("frontend"));
+        Files.writeString(repo.resolve("backend/pom.xml"), "<project/>");
+        Files.writeString(repo.resolve("frontend/package.json"), "{}");
+
+        ScaffoldPlan plan = scaffolder.plan("JN", repo, DeployTarget.DOCKER);
+
+        String pipeline = content(plan, "ci/pipeline.yml");
+        assertTrue(pipeline.contains("target: host"), pipeline);
+        assertEquals(Boolean.TRUE, plan.meta().get("deployable"));
+        assertTrue(plan.notes().stream().anyMatch(n -> n.contains("仅部署后端")),
+                String.valueOf(plan.notes()));
+        assertFalse(pipeline.contains("action: image_package"), pipeline);
+    }
+
+    @Test
+    @DisplayName("Dockerfile 在 backend/ 子目录也能识别，并按该文件打镜像")
+    void findsDockerfileInSubdirectory(@TempDir Path repo) throws Exception {
+        Files.createDirectories(repo.resolve("backend"));
+        Files.writeString(repo.resolve("backend/pom.xml"), "<project/>");
+        Files.writeString(repo.resolve("backend/Dockerfile"), "FROM eclipse-temurin:17-jre\n");
+
+        ScaffoldPlan plan = scaffolder.plan("B", repo, DeployTarget.DOCKER);
+
+        assertEquals("docker", plan.meta().get("deployTarget"));
+        String actions = content(plan, "ci/actions.yml");
+        assertTrue(actions.contains("-f"), actions);
+        assertTrue(actions.contains("backend/Dockerfile"), actions);
+        assertTrue(actions.contains("\"backend\""), actions);
+        assertTrue(content(plan, "ci/pipeline.yml").contains("expected: 2xx"));
     }
 
     private String content(ScaffoldPlan plan, String path) {

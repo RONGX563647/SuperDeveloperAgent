@@ -776,7 +776,14 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         if (k.startsWith("MONGO")) {
             return "mongo";
         }
-        if (k.startsWith("DB_") || k.startsWith("MYSQL") || k.startsWith("POSTGRES")) {
+        if (k.startsWith("POSTGRES")) {
+            return "postgres";
+        }
+        if (k.startsWith("MYSQL") || k.startsWith("MARIADB")) {
+            return "mysql";
+        }
+        if (k.startsWith("DB_")) {
+            // DB_* 无法从名字判断方言：保留历史默认（mysql），并在部署日志里提示显式声明。
             return "mysql";
         }
         return null;

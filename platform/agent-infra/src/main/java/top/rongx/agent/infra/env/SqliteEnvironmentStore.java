@@ -896,6 +896,34 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     @Override
+    public Optional<EnvBinding> latestConfirmedBinding(String projectId, String env) {
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "SELECT id, project_id, env, mapping_json, mapping_hash, created_by, "
+                             + "confirmed_by, confirmed_at, expires_at, status, created_at "
+                             + "FROM env_bindings WHERE project_id = ? AND env = ? "
+                             + "AND status = 'CONFIRMED' AND expires_at > ? "
+                             + "ORDER BY confirmed_at DESC, created_at DESC LIMIT 1")) {
+            st.setString(1, projectId);
+            st.setString(2, env);
+            st.setLong(3, System.currentTimeMillis());
+            try (ResultSet rs = st.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new EnvBinding(
+                        rs.getString("id"), rs.getString("project_id"), rs.getString("env"),
+                        rs.getString("mapping_json"), rs.getString("mapping_hash"),
+                        rs.getString("created_by"), rs.getString("confirmed_by"),
+                        rs.getLong("confirmed_at"), rs.getLong("expires_at"),
+                        rs.getString("status")));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("环境绑定查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public void confirmBinding(String id, String confirmedBy, long expiresAt) {
         try (Connection conn = open();
              PreparedStatement st = conn.prepareStatement("""

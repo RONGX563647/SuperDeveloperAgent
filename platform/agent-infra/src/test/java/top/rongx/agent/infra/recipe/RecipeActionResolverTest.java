@@ -75,8 +75,8 @@ class RecipeActionResolverTest {
 
         ActionSpec spec = resolver.resolve(root, ActionId.BACKEND_BUILD).orElseThrow();
         assertEquals(ActionSource.Kind.BUILTIN, spec.source().kind());
-        // 内置默认一步完成"编译 + 测试 + 打包"，避免 build/test 两个 stage 各编译一遍
-        assertEquals(List.of("mvn", "-B", "-q", "verify"), spec.steps().get(0));
+        // 内置默认只负责编译打包，测试交给 backend_test（避免把 e2e 当成构建门槛）
+        assertEquals(List.of("mvn", "-B", "-q", "-DskipTests", "package"), spec.steps().get(0));
     }
 
     @Test

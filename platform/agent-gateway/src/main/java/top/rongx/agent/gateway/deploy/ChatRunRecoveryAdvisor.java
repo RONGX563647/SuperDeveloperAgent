@@ -219,10 +219,15 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
                 要求：
                 1. 先用 read_run_log / env_summary 定位根因，不要凭空猜测；需要看代码时用 read_file / grep。
                 2. 中间件缺失或不可用 → 调 env_ensure；变量缺失/端点写错 → 说明原因并再次 env_ensure 修正。
-                3. 若根因是流水线定义与产物不匹配（HOST 目标没有可运行 jar、前端静态产物选了 host），
-                   直接 deploy_run 重试一次（不要传 deployTarget，让平台按产物自动选择）。
-                4. 若根因在仓库配置（构建/测试命令写错、e2e 用例不该在构建阶段跑、ci 定义不对），
-                   用 propose_patch 提交受限补丁（只能改 ci/**、Jenkinsfile、pom/build.gradle、src/test/**），
+                3. 若根因是流水线定义与产物不匹配（HOST 目标没有可运行 jar、前端静态产物选了 host、
+                   前端构建缺 Node 镜像），修正定义后重试；重试 deploy_run 必须带**人工确认过的 binding_id**：
+                   - 先调 env_mapping_draft，把 bindingId 与缺失项告诉用户，请其到设置页确认；
+                   - 用户确认后用同一个 binding_id 重试；**没有 binding_id 时不要反复调用 deploy_run**，
+                     否则只会得到 "缺少 binding_id" 的确定性失败。
+                4. 若根因在仓库配置（构建/测试命令写错、e2e 用例不该在构建阶段跑、ci 定义不对、
+                   Dockerfile/compose/nginx/application 配置与部署目标不匹配），
+                   用 propose_patch 提交受限补丁（可改 ci/**、Jenkinsfile、pom/build.gradle、src/test/**、
+                   Dockerfile、deploy/**、docker-compose*.yml、nginx*.conf、application*.yml、package.json），
                    base_sha 用本次运行的提交；工具会返回 changeId，把它写进结论，让用户到确认卡片确认。
                 5. 需要其它人工确认的动作，用 request_confirmation 登记变更，同样把 changeId 写进结论；
                    不要假设任何人已经确认，也不要空等确认结果。

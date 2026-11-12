@@ -122,6 +122,11 @@ public class EnvBindingService implements EnvBindingPort {
         return requireBinding(bindingId);
     }
 
+    @Override
+    public java.util.Optional<EnvBinding> latestConfirmed(String projectId, String env) {
+        return envStore.latestConfirmedBinding(projectId, env);
+    }
+
     /** 运行期校验：必须已确认、未过期、项目/环境一致。 */
     public EnvBinding requireForRun(String bindingId, String projectId, String env) {
         EnvBinding binding = requireBinding(bindingId);

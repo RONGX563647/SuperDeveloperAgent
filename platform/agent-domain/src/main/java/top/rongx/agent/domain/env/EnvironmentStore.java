@@ -74,6 +74,9 @@ public interface EnvironmentStore {
 
     Optional<EnvBinding> binding(String id);
 
+    /** 最近一次已确认且未过期的绑定（deploy_run 免重复索要 binding_id）。 */
+    Optional<EnvBinding> latestConfirmedBinding(String projectId, String env);
+
     void confirmBinding(String id, String confirmedBy, long expiresAt);
 
     // ---------------------------------------------------------------- 端口租约

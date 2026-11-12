@@ -268,9 +268,32 @@ public record PipelineDefinition(String name, List<StageDef> stages,
                     m.get("workdir") == null ? null : str(m, "workdir", ""),
                     m.get("image") == null ? null : str(m, "image", ""),
                     m.get("url") == null ? null : str(m, "url", ""),
-                    m.get("expected") instanceof Number n ? n.intValue() : 200));
+                    expectedOf(m.get("expected"))));
         }
         return out;
+    }
+
+    /**
+     * 解析健康检查期望码：数字直接取；{@code 2xx}（大小写不敏感）用 0 表示"任意 2xx"。
+     * 其他写法视为非法定义，避免"看起来配了其实没配"。
+     */
+    private static int expectedOf(Object raw) {
+        if (raw == null) {
+            return 200;
+        }
+        if (raw instanceof Number n) {
+            return n.intValue();
+        }
+        String text = String.valueOf(raw).trim();
+        if (text.equalsIgnoreCase("2xx")) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "health.expected 只能是状态码或 2xx，实际为：" + text);
+        }
     }
 
     /** 从 {@code Map<?,?>} 里安全取字符串（避开通配符捕获的泛型问题）。 */

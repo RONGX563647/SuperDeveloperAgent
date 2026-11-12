@@ -74,8 +74,9 @@ public class DeployTools {
     @Tool(name = "deploy_run",
             description = """
                     触发一次流水线运行（写操作，仅 dev/test）。
-                    必须先调用 env_mapping_draft 生成环境映射，并由人在设置页确认后把 binding_id 传进来；
-                    未带 binding_id、草案未确认、已过期或变量改过都会拒绝运行。
+                    优先使用传入的 binding_id；未传时自动复用该环境最近一次已确认且未过期的绑定
+                    （变量哈希变化则由 requireForRun 拒绝，需重新生成草案并人工确认）。
+                    没有任何已确认绑定时，必须先调用 env_mapping_draft，由人在设置页确认。
                     服务器（prod）不允许用本工具触发：必须先在测试环境跑通并固化，再到部署面板确认发布。""",
             readOnly = false, concurrencySafe = false)
     public String run(@ToolParam(name = "pipeline_id", description = "流水线名（release / verify）")
@@ -99,11 +100,18 @@ public class DeployTools {
         if (sha == null || !sha.matches("[0-9a-f]{7,40}")) {
             return "err: git_sha 需 7-40 位小写十六进制";
         }
-        if (bindingId == null || bindingId.isBlank()) {
-            return "err: 缺少 binding_id：请先调用 env_mapping_draft，等人在设置页确认后再触发";
+        String effectiveBindingId = bindingId;
+        if (effectiveBindingId == null || effectiveBindingId.isBlank()) {
+            effectiveBindingId = bindings.latestConfirmed(ctx.projectId(), target)
+                    .map(EnvBinding::id)
+                    .orElse(null);
+        }
+        if (effectiveBindingId == null || effectiveBindingId.isBlank()) {
+            return "err: 缺少 binding_id：请先调用 env_mapping_draft，等人在设置页确认后再触发"
+                    + "（同一环境已有未过期的确认绑定时可省略，本次没有）";
         }
         // 绑定无效 / 触发被拒都是真失败：抛出让 Agent 与前端都看到失败态（而不是一段普通文本）
-        EnvBinding binding = bindings.requireForRun(bindingId.trim(), ctx.projectId(), target);
+        EnvBinding binding = bindings.requireForRun(effectiveBindingId.trim(), ctx.projectId(), target);
         Map<String, String> params = new LinkedHashMap<>();
         params.put("gitSha", sha);
         params.put("env", target);
@@ -119,7 +127,8 @@ public class DeployTools {
                     把「已经跑通的动作序列」固化成该环境的可复现脚本（写操作）。
                     只在确实跑通过之后调用；脚本会记录当前证据运行，供后续重放与上服务器判断。
                     actions 只能取：backend_build / backend_test / frontend_build / image_package。
-                    需要部署到容器时传 with_deploy=true，平台会补 deploy + health + rollback。
+                    需要部署时传 with_deploy=true，并显式指定 target（docker / host / server）：
+                    固化脚本会按该目标与 health_path 渲染，避免回放到 host/server 时报 E-504。
                     可自动放行：dev/test 下无需额外确认单；生产环境拒绝执行。""",
             readOnly = false, concurrencySafe = false)
     public String saveRecipe(@ToolParam(name = "env", description = "环境：dev / test") String env,
@@ -128,10 +137,16 @@ public class DeployTools {
                              String actions,
                              @ToolParam(name = "with_deploy", description = "是否包含部署与健康检查（true/false）")
                              String withDeploy,
+                             @ToolParam(name = "target", required = false,
+                                     description = "部署目标：docker / host / server（默认 docker）")
+                             String target,
+                             @ToolParam(name = "health_path", required = false,
+                                     description = "健康检查路径，默认 /healthz")
+                             String healthPath,
                              @ToolParam(name = "port", description = "部署端口，默认 8080") String port,
                              ProjectContext ctx) {
-        String target = normalize(env);
-        if ("prod".equals(target)) {
+        String targetEnv = normalize(env);
+        if ("prod".equals(targetEnv)) {
             return "err: 不要把生产环境当探索目标；测试环境跑通后直接 replay 到生产即可";
         }
         List<RecipeRenderer.Step> steps = new java.util.ArrayList<>();
@@ -153,21 +168,31 @@ public class DeployTools {
             return "err: actions 不能为空";
         }
         boolean deploy = "true".equalsIgnoreCase(String.valueOf(withDeploy));
+        String wireTarget = target == null || target.isBlank()
+                ? "docker" : target.trim().toLowerCase();
+        if (deploy && !List.of("docker", "host", "server").contains(wireTarget)) {
+            return "err: target 只能是 docker / host / server，实际为 " + wireTarget;
+        }
         if (deploy) {
             steps.add(RecipeRenderer.Step.deploy());
             steps.add(RecipeRenderer.Step.health());
             steps.add(RecipeRenderer.Step.rollback());
         }
         Integer parsedPort = parsePort(port);
+        int actualPort = parsedPort == null ? 8080 : parsedPort;
+        String path = healthPath == null || healthPath.isBlank() ? "/healthz" : healthPath.trim();
+        if (!path.startsWith("/")) {
+            path = "/" + path;
+        }
         RecipeRenderer.RenderTarget renderTarget = deploy
-                ? RecipeRenderer.RenderTarget.docker(parsedPort == null ? 8080 : parsedPort)
+                ? new RecipeRenderer.RenderTarget(wireTarget, actualPort, actualPort, path)
                 : null;
         String yaml = RecipeRenderer.render("release", steps, renderTarget);
 
-        String evidence = lastSuccessfulRun(ctx.projectId(), target);
-        DeployRecipe saved = recipes.save(new DeployRecipe(ctx.projectId(), target, 0, yaml, null,
+        String evidence = lastSuccessfulRun(ctx.projectId(), targetEnv);
+        DeployRecipe saved = recipes.save(new DeployRecipe(ctx.projectId(), targetEnv, 0, yaml, null,
                 evidence, null, System.currentTimeMillis(), "agent"));
-        return "saved: v" + saved.version() + "\nenv: " + target
+        return "saved: v" + saved.version() + "\nenv: " + targetEnv
                 + "\nevidence: " + (evidence == null ? "（无成功运行，建议先 deploy_run）" : evidence)
                 + "\n---\n" + yaml;
     }
@@ -193,6 +218,10 @@ public class DeployTools {
 
     private static String normalize(String env) {
         String value = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
-        return List.of("dev", "test", "prod").contains(value) ? value : "test";
+        if (!List.of("dev", "test", "prod").contains(value)) {
+            throw new IllegalArgumentException(
+                    "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
+        }
+        return value;
     }
 }
