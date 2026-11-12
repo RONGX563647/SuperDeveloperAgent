@@ -41,6 +41,16 @@ public interface PipelineEngine {
     record DeploySummary(String target, int port, String healthPath) {
     }
 
+    /**
+     * 本机 Docker 是否可用。
+     *
+     * <p>部署目标下拉与 dry-run 门控都要用：默认按"不可用"处理（fail-closed），
+     * 避免没有容器运行时的环境仍把容器部署展示为可选。
+     */
+    default boolean dockerReady() {
+        return false;
+    }
+
     /** 触发一次运行，返回 runId。参数只允许枚举/正则约束后的值。 */
     String trigger(String projectId, String pipelineId, Map<String, String> params);
 

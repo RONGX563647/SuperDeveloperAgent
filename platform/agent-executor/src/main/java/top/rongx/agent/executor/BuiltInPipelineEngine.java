@@ -557,6 +557,34 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (needsDocker && !dockerAvailable()) {
             blockers.add("Docker 不可用：镜像/容器部署无法执行（L3 fail-closed）");
         }
+        // 部署阶段同样要预检：定义声明 target=docker 时，执行期要么产出镜像（需要 Docker），
+        // 要么回退 host（需要可运行 jar）。两者都不成立就必须在 dry-run 拦下，
+        // 否则会出现"预检通过、真正部署时才报目标无法确定"。
+        boolean deployRunnable = previews.stream().anyMatch(p -> "deploy".equals(p.type())
+                && (p.skipReason() == null || p.skipReason().isBlank()));
+        if (deployRunnable && !dockerAvailable()) {
+            boolean hasImage = previews.stream().anyMatch(p -> "image_package".equals(p.action())
+                    && (p.skipReason() == null || p.skipReason().isBlank()));
+            String target = deploySummary(projectId, normalized)
+                    .map(DeploySummary::target).orElse(null);
+            if ("docker".equals(target)) {
+                boolean javaProject = repo != null
+                        && (Files.isRegularFile(repo.resolve("pom.xml"))
+                        || Files.isRegularFile(repo.resolve("build.gradle"))
+                        || Files.isRegularFile(repo.resolve("build.gradle.kts")));
+                boolean hostFallback = !hasImage && repo != null
+                        && (javaProject || hasRunnableJar(repo, null));
+                if (hasImage) {
+                    blockers.add("E-709 Docker 不可用：本次需要构建/运行镜像，容器部署无法执行（fail-closed）");
+                } else if (hostFallback) {
+                    warnings.add("Docker 不可用：部署目标将从 docker 自动回退到 host");
+                } else if (repo != null && Files.isRegularFile(repo.resolve("Dockerfile"))) {
+                    blockers.add("E-709 Docker 不可用：定义要求用 Dockerfile 构建镜像，当前没有可回退的本机 jar");
+                } else {
+                    blockers.add("E-709 无法确定部署目标：Docker 不可用，且本次既没有镜像阶段也没有可运行 jar");
+                }
+            }
+        }
         for (StagePreview p : previews) {
             boolean runnable = p.skipReason() == null || p.skipReason().isBlank();
             stages.add(new StageDryRun(p.id(), p.type(), p.action(), runnable,
@@ -573,6 +601,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return new DryRunReport(projectId, normalized, pipelineId,
                 gitSha == null ? "" : gitSha, reportHash, fingerprint, ok,
                 blockers, warnings, stages, System.currentTimeMillis());
+    }
+
+    @Override
+    public boolean dockerReady() {
+        return dockerAvailable();
     }
 
     private static boolean dockerAvailable() {

@@ -193,9 +193,11 @@ public class PipelineController {
                 .map(s -> "默认服务器：" + s.name() + "（" + s.host() + "）")
                 .orElse(legacyServerConfigured
                         ? "已通过环境变量配置" : "未配置：请到「设置 → 服务器」添加");
+        boolean dockerReady = engine.dockerReady();
         return List.of(
-                Map.of("target", "docker", "label", "本机 Docker 容器", "available", true,
-                        "detail", "替换式发布；需要 Dockerfile 与镜像"),
+                Map.of("target", "docker", "label", "本机 Docker 容器", "available", dockerReady,
+                        "detail", dockerReady ? "替换式发布；需要 Dockerfile 与镜像"
+                                : "未检测到可用的 Docker（L3 fail-closed）"),
                 Map.of("target", "host", "label", "本机直接运行", "available", true,
                         "detail", "仅 Java jar；pid 文件管理"),
                 Map.of("target", "server", "label", "远程服务器", "available",
