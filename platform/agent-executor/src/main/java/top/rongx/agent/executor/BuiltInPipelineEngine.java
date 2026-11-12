@@ -441,7 +441,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return Optional.empty();
             }
             PipelineDefinition.DeploySpec deploy = def.deploy();
-            return Optional.of(new DeploySummary(deploy.target(), deploy.port(), deploy.healthPath()));
+            // dev 固定本机运行（与 trigger/execute 的强制逻辑一致）：
+            // 设置页若显示 docker，就会出现"页面一套、执行另一套"。
+            String target = "dev".equals(normalized) && localDevHost != null
+                    ? "host" : deploy.target();
+            return Optional.of(new DeploySummary(target, deploy.port(), deploy.healthPath()));
         } catch (RuntimeException e) {
             return Optional.empty();
         }
@@ -504,13 +508,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return List.of();
             }
         } catch (RuntimeException e) {
-            // 定义还没生成/刚被改坏：预览为空，由触发期给出可读错误
+            // 定义还没生成/刚被改坏：预览为空，由触发期给出可读错误。
+            // 但要留下日志：否则"为什么预览是空的"在现场无法定位（只剩 dry-run 的笼统提示）。
+            log.warn("项目 {} 的流水线预览不可用（env={}, sha={}）：{}",
+                    projectId, env, gitSha, e.getMessage());
             return List.of();
         }
         try {
             return renderPreviews(definition, pipelineId, recipeRoot);
         } catch (RuntimeException e) {
-            // 配方解析失败同样不阻塞触发：预览为空，触发期会给可读错误
+            log.warn("项目 {} 的流水线配方渲染失败（pipeline={}, root={}）：{}",
+                    projectId, pipelineId, recipeRoot, e.getMessage());
             return List.of();
         } finally {
             deleteTree(shaRoot);
