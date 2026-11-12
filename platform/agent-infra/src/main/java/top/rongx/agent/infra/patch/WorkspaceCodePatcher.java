@@ -34,7 +34,14 @@ public class WorkspaceCodePatcher implements CodePatcher {
     /** 白名单说明（同时用于提示词与错误信息）。 */
     private static final List<String> ALLOWED_PATTERNS = List.of(
             "ci/**", "Jenkinsfile", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts",
-            "**/src/test/**");
+            "**/src/test/**",
+            // 部署/运行形态相关：Dockerfile、compose、nginx、应用配置、前端构建脚本
+            "Dockerfile", "**/Dockerfile", "**/*.Dockerfile",
+            "deploy/**", "**/docker-compose*.yml", "**/docker-compose*.yaml",
+            "**/nginx*.conf", "**/nginx/**",
+            "**/application*.yml", "**/application*.yaml", "**/application*.properties",
+            "**/package.json",
+            "**/.env.example", "**/.env.sample", "**/.env.template");
 
     private static final int MAX_FILES = 10;
     private static final int MAX_CONTENT_CHARS = 400_000;
@@ -162,7 +169,27 @@ public class WorkspaceCodePatcher implements CodePatcher {
                 || path.equals("pom.xml") || path.endsWith("/pom.xml")
                 || path.equals("build.gradle") || path.endsWith("/build.gradle")
                 || path.equals("build.gradle.kts") || path.endsWith("/build.gradle.kts")
-                || path.startsWith("src/test/") || path.contains("/src/test/");
+                || path.startsWith("src/test/") || path.contains("/src/test/")
+                || path.equals("Dockerfile") || path.endsWith("/Dockerfile")
+                || path.endsWith(".Dockerfile")
+                || path.startsWith("deploy/") || path.contains("/deploy/")
+                || path.endsWith("/docker-compose.yml") || path.endsWith("/docker-compose.yaml")
+                || path.equals("docker-compose.yml") || path.equals("docker-compose.yaml")
+                || path.endsWith(".conf") && path.contains("nginx")
+                || path.contains("/nginx/")
+                || isApplicationConfig(path)
+                || path.equals("package.json") || path.endsWith("/package.json")
+                || path.endsWith("/.env.example") || path.endsWith("/.env.sample")
+                || path.endsWith("/.env.template")
+                || path.equals(".env.example") || path.equals(".env.sample")
+                || path.equals(".env.template");
+    }
+
+    /** application*.yml / properties（只允许这三类扩展名，避免误放业务配置）。 */
+    private static boolean isApplicationConfig(String path) {
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        return name.startsWith("application")
+                && (name.endsWith(".yml") || name.endsWith(".yaml") || name.endsWith(".properties"));
     }
 
     private static Path resolveInside(Path root, String relative) {

@@ -236,4 +236,29 @@ function download(): void {
 .lc {
   vertical-align: top;
 }
+
+/* 手机：工具栏换行，路径占一行、操作按钮右对齐，避免横向溢出 */
+@media (max-width: 600px) {
+  .fv-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .fv-meta {
+    flex: 1 1 100%;
+  }
+  .fv-stat {
+    display: none;
+  }
+  .fv-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+  .fv-btn {
+    height: 28px;
+  }
+  .code {
+    font-size: 12px;
+  }
+}
 </style>

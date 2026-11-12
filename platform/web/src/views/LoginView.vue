@@ -104,9 +104,10 @@ async function doLogin() {
 .login-page {
   display: grid;
   place-items: center;
-  width: 100vw;
+  width: 100%;
   height: 100vh;
   height: 100dvh;
+  padding: 16px;
   background: var(--bg);
 }
 .login-card {

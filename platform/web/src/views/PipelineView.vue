@@ -113,6 +113,8 @@ const comparePrev = ref<RunView | null>(null)
 
 const leftPct = ref(34)
 const topError = ref('')
+/** 手机端主从切换：配置区 / 运行详情；桌面端不参与布局。 */
+const mobilePane = ref<'config' | 'run'>('config')
 
 /** 当前右侧查看的运行来自哪次触发/哪条历史（运行详情本身不带 env/pipeline）。 */
 const activeMeta = ref<{ env: string, pipelineId: string, sha: string } | null>(null)
@@ -121,6 +123,11 @@ const {
   run, runId, loading: runLoading, errorText, startedAt, running,
   open: openRun, attach, cancel, clear,
 } = useRunTracker({ onFinished: () => { void loadHistory(); void loadEnvs() } })
+
+/** 有运行被打开/触发时，手机端自动切到「运行详情」，避免用户再多点一次。 */
+watch(runId, (id) => {
+  mobilePane.value = id ? 'run' : 'config'
+})
 
 /** 当前查看运行所属环境在「设置 → 项目环境」里的状态（用于展示固化脚本版本）。 */
 const activeEnvRow = computed(() => {
@@ -855,7 +862,28 @@ async function copyDigest(digest: string): Promise<void> {
       </template>
     </PageHeader>
 
-    <div class="wp-body">
+    <!-- 手机端：配置区与运行详情分屏切换，各占满整屏高度 -->
+    <div class="mobile-tabs" role="tablist" aria-label="流水线视图">
+      <button
+        type="button" role="tab" class="mt-btn"
+        :class="{ active: mobilePane === 'config' }"
+        :aria-selected="mobilePane === 'config'"
+        @click="mobilePane = 'config'"
+      >
+        配置
+      </button>
+      <button
+        type="button" role="tab" class="mt-btn"
+        :class="{ active: mobilePane === 'run' }"
+        :aria-selected="mobilePane === 'run'"
+        @click="mobilePane = 'run'"
+      >
+        运行详情
+        <span v-if="run" class="mt-dot" :class="statusTone(run.status)" />
+      </button>
+    </div>
+
+    <div class="wp-body" :class="`mpane-${mobilePane}`">
       <!-- 左：上下文 + 运行 + 历史 -->
       <div class="wp-left" :style="{ width: `${leftPct}%` }">
         <div class="wp-left-inner">
@@ -1161,6 +1189,10 @@ async function copyDigest(digest: string): Promise<void> {
   flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
+}
+/* 手机端分屏切换条：桌面端不显示 */
+.mobile-tabs {
+  display: none;
 }
 .wp-left {
   flex: none;
@@ -1683,15 +1715,92 @@ async function copyDigest(digest: string): Promise<void> {
 }
 
 @media (max-width: 900px) {
-  .wp-body {
-    flex-direction: column;
+  /* 主从切换：配置 / 运行详情一次只显示一个，避免上下各占一半 */
+  .wp-body.mpane-config .wp-right {
+    display: none;
+  }
+  .wp-body.mpane-run .wp-left {
+    display: none;
   }
   .wp-left {
     width: 100% !important;
     height: auto;
-    max-height: 50%;
+    flex: 1 1 0;
     border-right: 0;
+  }
+  .wp-body :deep(.resizer) {
+    display: none;
+  }
+  .wp-right {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  /* 运行详情在手机上整体可滚，日志区不再被挤成一条缝 */
+  .run-detail {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .run-detail :deep(.run-log) {
+    min-height: 320px;
+  }
+  .run-detail :deep(.log-scroll) {
+    min-height: 150px;
+  }
+  .mobile-tabs {
+    display: flex;
+    flex: none;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--surface-raised);
     border-bottom: 1px solid var(--line-soft);
+  }
+  .mt-btn {
+    display: inline-flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink-muted);
+    cursor: pointer;
+    background: var(--surface-sunken);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+  }
+  .mt-btn.active {
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--panel);
+    border-color: var(--line-soft);
+  }
+  .mt-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--ink-faint);
+    border-radius: 50%;
+  }
+  .mt-dot.busy { background: var(--accent); }
+  .mt-dot.ok { background: var(--ok); }
+  .mt-dot.bad { background: var(--danger); }
+}
+
+/* 手机：左侧上下文区压缩，产物行去掉摘要列，避免横向溢出 */
+@media (max-width: 720px) {
+  .wp-left-inner {
+    padding: 10px;
+  }
+  .run-bar {
+    padding: 8px 10px;
+  }
+  .artifact-row {
+    grid-template-columns: 52px minmax(0, 1fr) 60px 64px;
+    gap: 8px;
+  }
+  .art-digest {
+    display: none;
   }
 }
 </style>

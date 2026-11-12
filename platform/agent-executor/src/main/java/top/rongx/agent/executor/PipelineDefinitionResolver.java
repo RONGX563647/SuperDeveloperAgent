@@ -190,14 +190,22 @@ public final class PipelineDefinitionResolver {
         String actionsYaml = fileContent(plan, "ci/actions.yml");
         String note = "按仓库结构自动生成（stack=" + plan.stack() + "）";
 
-        if ("UNKNOWN".equals(plan.stack()) && author != null) {
-            // 规则认不出技术栈：请模型按同一契约给候选定义（模型只能选白名单动作）
-            String reason = "规则未能识别技术栈（没有任何 pom.xml / package.xml / Dockerfile 线索）";
+        boolean unknownStack = "UNKNOWN".equals(plan.stack());
+        // 规则认不出技术栈，或规则给出了不可部署的阻塞项（如无 Dockerfile 却选了 DOCKER）时，
+        // 都请模型按同一契约给候选定义；否则生成的定义一看就必然失败。
+        boolean blocked = Boolean.FALSE.equals(plan.meta().get("deployable"));
+        if ((unknownStack || blocked) && author != null) {
+            String reason = unknownStack
+                    ? "规则未能识别技术栈（没有任何 pom.xml / package.json / Dockerfile 线索）"
+                    : "规则生成的部署目标不可用（" + String.join("；", plan.notes()) + "）";
             Optional<String> authored = author.author(projectId, repoRoot, plan, reason);
             if (authored.isPresent() && isValidDefinition(authored.get())) {
                 pipelineYaml = authored.get();
-                note = "规则未识别，已用 agent 生成（请人工确认）";
-                log.info("项目 {} 流水线定义由 agent 兜底生成", projectId);
+                note = unknownStack
+                        ? "规则未识别，已用 agent 生成（请人工确认）"
+                        : "规则定义存在阻塞项，已用 agent 生成候选（请人工确认）";
+                log.info("项目 {} 流水线定义由 agent 兜底生成（unknownStack={}, blocked={}）",
+                        projectId, unknownStack, blocked);
             } else if (authored.isPresent()) {
                 log.warn("项目 {} 的 agent 兜底定义不合契约（引用了未知动作/结构非法），退回规则骨架", projectId);
                 note = note + "；agent 兜底输出不合契约，已退回骨架";

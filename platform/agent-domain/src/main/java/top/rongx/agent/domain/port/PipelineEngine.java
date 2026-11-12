@@ -2,6 +2,7 @@ package top.rongx.agent.domain.port;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
@@ -21,6 +22,19 @@ public interface PipelineEngine {
 
     /** 该项目下可用的流水线（白名单，不返回任意 job）。 */
     List<String> pipelines(String projectId);
+
+    /**
+     * 当前生效的发布摘要（目标 / 端口 / 健康路径），供设置页展示"真正会用的值"。
+     *
+     * <p>放在端口上是为了让网关不直接依赖执行面的 YAML 解析类（规约 §2.1 单向依赖）。
+     */
+    default Optional<DeploySummary> deploySummary(String projectId) {
+        return Optional.empty();
+    }
+
+    /** 发布摘要（只读视图）。 */
+    record DeploySummary(String target, int port, String healthPath) {
+    }
 
     /** 触发一次运行，返回 runId。参数只允许枚举/正则约束后的值。 */
     String trigger(String projectId, String pipelineId, Map<String, String> params);

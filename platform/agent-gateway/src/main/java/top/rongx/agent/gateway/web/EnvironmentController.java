@@ -36,7 +36,7 @@ import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.net.PortProbe;
-import top.rongx.agent.domain.port.DeployDefaultsReader;
+import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
@@ -67,7 +67,7 @@ public class EnvironmentController {
     private final EnvRuntime envRuntime;
     private final LocalServiceManager localServices;
     private final CurrentUser currentUser;
-    private final DeployDefaultsReader deployDefaultsReader;
+    private final PipelineEngine pipelineEngine;
 
     /** 发现候选暂存：密码留在后端，前端只拿 candidateId。 */
     private final Map<String, EnvResource> candidates = new ConcurrentHashMap<>();
@@ -76,7 +76,7 @@ public class EnvironmentController {
                                  EnvBindingService bindings, DeployServerRepository servers,
                                  SshAccess ssh, EnvRuntime envRuntime,
                                  LocalServiceManager localServices, CurrentUser currentUser,
-                                 DeployDefaultsReader deployDefaultsReader) {
+                                 PipelineEngine pipelineEngine) {
         this.envStore = envStore;
         this.discovery = discovery;
         this.bindings = bindings;
@@ -85,7 +85,7 @@ public class EnvironmentController {
         this.envRuntime = envRuntime;
         this.localServices = localServices;
         this.currentUser = currentUser;
-        this.deployDefaultsReader = deployDefaultsReader;
+        this.pipelineEngine = pipelineEngine;
     }
 
     // ---------------------------------------------------------------- 模板
@@ -424,7 +424,7 @@ public class EnvironmentController {
         out.put("network", e.network() == null ? "" : e.network());
         // 部署端口/健康路径以流水线定义为准（真正生效的是它），模板默认值只在没有定义时兜底，
         // 否则页面会显示一套、部署用另一套。
-        DeployDefaults deploy = pipelineDeploy(projectId);
+        PipelineEngine.DeploySummary deploy = pipelineDeploy(projectId);
         boolean deployOverrides = deploy != null;
         out.put("defaultPort", deployOverrides && deploy.port() > 0 ? deploy.port() : e.defaultPort());
         out.put("healthPath", deployOverrides && deploy.healthPath() != null
@@ -442,15 +442,9 @@ public class EnvironmentController {
         return out;
     }
 
-    /** 读取平台侧流水线的 deploy 段；缺失或 YAML 不合法时返回 null（退回环境模板默认值）。 */
-    private DeployDefaults pipelineDeploy(String projectId) {
-        try {
-            return deployDefaultsReader.read(projectId);
-        } catch (RuntimeException e) {
-            log.debug("流水线定义解析失败，端口/健康路径退回环境模板 projectId={}：{}",
-                    projectId, e.getMessage());
-            return null;
-        }
+    /** 读取当前生效的发布摘要；缺失或解析失败时返回 null（退回环境模板默认值）。 */
+    private PipelineEngine.DeploySummary pipelineDeploy(String projectId) {
+        return pipelineEngine.deploySummary(projectId).orElse(null);
     }
 
     /**

@@ -88,13 +88,6 @@ public class PipelineConfig {
         return new LocalDevHostDeployer(envStore, logRoot);
     }
 
-    /** 平台侧 deploy 段解析：环境页展示的端口/健康路径与真实部署保持一致。 */
-    @Bean
-    public top.rongx.agent.domain.port.DeployDefaultsReader deployDefaultsReader(
-            top.rongx.agent.domain.port.PipelineDefStore defStore) {
-        return new PipelineDeployDefaultsReader(defStore);
-    }
-
     @Bean
     public PipelineEngine pipelineEngine(ActionResolver recipes,
                                          @Qualifier("hostActionRunner") ProcessActionRunner host,

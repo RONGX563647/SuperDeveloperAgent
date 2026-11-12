@@ -122,10 +122,13 @@ public class AgentFactory {
                    （一次最多 90 秒，未结束就再次 wait_run 续等，不要高频调用 ci_status）；
                    失败再用 read_run_log 定位原因。
                 5. 根因在仓库配置时，用 propose_patch 修（这是唯一能改仓库的入口）：
-                   - 只能改 ci/**、Jenkinsfile、**/pom.xml、**/build.gradle(.kts)、**/src/test/**；
+                   - 只能改 ci/**、Jenkinsfile、**/pom.xml、**/build.gradle(.kts)、**/src/test/**、
+                     Dockerfile、deploy/**、docker-compose*.yml、nginx*.conf、application*.yml、
+                     package.json、.env.example；
                    - 工具只生成 diff 并登记变更单（返回 changeId），必须请人到确认卡片确认后才应用；
                    - 典型修法：e2e 用例不该在构建阶段跑 → 给测试打 @Tag 并在构建配置排除；
                      构建命令缺参数或镜像用错 → 改 ci/ 下的流水线定义；
+                     前端构建失败（No such file: node/npm）→ 给 frontend stage 加 Node 镜像；
                    - 不要尝试改业务代码、配置文件或凭证（工具会直接拒绝）。
                 6. 需要单独验证某个白名单动作时用 run_action；需要留痕/确认时用 request_confirmation。
                 7. 跑通之后必须调 deploy_save_recipe 固化，并把动作序列写清楚（这就是下次重放的内容）。
@@ -133,7 +136,7 @@ public class AgentFactory {
 
                 判定"跑通"的标准（不要自己宣布成功）：
                 - 构建/测试 stage 全部 SUCCEEDED；
-                - 如果有部署：健康检查 200，且部署产物（endpoint）已登记；
+                - 如果有部署：健康检查 2xx（具体码按 deploy 定义），且部署产物（endpoint）已登记；
                 - 证据运行 id 能对上。
 
                 硬边界：

@@ -102,7 +102,11 @@ public enum MiddlewareKind {
         if (k.startsWith("MONGO")) {
             return Optional.of(MONGO);
         }
-        if (k.startsWith("DB_") || k.startsWith("MYSQL") || k.startsWith("POSTGRES")) {
+        if (k.startsWith("POSTGRES")) {
+            return Optional.of(POSTGRES);
+        }
+        if (k.startsWith("DB_") || k.startsWith("MYSQL") || k.startsWith("MARIADB")) {
+            // DB_* 无法从名字判断方言：保留历史默认（mysql）；MARIADB 复用 MySQL 协议与初始化方式。
             return Optional.of(MYSQL);
         }
         return Optional.empty();

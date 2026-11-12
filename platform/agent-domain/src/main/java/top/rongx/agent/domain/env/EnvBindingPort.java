@@ -1,6 +1,7 @@
 package top.rongx.agent.domain.env;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Agent 环境绑定的领域端口。
@@ -19,5 +20,15 @@ public interface EnvBindingPort {
     /** 项目声明的必填变量名（来自 .env.example 等，只读键名，不含值）。 */
     default List<String> requiredKeys(String projectId) {
         return List.of();
+    }
+
+    /**
+     * 最近一次已确认且未过期的绑定（同一项目/环境）。
+     *
+     * <p>供 {@code deploy_run} 在未显式带 binding_id 时复用：变量哈希若已变化，
+     * {@link #requireForRun} 仍会拒绝，因此复用是安全的。
+     */
+    default Optional<EnvBinding> latestConfirmed(String projectId, String env) {
+        return Optional.empty();
     }
 }

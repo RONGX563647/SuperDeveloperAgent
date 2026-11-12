@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { ArrowLeft, Close } from '@element-plus/icons-vue'
 import {
   decommission, listProjects, scaffoldApply, scaffoldPreview,
   type ProjectRow, type ScaffoldPlan,
@@ -34,6 +35,15 @@ const selected = shallowRef<TreeNode | null>(null)
 const tabbed = ref<InstanceType<typeof TabbedFiles> | null>(null)
 
 const selectedId = computed(() => selected.value?.id ?? null)
+/** 手机端主从切换：false=文件树，true=详情；桌面端该状态不参与布局。 */
+const mobileDetail = ref(false)
+
+/** 手机端详情页顶部的返回条标题。 */
+const mobileTitle = computed(() => {
+  if (!selected.value) return ''
+  if (selected.value.kind === 'file') return selected.value.name
+  return selected.value.project?.name ?? selected.value.name
+})
 
 /* ---------------------------------------------------------------- 流水线脚手架 */
 
@@ -120,10 +130,21 @@ onMounted(load)
 
 function onSelect(node: TreeNode): void {
   selected.value = node
+  mobileDetail.value = true
   // 文件节点 → 打开/聚焦一个 Tab；目录或根 → 右侧概览，Tab 区隐藏
   if (node.kind === 'file') {
     tabbed.value?.openTab(node.path, node.name)
   }
+}
+
+/** 手机端：从详情返回文件树。 */
+function backToTree(): void {
+  mobileDetail.value = false
+}
+
+function clearSelection(): void {
+  selected.value = null
+  mobileDetail.value = false
 }
 
 async function onAction(action: 'refresh' | 'rename' | 'delete', node: TreeNode): Promise<void> {
@@ -171,15 +192,15 @@ const overviewProject = computed(() =>
     <PageHeader title="项目管理" subtitle="文档树 · 详情面板 · 流水线入口">
       <template #actions>
         <button type="button" class="hdr-btn" @click="openScaffold">
-          生成流水线脚本
+          <span class="hdr-long">生成流水线脚本</span><span class="hdr-short">生成脚本</span>
         </button>
         <button type="button" class="hdr-btn primary" @click="router.push('/projects/intake')">
-          接入项目
+          <span class="hdr-long">接入项目</span><span class="hdr-short">接入</span>
         </button>
       </template>
     </PageHeader>
 
-    <div class="wb-body">
+    <div class="wb-body" :class="mobileDetail ? 'mpane-detail' : 'mpane-tree'">
       <!-- 左：文档树 -->
       <div class="wb-left" :style="{ width: `${leftPct}%` }">
         <ProjectTree
@@ -195,6 +216,16 @@ const overviewProject = computed(() =>
 
       <!-- 右：详情区 -->
       <div class="wb-right">
+        <!-- 手机端详情页顶部：返回文件树 + 当前节点 -->
+        <div class="wb-mobile-bar">
+          <button type="button" class="wb-back" @click="backToTree">
+            <el-icon><ArrowLeft /></el-icon> 文件树
+          </button>
+          <span class="wb-mobile-title">{{ mobileTitle }}</span>
+          <button type="button" class="wb-mobile-close" aria-label="关闭详情" @click="clearSelection">
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
         <!-- 项目概览（根/目录节点） -->
         <ProjectOverview
           v-if="overviewProject"
@@ -282,19 +313,25 @@ const overviewProject = computed(() =>
       </div>
 
       <template #footer>
-        <el-checkbox v-model="scaffoldToRepo" size="small" class="sc-overwrite">
-          写入仓库 ci/（随代码 review，不自动提交）
-        </el-checkbox>
-        <el-checkbox v-model="scaffoldOverwrite" size="small" class="sc-overwrite">
-          覆盖已存在文件
-        </el-checkbox>
-        <el-button @click="scaffoldDialog = false">取消</el-button>
-        <el-button :disabled="!scaffoldPlan" :loading="scaffoldLoading" @click="reloadScaffold">
-          重新扫描
-        </el-button>
-        <el-button type="primary" :disabled="!scaffoldPlan" :loading="scaffoldApplying" @click="applyScaffold">
-          {{ scaffoldToRepo ? '写入仓库 ci/' : '保存到平台' }}
-        </el-button>
+        <div class="sc-foot">
+          <div class="sc-foot-checks">
+            <el-checkbox v-model="scaffoldToRepo" size="small" class="sc-overwrite">
+              写入仓库 ci/（随代码 review，不自动提交）
+            </el-checkbox>
+            <el-checkbox v-model="scaffoldOverwrite" size="small" class="sc-overwrite">
+              覆盖已存在文件
+            </el-checkbox>
+          </div>
+          <div class="sc-foot-actions">
+            <el-button @click="scaffoldDialog = false">取消</el-button>
+            <el-button :disabled="!scaffoldPlan" :loading="scaffoldLoading" @click="reloadScaffold">
+              重新扫描
+            </el-button>
+            <el-button type="primary" :disabled="!scaffoldPlan" :loading="scaffoldApplying" @click="applyScaffold">
+              {{ scaffoldToRepo ? '写入仓库 ci/' : '保存到平台' }}
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -394,6 +431,21 @@ const overviewProject = computed(() =>
   background: var(--accent);
   border-color: var(--accent);
 }
+/* 顶栏按钮在手机上用短文案，给标题留出空间 */
+.hdr-short {
+  display: none;
+}
+@media (max-width: 600px) {
+  .hdr-long {
+    display: none;
+  }
+  .hdr-short {
+    display: inline;
+  }
+  .hdr-btn {
+    padding: 0 10px;
+  }
+}
 
 /* 生成脚本对话框 */
 .scaffold {
@@ -465,6 +517,152 @@ const overviewProject = computed(() =>
   background: var(--code-bg);
 }
 .sc-overwrite {
-  margin-right: auto;
+  margin-right: 0;
+}
+
+.sc-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.sc-foot-checks {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.sc-foot-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 手机端详情页顶部返回条：桌面端始终隐藏 */
+.wb-mobile-bar {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  /* 主从布局：一次只显示文件树或详情，避免上下各占一半导致两边都滚不全 */
+  .wb-body.mpane-tree .wb-right {
+    display: none;
+  }
+  .wb-body.mpane-detail .wb-left {
+    display: none;
+  }
+  .wb-left {
+    width: 100% !important;
+    height: auto;
+    flex: 1 1 0;
+    border-right: 0;
+  }
+  .wb-body :deep(.resizer) {
+    display: none;
+  }
+  .wb-right {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .wb-mobile-bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 8px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .wb-back,
+  .wb-mobile-close {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+    padding: 0 8px;
+    font-family: inherit;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-sm);
+  }
+  .wb-back:active {
+    background: var(--surface-hover);
+  }
+  .wb-mobile-close {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+  .wb-mobile-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 概览/文件区在移动端各自占满剩余高度，内部滚动到底 */
+  .wb-tabs {
+    height: auto;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .wb-empty {
+    padding: 24px 16px;
+  }
+}
+
+/* 手机：生成脚本对话框的信息行/目标选择换行，避免内容被右侧裁掉 */
+@media (max-width: 600px) {
+  .sc-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .sc-stack {
+    flex: 1 1 100%;
+    white-space: normal;
+  }
+  .sc-target {
+    width: 100%;
+    margin-left: 0;
+  }
+  .sc-file-head {
+    flex-wrap: wrap;
+  }
+  .sc-file-hint {
+    margin-left: 0;
+  }
+  .sc-code {
+    max-height: 40vh;
+  }
+  .scaffold {
+    max-height: none;
+    overflow: visible;
+  }
+  .sc-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .sc-foot-checks {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .sc-foot-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+  .sc-foot-actions .el-button {
+    flex: 1;
+  }
 }
 </style>
