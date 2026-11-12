@@ -229,13 +229,17 @@ onMounted(load)
 }
 .detail-body {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
   max-width: 54rem;
   width: 100%;
   padding: 16px 24px 24px;
   margin: 0 auto;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .card {
   padding: 16px 18px;

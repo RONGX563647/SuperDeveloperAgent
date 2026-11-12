@@ -211,18 +211,50 @@ async function refresh(): Promise<void> {
   }
   .settings-shell {
     grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
   }
+  /* 分区导航改为顶部横向吸顶条：不再占掉大半屏后再滚动内容 */
   .settings-nav {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 6;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 8px 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    background: var(--bg);
+  }
+  .settings-nav::-webkit-scrollbar {
+    display: none;
   }
   .nav-card {
-    flex: 1 1 180px;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    width: auto;
+    padding: 7px 12px;
+    white-space: nowrap;
+    background: var(--panel);
+    border-color: var(--line-soft);
+    border-radius: var(--radius-pill);
+  }
+  .nav-icon {
+    width: auto;
+    height: auto;
+    margin-top: 0;
+    font-size: 14px;
+  }
+  .nav-card.active .nav-icon {
+    background: none;
+  }
+  .nav-desc {
+    display: none;
   }
 }
 
-/* 手机：导航卡占满整行，卡片内边距收紧 */
+/* 手机：内容卡片内边距收紧 */
 @media (max-width: 600px) {
   .settings-body {
     padding: 0 12px calc(16px + env(safe-area-inset-bottom));
@@ -230,12 +262,8 @@ async function refresh(): Promise<void> {
   .settings-card {
     padding: 16px 14px 18px;
   }
-  .nav-card {
-    flex: 1 1 100%;
-    padding: 10px 12px;
-  }
-  .nav-desc {
-    display: none;
+  .nav-title {
+    font-size: 12.5px;
   }
 }
 </style>

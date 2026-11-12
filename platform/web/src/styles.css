@@ -222,15 +222,51 @@ body {
 }
 
 /* ============ 移动端全局校正 ============ */
+@media (max-width: 900px) {
+  /* 触屏惯性滚动 + 阻止滚动链传递到外层（避免整页跟着弹） */
+  .app-main,
+  .intake-page,
+  .settings-body,
+  .detail-body,
+  .proj-overview,
+  .wp-left-inner,
+  .run-detail,
+  .fv-code,
+  .fs-list {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}
+
 @media (max-width: 600px) {
-  /* 固定宽度的 el-dialog（如 720px 的脚本预览）在小屏上不能溢出 */
+  /* 固定宽度的 el-dialog（如 720px 的脚本预览）改成近全屏抽屉式，内容区独立滚动 */
   .el-dialog {
+    display: flex;
+    flex-direction: column;
     width: calc(100vw - 20px) !important;
-    margin: 6vh auto;
+    max-width: none;
+    max-height: calc(100dvh - 20px);
+    margin: 10px auto !important;
+  }
+  .el-dialog__header {
+    flex: none;
   }
   .el-dialog__body {
-    max-height: 68vh;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .el-dialog__footer {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+  .el-dialog__footer .el-button + .el-button {
+    margin-left: 0;
   }
   .el-message-box {
     max-width: calc(100vw - 32px);

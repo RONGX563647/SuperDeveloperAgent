@@ -25,9 +25,25 @@ const isPublicPage = computed(() => route.meta.public === true)
 
 const MOBILE_QUERY = '(max-width: 900px)'
 let media: MediaQueryList | null = null
+let viewport: VisualViewport | null = null
+
+/**
+ * 手机浏览器地址栏/软键盘会改变可视高度，100dvh 在软键盘弹出时不会收缩，
+ * 导致输入框被键盘盖住。这里把 visualViewport 的真实高度写入 --app-height，
+ * 桌面端保持默认 100dvh。
+ */
+function syncAppHeight(): void {
+  const root = document.documentElement
+  if (!media?.matches || !viewport) {
+    root.style.removeProperty('--app-height')
+    return
+  }
+  root.style.setProperty('--app-height', `${Math.round(viewport.height)}px`)
+}
 
 function onViewportChange(): void {
   if (!media?.matches) closeNav()
+  syncAppHeight()
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -39,13 +55,18 @@ watch(() => route.fullPath, closeNav)
 
 onMounted(() => {
   media = window.matchMedia(MOBILE_QUERY)
+  viewport = window.visualViewport
   media.addEventListener('change', onViewportChange)
+  viewport?.addEventListener('resize', syncAppHeight)
   window.addEventListener('keydown', onKeydown)
+  syncAppHeight()
 })
 
 onBeforeUnmount(() => {
   media?.removeEventListener('change', onViewportChange)
+  viewport?.removeEventListener('resize', syncAppHeight)
   window.removeEventListener('keydown', onKeydown)
+  document.documentElement.style.removeProperty('--app-height')
 })
 </script>
 
@@ -78,7 +99,7 @@ onBeforeUnmount(() => {
   flex-direction: row;
   width: 100vw;
   height: 100vh;
-  height: 100dvh;
+  height: var(--app-height, 100dvh);
   overflow: hidden;
   background: var(--bg);
 }
