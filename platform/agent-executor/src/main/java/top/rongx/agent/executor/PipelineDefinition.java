@@ -4,7 +4,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.yaml.snakeyaml.Yaml;
+import top.rongx.agent.domain.action.ActionId;
 
 /**
  * 流水线定义（来自项目仓库 {@code ci/pipeline.yml}，随代码版本化）。
@@ -246,6 +248,10 @@ public record PipelineDefinition(String name, List<StageDef> stages,
         return List.copyOf(out);
     }
 
+    /** 唯一允许的 stage 类型；写错类型在解析期就报错（而不是运行期才变成 E-2xx）。 */
+    private static final Set<String> STAGE_TYPES =
+            Set.of("action", "deploy", "health", "rollback", "git-checkout");
+
     private static List<StageDef> parseStages(Object raw, String field) {
         if (!(raw instanceof List<?> list)) {
             return List.of();
@@ -256,9 +262,18 @@ public record PipelineDefinition(String name, List<StageDef> stages,
                 continue;
             }
             String type = str(m, "type", "action");
+            if (type.isBlank()) {
+                type = "action";
+            }
             String action = m.get("action") == null ? null : str(m, "action", "");
-            if ("action".equals(type) && (action == null || action.isBlank())) {
-                throw new IllegalArgumentException(field + " 中 action 类型必须声明 action 名");
+            if (!STAGE_TYPES.contains(type)) {
+                throw new IllegalArgumentException(field + " 中 stage 类型非法：" + type
+                        + "（可选：" + String.join(" / ", STAGE_TYPES) + "）");
+            }
+            if ("action".equals(type)
+                    && (action == null || action.isBlank() || ActionId.fromWire(action).isEmpty())) {
+                throw new IllegalArgumentException(field + " 中 action 类型必须声明白名单动作名，实际为："
+                        + (action == null || action.isBlank() ? "（空）" : action));
             }
             out.add(new StageDef(
                     str(m, "id", "stage-" + (out.size() + 1)),

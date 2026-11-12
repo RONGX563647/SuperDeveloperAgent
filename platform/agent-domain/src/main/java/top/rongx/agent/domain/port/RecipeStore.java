@@ -32,6 +32,20 @@ public interface RecipeStore {
     Path rootOf(String projectId, String env, int version);
 
     /**
+     * 脚本内容没变时只刷新证据（runId / gitSha），不新增版本。
+     *
+     * <p>为什么需要它：晋升校验要求"固化脚本的 gitSha 等于本次发布提交"，
+     * 而脚本内容往往连续多个提交都不变；若只在内容变化时更新证据，
+     * 第二次发布起就会永远是旧提交的证据，生产晋升被误判为"未在测试环境验证"。
+     *
+     * @return 更新后的版本；没有 current 版本时返回空（调用方应走 {@link #save}）
+     */
+    default Optional<DeployRecipe> updateEvidence(String projectId, String env,
+                                                  String runId, String gitSha) {
+        return Optional.empty();
+    }
+
+    /**
      * 让该环境当前生效脚本失效（保留历史版本，可再 activate 回来）。
      *
      * <p>用于"平台定义被重新生成"：旧脚本是旧定义的固化产物，继续生效会让用户以为

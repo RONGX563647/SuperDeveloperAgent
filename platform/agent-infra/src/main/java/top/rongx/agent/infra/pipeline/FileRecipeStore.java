@@ -49,15 +49,8 @@ public class FileRecipeStore implements RecipeStore {
             DeployRecipe saved = new DeployRecipe(projectId, env, version, recipe.pipelineYaml(),
                     recipe.actionsYaml(), recipe.evidenceRunId(), recipe.gitSha(),
                     System.currentTimeMillis(), recipe.createdBy());
-            Map<String, Object> meta = new LinkedHashMap<>();
-            meta.put("projectId", saved.projectId());
-            meta.put("env", saved.env());
-            meta.put("version", saved.version());
-            meta.put("evidenceRunId", saved.evidenceRunId() == null ? "" : saved.evidenceRunId());
-            meta.put("gitSha", saved.gitSha() == null ? "" : saved.gitSha());
-            meta.put("createdAt", saved.createdAt());
-            meta.put("createdBy", saved.createdBy() == null ? "" : saved.createdBy());
-            Files.writeString(dir.resolve("meta.yml"), new Yaml().dump(meta), StandardCharsets.UTF_8);
+            Files.writeString(dir.resolve("meta.yml"), new Yaml().dump(metaOf(saved)),
+                    StandardCharsets.UTF_8);
             Files.writeString(envDir(projectId, env).resolve("current"),
                     "v" + version, StandardCharsets.UTF_8);
             log.info("固化环境脚本：{} / {} → v{}（证据 {}）", projectId, env, version, saved.evidenceRunId());
@@ -117,6 +110,25 @@ public class FileRecipeStore implements RecipeStore {
     }
 
     @Override
+    public Optional<DeployRecipe> updateEvidence(String projectId, String env,
+                                                 String runId, String gitSha) {
+        return current(projectId, env).map(cur -> {
+            DeployRecipe updated = cur.withEvidence(runId, gitSha);
+            Path dir = versionDir(safe(projectId), safe(env), cur.version());
+            try {
+                Files.writeString(dir.resolve("meta.yml"), new Yaml().dump(metaOf(updated)),
+                        StandardCharsets.UTF_8);
+                log.info("刷新环境脚本证据：{} / {} v{} → 证据 {}", projectId, env,
+                        cur.version(), updated.evidenceRunId());
+            } catch (IOException e) {
+                log.warn("刷新环境脚本证据失败 {} / {} v{}：{}", projectId, env, cur.version(),
+                        e.getMessage());
+            }
+            return updated;
+        });
+    }
+
+    @Override
     public boolean activate(String projectId, String env, int version) {
         Path dir = versionDir(safe(projectId), safe(env), version);
         if (!Files.isRegularFile(dir.resolve("ci/pipeline.yml"))) {
@@ -149,6 +161,18 @@ public class FileRecipeStore implements RecipeStore {
     }
 
     // ---------------------------------------------------------------- 内部
+
+    private static Map<String, Object> metaOf(DeployRecipe recipe) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("projectId", recipe.projectId());
+        meta.put("env", recipe.env());
+        meta.put("version", recipe.version());
+        meta.put("evidenceRunId", recipe.evidenceRunId() == null ? "" : recipe.evidenceRunId());
+        meta.put("gitSha", recipe.gitSha() == null ? "" : recipe.gitSha());
+        meta.put("createdAt", recipe.createdAt());
+        meta.put("createdBy", recipe.createdBy() == null ? "" : recipe.createdBy());
+        return meta;
+    }
 
     private Optional<Integer> currentVersion(String projectId, String env) {
         Path pointer = envDir(safe(projectId), safe(env)).resolve("current");

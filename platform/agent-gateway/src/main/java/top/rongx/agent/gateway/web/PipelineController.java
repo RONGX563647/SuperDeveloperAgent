@@ -18,7 +18,6 @@ import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.RunMeta;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
-import top.rongx.agent.gateway.deploy.DeployGate;
 
 /** 流水线运行查询（CI 的"构建历史/阶段视图"）。 */
 @RestController
@@ -28,20 +27,17 @@ public class PipelineController {
     private final PipelineEngine engine;
     private final boolean legacyServerConfigured;
     private final top.rongx.agent.domain.settings.DeployServerRepository deployServers;
-    private final DeployGate deployGate;
     private final top.rongx.agent.gateway.settings.EnvBindingService bindings;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
 
     public PipelineController(PipelineEngine engine,
                               @Value("${agent.deploy.server.host:}") String serverHost,
                               top.rongx.agent.domain.settings.DeployServerRepository deployServers,
-                              DeployGate deployGate,
                               top.rongx.agent.gateway.settings.EnvBindingService bindings,
                               top.rongx.agent.gateway.auth.CurrentUser currentUser) {
         this.engine = engine;
         this.legacyServerConfigured = serverHost != null && !serverHost.isBlank();
         this.deployServers = deployServers;
-        this.deployGate = deployGate;
         this.bindings = bindings;
         this.currentUser = currentUser;
     }
@@ -155,8 +151,8 @@ public class PipelineController {
                 && !requestedHash.equals(dryRun.reportHash())) {
             throw new IllegalArgumentException("E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
         }
-        // 服务器（prod）操作：测试证据 + 一次性人工确认令牌，两个入口（这里 / deploy/replay）共用同一校验
-        deployGate.requireIfNeeded(projectId, normalizedEnv, sha, params.get("confirmToken"));
+        // 服务器（prod）的一次性人工确认令牌由引擎统一校验（E-602）：
+        // UI / Agent 工具 / 内部重放都走同一条路径，不再只在 Controller 拦。
         // Agent 触发：必须带已人工确认的环境绑定（普通 UI 触发不强制）
         String bindingId = params.get("bindingId");
         String actor = currentUser.requireUserId();
@@ -169,6 +165,11 @@ public class PipelineController {
         triggerParams.put("env", normalizedEnv);
         triggerParams.put("dryRunHash", dryRun.reportHash());
         triggerParams.put("dryRunFingerprint", dryRun.fingerprint());
+        // 令牌随触发参数下发，由引擎在校验通过后消费（一次性）
+        String confirmToken = params.get("confirmToken");
+        if (confirmToken != null && !confirmToken.isBlank()) {
+            triggerParams.put("confirmToken", confirmToken);
+        }
         triggerParams.put("actor", bindingId == null || bindingId.isBlank() ? "ui:" + actor : "agent");
         if (bindingId != null && !bindingId.isBlank()) {
             triggerParams.put("bindingId", bindingId);

@@ -64,6 +64,18 @@ class PipelineDefinitionResolverTest {
     }
 
     @Test
+    @DisplayName("只读解析：没有定义时不生成、不落盘、不调模型")
+    void readOnlyDoesNotGenerate(@TempDir Path temp) throws Exception {
+        Path repo = dir(temp, "repo");
+        MemoryStore store = new MemoryStore(temp.resolve("platform"));
+        PipelineDefinitionResolver resolver = resolver(store, plan("JAVA", "from-rule"), null);
+
+        assertThrows(IllegalStateException.class,
+                () -> resolver.resolveReadOnly(PROJECT, repo, null));
+        assertTrue(!store.exists(PROJECT), "GET 路径不得写盘");
+    }
+
+    @Test
     @DisplayName("两边都没有 → 按规则生成并落盘（source=GENERATED）")
     void generatesWhenNothingExists(@TempDir Path temp) throws Exception {
         Path repo = dir(temp, "repo");

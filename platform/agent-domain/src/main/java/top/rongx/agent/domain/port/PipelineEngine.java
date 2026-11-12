@@ -32,6 +32,11 @@ public interface PipelineEngine {
         return Optional.empty();
     }
 
+    /** 带环境的发布摘要：环境脚本可能不同于仓库定义，展示值必须按环境解析。 */
+    default Optional<DeploySummary> deploySummary(String projectId, String env) {
+        return deploySummary(projectId);
+    }
+
     /** 发布摘要（只读视图）。 */
     record DeploySummary(String target, int port, String healthPath) {
     }

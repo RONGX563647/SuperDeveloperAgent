@@ -16,12 +16,14 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -70,6 +72,9 @@ import top.rongx.agent.executor.RunHistoryStore.RunSnapshot;
  */
 public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(BuiltInPipelineEngine.class);
+
     private static final Duration STAGE_TIMEOUT = Duration.ofMinutes(5);
     /** 命令里的 ${var} 占位符（预览展示模板，运行时替换）。 */
     private static final java.util.regex.Pattern PLACEHOLDER =
@@ -90,10 +95,19 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final Path workspaceRoot;
 
     private final Map<String, RunState> runs = new ConcurrentHashMap<>();
-    /** 每个项目最近一次成功发布的镜像 tag，供回滚使用。 */
+    /**
+     * 每个「项目 + 环境」最近一次成功发布的镜像 tag，供回滚使用。
+     *
+     * <p>必须带环境维度：否则 test 成功一次就会把 prod 的回滚锚点覆盖成测试镜像。
+     */
     private final Map<String, String> lastGood = new ConcurrentHashMap<>();
+    /** 已分配过的构建序号高水位：并发触发时防止两个请求拿到同一个 seq/镜像 tag。 */
+    private final Map<String, Integer> seqHigh = new ConcurrentHashMap<>();
     /** 有界队列：全局并发上限 4；同一项目串行由 TriggerScheduler 保证。 */
     private final ExecutorService workers = Executors.newFixedThreadPool(4, Thread.ofVirtual().factory());
+    /** 失败自动诊断专用线程：诊断不占用构建线程，但项目串行槽要等它结束才释放。 */
+    private final ExecutorService recoveryWorkers = Executors.newSingleThreadExecutor(
+            Thread.ofVirtual().name("pipeline-recovery-", 0).factory());
     private final TriggerScheduler scheduler = new TriggerScheduler();
     /** 构建历史持久化（重启可恢复）。 */
     private final RunHistoryStore history;
@@ -119,6 +133,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final top.rongx.agent.domain.env.EnvProvisioner envProvisioner;
     /** 失败后自动诊断（部署 Agent）；空 = 不介入。 */
     private final top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor;
+    /** 触发授权门禁（E-602）；空 = 不启用（单测/无确认能力）。 */
+    private final top.rongx.agent.domain.deploy.RunAuthorizationGate runGate;
     /** 多服务部署（test 前后端分离）直接使用 docker 实现。 */
     private final DockerDeployer dockerDeployer = new DockerDeployer();
 
@@ -126,6 +142,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     @Override
     public void close() {
         workers.shutdownNow();
+        recoveryWorkers.shutdownNow();
     }
 
     public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
@@ -309,6 +326,31 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
                                  top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor,
                                  LocalDevHostDeployer localDevHost) {
+        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
+                resolver, recipeStore, envVars, envStore, envRuntime, envProvisioner,
+                recoveryAdvisor, localDevHost, null);
+    }
+
+    /**
+     * 最完整构造：再注入触发授权门禁（E-602）。
+     *
+     * <p>门禁放在引擎而不是 Controller：Agent 工具/内部重放直接调 {@link #trigger} 时，
+     * 也必须经过同一份"人工确认"校验。
+     */
+    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
+                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
+                                 String imagePrefix,
+                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
+                                 top.rongx.agent.domain.port.Deployer deployers,
+                                 PipelineDefinitionResolver resolver,
+                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
+                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
+                                 top.rongx.agent.domain.env.EnvironmentStore envStore,
+                                 top.rongx.agent.domain.env.EnvRuntime envRuntime,
+                                 top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
+                                 top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor,
+                                 LocalDevHostDeployer localDevHost,
+                                 top.rongx.agent.domain.deploy.RunAuthorizationGate runGate) {
         this.recipes = recipes;
         this.sandboxed = sandboxed;
         this.host = host;
@@ -325,6 +367,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         this.envProvisioner = envProvisioner;
         this.recoveryAdvisor = recoveryAdvisor;
         this.localDevHost = localDevHost;
+        this.runGate = runGate;
         restoreHistory();
     }
 
@@ -353,7 +396,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         try {
             PipelineDefinition def;
             if (resolver != null) {
-                def = resolver.resolveForRead(projectId, repoDir).definition();
+                // GET 路径只读：不生成、不写盘、不调模型
+                def = resolver.resolveReadOnly(projectId, repoDir, null).definition();
             } else if (repoDir != null && Files.isRegularFile(repoDir.resolve(PIPELINE_FILE))) {
                 def = PipelineDefinition.load(repoDir);
             } else {
@@ -373,11 +417,21 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      */
     @Override
     public Optional<DeploySummary> deploySummary(String projectId) {
+        return deploySummary(projectId, null);
+    }
+
+    /**
+     * 带环境的发布摘要：环境脚本（recipe）可能与本仓库定义不同，
+     * 只有传入环境才能保证"设置页展示的 = 该环境执行时用的"。
+     */
+    @Override
+    public Optional<DeploySummary> deploySummary(String projectId, String env) {
         Path repoDir = resolveRepoForRead(projectId);
         try {
+            String normalized = env == null || env.isBlank() ? null : normalizeEnv(env);
             PipelineDefinition def;
             if (resolver != null) {
-                def = resolver.resolveForRead(projectId, repoDir).definition();
+                def = resolver.resolveReadOnly(projectId, repoDir, normalized).definition();
             } else if (repoDir != null && Files.isRegularFile(repoDir.resolve(PIPELINE_FILE))) {
                 def = PipelineDefinition.load(repoDir);
             } else {
@@ -405,6 +459,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     @Override
     public List<StagePreview> preview(String projectId, String pipelineId, String env, String gitSha) {
+        // GET 预览只读：没有定义就返回空，由用户显式「生成」或首次运行触发自动生成
+        return previewInternal(projectId, pipelineId, env, gitSha, false);
+    }
+
+    /** allowGenerate=true 仅用于 dryRun（POST，明确的执行前检查）：首次运行前允许自动生成定义。 */
+    private List<StagePreview> previewInternal(String projectId, String pipelineId, String env,
+                                               String gitSha, boolean allowGenerate) {
         PipelineDefinition definition;
         Path recipeRoot;
         Path repoDir = resolveRepoForRead(projectId);
@@ -412,8 +473,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         Path shaRoot = null;
         try {
             if (resolver != null) {
-                PipelineDefinitionResolver.Resolved resolved =
-                        resolver.resolveForRead(projectId, repoDir, normalizedEnv);
+                PipelineDefinitionResolver.Resolved resolved = allowGenerate
+                        ? resolver.resolveForRead(projectId, repoDir, normalizedEnv)
+                        : resolver.resolveReadOnly(projectId, repoDir, normalizedEnv);
                 // dev 的语义是"用本地工作区"（sha 仅作记录）；其余环境执行会检出该提交，
                 // 因此"仓库定义"要按该提交解析，否则预览与实跑可能是两份 pipeline.yml。
                 if (gitSha != null && !gitSha.isBlank() && repoDir != null
@@ -421,7 +483,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                         && resolved.source() != PipelineDefinitionResolver.Source.RECIPE) {
                     shaRoot = materializeCommitDefinition(repoDir, gitSha);
                     if (shaRoot != null) {
-                        resolved = resolver.resolveForRead(projectId, shaRoot, normalizedEnv);
+                        resolved = allowGenerate
+                                ? resolver.resolveForRead(projectId, shaRoot, normalizedEnv)
+                                : resolver.resolveReadOnly(projectId, shaRoot, normalizedEnv);
                     }
                 }
                 definition = resolved.definition();
@@ -456,7 +520,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     @Override
     public DryRunReport dryRun(String projectId, String pipelineId, String env, String gitSha) {
         String normalized = normalizeEnv(env == null || env.isBlank() ? "test" : env);
-        List<StagePreview> previews = preview(projectId, pipelineId, normalized, gitSha);
+        List<StagePreview> previews = previewInternal(projectId, pipelineId, normalized, gitSha, true);
         List<String> blockers = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         List<StageDryRun> stages = new ArrayList<>();
@@ -902,7 +966,22 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             var current = recipeStore.current(state.projectId, state.env);
             if (current.isPresent() && current.get().pipelineYaml().equals(yaml)
                     && java.util.Objects.equals(current.get().actionsYaml(), actions)) {
-                return; // 脚本没变：沿用现有版本
+                // 脚本没变：不堆版本，但要刷新"证据"（runId + gitSha）。
+                // 否则同一份脚本连续发布多个提交时，晋升校验永远拿旧提交做比对，
+                // 第二次发布起就会被误判为"未在测试环境验证过"。
+                var cur = current.get();
+                if (!java.util.Objects.equals(cur.evidenceRunId(), state.runId)
+                        || !java.util.Objects.equals(cur.gitSha(), state.gitSha)) {
+                    var refreshed = recipeStore.updateEvidence(
+                            state.projectId, state.env, state.runId, state.gitSha);
+                    if (refreshed.isEmpty()) {
+                        // 存储实现不支持原地刷新证据：退化为"同内容的新版本"，语义一致
+                        recipeStore.save(cur.withEvidence(state.runId, state.gitSha));
+                    }
+                    state.log.append("[recipe] 环境脚本未变，已刷新证据 v").append(cur.version())
+                            .append("（证据 ").append(state.runId).append("）\n");
+                }
+                return;
             }
             var saved = recipeStore.save(new top.rongx.agent.domain.deploy.DeployRecipe(
                     state.projectId, state.env, 0, yaml, actions, state.runId, state.gitSha,
@@ -956,6 +1035,20 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (problem != null) {
             throw new IllegalArgumentException("E-601 " + problem);
         }
+        // 预演报告绑定：调用方传了 dryRunHash 就必须与"此刻重新预演"的结果一致，
+        // 防止"预演时看到的是 A、真正执行的是 B"（定义/环境/配方在两次调用之间被改掉）。
+        String expectedHash = params.get("dryRunHash");
+        if (expectedHash != null && !expectedHash.isBlank()) {
+            String actualHash = dryRun(projectId, pipelineId, env, sha).reportHash();
+            if (!expectedHash.equals(actualHash)) {
+                throw new IllegalArgumentException(
+                        "E-211 预演报告已失效：定义 / 环境 / 环境脚本在预演后发生了变化，请重新预演后再执行");
+            }
+        }
+        // 一次性人工确认（E-602）：不再只放在 HTTP 层，Agent 工具 / 内部重放同样要过这道门。
+        if (runGate != null && runGate.available()) {
+            runGate.require(projectId, env, sha, params.get("confirmToken"));
+        }
         // 不再校验"该提交里有没有 ci/pipeline.yml"：定义可以放在平台侧（默认），
         // 仓库里那份只是可选覆盖。真正缺定义时由执行期的 pipeline-def stage 说明。
         // 前置：仓库必须可定位，否则建出来的运行只会在历史里留下一条失败记录
@@ -965,8 +1058,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         String runId = "run-" + UUID.randomUUID().toString().substring(0, 8);
         RunState state = new RunState(runId, projectId, env, pipelineId, sha);
-        // 构建序号（项目 + 环境内从 1 开始）：既是历史列表的顺序，也是镜像版本 vN
-        state.seq = history.nextSeq(projectId, env);
         if (deployTarget != null && !deployTarget.isBlank()) {
             state.deployTargetOverride = deployTarget.trim().toLowerCase();
         }
@@ -986,8 +1077,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                             ? "（空）" : state.confirmedBy)
                     .append('\n');
         }
-        runs.put(runId, state);
-        history.save(state.snapshot());
+        // 构建序号（项目 + 环境内从 1 开始）既是历史列表的顺序，也是镜像版本 vN。
+        // 取号与落盘必须在同一把锁里：否则两个并发触发都能在对方写盘前读到同一个 max，
+        // 得到相同 seq 和相同的镜像 tag（后者覆盖前者）。
+        synchronized (history) {
+            String seqKey = projectId + '\u0000' + env;
+            int next = Math.max(history.nextSeq(projectId, env),
+                    seqHigh.getOrDefault(seqKey, 0) + 1);
+            seqHigh.put(seqKey, next);
+            state.seq = next;
+            runs.put(runId, state);
+            history.save(state.snapshot());
+        }
         scheduler.submit(projectId, () -> workers.submit(() -> execute(state)));
         return runId;
     }
@@ -1183,6 +1284,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     private void restoreHistory() {
+        Map<String, String> anchors = new HashMap<>();
         for (RunHistoryStore.RunSnapshot snap : history.list()) {
             if (runs.containsKey(snap.runId())) {
                 continue;
@@ -1212,23 +1314,33 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 history.save(restored.snapshot());
             }
             runs.put(snap.runId(), restored);
-            if (restored.status == StageStatus.SUCCEEDED && "release".equals(restored.pipelineId)) {
-                // 回滚锚点：取该次运行登记的镜像 tag
+            // 回滚锚点：按「项目 + 环境」取**最新**一次成功发布的镜像。
+            // history.list() 是时间倒序，putIfAbsent 保证第一条（最新）胜出；
+            // 旧实现顺序 put 的最终值是"最旧"一次，会把回滚锚点倒退回历史版本。
+            if (restored.status == StageStatus.SUCCEEDED) {
                 snap.artifacts().stream()
                         .filter(a -> a.kind().equals("image"))
                         .findFirst()
-                        .ifPresent(a -> lastGood.put(snap.projectId(), a.ref()));
+                        .ifPresent(a -> anchors.putIfAbsent(
+                                rollbackKey(snap.projectId(), snap.env()), a.ref()));
             }
         }
+        lastGood.putAll(anchors);
+    }
+
+    /** 回滚锚点的键：必须带环境，否则 test 的成功会覆盖 prod 的锚点。 */
+    private static String rollbackKey(String projectId, String env) {
+        return projectId + '\u0000' + env;
     }
 
     // ---------------------------------------------------------------- 执行
 
     private void execute(RunState state) {
+        boolean recoveryOwnsRelease = false;
         try {
             state.status = StageStatus.RUNNING;
             doExecute(state);
-            recoverIfNeeded(state);
+            recoveryOwnsRelease = startRecovery(state);
         } catch (Throwable e) {
             // 定位仓库 / 同步远端等前置步骤在 doExecute 的 try 之外，异常原先会被
             // workers.submit 的 Future 吞掉：运行永远停在 RUNNING、0 阶段，成为"跑不完"的幽灵任务。
@@ -1239,7 +1351,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         } finally {
             // 每次运行结束（含异常）都落盘，保证重启后可查询历史
             history.save(state.snapshot());
-            scheduler.complete(state.projectId);
+            // 自动诊断在独立线程里跑：项目串行槽由诊断线程结束时释放，
+            // 这样诊断再慢也不会占住 4 个构建线程之一。
+            if (!recoveryOwnsRelease) {
+                scheduler.complete(state.projectId);
+            }
         }
     }
 
@@ -1250,37 +1366,61 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * 工作，用户就看不到 {@code [agent]} 步骤。Agent 自己触发的运行（actor=agent）不进入，
      * 避免"触发 → 失败 → 再触发"的递归。
      */
-    private void recoverIfNeeded(RunState state) {
+    private boolean startRecovery(RunState state) {
         if (recoveryAdvisor == null || !recoveryAdvisor.available()
                 || state.status != StageStatus.FAILED) {
-            return;
+            return false;
         }
         if ("prod".equalsIgnoreCase(state.env)
                 || state.actor == null || !state.actor.startsWith("ui:")) {
-            return;
+            return false;
         }
         state.status = StageStatus.RUNNING;
-        state.log.append("[agent] 运行失败，自动调用发布 Agent 诊断与修复…\n");
+        synchronized (state.log) {
+            state.log.append("[agent] 运行失败，自动调用发布 Agent 诊断与修复…\n");
+        }
+        history.save(state.snapshot());
+        String logTail;
+        synchronized (state.log) {
+            logTail = state.log.toString();
+        }
+        if (logTail.length() > 20000) {
+            logTail = logTail.substring(logTail.length() - 20000);
+        }
+        final String tail = logTail;
         try {
-            String log = state.log.toString();
-            if (log.length() > 20000) {
-                log = log.substring(log.length() - 20000);
-            }
-            List<String> lines = recoveryAdvisor.advise(new top.rongx.agent.domain.run.RunRecoveryAdvisor.Context(
-                    state.runId, state.projectId, state.env, state.pipelineId, state.gitSha,
-                    state.actor, log));
-            if (lines == null || lines.isEmpty()) {
-                state.log.append("[agent] 本次未产生诊断步骤\n");
-            } else {
-                for (String line : lines) {
-                    state.log.append("[agent] ").append(line).append('\n');
+            recoveryWorkers.submit(() -> {
+                try {
+                    List<String> lines = recoveryAdvisor.advise(
+                            new top.rongx.agent.domain.run.RunRecoveryAdvisor.Context(
+                                    state.runId, state.projectId, state.env, state.pipelineId,
+                                    state.gitSha, state.actor, tail));
+                    synchronized (state.log) {
+                        if (lines == null || lines.isEmpty()) {
+                            state.log.append("[agent] 本次未产生诊断步骤\n");
+                        } else {
+                            for (String line : lines) {
+                                state.log.append("[agent] ").append(line).append('\n');
+                            }
+                        }
+                    }
+                } catch (Throwable e) {
+                    synchronized (state.log) {
+                        state.log.append("[agent] 自动诊断异常：")
+                                .append(e.getMessage() == null ? e.toString() : e.getMessage())
+                                .append('\n');
+                    }
+                } finally {
+                    state.status = StageStatus.FAILED;
+                    history.save(state.snapshot());
+                    scheduler.complete(state.projectId);
                 }
-            }
-        } catch (Throwable e) {
-            state.log.append("[agent] 自动诊断异常：")
-                    .append(e.getMessage() == null ? e.toString() : e.getMessage()).append('\n');
-        } finally {
+            });
+            return true;
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // 平台正在关闭：退化为"不诊断"，正常释放串行槽
             state.status = StageStatus.FAILED;
+            return false;
         }
     }
 
@@ -1427,7 +1567,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // 导致环境状态带显示"已跑通"、甚至让生产晋升拿到假证据。
         boolean deployed = deployedIn(state);
         if (deployed) {
-            lastGood.put(state.projectId, vars.get("tag"));
+            String tag = vars.get("tag");
+            if (tag != null && !tag.isBlank()) {
+                lastGood.put(rollbackKey(state.projectId, state.env), tag);
+            }
             freezeRecipe(state, runDir);
         } else {
             state.log.append("[recipe] 本次是检查构建（未部署），不固化环境脚本、不更新回滚锚点\n");
@@ -1517,9 +1660,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private void executeRetry(RunState state, PipelineDefinition definition, Path runDir,
                               Map<String, String> vars, int from) {
+        boolean recoveryOwnsRelease = false;
         try {
             runStagesFrom(state, definition, runDir, vars, from);
-            recoverIfNeeded(state);
+            recoveryOwnsRelease = startRecovery(state);
         } catch (Throwable e) {
             String why = e.getMessage() == null ? e.toString() : e.getMessage();
             state.log.append("[engine] 重试异常：").append(why).append('\n');
@@ -1534,7 +1678,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 state.keptBare = null;
             }
             history.save(state.snapshot());
-            scheduler.complete(state.projectId);
+            if (!recoveryOwnsRelease) {
+                scheduler.complete(state.projectId);
+            }
         }
     }
 
@@ -2182,7 +2328,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             DockerSandbox base = dockerRunner.sandbox();
             return new DockerActionRunner(base.withImage(stage.image()));
         }
-        // 宿主模式下忽略 image（工具链由宿主机提供）
+        // 宿主模式下忽略 image（工具链由宿主机提供）。
+        // 但这意味着隔离等级下降：必须显式留痕，不能"静默退回宿主"。
+        log.warn("stage {} 声明了镜像 {}，但未装配 Docker 沙箱，已回退宿主机执行"
+                + "（隔离等级下降，请检查 ActionRunner 配置）", stage.id(), stage.image());
         return host;
     }
 
@@ -2207,40 +2356,75 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     .append("，跳过'部署配置与默认分支一致'校验（仅 prod 要求）\n");
             return true;
         }
-        if (state.definitionSource != null && state.definitionSource != PipelineDefinitionResolver.Source.REPO) {
+        if (state.definitionSource == PipelineDefinitionResolver.Source.PLATFORM
+                || state.definitionSource == PipelineDefinitionResolver.Source.GENERATED) {
             // 定义来自平台（自动生成/人工维护），仓库里没有可比对的版本：
-            // 受审校验的对象是"仓库里的 deploy 配置"，对平台定义不适用。
+            // 受审校验的对象是"仓库里的配置"。
             state.log.append("[guard] 定义来源=").append(state.definitionSource)
                     .append("，跳过'部署配置与默认分支一致'校验\n");
             return true;
         }
+        // 执行时实际读取的是固化脚本目录（recipe）或本次检出（repo）：
+        // 必须校验"真正会执行的那份配置"，而不是永远校验 runDir。
+        Path currentRoot = state.recipeRoot != null ? state.recipeRoot : runDir;
         // 默认分支：先问 bare 的 HEAD 指向哪条分支，再退回 main/master
         List<String> branches = defaultBranches(bare);
         for (String branch : branches) {
-            ActionResult reviewed = host.run(bare, spec("deploy-guard", List.of(
-                    List.of("git", "rev-parse", "--verify", branch + ":ci/pipeline.yml"))), () -> false);
-            if (reviewed.result().status() != StageStatus.SUCCEEDED) {
-                continue;
+            if (blobOnBranch(bare, branch, "ci/pipeline.yml") == null) {
+                continue; // 默认分支没有约定流水线文件：无需受审
             }
-            String reviewedHash = reviewed.logTail().trim();
-            ActionResult current = host.run(runDir, spec("deploy-guard", List.of(
-                    List.of("git", "hash-object", "ci/pipeline.yml"))), () -> false);
-            if (current.result().status() != StageStatus.SUCCEEDED) {
-                state.log.append("[guard] 无法计算本次 pipeline.yml 哈希，跳过校验\n");
-                return true;
+            if (!configMatches(bare, branch, "ci/pipeline.yml", currentRoot, state)) {
+                return false;
             }
-            String currentHash = current.logTail().trim();
-            if (reviewedHash.equals(currentHash)) {
-                state.log.append("[guard] deploy 配置与默认分支(").append(branch).append(")一致\n");
-                return true;
+            // 命令真正写在 actions.yml 里：只比对 pipeline.yml 会让"改命令"直接绕过受审。
+            if (Files.isRegularFile(currentRoot.resolve("ci/actions.yml"))) {
+                if (blobOnBranch(bare, branch, "ci/actions.yml") == null) {
+                    state.log.append("[guard] 本次执行用到了 ci/actions.yml，但默认分支没有该文件：")
+                            .append("命令未经合并审查，拒绝发布\n");
+                    return false;
+                }
+                if (!configMatches(bare, branch, "ci/actions.yml", currentRoot, state)) {
+                    return false;
+                }
             }
-            state.log.append("[guard] 默认分支(").append(branch).append(") blob=")
-                    .append(reviewedHash).append(" 本次 blob=").append(currentHash).append('\n');
-            return false;
+            state.log.append("[guard] deploy 配置与默认分支(").append(branch)
+                    .append(")一致（pipeline.yml + actions.yml）\n");
+            return true;
         }
         state.log.append("[guard] 无法读取默认分支的 ci/pipeline.yml（尝试：")
                 .append(String.join(",", branches)).append("），跳过部署配置校验\n");
         return true;
+    }
+
+    /** 默认分支上的文件 blob 哈希；读不到返回 null。 */
+    private String blobOnBranch(Path bare, String branch, String file) {
+        ActionResult reviewed = host.run(bare, spec("deploy-guard", List.of(
+                List.of("git", "rev-parse", "--verify", branch + ":" + file))), () -> false);
+        return reviewed.result().status() == StageStatus.SUCCEEDED
+                ? reviewed.logTail().trim() : null;
+    }
+
+    /** 本次要执行的文件是否与默认分支一致（blob 哈希对比）。 */
+    private boolean configMatches(Path bare, String branch, String file, Path currentRoot,
+                                  RunState state) {
+        String reviewedHash = blobOnBranch(bare, branch, file);
+        if (reviewedHash == null) {
+            return false;
+        }
+        ActionResult current = host.run(currentRoot, spec("deploy-guard", List.of(
+                List.of("git", "hash-object", file))), () -> false);
+        if (current.result().status() != StageStatus.SUCCEEDED) {
+            state.log.append("[guard] 无法计算本次 ").append(file).append(" 哈希，跳过校验\n");
+            return true;
+        }
+        String currentHash = current.logTail().trim();
+        if (reviewedHash.equals(currentHash)) {
+            return true;
+        }
+        state.log.append("[guard] 默认分支(").append(branch).append(") ").append(file)
+                .append(" blob=").append(reviewedHash).append(" 本次 blob=")
+                .append(currentHash).append('\n');
+        return false;
     }
 
     /**
@@ -2270,7 +2454,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .reduce((first, second) -> second)
                 .map(ArtifactRef::ref)
                 .orElse(null);
-        String previous = lastGood.get(state.projectId);
+        String previous = lastGood.get(rollbackKey(state.projectId, state.env));
         String image = rollback ? previous : currentImage;
         if (rollback && (image == null || image.isBlank())) {
             // 首次发布失败时会走到回滚：没有上一版不是错误，跳过即可，
@@ -2304,6 +2488,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return false;
         }
         target = reconciled;
+
+        // 回滚前置：锚点镜像必须还在本地。否则回滚会以一条难以理解的部署错误收场，
+        // 提前说清楚"上一版镜像已被清理，无法回滚"更有用。
+        if (rollback && target == DeployTarget.DOCKER) {
+            ActionResult check = host.run(runDir, spec("rollback-check", List.of(
+                    List.of("docker", "image", "inspect", image))), () -> false);
+            if (check.result().status() != StageStatus.SUCCEEDED) {
+                state.stages.add(StageResult.failed(stageId, 1, "E-507",
+                        "回滚镜像已不存在（可能已被清理）：" + image, elapsed(start)));
+                return false;
+            }
+        }
 
         // 环境容器自愈（E-509 之前）：必填变量指向的中间件缺失时按需创建，
         // 连接信息写入项目覆盖；密钥类必填变量缺失时自动生成。失败才 fail-closed。
@@ -3036,7 +3232,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 continue;
             }
             Map<String, String> merged = new java.util.HashMap<>(vars);
-            String good = lastGood.get(state.projectId);
+            String good = lastGood.get(rollbackKey(state.projectId, state.env));
             if (good != null) {
                 merged.put("tag", good);
             }
@@ -3219,8 +3415,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         final String gitSha;
         /** 触发时间（epoch millis），构建历史按它倒序展示。 */
         final long createdAt = System.currentTimeMillis();
-        final List<StageResult> stages = new ArrayList<>();
-        final List<ArtifactRef> artifacts = new ArrayList<>();
+        final List<StageResult> stages = new CopyOnWriteArrayList<>();
+        final List<ArtifactRef> artifacts = new CopyOnWriteArrayList<>();
         final StringBuilder log = new StringBuilder();
         /**
          * 本次运行注入过的密钥明文：写日志前整段替换。
@@ -3262,9 +3458,15 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         final Map<String, Integer> artifactMark = new java.util.concurrent.ConcurrentHashMap<>();
 
         RunSnapshot snapshot() {
+            // log 会被执行线程和自动诊断线程同时写：读快照时必须与写同一把锁，
+            // 否则可能读到一半的字符（stages/artifacts 是 COW 列表，迭代本身安全）。
+            String raw;
+            synchronized (log) {
+                raw = log.toString();
+            }
             return new RunHistoryStore.RunSnapshot(runId, projectId, env, pipelineId, gitSha,
                     status, createdAt, seq, List.copyOf(stages), List.copyOf(artifacts),
-                    ProcessExecutor.redact(log.toString(), sensitiveValues),
+                    ProcessExecutor.redact(raw, sensitiveValues),
                     definitionSource == null ? null : definitionSource.name(), definitionNote);
         }
 

@@ -142,10 +142,13 @@ public class DeployController {
             throw new IllegalArgumentException(
                     "环境 " + env + " 还没有固化脚本：请先在该环境跑通一次（平台会自动固化）");
         }
-        gate.requireIfNeeded(projectId, env, sha, confirmToken);
+        // 一次性确认令牌交给引擎统一校验（E-602）：所有触发入口共用同一份实现
         Map<String, String> params = new LinkedHashMap<>();
         params.put("gitSha", sha);
         params.put("env", env);
+        if (confirmToken != null && !confirmToken.isBlank()) {
+            params.put("confirmToken", confirmToken);
+        }
         String runId = engine.trigger(projectId, releasePipeline(projectId), params);
         return Map.of("runId", runId, "env", env, "status", engine.status(runId).name());
     }

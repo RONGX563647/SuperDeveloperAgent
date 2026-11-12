@@ -420,7 +420,7 @@ public class EnvironmentController {
         out.put("network", e.network() == null ? "" : e.network());
         // 部署端口/健康路径以流水线定义为准（真正生效的是它），模板默认值只在没有定义时兜底，
         // 否则页面会显示一套、部署用另一套。
-        PipelineEngine.DeploySummary deploy = pipelineDeploy(projectId);
+        PipelineEngine.DeploySummary deploy = pipelineDeploy(projectId, env);
         boolean deployOverrides = deploy != null;
         out.put("defaultPort", deployOverrides && deploy.port() > 0 ? deploy.port() : e.defaultPort());
         out.put("healthPath", deployOverrides && deploy.healthPath() != null
@@ -438,9 +438,9 @@ public class EnvironmentController {
         return out;
     }
 
-    /** 读取当前生效的发布摘要；缺失或解析失败时返回 null（退回环境模板默认值）。 */
-    private PipelineEngine.DeploySummary pipelineDeploy(String projectId) {
-        return pipelineEngine.deploySummary(projectId).orElse(null);
+    /** 读取当前环境生效的发布摘要；缺失或解析失败时返回 null（退回环境模板默认值）。 */
+    private PipelineEngine.DeploySummary pipelineDeploy(String projectId, String env) {
+        return pipelineEngine.deploySummary(projectId, env).orElse(null);
     }
 
     /**

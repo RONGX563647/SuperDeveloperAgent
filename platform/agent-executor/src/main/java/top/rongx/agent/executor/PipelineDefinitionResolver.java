@@ -85,7 +85,7 @@ public final class PipelineDefinitionResolver {
      * @param env      环境（有 recipe 时优先用它，保证下拉里显示的是实际会跑的脚本名）
      */
     public Resolved resolveForRead(String projectId, Path repoRoot, String env) {
-        Optional<Resolved> recipe = fromRecipe(projectId, env);
+        Optional<Resolved> recipe = fromRecipe(projectId, env, repoRoot);
         if (recipe.isPresent()) {
             return recipe.get();
         }
@@ -102,6 +102,32 @@ public final class PipelineDefinitionResolver {
     }
 
     /**
+     * 只读解析：**不生成、不写盘、不调模型**。
+     *
+     * <p>用于列表/设置页/预览等 GET 路径：读接口不应有副作用（过去这里会顺手生成定义，
+     * 导致打开页面可能触发 30s 的模型调用并改磁盘）。
+     *
+     * @throws IllegalStateException 项目还没有任何可用定义（首次运行时会自动生成）
+     */
+    public Resolved resolveReadOnly(String projectId, Path repoRoot, String env) {
+        Optional<Resolved> recipe = fromRecipe(projectId, env, repoRoot);
+        if (recipe.isPresent()) {
+            return recipe.get();
+        }
+        if (repoRoot != null) {
+            Optional<Resolved> fromRepo = fromRepo(repoRoot);
+            if (fromRepo.isPresent()) {
+                return fromRepo.get();
+            }
+        }
+        if (store.exists(projectId)) {
+            return fromPlatform(projectId);
+        }
+        throw new IllegalStateException("项目 " + projectId
+                + " 还没有流水线定义：首次运行时会自动生成，也可在项目页点「生成流水线脚本」");
+    }
+
+    /**
      * 执行路径：**该环境已固化的脚本优先**（它就是"在这个环境上被证明能跑通"的那一份），
      * 其次才是仓库提交里的定义、平台定义、自动生成。
      *
@@ -109,7 +135,7 @@ public final class PipelineDefinitionResolver {
      * 这与"必须先在测试机跑通"是同一条规则的两种表述。
      */
     public Resolved resolveForRun(String projectId, Path worktree, Path repoRootForGeneration, String env) {
-        Optional<Resolved> recipe = fromRecipe(projectId, env);
+        Optional<Resolved> recipe = fromRecipe(projectId, env, worktree);
         if (recipe.isPresent()) {
             return recipe.get();
         }
@@ -130,7 +156,7 @@ public final class PipelineDefinitionResolver {
 
     // ---------------------------------------------------------------- 三种来源
 
-    private Optional<Resolved> fromRecipe(String projectId, String env) {
+    private Optional<Resolved> fromRecipe(String projectId, String env, Path repoRoot) {
         if (recipes == null || env == null || env.isBlank()) {
             return Optional.empty();
         }
@@ -151,7 +177,35 @@ public final class PipelineDefinitionResolver {
                 ? "晋升：使用测试环境 v" + recipe.version() + " 的脚本（证据 " + recipe.evidenceRunId() + "）"
                 : "环境 " + sourceEnv + " 的可复现脚本 v" + recipe.version()
                 + "（证据 " + recipe.evidenceRunId() + "）";
+        // 固化脚本优先是设计（它就是被证明能跑通的那份），但"仓库改了新编排却静默不生效"
+        // 必须让人看见：在 note 里明确提示，并留一条 debug 日志（读接口会频繁调用）。
+        String drift = repoDefinitionDrift(repoRoot, recipe.pipelineYaml());
+        if (drift != null) {
+            note = note + "；注意：本次提交的 ci/pipeline.yml 与固化脚本不一致（" + drift
+                    + "），已按固化脚本执行；如需采用新编排，请在设置页重新生成/失效脚本";
+            log.debug("项目 {} 环境 {} 的固化脚本与仓库定义不一致：{}", projectId, env, drift);
+        }
         return Optional.of(new Resolved(root, def, Source.RECIPE, note));
+    }
+
+    /** 仓库（本次检出）里的 ci/pipeline.yml 与固化脚本内容不同时返回差异摘要，否则 null。 */
+    private static String repoDefinitionDrift(Path repoRoot, String recipeYaml) {
+        if (repoRoot == null) {
+            return null;
+        }
+        Path file = repoRoot.resolve("ci/pipeline.yml");
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            String repoYaml = Files.readString(file);
+            if (repoYaml.trim().equals(recipeYaml == null ? "" : recipeYaml.trim())) {
+                return null;
+            }
+            return "仓库定义 " + repoYaml.length() + " 字符 / 脚本 " + (recipeYaml == null ? 0 : recipeYaml.length()) + " 字符";
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private Optional<Resolved> fromRepo(Path root) {

@@ -108,7 +108,9 @@ public class PipelineConfig {
                                          org.springframework.beans.factory.ObjectProvider<
                                                  top.rongx.agent.domain.port.PipelineDefAuthor> defAuthor,
                                          org.springframework.beans.factory.ObjectProvider<
-                                                 top.rongx.agent.domain.run.RunRecoveryAdvisor> recoveryAdvisor) {
+                                                 top.rongx.agent.domain.run.RunRecoveryAdvisor> recoveryAdvisor,
+                                         org.springframework.beans.factory.ObjectProvider<
+                                                 top.rongx.agent.domain.deploy.RunAuthorizationGate> runGate) {
         Path root = Path.of(workspaceRoot);
         RunHistoryStore store = persist ? RunHistoryStore.file(root) : RunHistoryStore.disabled();
         // 定义解析：仓库提交覆盖 > 环境固化脚本 > 平台定义 > 规则生成 > agent 兜底
@@ -130,9 +132,26 @@ public class PipelineConfig {
                         return target == null ? java.util.List.of() : target.advise(ctx);
                     }
                 };
+        // 触发授权（E-602）：同样用 ObjectProvider 延迟解析，避免
+        // pipelineEngine → DeployGate → pipelineEngine 的循环依赖。
+        top.rongx.agent.domain.deploy.RunAuthorizationGate lazyGate =
+                new top.rongx.agent.domain.deploy.RunAuthorizationGate() {
+                    @Override
+                    public boolean available() {
+                        return runGate.getIfAvailable() != null;
+                    }
+
+                    @Override
+                    public void require(String projectId, String env, String sha, String confirmToken) {
+                        var target = runGate.getIfAvailable();
+                        if (target != null) {
+                            target.require(projectId, env, sha, confirmToken);
+                        }
+                    }
+                };
         BuiltInPipelineEngine engine = new BuiltInPipelineEngine(recipes, sandboxed, host, root, store,
                 imagePrefix, repoLocator, deployers, resolver, recipeStore, envVars, envStore,
-                envRuntime, envProvisioner, lazyRecovery, localDevHost);
+                envRuntime, envProvisioner, lazyRecovery, localDevHost, lazyGate);
         // 应用关闭时中断执行线程，避免悬挂构建进程。
         // 用虚拟线程工厂创建钩子线程（规约 R04 禁止 new Thread）；
         // 虚拟线程必须为 daemon，而 JVM 退出本身会回收这些轻量线程，关闭语义不受影响。

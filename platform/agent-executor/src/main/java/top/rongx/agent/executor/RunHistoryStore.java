@@ -25,6 +25,12 @@ public class RunHistoryStore {
 
     private final Path dir;
     private final boolean enabled;
+    /**
+     * 内存索引：历史列表/序号/单条查询都走它，避免每次轮询都扫描并解析全部 YAML。
+     * 首次读取时从磁盘装载一次，之后 save/delete 同步维护。
+     */
+    private final Map<String, RunSnapshot> cache = new ConcurrentHashMap<>();
+    private volatile boolean loaded;
 
     private RunHistoryStore(Path dir, boolean enabled) {
         this.dir = dir;
@@ -50,6 +56,11 @@ public class RunHistoryStore {
         if (!enabled) {
             return;
         }
+        cache.put(snapshot.runId(), snapshot);
+        writeFile(snapshot);
+    }
+
+    private void writeFile(RunSnapshot snapshot) {
         try {
             Map<String, Object> data = new java.util.LinkedHashMap<>();
             data.put("runId", snapshot.runId());
@@ -80,41 +91,57 @@ public class RunHistoryStore {
      * 这样界面上的构建序号不会因为历史格式升级而断档。
      */
     public List<RunSnapshot> list() {
-        if (!enabled || !Files.isDirectory(dir)) {
+        if (!enabled) {
             return List.of();
         }
-        List<RunSnapshot> out = new ArrayList<>();
-        try (var stream = Files.list(dir)) {
-            stream.filter(p -> p.toString().endsWith(".yml"))
-                    .forEach(p -> {
-                        try {
-                            out.add(read(p));
-                        } catch (Exception ignored) {
-                            // 单个损坏文件不影响其他历史
-                        }
-                    });
-        } catch (IOException ignored) {
-            // ignore
+        loadOnce();
+        List<RunSnapshot> out = new ArrayList<>(cache.values());
+        out.sort((a, b) -> Long.compare(b.createdAt(), a.createdAt()));
+        return out;
+    }
+
+    /** 首次读取时把磁盘上的历史装进内存索引（只做一次）；顺带给旧文件补序号。 */
+    private void loadOnce() {
+        if (loaded) {
+            return;
         }
-        out.sort(Comparator.comparingLong(RunSnapshot::createdAt));
-        Map<String, Integer> cursor = new HashMap<>();
-        List<RunSnapshot> numbered = new ArrayList<>(out.size());
-        for (RunSnapshot s : out) {
-            String key = s.projectId() + '\u0000' + s.env();
-            int next = cursor.getOrDefault(key, 0) + 1;
-            int seq = s.seq() > 0 ? s.seq() : next;
-            cursor.put(key, Math.max(next, seq));
-            if (seq == s.seq()) {
-                numbered.add(s);
-            } else {
-                // 补的号立即落盘：否则删掉中间一条后，后面旧文件的号会整体前移
-                RunSnapshot filled = s.withSeq(seq);
-                save(filled);
-                numbered.add(filled);
+        synchronized (this) {
+            if (loaded) {
+                return;
             }
+            if (Files.isDirectory(dir)) {
+                List<RunSnapshot> raw = new ArrayList<>();
+                try (var stream = Files.list(dir)) {
+                    stream.filter(p -> p.toString().endsWith(".yml"))
+                            .forEach(p -> {
+                                try {
+                                    raw.add(read(p));
+                                } catch (Exception ignored) {
+                                    // 单个损坏文件不影响其他历史
+                                }
+                            });
+                } catch (IOException ignored) {
+                    // ignore
+                }
+                raw.sort(Comparator.comparingLong(RunSnapshot::createdAt));
+                Map<String, Integer> cursor = new HashMap<>();
+                for (RunSnapshot s : raw) {
+                    String key = s.projectId() + '\u0000' + s.env();
+                    int next = cursor.getOrDefault(key, 0) + 1;
+                    int seq = s.seq() > 0 ? s.seq() : next;
+                    cursor.put(key, Math.max(next, seq));
+                    if (seq == s.seq()) {
+                        cache.put(s.runId(), s);
+                    } else {
+                        // 补的号立即落盘：否则删掉中间一条后，后面旧文件的号会整体前移
+                        RunSnapshot filled = s.withSeq(seq);
+                        writeFile(filled);
+                        cache.put(s.runId(), filled);
+                    }
+                }
+            }
+            loaded = true;
         }
-        numbered.sort((a, b) -> Long.compare(b.createdAt(), a.createdAt()));
-        return numbered;
     }
 
     /** 同一项目 + 环境内的下一个构建序号（从 1 开始，取现有最大值 +1）。 */
@@ -133,6 +160,7 @@ public class RunHistoryStore {
         if (!enabled || runId == null || runId.isBlank()) {
             return false;
         }
+        cache.remove(runId);
         try {
             return Files.deleteIfExists(dir.resolve(runId + ".yml"));
         } catch (IOException e) {

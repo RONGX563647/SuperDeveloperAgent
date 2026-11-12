@@ -129,6 +129,37 @@ class DeployRecipeFlowTest {
     }
 
     @Test
+    @DisplayName("脚本内容不变的新提交：不堆版本，但证据要刷新到新提交，prod 才能继续晋升")
+    void refreshesEvidenceWhenContentUnchanged(@TempDir Path temp) throws Exception {
+        Path repo = newRepo(temp);
+        String sha1 = commit(repo, "init");
+        Path ws = temp.resolve("ws");
+        RecipeStore recipes = new MemoryRecipeStore(ws);
+        BuiltInPipelineEngine engine = newEngine(ws, repo, recipes, temp);
+        try {
+            String run1 = engine.trigger(PROJECT, "release", Map.of("gitSha", sha1, "env", "test"));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, run1), engine.logTail(run1));
+
+            // 新提交只改了业务文件，ci/pipeline.yml 内容不变
+            Files.writeString(repo.resolve("second.txt"), "x", StandardCharsets.UTF_8);
+            String sha2 = commit(repo, "second");
+            String run2 = engine.trigger(PROJECT, "release", Map.of("gitSha", sha2, "env", "test"));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, run2), engine.logTail(run2));
+
+            DeployRecipe cur = recipes.current(PROJECT, "test").orElseThrow();
+            assertEquals(sha2, cur.gitSha(), "同内容新提交也必须刷新证据 commit");
+            assertEquals(run2, cur.evidenceRunId(), "证据运行要指向最新一次成功运行");
+            assertEquals(1, recipes.versions(PROJECT, "test").size(), "内容没变不该堆版本");
+
+            // 证据已刷新 → 同一提交上生产不再被误挡
+            String prodRun = engine.trigger(PROJECT, "release", Map.of("gitSha", sha2, "env", "prod"));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, prodRun), engine.logTail(prodRun));
+        } finally {
+            engine.close();
+        }
+    }
+
+    @Test
     @DisplayName("晋升规则矩阵：无脚本 / 无证据 / 证据失败 / sha 不一致")
     void promotionMatrix(@TempDir Path temp) {
         RecipeStore recipes = new MemoryRecipeStore(temp.resolve("ws"));
@@ -218,6 +249,21 @@ class DeployRecipeFlowTest {
             current.put(key(recipe.projectId(), recipe.env()), saved);
             write(saved);
             return saved;
+        }
+
+        @Override
+        public Optional<DeployRecipe> updateEvidence(String projectId, String env,
+                                                     String runId, String gitSha) {
+            return current(projectId, env).map(cur -> {
+                DeployRecipe updated = cur.withEvidence(runId, gitSha);
+                var versions = all.get(key(projectId, env));
+                if (versions != null) {
+                    versions.put(cur.version(), updated);
+                }
+                current.put(key(projectId, env), updated);
+                write(updated);
+                return updated;
+            });
         }
 
         @Override

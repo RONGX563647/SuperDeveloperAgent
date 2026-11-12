@@ -49,8 +49,8 @@ public class CiCommandTools {
         }
         java.util.List<String> available = engine.pipelines(ctx.projectId());
         if (available.isEmpty()) {
-            return "err: 该仓库没有 ci/pipeline.yml（流水线定义随代码版本化）。"
-                    + "请在项目页点「生成流水线脚本」并提交后重试";
+            return "err: 该项目还没有可用的流水线定义（平台侧定义 / ci/pipeline.yml 均可）。"
+                    + "请在项目页点「生成流水线脚本」后重试";
         }
         if (!available.contains(pipelineId)) {
             return "err: pipeline 不在白名单：" + pipelineId + "（可用：" + String.join(", ", available) + "）";

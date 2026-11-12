@@ -18,7 +18,7 @@ import top.rongx.agent.governance.ConfirmTokenService;
  * <p>其余环境（dev / test）不做任何拦截：agent 可以全权跑，直到跑通并固化。
  */
 @Component
-public class DeployGate {
+public class DeployGate implements top.rongx.agent.domain.deploy.RunAuthorizationGate {
 
     private final RecipeStore recipes;
     private final PipelineEngine engine;
@@ -33,6 +33,21 @@ public class DeployGate {
     /** 测试证据是否齐备（返回 null 表示齐备）。 */
     public String evidenceProblem(String projectId, String env, String sha) {
         return EnvironmentPromotion.problem(recipes, engine::status, projectId, env, sha);
+    }
+
+    @Override
+    public boolean available() {
+        return true;
+    }
+
+    /**
+     * 引擎侧入口：所有触发路径共用的授权校验。
+     *
+     * <p>与 HTTP 层调用的是同一份实现，避免"绕过 Controller 直接 trigger"。
+     */
+    @Override
+    public void require(String projectId, String env, String sha, String confirmToken) {
+        requireIfNeeded(projectId, env, sha, confirmToken);
     }
 
     /**
