@@ -10,10 +10,11 @@
 ## 目录
 
 ```
-docs/          设计与规约（11 份文档 + 2 份汇报稿）
-  research/    —（调研材料在 ../_research/）
-platform/      后端 8 模块 + spec-checks + Vue3 前端
+docs/          设计与规约（27 份 Markdown + 2 份汇报稿，含 Code Wiki）
+specs/         功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
+platform/      后端 8 个 Maven 模块 + Vue3 前端
 _research/     市场调研与源码能力盘点（含采集脚本）
+.workflow/     Gitee Go CI（本质：cd platform && mvn -B verify）
 ```
 
 ## 阅读顺序（推荐）
@@ -33,23 +34,32 @@ _research/     市场调研与源码能力盘点（含采集脚本）
 | 11 | [CI/CD 方案替代与自创 · 决策](docs/CICD方案替代与自创-决策-v1.md) | 不造 DSL，改用「5 个动作 + 仓库内配方」 |
 | 12 | [自研流水线能否替代 Jenkins · 验收报告](docs/CICD验收报告-v1.md) | 真实 git→构建→镜像→部署→健康→回滚，4/4 通过 |
 | 13 | [流水线工作台 · 使用指南](docs/流水线工作台-使用指南-v1.md) | 接入项目、写配方、触发/重跑/回滚、看懂错误码 |
+| 14 | [环境模板与中间件自动注入 v2](docs/环境变量与环境模板设计-v2.md) | 环境变量 / 中间件 / 部署注入的现行决策（v1 仅存档） |
+| 15 | [发布编排 + 平台部署器 v1](docs/发布编排与平台部署器-v1.md) | HOST / DOCKER / SERVER 三种部署语义 |
+| 16 | [设置：服务器与模型连接 v1](docs/设置-服务器与模型连接-v1.md) | 设置页数据模型、密钥加密与连通性探测 |
+| 17 | [项目接入设计 v2](docs/项目接入设计-v2.md) | DIRECT 本地引用 / MANAGED bare + worktree |
+| 18 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
 
 **背景与推演**（按时间顺序，记录结论如何演化）：
 
 [v1 若依 4.8.3](docs/ruoyi-agent-可行性分析与市场调研.md) → [v2 Vue-Plus 重评](docs/ruoyi-vue-plus-agent-可行性分析-v2.md) → [v3 独立平台](docs/devops-agent-独立平台-可行性分析-v3.md) → [v4 多项目](docs/多项目托管设计-v4.md)；
-另有 [ruoyi-ai 编程助手拆解](docs/ruoyi-ai-编程助手拆解.md) 与 [脚手架完善分析](docs/脚手架完善分析-v1.md)。
+另有 [ruoyi-ai 编程助手拆解](docs/ruoyi-ai-编程助手拆解.md)、[脚手架完善分析](docs/脚手架完善分析-v1.md)、[架构分析](docs/架构分析-agentscope-ruoyi-platform-v1.md) 与 [方案 D 修复方案](docs/方案D修复方案-v1.md)。
 
 ## 快速开始
 
 ```bash
 cd platform
 export AGENT_MODEL_API_KEY=sk-xxx      # Windows: $env:AGENT_MODEL_API_KEY="sk-xxx"
+# 或写入 platform/.env（应用启动时自动加载，真实环境变量优先）
+
 mvn -q verify                          # 编译 + 规约检查 + 单测
 java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
+# 健康检查：http://127.0.0.1:8090/actuator/health
 
 cd web && npm install && npm run dev    # http://localhost:5173
 ```
 
+> 登录种子账号：`admin / admin-2026`、`devops / devops-2026`、`viewer / viewer-2026`。
 > 前端只监听 `localhost`：用 `127.0.0.1` 打不开是正常的（Vite 默认绑 `::1`）。
 > 要让 IPv4 可达，用 `npm run dev -- --host 127.0.0.1`；回归脚本也按 `localhost` 取址。
 
@@ -92,6 +102,7 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 ```
 
 ## 关于外部源码引用
+
 `docs/` 中 v1、v2 两份报告的「证据索引」引用了 `../RuoYi/`、`../agentscope-java/`、`../RuoYi-Vue-Plus/` 下的源码路径。
 这些是**分析当时的源码快照，已从本仓库移除**（见 [.gitignore](.gitignore) 中的克隆命令），因此那些链接不可点击，但结论与引用的类名/行号仍可对照上游仓库复核。
 
@@ -99,11 +110,15 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | ✅ `docs/` 20 份已入库（PRD / 项目规约 / 执行器契约 / 设计 / 分析 / 验收） |
-| 后端 | ✅ 9 模块，`mvn -B verify` 全绿（新增 recipe/门禁用例；1 个用例需真实模型 Key 时跳过） |
-| 前端 | ✅ Vue3 + Vite + Element Plus；`npm run build`（vue-tsc strict）通过 |
-| 项目接入 | ✅ 本地目录 / 远程 clone（DIRECT 不复制仓库）；自检 + 按仓库结构在**平台侧**生成定义（不写用户仓库） |
-| 流水线 | ✅ 检出 → 容器内构建/测试 → 镜像 → 平台部署 → 健康检查；历史落盘、可取消、可重跑 |
-| 环境与固化 | ✅ 每个环境一份可复现脚本（跑通即固化 vN、可重放/回滚）；服务器发布需**测试环境成功案例 + 一次人工确认**（E-601/E-602） |
-| 回归脚本 | ✅ `platform/web/scripts/*.mjs`（布局 / 登录 / 外壳隔离 / 交互 / 流水线交互 / 缺定义引导），需本地起前端 dev server |
-| 未做 | ⬜ 会话与消息持久化、用户管理界面、markdown 渲染、多租户 |
+| 设计文档 | ✅ `docs/` 27 份 Markdown + 2 份汇报稿；`specs/` 3 份规格与任务清单 |
+| 后端 | ✅ 8 个 Maven 模块（7 个运行时模块 + `spec-checks`），`mvn -B verify` 全绿 |
+| 前端 | ✅ Vue3 + Vite + Element Plus；7 个页面；`npm run build`（vue-tsc strict）通过 |
+| 认证与授权 | ✅ Sa-Token 会话、3 个种子账号、角色权限码；高危操作需二级密码 |
+| 项目接入 | ✅ 本地 DIRECT（不复制仓库）/ 远程 clone（bare + worktree）；配方自检 + 按仓库结构在**平台侧**生成定义 |
+| 流水线 | ✅ 检出 → 构建/测试 → 镜像 → 部署 → 健康检查 → 失败回滚；命令级预览、失败续跑、产物下载、历史删除 |
+| dev 本机部署 | ✅ dev 固定本机运行（后端 jar + 前端 dist），忽略 `deployTarget=docker`；可一键停止交还 IDE |
+| 环境子系统 | ✅ 模板 / 中间件资源 / 项目覆盖 / 有效视图；发现、按需供给、健康检查；部署前 E-509 / E-701 / E-702 预检与端口租约 |
+| 安全门禁 | ✅ L2/L3 动作门禁、一次性确认令牌（绑定 planHash）；补丁只提交到 `patch/<projectId>` 分支；明文回显单独授权并写审计 |
+| 取证与恢复 | ✅ `env_runtime_status` / `app_logs` / `port_check`；失败恢复建议；一键自动部署 Agent（仅 dev/test） |
+| 回归脚本 | ✅ `platform/web/scripts/*.mjs`（布局 / 登录 / 外壳隔离 / 交互 / 流水线 / 项目 ID），需本地起前端 dev server |
+| 未做 | ⬜ 多租户、用户管理界面、`GET /api/v1/fs/read`、AgentScope 事件稳定枚举、补丁/变更单落库 |
