@@ -26,6 +26,7 @@ import java.util.List;
  * @param running      最近一次健康检查是否运行
  * @param lastCheckAt  最近检查时间（0 = 未检查）
  * @param lastError    最近错误
+ * @param image        中间件镜像（如 mysql:8.0）；环境模板以镜像为身份，容器只是运行态
  */
 public record EnvResource(
         String id,
@@ -44,7 +45,29 @@ public record EnvResource(
         String source,
         boolean running,
         long lastCheckAt,
-        String lastError) {
+        String lastError,
+        String image) {
+
+    public EnvResource {
+        if (image == null || image.isBlank()) {
+            image = MiddlewareImages.imageOf(kind);
+        }
+    }
+
+    /** 兼容旧调用：镜像按类型取默认值。 */
+    public EnvResource(String id, String env, String kind, String name, String host, int port,
+                       int containerPort, String internalHost, String databaseName,
+                       String username, String password, String network, String serverId,
+                       String source, boolean running, long lastCheckAt, String lastError) {
+        this(id, env, kind, name, host, port, containerPort, internalHost, databaseName,
+                username, password, network, serverId, source, running, lastCheckAt, lastError,
+                null);
+    }
+
+    /** 展示用镜像：显式值优先，否则按类型兜底。 */
+    public String displayImage() {
+        return image == null || image.isBlank() ? MiddlewareImages.imageOf(kind) : image;
+    }
 
     public boolean hasPassword() {
         return password != null && !password.isEmpty();

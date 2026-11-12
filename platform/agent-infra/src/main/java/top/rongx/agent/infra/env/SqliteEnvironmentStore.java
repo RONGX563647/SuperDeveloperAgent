@@ -74,6 +74,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 running       INTEGER NOT NULL DEFAULT 0,
                 last_check_at INTEGER NOT NULL DEFAULT 0,
                 last_error    TEXT,
+                image         TEXT,
                 updated_at    INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_env_resources_env ON env_resources(env);
@@ -182,6 +183,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         ensureColumn(st, "env_resources", "container_port",
                 "container_port INTEGER NOT NULL DEFAULT 0");
         ensureColumn(st, "env_resources", "internal_host", "internal_host TEXT");
+        ensureColumn(st, "env_resources", "image", "image TEXT");
         ensureColumn(st, "env_vars", "value_kind", "value_kind TEXT NOT NULL DEFAULT 'INLINE'");
         ensureColumn(st, "env_vars", "secret_ref", "secret_ref TEXT");
         ensureColumn(st, "project_env_overrides", "value_kind",
@@ -334,7 +336,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                      "SELECT id, env, kind, name, host, port, container_port, internal_host, "
                              + "database_name, username, "
                              + "password_enc, password_iv, network, server_id, source, "
-                             + "running, last_check_at, last_error, updated_at "
+                             + "running, last_check_at, last_error, image, updated_at "
                              + "FROM env_resources WHERE env = ? ORDER BY kind, name")) {
             st.setString(1, env);
             try (ResultSet rs = st.executeQuery()) {
@@ -356,7 +358,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                      "SELECT id, env, kind, name, host, port, container_port, internal_host, "
                              + "database_name, username, "
                              + "password_enc, password_iv, network, server_id, source, "
-                             + "running, last_check_at, last_error, updated_at "
+                             + "running, last_check_at, last_error, image, updated_at "
                              + "FROM env_resources WHERE id = ?")) {
             st.setString(1, id);
             try (ResultSet rs = st.executeQuery()) {
@@ -380,8 +382,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                          (id, env, kind, name, host, port, container_port, internal_host,
                           database_name, username,
                           password_enc, password_iv, network, server_id, source,
-                          running, last_check_at, last_error, updated_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                          running, last_check_at, last_error, image, updated_at)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(id) DO UPDATE SET
                          env=excluded.env, kind=excluded.kind, name=excluded.name,
                          host=excluded.host, port=excluded.port,
@@ -391,6 +393,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                          network=excluded.network, server_id=excluded.server_id,
                          source=excluded.source, running=excluded.running,
                          last_check_at=excluded.last_check_at, last_error=excluded.last_error,
+                         image=excluded.image,
                          updated_at=excluded.updated_at
                          %s
                      """.formatted(sealed == null ? ""
@@ -414,6 +417,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setInt(i++, r.lastCheckAt() > 0 && r.running() ? 1 : 0);
             st.setLong(i++, r.lastCheckAt());
             st.setString(i++, blankToNull(r.lastError()));
+            st.setString(i++, blankToNull(r.displayImage()));
             st.setLong(i, now);
             st.executeUpdate();
         } catch (SQLException e) {
@@ -467,7 +471,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 rs.getInt("container_port"), rs.getString("internal_host"),
                 rs.getString("database_name"), rs.getString("username"), password,
                 rs.getString("network"), rs.getString("server_id"), rs.getString("source"),
-                rs.getInt("running") == 1, rs.getLong("last_check_at"), rs.getString("last_error"));
+                rs.getInt("running") == 1, rs.getLong("last_check_at"), rs.getString("last_error"),
+                rs.getString("image"));
     }
 
     // ---------------------------------------------------------------- 环境变量

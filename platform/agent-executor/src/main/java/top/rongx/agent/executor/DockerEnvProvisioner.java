@@ -23,6 +23,7 @@ import top.rongx.agent.domain.env.EnvProvisioner;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.MiddlewareImages;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.StackAdapter;
 
@@ -710,16 +711,16 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             case "mysql", "mariadb" -> {
                 argv.addAll(List.of("-e", "MYSQL_ROOT_PASSWORD=" + nullSafe(password),
                         "-e", "MYSQL_DATABASE=" + nullSafe(database)));
-                argv.add("mysql:8.0");
+                argv.add(MiddlewareImages.imageOf("mysql"));
             }
             case "postgres" -> {
                 argv.addAll(List.of("-e", "POSTGRES_USER=" + nullSafe(username),
                         "-e", "POSTGRES_PASSWORD=" + nullSafe(password),
                         "-e", "POSTGRES_DB=" + nullSafe(database)));
-                argv.add("postgres:16-alpine");
+                argv.add(MiddlewareImages.imageOf("postgres"));
             }
             case "redis" -> {
-                argv.add("redis:7-alpine");
+                argv.add(MiddlewareImages.imageOf("redis"));
                 if (password != null && !password.isBlank()) {
                     argv.addAll(List.of("redis-server", "--requirepass", password));
                 }
@@ -727,18 +728,18 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             case "rabbitmq" -> {
                 argv.addAll(List.of("-e", "RABBITMQ_DEFAULT_USER=" + nullSafe(username),
                         "-e", "RABBITMQ_DEFAULT_PASS=" + nullSafe(password)));
-                argv.add("rabbitmq:3.12-management");
+                argv.add(MiddlewareImages.imageOf("rabbitmq"));
             }
             case "minio" -> {
                 argv.addAll(List.of("-e", "MINIO_ROOT_USER=" + nullSafe(username),
                         "-e", "MINIO_ROOT_PASSWORD=" + nullSafe(password)));
-                argv.add("minio/minio:latest");
+                argv.add(MiddlewareImages.imageOf("minio"));
                 argv.addAll(List.of("server", "/data"));
             }
             case "mongo" -> {
                 argv.addAll(List.of("-e", "MONGO_INITDB_ROOT_USERNAME=" + nullSafe(username),
                         "-e", "MONGO_INITDB_ROOT_PASSWORD=" + nullSafe(password)));
-                argv.add("mongo:7");
+                argv.add(MiddlewareImages.imageOf("mongo"));
             }
             default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
         }

@@ -157,7 +157,8 @@ public class EnvironmentDiscoveryService {
             return null;
         }
         String container = parts[0].replaceFirst("^/", "");
-        String image = parts[1].toLowerCase(Locale.ROOT);
+        String rawImage = parts.length > 1 ? parts[1].trim() : "";
+        String image = rawImage.toLowerCase(Locale.ROOT);
         boolean running = Boolean.parseBoolean(parts[2]);
         String network = parts.length > 3 ? parts[3].trim() : "";
         String kind = kindOf(image);
@@ -173,7 +174,7 @@ public class EnvironmentDiscoveryService {
                 null, null, null, network.isBlank() ? null : network.split("\\s+")[0],
                 server == null ? null : server.id(),
                 server == null ? "LOCAL_DOCKER" : "REMOTE_DOCKER",
-                running, 0, null);
+                running, 0, null, rawImage.isBlank() ? null : rawImage);
         // 这里保留"登记值"（发布端口 / 容器内端口 / 容器名），
         // 按运行形态寻址在展示与注入时统一做（EnvAddressing），切环境不用重新发现。
         return raw;
@@ -242,7 +243,8 @@ public class EnvironmentDiscoveryService {
         return new EnvResource(base.id(), base.env(), base.kind(), base.name(), base.host(),
                 base.port(), base.containerPort(), base.internalHost(), database, username,
                 password, base.network(), base.serverId(),
-                base.source(), base.running(), base.lastCheckAt(), base.lastError());
+                base.source(), base.running(), base.lastCheckAt(), base.lastError(),
+                base.image());
     }
 
     private static String kindOf(String image) {

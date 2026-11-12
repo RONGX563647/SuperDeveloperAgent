@@ -60,7 +60,8 @@ public final class EnvAddressing {
         }
         return new EnvResource(r.id(), r.env(), r.kind(), r.name(), host, port,
                 r.containerPort(), r.internalHost(), r.databaseName(), r.username(), r.password(),
-                r.network(), r.serverId(), r.source(), r.running(), r.lastCheckAt(), r.lastError());
+                r.network(), r.serverId(), r.source(), r.running(), r.lastCheckAt(), r.lastError(),
+                r.image());
     }
 
     /** 容器内 / 共享网络内的地址。 */

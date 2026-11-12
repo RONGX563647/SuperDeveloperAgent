@@ -22,6 +22,7 @@ import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.ProjectEnvFiles;
+import top.rongx.agent.domain.env.ScenarioCatalog;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.project.ProjectContext;
 
@@ -95,7 +96,9 @@ public class ConfigResolver {
             if (needsUserInput) {
                 sb.append("status: NEED_USER_INPUT\n")
                         .append("ask: 项目环境里还缺配置或存在多个候选。请告诉我要使用哪一组值，")
-                        .append("或先在「设置 → 项目环境」补齐；确认前我不会继续执行。");
+                        .append("或先在「设置 → 项目环境」补齐；确认前我不会继续执行。\n")
+                        .append("catalog: 缺失项若属于 DeepSeek / 阿里云 OSS / SMTP 邮箱等内置场景，")
+                        .append("可先调 config_catalog 查看键名、含义与默认值，再让用户补值。");
             } else {
                 sb.append("status: READY");
             }
@@ -157,7 +160,8 @@ public class ConfigResolver {
                     conflicts.add(key + " 有 " + distinct + " 个不同候选");
                 }
             }
-            if (declared.required().contains(key) || known.containsKey(key)) {
+            if (declared.required().contains(key) || known.containsKey(key)
+                    || ScenarioCatalog.key(key).isPresent()) {
                 missing.add(key);
             }
         }

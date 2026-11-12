@@ -5,10 +5,10 @@ import { Delete, DocumentCopy, Hide, Plus, Refresh, Search, VideoPause, VideoPla
 import { ApiError } from '../../api/http'
 import {
   checkEnvResource, deleteEnvResource, deleteEnvTemplateVar, discoverEnvResources,
-  getEnvDetail, importEnvResources, listEnvTemplates, listServers, revealEnvVar,
-  saveEnvResource, saveEnvTemplate, saveEnvTemplateVar, startEnvResource, stopEnvResource,
+  getEnvDetail, importEnvResources, importScenario, listEnvTemplates, listScenarios, listServers,
+  revealEnvVar, saveEnvResource, saveEnvTemplate, saveEnvTemplateVar, startEnvResource, stopEnvResource,
   type DeployServer, type EnvResourceView, type EnvTemplate, type EnvTemplateRow,
-  type EnvVariableView, type RuntimeMode,
+  type EnvVariableView, type RuntimeMode, type ScenarioView,
 } from '../../api/settings'
 import { appStore } from '../../stores/app'
 import { formatTime } from '../../utils/status'
@@ -27,6 +27,10 @@ const env = ref('test')
 const template = ref<EnvTemplate | null>(null)
 const resources = ref<EnvResourceView[]>([])
 const vars = ref<EnvVariableView[]>([])
+/** 中间件类型 → 平台默认镜像（新增资源时预填，与后端供给用的镜像一致）。 */
+const imageDefaults = ref<Record<string, string>>({})
+/** 场景配置词条（DeepSeek / OSS / SMTP 等），Agent 通过 config_catalog 读同一份。 */
+const scenarios = ref<ScenarioView[]>([])
 const servers = ref<DeployServer[]>([])
 const loading = ref(false)
 const savingTemplate = ref(false)
@@ -89,6 +93,7 @@ async function loadDetail(): Promise<void> {
     template.value = detail.template
     resources.value = detail.resources
     vars.value = detail.vars
+    imageDefaults.value = detail.imageDefaults ?? {}
     revealed.value = {}
     settingForm.network = detail.template.network ?? ''
     settingForm.defaultTarget = detail.template.defaultTarget || 'docker'
@@ -97,10 +102,16 @@ async function loadDetail(): Promise<void> {
     settingForm.runtimeMode = detail.template.runtimeMode || 'LOCAL_DEV'
     settingForm.namespace = detail.template.namespace || `agent-${env.value}`
     settingForm.serverId = detail.template.serverId || ''
+    try {
+      scenarios.value = await listScenarios(env.value)
+    } catch {
+      scenarios.value = []
+    }
   } catch (e) {
     template.value = null
     resources.value = []
     vars.value = []
+    scenarios.value = []
     ElMessage.error(e instanceof Error ? e.message : '加载环境详情失败')
   } finally {
     loading.value = false
@@ -232,7 +243,7 @@ const resourceDialog = ref(false)
 const resourceSaving = ref(false)
 const resourceForm = reactive({
   kind: 'mysql', name: '', host: '127.0.0.1', port: 3306,
-  databaseName: '', username: '', password: '',
+  databaseName: '', username: '', password: '', image: '',
 })
 
 function openResourceDialog(): void {
@@ -243,7 +254,18 @@ function openResourceDialog(): void {
   resourceForm.databaseName = ''
   resourceForm.username = ''
   resourceForm.password = ''
+  resourceForm.image = imageDefaults.value.mysql ?? ''
   resourceDialog.value = true
+}
+
+/** 切换类型时带出该类型的平台默认镜像（模板以镜像为身份，不跟某台机器的容器绑定）。 */
+function onKindChange(kind: string): void {
+  resourceForm.image = imageDefaults.value[kind] ?? ''
+  const ports: Record<string, number> = {
+    mysql: 3306, mariadb: 3306, postgres: 5432, redis: 6379,
+    mongo: 27017, rabbitmq: 5672, minio: 9000, nacos: 8848,
+  }
+  resourceForm.port = ports[kind] ?? resourceForm.port
 }
 
 async function saveResource(): Promise<void> {
@@ -261,6 +283,7 @@ async function saveResource(): Promise<void> {
       databaseName: resourceForm.databaseName.trim() || undefined,
       username: resourceForm.username.trim() || undefined,
       password: resourceForm.password || undefined,
+      image: resourceForm.image.trim() || undefined,
     })
     ElMessage.success('已添加中间件')
     resourceDialog.value = false
@@ -388,6 +411,51 @@ async function removeVar(v: EnvVariableView): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- 场景配置词条
+
+/** 正在导入的场景；表单键 = 变量名，值 = 用户填写（敏感项默认空）。 */
+const scenarioDialog = ref(false)
+const scenarioSaving = ref(false)
+const activeScenario = ref<ScenarioView | null>(null)
+const scenarioValues = reactive<Record<string, string>>({})
+
+function openScenarioImport(s: ScenarioView): void {
+  activeScenario.value = s
+  for (const key of Object.keys(scenarioValues)) delete scenarioValues[key]
+  for (const k of s.keys) {
+    scenarioValues[k.key] = k.defaultValue ?? ''
+  }
+  scenarioDialog.value = true
+}
+
+async function saveScenario(): Promise<void> {
+  const s = activeScenario.value
+  if (!s) return
+  const filled = Object.entries(scenarioValues).filter(([, v]) => v.trim() !== '')
+  if (!filled.length) {
+    ElMessage.warning('至少填写一项配置值')
+    return
+  }
+  scenarioSaving.value = true
+  try {
+    const result = await importScenario(s.id, env.value, { ...scenarioValues })
+    ElMessage.success(
+      `已导入 ${result.imported.length} 个变量到${envLabel(env.value)}模板`
+      + (result.skipped.length ? `，跳过 ${result.skipped.length} 个空值` : ''))
+    scenarioDialog.value = false
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '导入失败')
+  } finally {
+    scenarioSaving.value = false
+  }
+}
+
+/** 场景里已有的键不允许在导入框里重复填写（走「模板变量」修改值）。 */
+function scenarioKeyConfigured(key: string): boolean {
+  return vars.value.some((v) => v.key === key)
+}
+
 function kindLabel(kind: string): string {
   const map: Record<string, string> = {
     mysql: 'MySQL', mariadb: 'MariaDB', postgres: 'PostgreSQL', redis: 'Redis',
@@ -462,8 +530,9 @@ defineExpose({ load })
       <div>
         <h2 class="et-title">环境模板</h2>
         <p class="et-sub">
-          为开发 / 测试 / 生产各配一套变量、网络和中间件；项目差异在「项目环境」里覆盖。
-          敏感值加密保存，列表默认掩码，可点眼睛查看；容器未启动不算异常，部署时会自动启动项目引用的中间件。
+          环境模板按<strong>镜像</strong>组织：声明这套环境要拉起哪些中间件镜像，换台机器按镜像重建即可复现；
+          容器名、端口、运行状态只是运行态信息。变量与场景词条（DeepSeek / 阿里云 OSS / SMTP 等）配一次全项目共用，
+          项目差异在「项目环境」里覆盖；Agent 通过 config_catalog 读取同一份词条。敏感值加密保存，列表默认掩码。
         </p>
       </div>
       <el-button size="small" :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
@@ -489,9 +558,12 @@ defineExpose({ load })
           端口 {{ row.template.defaultPort || '未配置' }} · 变量 {{ row.varCount }} 个
           <template v-if="row.secretCount">（{{ row.secretCount }} 敏感）</template>
         </span>
+        <span class="et-card-line et-card-image" :title="row.images.join(' · ')">
+          镜像 {{ row.images.length ? row.images.slice(0, 2).join(' · ') : '未声明' }}
+          <template v-if="row.images.length > 2"> +{{ row.images.length - 2 }}</template>
+        </span>
         <span class="et-card-line">
-          中间件 {{ row.resourceCount }} 个 · 运行 {{ row.runningCount }}
-          <template v-if="row.stoppedCount"> · 未启动 {{ row.stoppedCount }}</template>
+          容器 运行 {{ row.runningCount }} · 未启动 {{ row.stoppedCount }}（不算异常）
         </span>
       </button>
     </div>
@@ -554,28 +626,28 @@ defineExpose({ load })
       <div class="et-block">
         <div class="et-block-head">
           <div class="et-block-title">
-            <b>中间件资源</b>
+            <b>中间件镜像</b>
             <span class="et-muted">
-              共 {{ resources.length }} 个 · 运行 {{ runningCount }}
-              <template v-if="stoppedCount"> · 未启动 {{ stoppedCount }}（不算异常）</template>
+              {{ resources.length }} 个镜像 · 容器运行 {{ runningCount }}
+              <template v-if="stoppedCount"> · 未启动 {{ stoppedCount }}（部署时会拉起）</template>
               <template v-if="missingCount"> · 缺信息 {{ missingCount }}</template>
             </span>
           </div>
           <div class="et-block-actions">
             <el-button size="small" :icon="Search" @click="openDiscover">发现 / 导入</el-button>
             <el-button size="small" :icon="Refresh" :loading="checkingAll" @click="checkAll">检查全部</el-button>
-            <el-button size="small" :icon="Plus" @click="openResourceDialog">手工添加</el-button>
+            <el-button size="small" :icon="Plus" @click="openResourceDialog">添加镜像</el-button>
           </div>
         </div>
 
         <div v-if="resources.length" class="et-table">
           <div class="et-row et-row-head">
-            <span>类型 / 名称</span><span>地址</span><span>库 / 用户</span><span>来源</span><span>状态</span><span />
+            <span>镜像 / 名称</span><span>地址</span><span>库 / 用户</span><span>来源</span><span>状态</span><span />
           </div>
           <div v-for="r in resources" :key="r.id" class="et-row">
-            <span class="et-cell">
+            <span class="et-cell et-cell-stack">
               <b>{{ r.name }}</b>
-              <em class="et-kind">{{ kindLabel(r.kind) }}</em>
+              <code class="et-image mono" :title="r.image ?? kindLabel(r.kind)">{{ r.image || kindLabel(r.kind) }}</code>
             </span>
             <code class="et-cell mono">{{ r.host }}:{{ r.port }}</code>
             <span class="et-cell et-muted">
@@ -623,6 +695,46 @@ defineExpose({ load })
           </div>
         </div>
         <p v-else class="et-empty">还没有登记中间件；点「发现 / 导入」从本机或远程 docker 导入，或手工添加。</p>
+      </div>
+
+      <!-- 场景配置词条 -->
+      <div class="et-block">
+        <div class="et-block-head">
+          <div class="et-block-title">
+            <b>场景配置词条</b>
+            <span class="et-muted">
+              对接第三方服务的标准变量名；Agent 通过 config_catalog 读同一份目录，不自己猜键名
+            </span>
+          </div>
+        </div>
+        <div v-if="scenarios.length" class="et-scenarios">
+          <article v-for="s in scenarios" :key="s.id" class="et-scenario">
+            <header class="et-scenario-head">
+              <div>
+                <b>{{ s.name }}</b>
+                <span class="et-muted"> {{ s.summary }}</span>
+              </div>
+              <span class="et-scenario-side">
+                <span class="et-state" :class="s.configuredCount === s.keys.length ? 'ok' : 'idle'">
+                  已配置 {{ s.configuredCount }}/{{ s.keys.length }}
+                </span>
+                <el-button size="small" type="primary" plain @click="openScenarioImport(s)">导入词条</el-button>
+              </span>
+            </header>
+            <div class="et-scenario-keys">
+              <div v-for="k in s.keys" :key="k.key" class="et-scenario-key">
+                <code class="mono et-scenario-name" :title="k.description">{{ k.key }}</code>
+                <span class="et-muted">{{ k.label }}</span>
+                <span v-if="k.secret" class="et-state warn">敏感</span>
+                <span v-if="k.required" class="et-state idle">必填</span>
+                <span class="et-state" :class="scenarioKeyConfigured(k.key) ? 'ok' : 'idle'">
+                  {{ scenarioKeyConfigured(k.key) ? '已配置' : '未配置' }}
+                </span>
+              </div>
+            </div>
+          </article>
+        </div>
+        <p v-else class="et-empty">词条目录加载失败；刷新重试。</p>
       </div>
 
       <!-- 变量 -->
@@ -733,18 +845,22 @@ defineExpose({ load })
     </el-dialog>
 
     <!-- 手工添加中间件 -->
-    <el-dialog v-model="resourceDialog" title="手工添加中间件" width="520px">
+    <el-dialog v-model="resourceDialog" title="添加中间件镜像" width="520px">
       <div class="et-dialog-grid">
         <label class="et-field">
           <span>类型</span>
-          <el-select v-model="resourceForm.kind" size="small">
-            <el-option v-for="k in ['mysql', 'postgres', 'redis', 'mongo', 'nacos', 'rabbitmq', 'other']"
+          <el-select v-model="resourceForm.kind" size="small" @change="onKindChange">
+            <el-option v-for="k in ['mysql', 'postgres', 'redis', 'mongo', 'nacos', 'rabbitmq', 'minio', 'other']"
               :key="k" :label="kindLabel(k)" :value="k" />
           </el-select>
         </label>
         <label class="et-field">
           <span>名称</span>
           <el-input v-model="resourceForm.name" size="small" placeholder="例如 mysql-test" />
+        </label>
+        <label class="et-field et-field-wide">
+          <span>镜像（模板以镜像为身份，空则用类型默认）</span>
+          <el-input v-model="resourceForm.image" size="small" class="mono" placeholder="mysql:8.0" />
         </label>
         <label class="et-field">
           <span>主机</span>
@@ -770,6 +886,34 @@ defineExpose({ load })
       <template #footer>
         <el-button @click="resourceDialog = false">取消</el-button>
         <el-button type="primary" :loading="resourceSaving" @click="saveResource">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 场景配置词条导入 -->
+    <el-dialog v-model="scenarioDialog" :title="`导入场景词条 · ${activeScenario?.name ?? ''}`" width="560px">
+      <p class="et-dialog-hint">
+        填入的值会写入 <b>{{ envLabel(env) }}</b> 环境模板变量，所有项目共用；空值跳过。
+        敏感项加密保存，导入后在「模板变量」里可查看/修改。
+      </p>
+      <div class="et-dialog-grid">
+        <label v-for="k in activeScenario?.keys ?? []" :key="k.key" class="et-field et-field-wide">
+          <span>
+            <code class="mono">{{ k.key }}</code> · {{ k.label }}
+            <em v-if="k.required" class="et-required">必填</em>
+            <em v-if="scenarioKeyConfigured(k.key)" class="et-required ok">已配置</em>
+            <br>
+            <small class="et-muted">{{ k.description }}</small>
+          </span>
+          <el-input
+            v-model="scenarioValues[k.key]" size="small" class="mono"
+            :type="k.secret ? 'password' : 'text'" :show-password="k.secret"
+            :placeholder="k.secret ? (k.example ?? '敏感值') : (k.defaultValue ?? k.example ?? '')"
+          />
+        </label>
+      </div>
+      <template #footer>
+        <el-button @click="scenarioDialog = false">取消</el-button>
+        <el-button type="primary" :loading="scenarioSaving" @click="saveScenario">导入到模板</el-button>
       </template>
     </el-dialog>
 
@@ -1123,8 +1267,94 @@ defineExpose({ load })
   cursor: pointer;
   user-select: none;
 }
+.et-card-image {
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.et-cell-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.et-image {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.et-scenarios {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.et-scenario {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.et-scenario-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.et-scenario-head .et-muted {
+  display: block;
+  margin-top: 2px;
+  line-height: 1.5;
+}
+.et-scenario-side {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+.et-scenario-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.et-scenario-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.et-scenario-name {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.et-dialog-hint {
+  margin: 0 0 12px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+}
+.et-required {
+  margin-left: 4px;
+  font-size: 10px;
+  font-style: normal;
+  color: var(--warn);
+}
+.et-required.ok {
+  color: var(--success, #16a34a);
+}
 @media (max-width: 900px) {
   .et-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .et-scenarios {
     grid-template-columns: minmax(0, 1fr);
   }
 }

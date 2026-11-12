@@ -236,6 +236,8 @@ export interface EnvTemplateRow {
   missingCount: number
   varCount: number
   secretCount: number
+  /** 这套环境模板会拉起的中间件镜像（环境以镜像为身份，容器只是运行态） */
+  images: string[]
 }
 
 /** 中间件资源（密码只返回掩码）。 */
@@ -246,6 +248,8 @@ export interface EnvResourceView {
   name: string
   host: string
   port: number
+  /** 中间件镜像（如 mysql:8.0）；环境模板以镜像为身份 */
+  image: string | null
   /** 容器内端口（dev 用发布端口 / test 用容器内端口） */
   containerPort: number
   /** 共享网络内的地址（容器名） */
@@ -376,8 +380,56 @@ export function getEnvDetail(env: string): Promise<{
   template: EnvTemplate
   resources: EnvResourceView[]
   vars: EnvVariableView[]
+  /** 中间件类型 → 默认镜像（新增资源时预填） */
+  imageDefaults: Record<string, string>
 }> {
   return apiFetch(`/api/v1/settings/envs/${encodeURIComponent(env)}`)
+}
+
+// ---------------------------------------------------------------- 场景配置词条
+
+/** 场景配置词条：告诉用户/Agent「对接某个服务要填哪些变量」。 */
+export interface ScenarioKeyView {
+  key: string
+  label: string
+  description: string
+  secret: boolean
+  required: boolean
+  defaultValue: string | null
+  example: string | null
+  /** 当前环境模板里是否已有该键 */
+  configured: boolean
+  source: string | null
+}
+
+export interface ScenarioView {
+  id: string
+  name: string
+  summary: string
+  keys: ScenarioKeyView[]
+  configuredCount: number
+}
+
+export interface ScenarioImportResult {
+  ok: boolean
+  scenario: string
+  env: string
+  imported: string[]
+  skipped: string[]
+}
+
+export function listScenarios(env: string): Promise<ScenarioView[]> {
+  return apiFetch(`/api/v1/settings/scenarios?env=${encodeURIComponent(env)}`)
+}
+
+/** 把场景词条写入环境模板变量（只写入带值的键）。 */
+export function importScenario(
+  id: string, env: string, values: Record<string, string>
+): Promise<ScenarioImportResult> {
+  return apiFetch(`/api/v1/settings/scenarios/${encodeURIComponent(id)}/import`, {
+    method: 'POST',
+    body: JSON.stringify({ env, values })
+  })
 }
 
 export function saveEnvTemplate(
@@ -429,6 +481,8 @@ export function saveEnvResource(
     password?: string
     network?: string
     serverId?: string
+    /** 镜像（空则按类型取平台默认） */
+    image?: string
   }
 ): Promise<EnvResourceView> {
   return apiFetch(`/api/v1/settings/envs/${encodeURIComponent(env)}/resources`, {

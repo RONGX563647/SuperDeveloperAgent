@@ -26,12 +26,15 @@ import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvRuntime;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.MiddlewareImages;
 import top.rongx.agent.domain.env.RuntimeMode;
+import top.rongx.agent.domain.env.ScenarioCatalog;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.domain.port.PipelineEngine;
@@ -104,6 +107,8 @@ public class EnvironmentController {
                     .filter(r -> "STOPPED".equals(r.status())).count());
             row.put("missingCount", resources.stream()
                     .filter(r -> "MISSING".equals(r.status())).count());
+            // 模板以镜像为身份：卡片直接展示这套环境会拉起哪些镜像，容器只是运行态。
+            row.put("images", imagesOf(resources));
             var vars = envStore.envVars(t.env());
             row.put("varCount", vars.size());
             row.put("secretCount", vars.stream().filter(v -> v.secret()).count());
@@ -118,11 +123,13 @@ public class EnvironmentController {
         // 每次打开详情时把中间件连接信息同步成模板变量（幂等），
         // 让"发现/导入"得到的账号密码可以直接看到、也可以在部署时注入。
         syncResourceVars(env);
-        return Map.of(
-                "template", envStore.template(env).orElseThrow(() ->
-                        new IllegalArgumentException("环境不存在：" + env)),
-                "resources", envStore.resources(env).stream().map(this::resourceView).toList(),
-                "vars", envStore.envVars(env));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("template", envStore.template(env).orElseThrow(() ->
+                new IllegalArgumentException("环境不存在：" + env)));
+        out.put("resources", envStore.resources(env).stream().map(this::resourceView).toList());
+        out.put("vars", envStore.envVars(env));
+        out.put("imageDefaults", MiddlewareImages.defaultsByKind());
+        return out;
     }
 
     @PutMapping("/envs/{env}")
@@ -143,6 +150,84 @@ public class EnvironmentController {
         // 形态/命名空间变化会改变中间件寻址，变量必须跟着重算。
         syncResourceVars(env);
         return envStore.template(env).orElseThrow();
+    }
+
+    // ---------------------------------------------------------------- 场景配置词条
+
+    /**
+     * 内置场景配置词条 + 当前环境是否已配置该键。
+     *
+     * <p>只返回键名、说明与是否已配置，不返回值；Agent 通过同一份目录（{@code config_catalog}）读取。
+     */
+    @GetMapping("/scenarios")
+    public List<Map<String, Object>> scenarios(@RequestParam(defaultValue = "dev") String env) {
+        requireRead();
+        Map<String, String> present = new LinkedHashMap<>();
+        for (EnvVariable v : envStore.envVars(env)) {
+            present.put(v.key(), v.source());
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ScenarioCatalog.Scenario scenario : ScenarioCatalog.all()) {
+            List<Map<String, Object>> keys = new ArrayList<>();
+            for (ScenarioCatalog.Key k : scenario.keys()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("key", k.key());
+                row.put("label", k.label());
+                row.put("description", k.description());
+                row.put("secret", k.secret());
+                row.put("required", k.required());
+                row.put("defaultValue", k.defaultValue());
+                row.put("example", k.example());
+                row.put("configured", present.containsKey(k.key()));
+                row.put("source", present.get(k.key()));
+                keys.add(row);
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", scenario.id());
+            row.put("name", scenario.name());
+            row.put("summary", scenario.summary());
+            row.put("keys", keys);
+            row.put("configuredCount",
+                    keys.stream().filter(k -> Boolean.TRUE.equals(k.get("configured"))).count());
+            out.add(row);
+        }
+        return out;
+    }
+
+    /**
+     * 把某个场景的词条写入环境模板变量。
+     *
+     * <p>只写入请求里带值的键，空值跳过（不落空变量，避免部署时注入空串）；
+     * 敏感标记取自词条定义，值与项目密钥一样加密保存。
+     */
+    @PostMapping("/scenarios/{id}/import")
+    public Map<String, Object> importScenario(@PathVariable String id,
+                                              @RequestBody Map<String, Object> body) {
+        requireWrite();
+        ScenarioCatalog.Scenario scenario = ScenarioCatalog.find(id).orElseThrow(() ->
+                new IllegalArgumentException("未知场景：" + id));
+        String env = EnvNames.normalize(str(body, "env", "dev"));
+        Object raw = body == null ? null : body.get("values");
+        Map<?, ?> values = raw instanceof Map<?, ?> map ? map : Map.of();
+        List<String> imported = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+        for (ScenarioCatalog.Key k : scenario.keys()) {
+            Object value = values.get(k.key());
+            String text = value == null ? null : String.valueOf(value).trim();
+            if (text == null || text.isBlank()) {
+                skipped.add(k.key());
+                continue;
+            }
+            envStore.saveEnvVar(env, k.key(), text, k.secret(), "TEMPLATE");
+            imported.add(k.key());
+        }
+        if (imported.isEmpty()) {
+            throw new IllegalArgumentException("至少填写一项配置值后再导入");
+        }
+        log.info("[audit] 导入场景配置 scenario={} env={} keys={} by={}",
+                id, env, imported, currentUser.requireUserId());
+        return Map.of("ok", true, "scenario", id, "env", env,
+                "imported", imported, "skipped", skipped);
     }
 
     // ---------------------------------------------------------------- 发现 / 导入
@@ -211,7 +296,7 @@ public class EnvironmentController {
                 str(body, "password", null),
                 str(body, "network", null),
                 str(body, "serverId", null),
-                "MANUAL", false, 0, null));
+                "MANUAL", false, 0, null, str(body, "image", null)));
         syncResourceVars(env);
         return resourceView(saved);
     }
@@ -725,6 +810,7 @@ public class EnvironmentController {
         out.put("network", r.network());
         out.put("serverId", r.serverId());
         out.put("source", r.source());
+        out.put("image", r.displayImage());
         out.put("running", r.running());
         out.put("status", r.status());
         out.put("missingFields", r.missingFields());
@@ -734,6 +820,15 @@ public class EnvironmentController {
     }
 
     // ---------------------------------------------------------------- 工具
+
+    /** 环境模板的镜像清单（去重；没有登记资源时返回空，不假装已配置）。 */
+    private static List<String> imagesOf(List<EnvResource> resources) {
+        return resources.stream()
+                .map(EnvResource::displayImage)
+                .filter(image -> image != null && !image.isBlank())
+                .distinct()
+                .toList();
+    }
 
     private void requireRead() {
         currentUser.checkPermission("settings:read");
