@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
+import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.resource.PathResourceResolver;
 
@@ -31,6 +32,15 @@ public class StaticWebConfig implements WebMvcConfigurer {
     }
 
     @Override
+    public void addViewControllers(ViewControllerRegistry registry) {
+        if (dist == null || !Files.isRegularFile(dist.resolve("index.html"))) {
+            return;
+        }
+        // 外部目录托管不会自动生成 WelcomePage，必须显式把 "/" 指到入口页
+        registry.addViewController("/").setViewName("forward:/index.html");
+    }
+
+    @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         if (dist == null || !Files.isRegularFile(dist.resolve("index.html"))) {
             return;
@@ -50,6 +60,10 @@ public class StaticWebConfig implements WebMvcConfigurer {
                         Resource requested = location.createRelative(resourcePath);
                         if (requested.exists() && requested.isReadable()) {
                             return requested;
+                        }
+                        // 带扩展名的静态资源缺失就是 404，别把 JS/CSS 伪装成 HTML
+                        if (resourcePath.contains(".")) {
+                            return null;
                         }
                         // SPA history 路由：未知路径回退到入口页，由前端路由接管
                         return location.createRelative("index.html");
