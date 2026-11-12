@@ -1,5 +1,6 @@
 import { computed, shallowRef } from 'vue'
 import { fsLs, type FsEntry, type ProjectRow } from '../../api/project'
+import { errorMessage } from '../../utils/feedback'
 
 /** 树节点模型：project 根 / dir / file 三种；目录懒加载 fsLs。 */
 export interface TreeNode {
@@ -72,7 +73,7 @@ export function useProjectTree(projects: () => ProjectRow[]) {
       }))
       node.loaded = true
     } catch (e) {
-      node.error = e instanceof Error ? e.message : '加载失败'
+      node.error = errorMessage(e, '加载失败')
     } finally {
       node.loading = false
     }

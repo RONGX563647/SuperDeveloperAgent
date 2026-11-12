@@ -1,8 +1,6 @@
 package top.rongx.agent.executor;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,6 +13,7 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ServiceLease;
+import top.rongx.agent.domain.net.PortProbe;
 
 /**
  * 开发环境本机托管：后端 {@code java -jar} + 前端 dist（Node 静态服务器），全部跑在宿主机。
@@ -328,7 +327,7 @@ public class LocalDevHostDeployer {
     private String awaitBackend(Process process, int port) {
         long deadline = System.currentTimeMillis() + BACKEND_READY_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
-            if (portOpen(port)) {
+            if (PortProbe.open("127.0.0.1", port)) {
                 return null;
             }
             if (!process.isAlive()) {
@@ -342,7 +341,7 @@ public class LocalDevHostDeployer {
     private String awaitFrontend(Process process, int port) {
         long deadline = System.currentTimeMillis() + FRONTEND_READY_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
-            if (portOpen(port)) {
+            if (PortProbe.open("127.0.0.1", port)) {
                 return null;
             }
             if (!process.isAlive()) {
@@ -351,18 +350,6 @@ public class LocalDevHostDeployer {
             sleep(300);
         }
         return "等待 " + (FRONTEND_READY_TIMEOUT_MS / 1000) + " 秒后端口仍未监听";
-    }
-
-    private static boolean portOpen(int port) {
-        if (port <= 0) {
-            return false;
-        }
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", port), 800);
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
     }
 
     private static void sleep(long ms) {

@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import top.rongx.agent.domain.error.DomainException;
 
 /**
  * 本地目录浏览接口（供前端"选择本地文件夹"）。
@@ -82,7 +83,7 @@ public class FsBrowserController {
             }
         }
         if (!Files.isDirectory(normalized)) {
-            throw new IllegalArgumentException("目录不存在：" + dir);
+            throw DomainException.notFound("目录不存在：" + dir);
         }
         List<Entry> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(normalized)) {

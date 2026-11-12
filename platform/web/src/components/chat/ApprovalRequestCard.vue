@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getChange, getChangePatch, confirmChange, applyChange } from '../../api/change'
 import type { ChangePatchView, ChangeView } from '../../types'
+import { notifyError } from '../../utils/feedback'
 
 /**
  * 变更确认卡（信息结构对齐 ruoyi-copilot 的 ApprovalRequestCard + 本项目 ConfirmTokenService）：
@@ -39,7 +40,7 @@ async function load(): Promise<void> {
     applyLog.value = null
     password.value = ''
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载变更失败')
+    notifyError(error, '加载变更失败')
   }
 }
 
@@ -50,7 +51,7 @@ async function doConfirm(): Promise<void> {
     confirmToken.value = result.confirmToken
     ElMessage.success('已确认，令牌 5 分钟内有效')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '确认失败')
+    notifyError(error, '确认失败')
   }
 }
 
@@ -64,7 +65,7 @@ async function doApply(): Promise<void> {
     ElMessage.success(`变更执行完毕：${result.status}`)
     emit('applied', result)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '执行失败')
+    notifyError(error, '执行失败')
   } finally {
     applyBusy.value = false
   }

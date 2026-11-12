@@ -15,6 +15,8 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.gateway.auth.CurrentUser;
 
+import static top.rongx.agent.gateway.web.JsonBody.str;
+
 /**
  * 项目环境变量（部署时注入容器，不进 pipeline.yml / 仓库）。
  *
@@ -101,8 +103,4 @@ public class ProjectEnvController {
         return value;
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? null : String.valueOf(value);
-    }
 }

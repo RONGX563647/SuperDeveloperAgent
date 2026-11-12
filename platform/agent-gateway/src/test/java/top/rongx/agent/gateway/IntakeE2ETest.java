@@ -11,6 +11,7 @@ import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.executor.BuiltInPipelineEngine;
 import top.rongx.agent.executor.DockerActionRunner;
 import top.rongx.agent.executor.DockerSandbox;
+import top.rongx.agent.executor.PipelineEngineConfig;
 import top.rongx.agent.executor.ProcessActionRunner;
 import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.infra.recipe.RecipeActionResolver;
@@ -104,8 +105,10 @@ class IntakeE2ETest {
                 "1g", "1", 256, "1000:1000");
         boolean dockerReady = sandbox.available();
         Assumptions.assumeTrue(dockerReady, "Docker 不可用，跳过引擎构建断言");
-        PipelineEngine engine = new BuiltInPipelineEngine(new RecipeActionResolver(),
-                new DockerActionRunner(sandbox), new ProcessActionRunner(), ws);
+        PipelineEngine engine = new BuiltInPipelineEngine(PipelineEngineConfig
+                .builder(new RecipeActionResolver(), new DockerActionRunner(sandbox),
+                        new ProcessActionRunner(), ws)
+                .build());
 
         // ci/pipeline.yml 的 name=release → pipelines() 白名单应含它
         assertTrue(engine.pipelines("E2E").contains("release"),

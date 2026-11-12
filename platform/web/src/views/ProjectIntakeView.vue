@@ -15,6 +15,7 @@ import DirPickerDialog from '../components/DirPickerDialog.vue'
 import GiteeRepoPicker from '../components/GiteeRepoPicker.vue'
 import { appStore } from '../stores/app'
 import { applySelection } from '../utils/projectId'
+import { notifyError } from '../utils/feedback'
 
 /**
  * 项目接入向导：
@@ -163,7 +164,7 @@ async function submit() {
     timer = setInterval(poll, 2000)
     void poll()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '提交失败')
+    notifyError(e, '提交失败')
   }
 }
 

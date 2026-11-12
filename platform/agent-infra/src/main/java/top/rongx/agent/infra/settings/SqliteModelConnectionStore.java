@@ -1,27 +1,24 @@
 package top.rongx.agent.infra.settings;
 
-import java.nio.file.Path;
-import java.security.SecureRandom;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.ModelConnection;
 import top.rongx.agent.domain.settings.ModelConnectionRepository;
+import top.rongx.agent.infra.persistence.SqliteStore;
 import top.rongx.agent.infra.security.SecretBox;
 
 /**
  * 模型连接配置（SQLite）：API Key AES-GCM 加密落库，接口只回掩码。
  */
 @Repository
-public class SqliteModelConnectionStore implements ModelConnectionRepository {
+public class SqliteModelConnectionStore extends SqliteStore implements ModelConnectionRepository {
 
     private static final String SCHEMA = """
             CREATE TABLE IF NOT EXISTS model_connections (
@@ -50,28 +47,13 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
             + "model_name, temperature, max_iters, enabled, is_default, last_test_at, last_test_ok, "
             + "last_test_msg, last_test_latency_ms, updated_by, updated_at";
 
-    private final Path dbFile;
     private final SecretBox secretBox;
 
     public SqliteModelConnectionStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
+        super(workspaceRoot, SCHEMA, "model_connections");
         this.secretBox = secretBox;
-        initSchema();
-    }
-
-    private void initSchema() {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
-            st.executeUpdate();
-        } catch (SQLException e) {
-            throw new IllegalStateException("model_connections 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
     }
 
     @Override
@@ -122,32 +104,21 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
 
     @Override
     public ModelConnection save(ModelConnectionView v, String apiKey, String updatedBy) {
-        String id = v.id() == null || v.id().isBlank() ? newId() : v.id();
+        String id = v.id() == null || v.id().isBlank() ? newId("mdl") : v.id();
         long now = System.currentTimeMillis();
-        try (Connection conn = open()) {
-            conn.setAutoCommit(false);
-            try {
-                boolean exists = exists(conn, id);
-                if (v.isDefault()) {
-                    clearDefault(conn);
-                }
-                SecretBox.Sealed sealed = apiKey == null || apiKey.isBlank()
-                        ? null : secretBox.encrypt(apiKey);
-                if (exists) {
-                    update(conn, v, id, sealed, updatedBy, now);
-                } else {
-                    insert(conn, v, id, sealed, updatedBy, now);
-                }
-                conn.commit();
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
+        inTransaction("模型保存", conn -> {
+            boolean exists = exists(conn, id);
+            if (v.isDefault()) {
+                clearDefault(conn);
             }
-        } catch (SQLException e) {
-            throw new IllegalStateException("模型保存失败：" + e.getMessage(), e);
-        }
+            SecretBox.Sealed sealed = apiKey == null || apiKey.isBlank()
+                    ? null : secretBox.encrypt(apiKey);
+            if (exists) {
+                update(conn, v, id, sealed, updatedBy, now);
+            } else {
+                insert(conn, v, id, sealed, updatedBy, now);
+            }
+        });
         return find(id).orElseThrow();
     }
 
@@ -326,17 +297,5 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
                 nullableLong(rs, "last_test_latency_ms"),
                 rs.getString("updated_by"),
                 rs.getLong("updated_at"));
-    }
-
-    /** SQLite 的 INTEGER 可能映射为 Integer/Long，统一按 Number 读取。 */
-    private static Long nullableLong(ResultSet rs, String column) throws SQLException {
-        Object value = rs.getObject(column);
-        return value == null ? null : ((Number) value).longValue();
-    }
-
-    private String newId() {
-        byte[] raw = new byte[4];
-        new SecureRandom().nextBytes(raw);
-        return "mdl-" + HexFormat.of().formatHex(raw);
     }
 }

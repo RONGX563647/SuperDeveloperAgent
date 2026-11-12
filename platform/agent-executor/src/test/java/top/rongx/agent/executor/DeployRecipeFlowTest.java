@@ -176,8 +176,13 @@ class DeployRecipeFlowTest {
         PipelineDefStore store = new MemoryDefStore(workspace.resolve("defs"));
         PipelineDefinitionResolver resolver = new PipelineDefinitionResolver(
                 store, scaffolder(), null, recipes);
-        return new BuiltInPipelineEngine(RESOLVER, HOST, HOST, workspace,
-                RunHistoryStore.disabled(), "ci", locator(repo), alwaysOkDeployer(), resolver, recipes);
+        return new BuiltInPipelineEngine(PipelineEngineConfig
+                .builder(RESOLVER, HOST, HOST, workspace)
+                .repoLocator(locator(repo))
+                .deployers(alwaysOkDeployer())
+                .resolver(resolver)
+                .recipeStore(recipes)
+                .build());
     }
 
     /** 只验证"跑通后固化"的编排语义：部署本身用桩，避免依赖 Docker。 */

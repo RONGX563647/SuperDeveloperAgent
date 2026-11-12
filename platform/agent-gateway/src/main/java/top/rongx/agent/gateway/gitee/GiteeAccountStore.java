@@ -3,7 +3,6 @@ package top.rongx.agent.gateway.gitee;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -18,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import top.rongx.agent.infra.persistence.SqliteStore;
 
 /**
  * Gitee 账号绑定存储：token 以 AES-256-GCM 加密落 SQLite（按平台主密钥加密）。
@@ -31,7 +31,7 @@ import org.springframework.stereotype.Service;
  * </ul>
  */
 @Service
-public class GiteeAccountStore implements AutoCloseable {
+public class GiteeAccountStore extends SqliteStore implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(GiteeAccountStore.class);
     private static final String TABLE = """
@@ -45,15 +45,12 @@ public class GiteeAccountStore implements AutoCloseable {
             )
             """;
 
-    private final Path dbFile;
     private final SecretKey masterKey;
 
     public GiteeAccountStore(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
                              @Value("${agent.security.master-key:}") String masterKeyB64) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
+        super(workspaceRoot, TABLE, "gitee_accounts");
         this.masterKey = resolveMasterKey(masterKeyB64);
-        initSchema();
     }
 
     /** 主密钥：环境变量优先（Base64 AES key）；否则用本地密钥文件（首次生成）。 */
@@ -64,7 +61,7 @@ public class GiteeAccountStore implements AutoCloseable {
                 return new SecretKeySpec(raw, "AES");
             }
             // 本地密钥文件：与 db 同目录（data/ 已 gitignore）
-            Path keyFile = dbFile.getParent().resolve("platform.key");
+            Path keyFile = dbFile().getParent().resolve("platform.key");
             if (java.nio.file.Files.isRegularFile(keyFile)) {
                 byte[] raw = Base64.getDecoder().decode(
                         java.nio.file.Files.readString(keyFile).trim());
@@ -80,18 +77,6 @@ public class GiteeAccountStore implements AutoCloseable {
         } catch (Exception e) {
             throw new IllegalStateException("主密钥初始化失败：" + e.getMessage(), e);
         }
-    }
-
-    private void initSchema() {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(TABLE)) {
-            st.executeUpdate();
-        } catch (SQLException e) {
-            throw new IllegalStateException("gitee_accounts 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
     }
 
     // ---------------------------------------------------------------- 加解密

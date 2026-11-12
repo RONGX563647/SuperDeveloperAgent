@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvTemplate;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
@@ -279,11 +280,12 @@ public class EnvironmentDiscoveryService {
                 throw new IllegalArgumentException("命令超时：" + String.join(" ", argv));
             }
             if (p.exitValue() != 0) {
-                throw new IllegalArgumentException("Docker 不可用或命令失败：" + out.trim());
+                throw DomainException.unavailable(
+                        "Docker 不可用或命令失败：" + out.trim(), null);
             }
             return List.of(out.split("\\R"));
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法执行 docker：" + e.getMessage(), e);
+            throw DomainException.unavailable("无法执行 docker：" + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("发现被中断");

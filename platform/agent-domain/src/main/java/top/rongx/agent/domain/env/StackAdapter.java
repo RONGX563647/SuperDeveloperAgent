@@ -26,49 +26,10 @@ public final class StackAdapter {
             if (r == null) {
                 continue;
             }
-            switch (r.kind()) {
-                case "mysql", "mariadb" -> {
-                    put(out, "DB_HOST", r.host());
-                    put(out, "DB_PORT", String.valueOf(r.port()));
-                    put(out, "DB_NAME", r.databaseName());
-                    put(out, "DB_USERNAME", r.username());
-                    put(out, "DB_PASSWORD", r.password());
-                }
-                case "redis" -> {
-                    put(out, "REDIS_HOST", r.host());
-                    put(out, "REDIS_PORT", String.valueOf(r.port()));
-                    put(out, "REDIS_PASSWORD", r.password());
-                }
-                case "rabbitmq" -> {
-                    put(out, "RABBITMQ_HOST", r.host());
-                    put(out, "RABBITMQ_PORT", String.valueOf(r.port()));
-                    put(out, "RABBITMQ_USERNAME", r.username());
-                    put(out, "RABBITMQ_PASSWORD", r.password());
-                }
-                case "minio" -> {
-                    put(out, "MINIO_ENDPOINT", "http://" + r.host() + ":" + r.port());
-                    put(out, "MINIO_ACCESS_KEY", r.username());
-                    put(out, "MINIO_SECRET_KEY", r.password());
-                }
-                case "postgres" -> {
-                    put(out, "DB_HOST", r.host());
-                    put(out, "DB_PORT", String.valueOf(r.port()));
-                    put(out, "DB_NAME", r.databaseName());
-                    put(out, "DB_USERNAME", r.username());
-                    put(out, "DB_PASSWORD", r.password());
-                }
-                default -> {
-                    // 未知类型不猜变量
-                }
-            }
+            MiddlewareKind.of(r.kind())
+                    .ifPresent(kind -> out.putAll(kind.derive(r, r.host(), r.port())));
         }
         return out;
-    }
-
-    private static void put(Map<String, String> out, String key, String value) {
-        if (value != null && !value.isBlank()) {
-            out.put(key, value);
-        }
     }
 
     /**
@@ -188,22 +149,11 @@ public final class StackAdapter {
     }
 
     private static String hostKey(String kind) {
-        String k = kind == null ? "" : kind;
-        return switch (k) {
-            case "redis" -> "REDIS_HOST";
-            case "rabbitmq" -> "RABBITMQ_HOST";
-            case "minio" -> "MINIO_ENDPOINT";
-            default -> "DB_HOST";
-        };
+        return MiddlewareKind.of(kind).map(k -> k.hostKey).orElse("DB_HOST");
     }
 
     private static String portKey(String kind) {
-        String k = kind == null ? "" : kind;
-        return switch (k) {
-            case "redis" -> "REDIS_PORT";
-            case "rabbitmq" -> "RABBITMQ_PORT";
-            default -> "DB_PORT";
-        };
+        return MiddlewareKind.of(kind).map(k -> k.portKey).orElse("DB_PORT");
     }
 
     /** 从 {@code scheme://host:port/path} 里取出端口（无端口返回 0）。 */

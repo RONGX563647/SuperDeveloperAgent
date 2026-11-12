@@ -20,6 +20,9 @@ final class ProcessExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessExecutor.class);
 
+    /** 不感知取消的默认谓词（命令由超时兜底终止）。 */
+    static final BooleanSupplier NEVER = () -> false;
+
     /** 单次动作日志上限（字符）：只保留尾部，避免大构建撑爆内存。 */
     private static final int MAX_LOG_CHARS = 200_000;
 

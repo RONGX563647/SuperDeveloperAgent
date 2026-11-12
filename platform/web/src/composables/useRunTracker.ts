@@ -3,6 +3,7 @@ import {
   cancelRun, getRun, isTerminalStatus,
   type RunView
 } from '../api/pipeline'
+import { errorMessage } from '../utils/feedback'
 
 /**
  * 运行跟踪 composable：
@@ -53,7 +54,7 @@ export function useRunTracker(options: { onFinished?: (run: RunView) => void } =
       }
     } catch (e) {
       if (current !== generation) return
-      errorText.value = `状态刷新失败：${e instanceof Error ? e.message : String(e)}`
+      errorText.value = `状态刷新失败：${errorMessage(e, String(e))}`
       // 指数退避，最长 8s；不终止轮询
       backoff = Math.min(backoff * 2, 8000)
       schedule(id, backoff)
@@ -77,7 +78,7 @@ export function useRunTracker(options: { onFinished?: (run: RunView) => void } =
       else options.onFinished?.(data)
     } catch (e) {
       loading.value = false
-      errorText.value = `加载运行失败：${e instanceof Error ? e.message : String(e)}`
+      errorText.value = `加载运行失败：${errorMessage(e, String(e))}`
     }
   }
 
@@ -103,7 +104,7 @@ export function useRunTracker(options: { onFinished?: (run: RunView) => void } =
       }
       return true
     } catch (e) {
-      errorText.value = `取消失败：${e instanceof Error ? e.message : String(e)}`
+      errorText.value = `取消失败：${errorMessage(e, String(e))}`
       return false
     }
   }

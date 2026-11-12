@@ -1,8 +1,5 @@
 package top.rongx.agent.gateway.settings;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -15,6 +12,7 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
+import top.rongx.agent.domain.net.PortProbe;
 
 /**
  * dev 本地前后端服务的端口分配与生命周期管理。
@@ -59,7 +57,7 @@ public class LocalServiceManager {
             int port = lease == null ? 0 : lease.hostPort();
             String status = lease == null ? "UNKNOWN" : runtime.status(projectId, env, service);
             // 平台没在跑、但端口被别的进程占着：说清楚是"外部占用"，避免用户以为启动成功了
-            if (!"RUNNING".equals(status) && port > 0 && !free(port)) {
+            if (!"RUNNING".equals(status) && port > 0 && !PortProbe.free("127.0.0.1", port)) {
                 status = "EXTERNAL";
             }
             Map<String, Object> row = new LinkedHashMap<>();
@@ -124,7 +122,7 @@ public class LocalServiceManager {
         for (int i = 0; i < size; i++) {
             int offset = (preferred + i) % size;
             int candidate = base + offset;
-            if (used.contains(candidate) || !free(candidate)) {
+            if (used.contains(candidate) || !PortProbe.free("127.0.0.1", candidate)) {
                 continue;
             }
             return candidate;
@@ -158,20 +156,10 @@ public class LocalServiceManager {
         // 自己的端口：只有平台进程确实在跑才算可用；否则可能是外部进程占着，应换端口
         boolean mine = store.serviceLeases(projectId, env).stream()
                 .anyMatch(l -> l.service().equals(service) && l.hostPort() == port);
-        if (free(port)) {
+        if (PortProbe.free("127.0.0.1", port)) {
             return false;
         }
         return !(mine && "RUNNING".equals(runtime.status(projectId, env, service)));
-    }
-
-    private static boolean free(int port) {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(false);
-            socket.bind(new InetSocketAddress("127.0.0.1", port));
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
     }
 
     private static int basePort(String env, String service) {

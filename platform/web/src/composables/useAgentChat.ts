@@ -4,6 +4,7 @@ import { streamChatOnce } from '../api/sse'
 import type { AgentEvent, AgentProjection, ChatMessage, ToolActivity } from '../types'
 import { emptyAgentProjection, reduceAgentEvent } from '../state/agentEventReducer'
 import { addSessionCost, emptySessionCost } from '../utils/deepseekPricing'
+import { errorMessage } from '../utils/feedback'
 
 /**
  * 会话编排 composable（参考 ruoyi-copilot 的 useHarnessAgent 收敛而来）：
@@ -18,7 +19,7 @@ import { addSessionCost, emptySessionCost } from '../utils/deepseekPricing'
 export type ConnectionState = 'IDLE' | 'CONNECTING' | 'OPEN' | 'RECONNECTING' | 'CLOSED'
 
 interface UseAgentChatOptions {
-  /** 构造 ChatRequest 请求体（projectId/env/sessionId 由调用方持有）。 */
+  /** 构造聊天请求体（projectId/env/sessionId 由调用方持有）。 */
   buildRequest: (message: string) => Record<string, unknown>
   /** 请求路径，默认 /api/v1/chat。 */
   url?: string
@@ -122,7 +123,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
       )
     } catch (e) {
       // 流中断且无正文时给出提示；其余错误直接上抛给视图展示
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = errorMessage(e, String(e))
     } finally {
       // 流结束后若有未落盘的流式轮次，落成一条 assistant 消息
       const current = projection.value

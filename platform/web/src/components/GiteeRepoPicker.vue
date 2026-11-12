@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, Lock, RefreshRight, Search, User } from '@element-plus/icons-vue'
 import { giteeRepos, type GiteeRepo } from '../api/project'
+import { notifyError } from '../utils/feedback'
 
 /**
  * Gitee 仓库选择器（现代卡片列表）：
@@ -43,7 +44,7 @@ async function load() {
   try {
     repos.value = await giteeRepos(scope.value)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '获取仓库列表失败')
+    notifyError(e, '获取仓库列表失败')
     repos.value = []
   } finally {
     loading.value = false

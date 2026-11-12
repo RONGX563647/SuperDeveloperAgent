@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.ModelConnection;
@@ -18,6 +19,8 @@ import top.rongx.agent.domain.settings.ModelConnectionRepository;
 import top.rongx.agent.domain.settings.SshAccess;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.settings.ModelProbe;
+
+import static top.rongx.agent.gateway.web.JsonBody.str;
 
 /**
  * 设置：服务器配置 + 模型连接。
@@ -73,7 +76,7 @@ public class SettingsController {
     public Map<String, Object> deleteServer(@PathVariable String id) {
         requireWrite();
         DeployServer server = servers.find(id).orElseThrow(
-                () -> new IllegalArgumentException("服务器不存在：" + id));
+                () -> DomainException.notFound("服务器不存在：" + id));
         servers.delete(id);
         // 默认服务器也允许删除：否则只剩一台默认服务器时，删除按钮被禁用、
         // 「设默认」又不可用于它本身，用户会陷入谁都删不掉的死局。
@@ -90,7 +93,7 @@ public class SettingsController {
     @PostMapping("/servers/{id}/default")
     public Map<String, Object> defaultServer(@PathVariable String id) {
         requireWrite();
-        servers.find(id).orElseThrow(() -> new IllegalArgumentException("服务器不存在：" + id));
+        servers.find(id).orElseThrow(() -> DomainException.notFound("服务器不存在：" + id));
         servers.markDefault(id);
         return Map.of("ok", true);
     }
@@ -100,7 +103,7 @@ public class SettingsController {
     public Map<String, Object> testServer(@PathVariable String id) {
         requireWrite();
         DeployServer server = servers.find(id).orElseThrow(
-                () -> new IllegalArgumentException("服务器不存在：" + id));
+                () -> DomainException.notFound("服务器不存在：" + id));
         return runServerTest(server, servers.secretOf(id).orElse(null), id);
     }
 
@@ -202,7 +205,7 @@ public class SettingsController {
     public Map<String, Object> deleteModel(@PathVariable String id) {
         requireWrite();
         ModelConnection connection = models.find(id).orElseThrow(
-                () -> new IllegalArgumentException("模型不存在：" + id));
+                () -> DomainException.notFound("模型不存在：" + id));
         if (connection.isDefault()) {
             throw new IllegalStateException("默认模型不可删除，请先把其它模型设为默认");
         }
@@ -213,7 +216,7 @@ public class SettingsController {
     @PostMapping("/models/{id}/default")
     public Map<String, Object> defaultModel(@PathVariable String id) {
         requireWrite();
-        models.find(id).orElseThrow(() -> new IllegalArgumentException("模型不存在：" + id));
+        models.find(id).orElseThrow(() -> DomainException.notFound("模型不存在：" + id));
         models.markDefault(id);
         return Map.of("ok", true);
     }
@@ -223,7 +226,7 @@ public class SettingsController {
     public Map<String, Object> testModel(@PathVariable String id) {
         requireWrite();
         ModelConnection connection = models.find(id).orElseThrow(
-                () -> new IllegalArgumentException("模型不存在：" + id));
+                () -> DomainException.notFound("模型不存在：" + id));
         String apiKey = models.apiKeyOf(id).orElse("");
         ModelProbe.Result result = modelProbe.probe(
                 connection.baseUrl(), apiKey, connection.modelName());
@@ -314,8 +317,4 @@ public class SettingsController {
         currentUser.checkPermission("settings:write");
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? null : String.valueOf(value);
-    }
 }

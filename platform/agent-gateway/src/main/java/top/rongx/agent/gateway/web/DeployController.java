@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.deploy.DeployRecipe;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.run.StageStatus;
@@ -176,7 +177,7 @@ public class DeployController {
                                         @RequestParam int version) {
         currentUser.requireUserId();
         if (!recipes.activate(projectId, env, version)) {
-            throw new IllegalArgumentException("版本不存在：v" + version);
+            throw DomainException.notFound("版本不存在：v" + version);
         }
         return Map.of("ok", true, "env", env, "version", version);
     }

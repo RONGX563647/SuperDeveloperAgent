@@ -4,10 +4,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.Optional;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.deploy.HealthPath;
 import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
@@ -79,7 +81,7 @@ public class ServerDeployer implements Deployer {
         String remoteTar = server.remoteDir() + "/" + request.projectId() + ".tar";
         String container = DockerDeployer.containerName(request.projectId(), request.envName());
         StringBuilder log = new StringBuilder();
-        BooleanSupplierNever never = new BooleanSupplierNever();
+        BooleanSupplier never = ProcessExecutor.NEVER;
 
         try {
             Files.createDirectories(localTar.getParent());
@@ -142,7 +144,7 @@ public class ServerDeployer implements Deployer {
 
             return DeployResult.ok(DeployTarget.SERVER,
                     "http://" + server.host() + ":" + hostPort
-                            + safePath(request.healthPath()),
+                            + HealthPath.normalize(request.healthPath()),
                     server.host() + ":" + container, redact(log));
         } finally {
             try {
@@ -206,21 +208,6 @@ public class ServerDeployer implements Deployer {
             return "0000000";
         }
         return sha.length() > 7 ? sha.substring(0, 7) : sha;
-    }
-
-    private static String safePath(String healthPath) {
-        if (healthPath == null || healthPath.isBlank()) {
-            return "/";
-        }
-        return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
-    }
-
-    /** 部署命令不支持取消（语义上由超时兜底）。 */
-    private static final class BooleanSupplierNever implements java.util.function.BooleanSupplier {
-        @Override
-        public boolean getAsBoolean() {
-            return false;
-        }
     }
 
     /** 空仓库：一律返回"未配置"。 */

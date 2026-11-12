@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Connection, Link, UserFilled } from '@element-plus/icons-vue'
 import {
   giteeBind, giteeBindStatus, giteeOauthStart, giteeRepos, giteeUnbind,
   type GiteeBinding, type GiteeRepo
 } from '../../api/project'
+import { notifyError, confirmAction } from '../../utils/feedback'
 
 /**
  * 代码仓库授权面板（从「接入项目」页迁移过来）：Gitee 账号绑定 + OAuth + 私人令牌。
@@ -54,7 +55,7 @@ async function bindPat(): Promise<void> {
     patToken.value = ''
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '绑定失败')
+    notifyError(e, '绑定失败')
   } finally {
     patBusy.value = false
   }
@@ -67,24 +68,21 @@ async function oauthStart(): Promise<void> {
     window.open(r.authorizeUrl, '_blank', 'noopener')
     ElMessage.info('已打开 Gitee 授权页；授权成功后回到本页点「刷新」')
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '无法发起授权')
+    notifyError(e, '无法发起授权')
   } finally {
     oauthBusy.value = false
   }
 }
 
 async function unbind(): Promise<void> {
-  const ok = await ElMessageBox.confirm(
-    '解绑后需要重新授权才能浏览/克隆私有仓库。确认解绑？', '解绑 Gitee',
-    { confirmButtonText: '解绑', cancelButtonText: '取消', type: 'warning' }
-  ).then(() => true).catch(() => false)
+  const ok = await confirmAction('解绑后需要重新授权才能浏览/克隆私有仓库。确认解绑？', '解绑 Gitee')
   if (!ok) return
   try {
     await giteeUnbind()
     ElMessage.success('已解绑')
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '解绑失败')
+    notifyError(e, '解绑失败')
   }
 }
 

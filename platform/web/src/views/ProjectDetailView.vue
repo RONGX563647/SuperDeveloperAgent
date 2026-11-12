@@ -6,6 +6,7 @@ import { CaretRight, RefreshRight } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import { gitStatus, gitSync, removeWorktree, type GitStatus, type WorktreeRow } from '../api/project'
 import { appStore } from '../stores/app'
+import { notifyError } from '../utils/feedback'
 
 /**
  * 项目详情：git 状态卡 / worktree 列表 / 操作区。
@@ -37,7 +38,7 @@ async function load() {
   try {
     status.value = await gitStatus(projectId)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载失败')
+    notifyError(e, '加载失败')
   } finally {
     loading.value = false
   }
@@ -50,7 +51,7 @@ async function doSync() {
     ElMessage.success('已同步（fetch）')
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '同步失败')
+    notifyError(e, '同步失败')
   } finally {
     syncing.value = false
   }
@@ -62,7 +63,7 @@ async function cleanup(wt: WorktreeRow) {
     ElMessage.success(`已清理 ${wt.name}`)
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '清理失败')
+    notifyError(e, '清理失败')
   }
 }
 

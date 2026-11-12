@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Folder, House, Monitor, Search, Document, Download, Star, ArrowUp, Check } from '@element-plus/icons-vue'
 import { fsLs, fsRoots, type FsEntry, type FsListing, type FsShortcut } from '../api/project'
+import { notifyError } from '../utils/feedback'
 
 /**
  * 现代目录选择器（VS Code / GitHub Desktop 风格）：
@@ -100,7 +101,7 @@ async function load(path?: string) {
     await nextTick()
     listRef.value?.focus()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '读取目录失败')
+    notifyError(e, '读取目录失败')
   } finally {
     loading.value = false
   }

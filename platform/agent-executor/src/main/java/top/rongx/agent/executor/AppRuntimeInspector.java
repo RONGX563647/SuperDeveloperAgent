@@ -232,7 +232,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
     private Cmd docker(List<String> argv) {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
-                new ProcessExecutor().exec(CWD, argv, TIMEOUT_MS, sink, () -> false);
+                new ProcessExecutor().exec(CWD, argv, TIMEOUT_MS, sink, ProcessExecutor.NEVER);
         return new Cmd(outcome.exitCode(), ProcessExecutor.redact(sink.toString()));
     }
 

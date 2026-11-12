@@ -4,19 +4,6 @@ import type { SessionCost, UsageCost } from './utils/deepseekPricing'
 
 export type { SessionCost, UsageCost }
 
-export interface ChatRequest {
-  projectId: string
-  env: string
-  sessionId?: string
-  message: string
-}
-
-/** 一条 SSE 事件：type 为后端事件类名，payload 为序列化后的事件体。 */
-export interface AgentEventDto {
-  type: string
-  payload: Record<string, unknown>
-}
-
 export type MessageRole = 'user' | 'assistant' | 'step' | 'error'
 
 export interface ChatMessage {

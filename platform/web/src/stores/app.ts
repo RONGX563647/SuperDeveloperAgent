@@ -1,4 +1,5 @@
 import { reactive, watch } from 'vue'
+import { readJson, readRaw, writeJson, writeRaw } from '../utils/storage'
 
 /** 执行策略：只读诊断 / 每次确认 / 自动展开确认卡（后端变更单仍是最终门禁）。 */
 export type PermissionMode = 'readonly' | 'confirm' | 'auto'
@@ -20,53 +21,34 @@ const MAX_SESSIONS = 30
 const DEFAULT_PROJECT = 'RY'
 
 function loadSessions(): SessionItem[] {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY)
-    const parsed = raw
-      ? (JSON.parse(raw) as Array<Partial<SessionItem> & { id: string }>)
-      : []
-    // 旧版本没有 projectId：统一归到默认工作区，避免历史会话散落在「未分组」里；
-    // 同时清掉旧逻辑在每次进入对话页时登记的空白「新会话」，否则侧栏会被占位条目淹没。
-    return parsed
-      .map((s) => ({
-        id: s.id,
-        title: s.title ?? '新会话',
-        at: s.at ?? Date.now(),
-        projectId: s.projectId ?? DEFAULT_PROJECT
-      }))
-      .filter((s) => s.title.trim() && s.title !== '新会话')
-  } catch {
-    return []
-  }
+  const parsed = readJson<Array<Partial<SessionItem> & { id: string }>>(SESSION_KEY, [])
+  // 旧版本没有 projectId：统一归到默认工作区，避免历史会话散落在「未分组」里；
+  // 同时清掉旧逻辑在每次进入对话页时登记的空白「新会话」，否则侧栏会被占位条目淹没。
+  return parsed
+    .map((s) => ({
+      id: s.id,
+      title: s.title ?? '新会话',
+      at: s.at ?? Date.now(),
+      projectId: s.projectId ?? DEFAULT_PROJECT
+    }))
+    .filter((s) => s.title.trim() && s.title !== '新会话')
 }
 
 function loadPermission(): PermissionMode {
-  try {
-    const value = localStorage.getItem(PERMISSION_KEY)
-    return value === 'readonly' || value === 'confirm' || value === 'auto'
-      ? value
-      : 'confirm'
-  } catch {
-    return 'confirm'
-  }
+  const value = readRaw(PERMISSION_KEY)
+  return value === 'readonly' || value === 'confirm' || value === 'auto'
+    ? value
+    : 'confirm'
 }
 
 /** 记住上一次使用的环境；没有记录或值非法时回退 test。 */
 function loadEnv(): string {
-  try {
-    const value = localStorage.getItem(ENV_KEY)
-    return value === 'dev' || value === 'test' || value === 'prod' ? value : 'test'
-  } catch {
-    return 'test'
-  }
+  const value = readRaw(ENV_KEY)
+  return value === 'dev' || value === 'test' || value === 'prod' ? value : 'test'
 }
 
 function persist(sessions: SessionItem[]) {
-  try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(sessions))
-  } catch {
-    // 隐私模式下不可写，忽略
-  }
+  writeJson(SESSION_KEY, sessions)
 }
 
 function newId(): string {
@@ -75,19 +57,11 @@ function newId(): string {
 
 /** 记住当前会话 id：刷新页面后仍能回到同一会话与历史消息。 */
 function loadCurrentSession(): string {
-  try {
-    return localStorage.getItem(CURRENT_SESSION_KEY) ?? ''
-  } catch {
-    return ''
-  }
+  return readRaw(CURRENT_SESSION_KEY)
 }
 
 function persistCurrentSession(id: string) {
-  try {
-    localStorage.setItem(CURRENT_SESSION_KEY, id)
-  } catch {
-    // 隐私模式下不可写，忽略
-  }
+  writeRaw(CURRENT_SESSION_KEY, id)
 }
 
 /**
@@ -138,11 +112,7 @@ export const appStore = reactive({
   /** 切换执行策略。 */
   setPermission(mode: PermissionMode) {
     appStore.permission = mode
-    try {
-      localStorage.setItem(PERMISSION_KEY, mode)
-    } catch {
-      // 隐私模式下不可写，忽略
-    }
+    writeRaw(PERMISSION_KEY, mode)
   },
 
   /**
@@ -227,9 +197,5 @@ export const appStore = reactive({
  * 切换项目时若该项目不支持该环境，ChatView 会回退 test 并同样落盘。
  */
 watch(() => appStore.env, (value) => {
-  try {
-    localStorage.setItem(ENV_KEY, value)
-  } catch {
-    // 隐私模式下不可写，忽略
-  }
+  writeRaw(ENV_KEY, value)
 })

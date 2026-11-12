@@ -1,8 +1,6 @@
 package top.rongx.agent.gateway.web;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -23,7 +21,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import top.rongx.agent.domain.deploy.DeployDefaults;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
+
 import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvResource;
@@ -34,15 +34,18 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.env.StackAdapter;
-import top.rongx.agent.domain.port.PipelineDefStore;
+import top.rongx.agent.domain.error.DomainException;
+import top.rongx.agent.domain.net.PortProbe;
+import top.rongx.agent.domain.port.DeployDefaultsReader;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.settings.EnvBindingService;
 import top.rongx.agent.gateway.settings.EnvironmentDiscoveryService;
-import top.rongx.agent.executor.PipelineDefinition;
 import top.rongx.agent.gateway.settings.LocalServiceManager;
+
+import static top.rongx.agent.gateway.web.JsonBody.str;
 
 /**
  * 环境模板 / 中间件资源 / 环境变量 / 项目覆盖 / Agent 绑定。
@@ -64,7 +67,7 @@ public class EnvironmentController {
     private final EnvRuntime envRuntime;
     private final LocalServiceManager localServices;
     private final CurrentUser currentUser;
-    private final PipelineDefStore pipelineDefs;
+    private final DeployDefaultsReader deployDefaultsReader;
 
     /** 发现候选暂存：密码留在后端，前端只拿 candidateId。 */
     private final Map<String, EnvResource> candidates = new ConcurrentHashMap<>();
@@ -73,7 +76,7 @@ public class EnvironmentController {
                                  EnvBindingService bindings, DeployServerRepository servers,
                                  SshAccess ssh, EnvRuntime envRuntime,
                                  LocalServiceManager localServices, CurrentUser currentUser,
-                                 PipelineDefStore pipelineDefs) {
+                                 DeployDefaultsReader deployDefaultsReader) {
         this.envStore = envStore;
         this.discovery = discovery;
         this.bindings = bindings;
@@ -82,7 +85,7 @@ public class EnvironmentController {
         this.envRuntime = envRuntime;
         this.localServices = localServices;
         this.currentUser = currentUser;
-        this.pipelineDefs = pipelineDefs;
+        this.deployDefaultsReader = deployDefaultsReader;
     }
 
     // ---------------------------------------------------------------- 模板
@@ -121,7 +124,7 @@ public class EnvironmentController {
         syncResourceVars(env);
         return Map.of(
                 "template", envStore.template(env).orElseThrow(() ->
-                        new IllegalArgumentException("环境不存在：" + env)),
+                        DomainException.notFound("环境不存在：" + env)),
                 "resources", envStore.resources(env).stream().map(this::resourceView).toList(),
                 "vars", envStore.envVars(env));
     }
@@ -229,7 +232,7 @@ public class EnvironmentController {
     public Map<String, Object> checkResource(@PathVariable String env, @PathVariable String id) {
         requireRead();
         EnvResource r = envStore.resource(id).orElseThrow(() ->
-                new IllegalArgumentException("资源不存在：" + id));
+                DomainException.notFound("资源不存在：" + id));
         Health health = check(r);
         envStore.recordHealth(id, health.running(), health.error());
         EnvResource updated = envStore.resource(id).orElseThrow();
@@ -353,7 +356,7 @@ public class EnvironmentController {
     public Map<String, Object> revealVar(@PathVariable String env, @PathVariable String key) {
         requireReveal();
         String value = envStore.envVarValue(env, key).orElseThrow(() ->
-                new IllegalArgumentException("变量不存在：" + key));
+                DomainException.notFound("变量不存在：" + key));
         log.info("[audit] 查看环境变量明文 env={} key={} by={}", env, key,
                 currentUser.requireUserId());
         return Map.of("env", env, "key", key, "value", value);
@@ -421,7 +424,7 @@ public class EnvironmentController {
         out.put("network", e.network() == null ? "" : e.network());
         // 部署端口/健康路径以流水线定义为准（真正生效的是它），模板默认值只在没有定义时兜底，
         // 否则页面会显示一套、部署用另一套。
-        PipelineDefinition.DeploySpec deploy = pipelineDeploy(projectId);
+        DeployDefaults deploy = pipelineDeploy(projectId);
         boolean deployOverrides = deploy != null;
         out.put("defaultPort", deployOverrides && deploy.port() > 0 ? deploy.port() : e.defaultPort());
         out.put("healthPath", deployOverrides && deploy.healthPath() != null
@@ -440,11 +443,9 @@ public class EnvironmentController {
     }
 
     /** 读取平台侧流水线的 deploy 段；缺失或 YAML 不合法时返回 null（退回环境模板默认值）。 */
-    private PipelineDefinition.DeploySpec pipelineDeploy(String projectId) {
+    private DeployDefaults pipelineDeploy(String projectId) {
         try {
-            return pipelineDefs.read(projectId)
-                    .map(yaml -> PipelineDefinition.parse(yaml, "平台侧定义").deploy())
-                    .orElse(null);
+            return deployDefaultsReader.read(projectId);
         } catch (RuntimeException e) {
             log.debug("流水线定义解析失败，端口/健康路径退回环境模板 projectId={}：{}",
                     projectId, e.getMessage());
@@ -535,7 +536,7 @@ public class EnvironmentController {
         requireReveal();
         String value = envStore.effective(projectId, env).values().get(key);
         if (value == null) {
-            throw new IllegalArgumentException("变量不存在或没有值：" + key);
+            throw DomainException.notFound("变量不存在或没有值：" + key);
         }
         log.info("[audit] 查看项目注入变量 env={} project={} key={} by={}", env, projectId, key,
                 currentUser.requireUserId());
@@ -632,7 +633,7 @@ public class EnvironmentController {
     public EnvBinding binding(@PathVariable String projectId, @PathVariable String bindingId) {
         requireRead();
         return envStore.binding(bindingId).orElseThrow(() ->
-                new IllegalArgumentException("环境绑定不存在：" + bindingId));
+                DomainException.notFound("环境绑定不存在：" + bindingId));
     }
 
     // ---------------------------------------------------------------- 健康检查
@@ -666,12 +667,10 @@ public class EnvironmentController {
     }
 
     private static Health tcpHealth(EnvResource r) {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(r.host(), r.port()), 1500);
-            return new Health(true, null);
-        } catch (Exception e) {
-            return new Health(false, "TCP 连接失败 " + r.host() + ":" + r.port() + "：" + e.getMessage());
-        }
+        String failure = PortProbe.failure(r.host(), r.port(), 1500);
+        return failure == null
+                ? new Health(true, null)
+                : new Health(false, "TCP 连接失败 " + r.host() + ":" + r.port() + "：" + failure);
     }
 
     /** 容器"没启动"不是异常，只有读不到状态（docker 不可用/容器不存在）才记错误。 */
@@ -762,8 +761,4 @@ public class EnvironmentController {
         }
     }
 
-    private static String str(Map<String, Object> body, String key, String fallback) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? fallback : String.valueOf(value);
-    }
 }

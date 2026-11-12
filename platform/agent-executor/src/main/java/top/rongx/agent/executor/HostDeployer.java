@@ -10,6 +10,7 @@ import java.util.Optional;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.deploy.HealthPath;
 import top.rongx.agent.domain.port.Deployer;
 
 /**
@@ -147,7 +148,7 @@ public class HostDeployer implements Deployer {
                     .append(" release=").append(releaseSha)
                     .append(" port=").append(request.hostPort()).append('\n');
             return DeployResult.ok(DeployTarget.HOST,
-                    "http://127.0.0.1:" + request.hostPort() + safePath(request.healthPath()),
+                    "http://127.0.0.1:" + request.hostPort() + HealthPath.normalize(request.healthPath()),
                     releaseSha, ProcessExecutor.redact(log.toString()));
         } catch (IOException e) {
             return DeployResult.failed(DeployTarget.HOST, "E-502",
@@ -264,13 +265,6 @@ public class HostDeployer implements Deployer {
         } catch (IOException e) {
             return "";
         }
-    }
-
-    private static String safePath(String healthPath) {
-        if (healthPath == null || healthPath.isBlank()) {
-            return "/";
-        }
-        return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
     }
 
     /** 本次构建的前端产物：优先 platform/web/dist，其次任意 dist/index.html（排除依赖目录）。 */

@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { Operation } from '@element-plus/icons-vue'
 import type { TraceTurn } from '../../types'
+import { formatClock } from '../../utils/status'
 
 /**
  * 对话页右侧的回答定位刻度（参考 DSH 对话页的细轨）。
@@ -30,12 +31,6 @@ function duration(ms: number): string {
   if (ms < 1000) return `${Math.max(0, ms)}ms`
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
   return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
-}
-
-function time(at: number): string {
-  const d = new Date(at)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function isLast(turn: TraceTurn): boolean {
@@ -86,7 +81,7 @@ function locate(id: string): void {
 
     <!-- 悬停摘要：贴着刻度左侧，一条一段，不堆叠 -->
     <span v-if="hovered" class="tick-card">
-      <span class="card-head mono">第 {{ hovered.index }} 轮 · {{ time(hovered.at) }}</span>
+      <span class="card-head mono">第 {{ hovered.index }} 轮 · {{ formatClock(hovered.at) }}</span>
       <span class="card-q">{{ hovered.question || '（无文本）' }}</span>
       <span class="card-meta mono">
         {{ hovered.steps }} 步 · {{ hovered.tools }} 调用

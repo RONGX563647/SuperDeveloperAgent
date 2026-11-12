@@ -1,29 +1,26 @@
 <script setup lang="ts">
-import { nextTick, ref, useTemplateRef } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { CircleCheck, CircleClose, Plus, Star } from '@element-plus/icons-vue'
 import {
   createServer, deleteServer, listServers, setDefaultServer, testServerDraft,
-  updateServer, type DeployServer, type DeployServerInput, type TestResult
+  updateServer, type DeployServer, type DeployServerInput
 } from '../../api/settings'
+import { useInlineCrud } from '../../composables/useInlineCrud'
+import { errorMessage } from '../../utils/feedback'
 
 /**
  * 服务器配置面板：列表 + **内联表单**（不弹浮层）+ 测试连通性 + 设默认。
  * 表单直接嵌在卡片里，编辑态与列表同屏，符合"工作台式设置"。
  */
-const servers = ref<DeployServer[]>([])
-const loading = ref(false)
-
-const formOpen = ref(false)
-const saving = ref(false)
-const testing = ref(false)
-const testResult = ref<TestResult | null>(null)
-const editing = ref<DeployServer | null>(null)
-const form = ref<DeployServerInput>(emptyForm())
-const formRef = useTemplateRef<HTMLElement>('formRef')
-
-function emptyForm(): DeployServerInput {
-  return {
+const {
+  items: servers, loading, saving, testing, testResult, formOpen, editing, form, formRef,
+  load, openCreate, openEdit, closeForm, save, remove, runTest
+} = useInlineCrud<DeployServer, DeployServerInput>({
+  list: listServers,
+  create: createServer,
+  update: updateServer,
+  remove: deleteServer,
+  emptyForm: () => ({
     name: '',
     host: '',
     port: 22,
@@ -34,32 +31,8 @@ function emptyForm(): DeployServerInput {
     enabled: true,
     isDefault: false,
     secret: ''
-  }
-}
-
-async function load(): Promise<void> {
-  loading.value = true
-  try {
-    servers.value = await listServers()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载服务器失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-async function openCreate(): Promise<void> {
-  editing.value = null
-  form.value = emptyForm()
-  testResult.value = null
-  formOpen.value = true
-  await nextTick()
-  formRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-}
-
-async function openEdit(server: DeployServer): Promise<void> {
-  editing.value = server
-  form.value = {
+  }),
+  toForm: (server) => ({
     name: server.name,
     host: server.host,
     port: server.port,
@@ -70,79 +43,16 @@ async function openEdit(server: DeployServer): Promise<void> {
     enabled: server.enabled,
     isDefault: server.isDefault,
     secret: ''
-  }
-  testResult.value = null
-  formOpen.value = true
-  await nextTick()
-  formRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-}
-
-function closeForm(): void {
-  formOpen.value = false
-  testResult.value = null
-  editing.value = null
-}
-
-/**
- * 测试连接一律用「当前表单草稿」：
- * 编辑态若走 /servers/{id}/test，测的是数据库里第一次保存的旧配置，
- * 改了主机/端口/密码再点测试，结果仍是第一次的，看起来像结果被缓存。
- * 带上 id 后，留空的密钥由后端沿用已保存值，本次结果也会写回列表状态。
- */
-async function testCurrent(): Promise<void> {
-  testing.value = true
-  testResult.value = null
-  try {
-    testResult.value = await testServerDraft({
-      ...form.value,
-      id: editing.value?.id
-    })
-    await load()
-  } catch (e) {
-    testResult.value = {
-      ok: false,
-      latencyMs: 0,
-      message: e instanceof Error ? e.message : '测试失败'
-    }
-  } finally {
-    testing.value = false
-  }
-}
-
-async function save(): Promise<void> {
-  saving.value = true
-  try {
-    if (editing.value) {
-      await updateServer(editing.value.id, form.value)
-    } else {
-      await createServer(form.value)
-    }
-    ElMessage.success('已保存')
-    closeForm()
-    await load()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-async function remove(server: DeployServer): Promise<void> {
-  const tip = server.isDefault
+  }),
+  removeTip: (server) => server.isDefault
     ? `删除默认服务器「${server.name}」？删除后会自动把另一台启用服务器设为默认。`
-    : `删除服务器「${server.name}」？`
-  const ok = await ElMessageBox.confirm(
-    tip, '删除确认',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-  ).then(() => true).catch(() => false)
-  if (!ok) return
-  try {
-    await deleteServer(server.id)
-    ElMessage.success('已删除')
-    await load()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '删除失败')
-  }
+    : `删除服务器「${server.name}」？`,
+  messages: { load: '加载服务器失败', save: '保存失败', remove: '删除失败' }
+})
+
+/** 测试连接一律用「当前表单草稿」：带上 id 后留空的密钥由后端沿用已保存值。 */
+function testCurrent(): Promise<void> {
+  return runTest((draft, id) => testServerDraft({ ...draft, id }))
 }
 
 async function makeDefault(server: DeployServer): Promise<void> {
@@ -151,7 +61,7 @@ async function makeDefault(server: DeployServer): Promise<void> {
     ElMessage.success(`默认服务器：${server.name}`)
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '设置失败')
+    ElMessage.error(errorMessage(e, '设置失败'))
   }
 }
 

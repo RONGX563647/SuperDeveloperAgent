@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Delete, DocumentCopy, Hide, Plus, Refresh, Search, VideoPause, VideoPlay, View } from '@element-plus/icons-vue'
 import { ApiError } from '../../api/http'
 import {
@@ -13,6 +13,7 @@ import {
 import { appStore } from '../../stores/app'
 import { formatTime } from '../../utils/status'
 import { envLabel } from '../../utils/pipelineLabels'
+import { errorMessage, notifyError, confirmAction } from '../../utils/feedback'
 
 /**
  * 环境模板（dev / test / prod）：
@@ -78,7 +79,7 @@ async function loadSummary(): Promise<void> {
     rows.value = await listEnvTemplates()
   } catch (e) {
     rows.value = []
-    ElMessage.error(e instanceof Error ? e.message : '加载环境模板失败')
+    notifyError(e, '加载环境模板失败')
   }
 }
 
@@ -101,7 +102,7 @@ async function loadDetail(): Promise<void> {
     template.value = null
     resources.value = []
     vars.value = []
-    ElMessage.error(e instanceof Error ? e.message : '加载环境详情失败')
+    notifyError(e, '加载环境详情失败')
   } finally {
     loading.value = false
   }
@@ -129,7 +130,7 @@ async function saveSetting(): Promise<void> {
     await loadDetail()
     await loadSummary()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+    notifyError(e, '保存失败')
   } finally {
     savingTemplate.value = false
   }
@@ -153,7 +154,7 @@ async function checkOne(r: EnvResourceView): Promise<void> {
     }
     await loadSummary()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '检查失败')
+    notifyError(e, '检查失败')
   } finally {
     checkingId.value = ''
   }
@@ -178,7 +179,7 @@ async function checkAll(): Promise<void> {
           failed.push(r.name)
         }
       } catch (e) {
-        failed.push(`${r.name}（${e instanceof Error ? e.message : '检查失败'}）`)
+        failed.push(`${r.name}（${errorMessage(e, '检查失败')}）`)
       }
     }
     await loadSummary()
@@ -207,24 +208,21 @@ async function toggleRunning(r: EnvResourceView): Promise<void> {
     else ElMessage.error(result.message || '操作失败')
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '操作失败')
+    notifyError(e, '操作失败')
   } finally {
     runtimeBusyId.value = ''
   }
 }
 
 async function removeResource(r: EnvResourceView): Promise<void> {
-  const ok = await ElMessageBox.confirm(
-    `删除中间件 ${r.name}（${r.host}:${r.port}）？`, '删除中间件',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-  ).then(() => true).catch(() => false)
+  const ok = await confirmAction(`删除中间件 ${r.name}（${r.host}:${r.port}）？`, '删除中间件')
   if (!ok) return
   try {
     await deleteEnvResource(env.value, r.id)
     ElMessage.success('已删除')
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+    notifyError(e, '删除失败')
   }
 }
 
@@ -266,7 +264,7 @@ async function saveResource(): Promise<void> {
     resourceDialog.value = false
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+    notifyError(e, '保存失败')
   } finally {
     resourceSaving.value = false
   }
@@ -314,7 +312,7 @@ async function runDiscover(): Promise<void> {
       ElMessage.info('没有发现 docker 容器；可以手工添加')
     }
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '发现失败')
+    notifyError(e, '发现失败')
   } finally {
     discovering.value = false
   }
@@ -332,7 +330,7 @@ async function importSelected(): Promise<void> {
     discoverDialog.value = false
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '导入失败')
+    notifyError(e, '导入失败')
   } finally {
     importing.value = false
   }
@@ -367,24 +365,21 @@ async function saveVar(): Promise<void> {
     varDialog.value = false
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+    notifyError(e, '保存失败')
   } finally {
     varSaving.value = false
   }
 }
 
 async function removeVar(v: EnvVariableView): Promise<void> {
-  const ok = await ElMessageBox.confirm(
-    `删除模板变量 ${v.key}？所有项目都会失去该默认值。`, '删除变量',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-  ).then(() => true).catch(() => false)
+  const ok = await confirmAction(`删除模板变量 ${v.key}？所有项目都会失去该默认值。`, '删除变量')
   if (!ok) return
   try {
     await deleteEnvTemplateVar(env.value, v.key)
     ElMessage.success('已删除')
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+    notifyError(e, '删除失败')
   }
 }
 
@@ -416,7 +411,7 @@ async function toggleReveal(v: EnvVariableView): Promise<void> {
     if (e instanceof ApiError && e.status === 403) {
       ElMessage.error('当前账号没有查看明文权限（需 settings:write / settings:reveal）')
     } else {
-      ElMessage.error(e instanceof Error ? e.message : '查看失败')
+      notifyError(e, '查看失败')
     }
   } finally {
     revealingKey.value = ''

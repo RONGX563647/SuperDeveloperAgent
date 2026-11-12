@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Close, CopyDocument, Download, Link, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import ResizableSplitter from '../components/project/ResizableSplitter.vue'
@@ -23,6 +23,7 @@ import { appStore } from '../stores/app'
 import { useRunTracker } from '../composables/useRunTracker'
 import { formatDuration, statusLabel, statusTone } from '../utils/status'
 import { envLabel, envShort, formatBytes, pipelineLabel } from '../utils/pipelineLabels'
+import { errorMessage, confirmAction } from '../utils/feedback'
 
 /**
  * 流水线工作台：
@@ -325,7 +326,7 @@ async function loadPipelines(): Promise<void> {
       choosePipeline()
     }
   } catch (e) {
-    topError.value = `加载流水线失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `加载流水线失败：${errorMessage(e, String(e))}`
     pipelines.value = []
     pipelineId.value = ''
   } finally {
@@ -480,13 +481,12 @@ async function promoteProd(): Promise<void> {
     return
   }
   const evidence = plan.evidence
-  const ok = await ElMessageBox.confirm(
+  const ok = await confirmAction(
     `即将发布提交 ${sha.value.slice(0, 7)} 到生产环境。\n`
     + `依据：测试环境 v${evidence?.version ?? '?'} · 证据运行 ${evidence?.runId ?? '?'}`
     + `（${evidence?.status ?? '?'}）\n这是高危操作，确认后立即执行。`,
-    '确认发布到生产',
-    { confirmButtonText: '确认发布', cancelButtonText: '取消', type: 'warning' },
-  ).then(() => true).catch(() => false)
+    '确认发布到生产'
+  )
   if (!ok) {
     ElMessage.info('已取消')
     return
@@ -515,7 +515,7 @@ async function doPrimary(): Promise<void> {
       await triggerSelected()
     }
   } catch (e) {
-    topError.value = `触发失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `触发失败：${errorMessage(e, String(e))}`
   } finally {
     triggerBusy.value = false
   }
@@ -532,7 +532,7 @@ async function doVerify(): Promise<void> {
     attachRun(result, { env: env.value, pipelineId: 'verify', sha: sha.value })
     ElMessage.success('已触发检查构建')
   } catch (e) {
-    topError.value = `触发失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `触发失败：${errorMessage(e, String(e))}`
   } finally {
     triggerBusy.value = false
   }
@@ -564,7 +564,7 @@ async function retryFailedStage(): Promise<void> {
     // 后端复用同一个 runId，重新接入轮询即可看到后续阶段
     await openRun(current.runId)
   } catch (e) {
-    topError.value = `重试失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `重试失败：${errorMessage(e, String(e))}`
   } finally {
     retrying.value = false
   }
@@ -606,7 +606,7 @@ async function openCompare(): Promise<void> {
     compareCurrent.value = cur
   } catch (e) {
     compareOpen.value = false
-    topError.value = `对比失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `对比失败：${errorMessage(e, String(e))}`
   } finally {
     compareLoading.value = false
   }
@@ -627,7 +627,7 @@ async function downloadArtifact(a: ArtifactView, index: number): Promise<void> {
     link.remove()
     URL.revokeObjectURL(url)
   } catch (e) {
-    ElMessage.error(`下载失败：${e instanceof Error ? e.message : String(e)}`)
+    ElMessage.error(`下载失败：${errorMessage(e, String(e))}`)
   }
 }
 
@@ -650,7 +650,7 @@ async function stopLocalServices(): Promise<void> {
     const result = await stopLocalDeploy(projectId.value, 'dev')
     ElMessage[result.stopped ? 'success' : 'info'](result.message || '已处理')
   } catch (e) {
-    topError.value = `停止本机服务失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `停止本机服务失败：${errorMessage(e, String(e))}`
   } finally {
     localStopping.value = false
   }
@@ -673,7 +673,7 @@ async function rerun(item: HistoryItem): Promise<void> {
     attachRun(result, { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha })
     ElMessage.success('已用该提交重跑')
   } catch (e) {
-    topError.value = `重跑失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `重跑失败：${errorMessage(e, String(e))}`
   } finally {
     triggerBusy.value = false
   }
@@ -682,15 +682,11 @@ async function rerun(item: HistoryItem): Promise<void> {
 /** 删除一条构建历史：只删记录（含磁盘上的 run yml），不动仓库与已构建镜像。 */
 async function handleDeleteHistory(item: HistoryItem): Promise<void> {
   const label = `#${item.seq || '—'} · ${item.gitSha.slice(0, 8)}`
-  try {
-    await ElMessageBox.confirm(
-      `删除构建历史 ${label}？只删除记录，不影响代码和已构建的镜像。`,
-      '删除历史',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
-    )
-  } catch {
-    return
-  }
+  const ok = await confirmAction(
+    `删除构建历史 ${label}？只删除记录，不影响代码和已构建的镜像。`,
+    '删除历史'
+  )
+  if (!ok) return
   try {
     const res = await deleteHistory(item.runId)
     if (!res.deleted) {
@@ -702,7 +698,7 @@ async function handleDeleteHistory(item: HistoryItem): Promise<void> {
     await loadHistory()
     ElMessage.success('已删除该条构建历史')
   } catch (e) {
-    topError.value = `删除失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `删除失败：${errorMessage(e, String(e))}`
   }
 }
 
@@ -725,7 +721,7 @@ async function rerunActive(): Promise<void> {
     attachRun(result, { env: meta.env, pipelineId: meta.pipelineId, sha: meta.sha })
     ElMessage.success('已用相同参数重跑')
   } catch (e) {
-    topError.value = `重跑失败：${e instanceof Error ? e.message : String(e)}`
+    topError.value = `重跑失败：${errorMessage(e, String(e))}`
   } finally {
     triggerBusy.value = false
   }

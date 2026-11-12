@@ -27,6 +27,7 @@ import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.executor.BuiltInPipelineEngine;
 import top.rongx.agent.executor.DockerActionRunner;
 import top.rongx.agent.executor.DockerSandbox;
+import top.rongx.agent.executor.PipelineEngineConfig;
 import top.rongx.agent.executor.ProcessActionRunner;
 import top.rongx.agent.executor.RunHistoryStore;
 import top.rongx.agent.infra.recipe.RecipeActionResolver;
@@ -209,8 +210,10 @@ class DualStackPipelineTest {
                 "2g", "2", 512, "1000:1000", "dual-cache");
         ActionRunner container = new DockerActionRunner(sandbox);
         ActionRunner host = new ProcessActionRunner();
-        return new BuiltInPipelineEngine(new RecipeActionResolver(), container, host,
-                workspaces, RunHistoryStore.file(workspaces));
+        return new BuiltInPipelineEngine(PipelineEngineConfig
+                .builder(new RecipeActionResolver(), container, host, workspaces)
+                .history(RunHistoryStore.file(workspaces))
+                .build());
     }
 
     private static void writeRepo(Path repo) throws Exception {

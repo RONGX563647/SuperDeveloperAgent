@@ -3,8 +3,6 @@ package top.rongx.agent.tools;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -26,6 +24,7 @@ import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
+import top.rongx.agent.domain.net.PortProbe;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 
@@ -262,7 +261,7 @@ public class RuntimeTools {
             return "err: port 必须是 1-65535";
         }
         boolean loopback = isLoopback(hostValue);
-        boolean open = tcpOpen(hostValue, port);
+        boolean open = PortProbe.open(hostValue, port, 1500);
         StringBuilder sb = new StringBuilder();
         sb.append("host: ").append(hostValue).append('\n')
                 .append("port: ").append(port).append('\n')
@@ -331,16 +330,6 @@ public class RuntimeTools {
     }
 
     // ---------------------------------------------------------------- 内部
-
-    /** TCP 连通性探测：只连不读写，1.5s 超时。 */
-    private static boolean tcpOpen(String host, int port) {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), 1500);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     private static boolean isLoopback(String host) {
         String value = host.toLowerCase(Locale.ROOT);

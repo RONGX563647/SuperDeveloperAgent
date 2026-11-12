@@ -1,9 +1,5 @@
 package top.rongx.agent.executor;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -23,8 +19,11 @@ import top.rongx.agent.domain.env.EnvProvisioner;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.MiddlewareKind;
 import top.rongx.agent.domain.env.RuntimeMode;
+import top.rongx.agent.domain.env.SecretNames;
 import top.rongx.agent.domain.env.StackAdapter;
+import top.rongx.agent.domain.net.PortProbe;
 
 /**
  * 本机 Docker 环境自愈：按「项目 + 环境」准备隔离的中间件容器。
@@ -321,7 +320,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             username = defaultUser(kind);
         }
         if (password == null) {
-            password = needsPassword(kind) ? generatePassword() : null;
+            password = generatePassword();
         }
         return new Creds(database, username, password);
     }
@@ -378,60 +377,32 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         } catch (NumberFormatException e) {
             return false;
         }
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(cleanHost, number), (int) PROBE_TIMEOUT.toMillis());
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
+        return PortProbe.open(cleanHost, number, (int) PROBE_TIMEOUT.toMillis());
     }
 
     private static String hostKey(String kind) {
-        return switch (kind) {
-            case "redis" -> "REDIS_HOST";
-            case "rabbitmq" -> "RABBITMQ_HOST";
-            case "minio" -> "MINIO_ENDPOINT";
-            case "mongo" -> "MONGO_HOST";
-            default -> "DB_HOST";
-        };
+        MiddlewareKind k = MiddlewareKind.of(kind).orElse(null);
+        return k == null ? "DB_HOST" : k.hostKey;
     }
 
     private static String portKey(String kind) {
-        return switch (kind) {
-            case "redis" -> "REDIS_PORT";
-            case "rabbitmq" -> "RABBITMQ_PORT";
-            case "minio" -> "MINIO_ENDPOINT";
-            case "mongo" -> "MONGO_PORT";
-            default -> "DB_PORT";
-        };
+        MiddlewareKind k = MiddlewareKind.of(kind).orElse(null);
+        return k == null ? "DB_PORT" : k.portKey;
     }
 
     private static String databaseKey(String kind) {
-        return switch (kind) {
-            case "minio", "redis", "rabbitmq" -> null;
-            case "mongo" -> "MONGO_DATABASE";
-            default -> "DB_NAME";
-        };
+        MiddlewareKind k = MiddlewareKind.of(kind).orElse(null);
+        return k == null ? "DB_NAME" : k.databaseKey;
     }
 
     private static String usernameKey(String kind) {
-        return switch (kind) {
-            case "minio" -> "MINIO_ACCESS_KEY";
-            case "rabbitmq" -> "RABBITMQ_USERNAME";
-            case "mongo" -> "MONGO_USERNAME";
-            case "redis" -> null;
-            default -> "DB_USERNAME";
-        };
+        MiddlewareKind k = MiddlewareKind.of(kind).orElse(null);
+        return k == null ? "DB_USERNAME" : k.usernameKey;
     }
 
     private static String passwordKey(String kind) {
-        return switch (kind) {
-            case "minio" -> "MINIO_SECRET_KEY";
-            case "rabbitmq" -> "RABBITMQ_PASSWORD";
-            case "mongo" -> "MONGO_PASSWORD";
-            case "redis" -> "REDIS_PASSWORD";
-            default -> "DB_PASSWORD";
-        };
+        MiddlewareKind k = MiddlewareKind.of(kind).orElse(null);
+        return k == null ? "DB_PASSWORD" : k.passwordKey;
     }
 
     // ---------------------------------------------------------------- 项目声明注入
@@ -533,7 +504,9 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     }
 
     static Map<String, String> derive(EnvResource r, boolean internalAddressing) {
-        Map<String, String> out = new LinkedHashMap<>();
+        if (r == null) {
+            return new LinkedHashMap<>();
+        }
         // 平台为本项目创建的容器：应用容器与中间件同处一个环境网络，
         // 用「容器名 + 容器端口」互访（127.0.0.1 在容器里指向自己，不能用）。
         boolean internal = internalAddressing
@@ -541,41 +514,9 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                 && r.internalHost() != null && !r.internalHost().isBlank();
         String host = internal ? r.internalHost() : r.host();
         int port = internal && r.containerPort() > 0 ? r.containerPort() : r.port();
-        switch (r.kind()) {
-            case "mysql", "mariadb", "postgres" -> {
-                put(out, "DB_HOST", host);
-                put(out, "DB_PORT", String.valueOf(port));
-                put(out, "DB_NAME", r.databaseName());
-                put(out, "DB_USERNAME", r.username());
-                put(out, "DB_PASSWORD", r.password());
-            }
-            case "redis" -> {
-                put(out, "REDIS_HOST", host);
-                put(out, "REDIS_PORT", String.valueOf(port));
-                put(out, "REDIS_PASSWORD", r.password());
-            }
-            case "rabbitmq" -> {
-                put(out, "RABBITMQ_HOST", host);
-                put(out, "RABBITMQ_PORT", String.valueOf(port));
-                put(out, "RABBITMQ_USERNAME", r.username());
-                put(out, "RABBITMQ_PASSWORD", r.password());
-            }
-            case "minio" -> {
-                put(out, "MINIO_ENDPOINT", "http://" + host + ":" + port);
-                put(out, "MINIO_ACCESS_KEY", r.username());
-                put(out, "MINIO_SECRET_KEY", r.password());
-            }
-            case "mongo" -> {
-                put(out, "MONGO_HOST", host);
-                put(out, "MONGO_PORT", String.valueOf(port));
-                put(out, "MONGO_USERNAME", r.username());
-                put(out, "MONGO_PASSWORD", r.password());
-            }
-            default -> {
-                // 未知类型不猜变量
-            }
-        }
-        return out;
+        return MiddlewareKind.of(r.kind())
+                .map(kind -> kind.derive(r, host, port))
+                .orElseGet(LinkedHashMap::new);
     }
 
     /** 必填但不是中间件连接的密钥类变量（TOKEN_SECRET 等）缺失时生成随机值。 */
@@ -603,7 +544,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
                 executor.exec(CWD, List.of("docker", "version", "--format", "{{.Server.Version}}"),
-                        20_000, sink, () -> false);
+                        20_000, sink, ProcessExecutor.NEVER);
         if (outcome.exitCode() == 0) {
             return null;
         }
@@ -617,12 +558,12 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome inspect =
                 executor.exec(CWD, List.of("docker", "network", "inspect", network), 15_000,
-                        sink, () -> false);
+                        sink, ProcessExecutor.NEVER);
         if (inspect.exitCode() == 0) {
             return;
         }
         ProcessExecutor.StepOutcome created = executor.exec(CWD,
-                List.of("docker", "network", "create", network), 30_000, sink, () -> false);
+                List.of("docker", "network", "create", network), 30_000, sink, ProcessExecutor.NEVER);
         if (created.exitCode() != 0) {
             throw new IllegalStateException("环境网络创建失败 " + network + "："
                     + ProcessExecutor.redact(ProcessExecutor.tail(sink)));
@@ -634,7 +575,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome = executor.exec(CWD,
                 List.of("docker", "inspect", "--format", "{{.State.Running}}", name), 15_000,
-                sink, () -> false);
+                sink, ProcessExecutor.NEVER);
         if (outcome.exitCode() != 0) {
             return null;
         }
@@ -645,19 +586,19 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome = executor.exec(CWD,
                 List.of("docker", "inspect", "--format", "{{.Name}}", name), 15_000, sink,
-                () -> false);
+                ProcessExecutor.NEVER);
         return outcome.exitCode() == 0;
     }
 
     private void removeContainer(String name) {
         StringBuilder sink = new StringBuilder();
-        executor.exec(CWD, List.of("docker", "rm", "-f", name), 60_000, sink, () -> false);
+        executor.exec(CWD, List.of("docker", "rm", "-f", name), 60_000, sink, ProcessExecutor.NEVER);
     }
 
     private void removeVolume(String name) {
         StringBuilder sink = new StringBuilder();
         executor.exec(CWD, List.of("docker", "volume", "rm", "-f", name + "-data"), 60_000, sink,
-                () -> false);
+                ProcessExecutor.NEVER);
     }
 
     private boolean waitRunning(String name) {
@@ -682,7 +623,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
                 executor.exec(CWD, runArgv(kind, name, port, database, username, password, network),
-                        TIMEOUT_MS, sink, () -> false);
+                        TIMEOUT_MS, sink, ProcessExecutor.NEVER);
         if (outcome.exitCode() != 0) {
             return ProcessExecutor.redact(ProcessExecutor.tail(sink));
         }
@@ -706,42 +647,11 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             argv.add("-v");
             argv.add(name + "-data:" + volume);
         }
-        switch (kind) {
-            case "mysql", "mariadb" -> {
-                argv.addAll(List.of("-e", "MYSQL_ROOT_PASSWORD=" + nullSafe(password),
-                        "-e", "MYSQL_DATABASE=" + nullSafe(database)));
-                argv.add("mysql:8.0");
-            }
-            case "postgres" -> {
-                argv.addAll(List.of("-e", "POSTGRES_USER=" + nullSafe(username),
-                        "-e", "POSTGRES_PASSWORD=" + nullSafe(password),
-                        "-e", "POSTGRES_DB=" + nullSafe(database)));
-                argv.add("postgres:16-alpine");
-            }
-            case "redis" -> {
-                argv.add("redis:7-alpine");
-                if (password != null && !password.isBlank()) {
-                    argv.addAll(List.of("redis-server", "--requirepass", password));
-                }
-            }
-            case "rabbitmq" -> {
-                argv.addAll(List.of("-e", "RABBITMQ_DEFAULT_USER=" + nullSafe(username),
-                        "-e", "RABBITMQ_DEFAULT_PASS=" + nullSafe(password)));
-                argv.add("rabbitmq:3.12-management");
-            }
-            case "minio" -> {
-                argv.addAll(List.of("-e", "MINIO_ROOT_USER=" + nullSafe(username),
-                        "-e", "MINIO_ROOT_PASSWORD=" + nullSafe(password)));
-                argv.add("minio/minio:latest");
-                argv.addAll(List.of("server", "/data"));
-            }
-            case "mongo" -> {
-                argv.addAll(List.of("-e", "MONGO_INITDB_ROOT_USERNAME=" + nullSafe(username),
-                        "-e", "MONGO_INITDB_ROOT_PASSWORD=" + nullSafe(password)));
-                argv.add("mongo:7");
-            }
-            default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
-        }
+        MiddlewareKind spec = MiddlewareKind.of(kind)
+                .orElseThrow(() -> new IllegalArgumentException("不支持的中间件类型：" + kind));
+        argv.addAll(spec.dockerEnvArgs(database, username, password));
+        argv.add(spec.image);
+        argv.addAll(spec.containerCommand(password));
         return argv;
     }
 
@@ -763,23 +673,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
 
     /** 必填变量名 → 需要的中间件类型（没命中返回 null）。 */
     static String kindOfKey(String key) {
-        String k = key == null ? "" : key.trim().toUpperCase(Locale.ROOT);
-        if (k.startsWith("RABBITMQ")) {
-            return "rabbitmq";
-        }
-        if (k.startsWith("MINIO")) {
-            return "minio";
-        }
-        if (k.startsWith("REDIS")) {
-            return "redis";
-        }
-        if (k.startsWith("MONGO")) {
-            return "mongo";
-        }
-        if (k.startsWith("DB_") || k.startsWith("MYSQL") || k.startsWith("POSTGRES")) {
-            return "mysql";
-        }
-        return null;
+        return MiddlewareKind.fromKey(key).map(k -> k.wireName).orElse(null);
     }
 
     static String containerName(String namespace, String projectId, String kind) {
@@ -796,7 +690,8 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     }
 
     private static String defaultDatabase(String projectId, String kind) {
-        if (!"mysql".equals(kind) && !"mariadb".equals(kind) && !"postgres".equals(kind)) {
+        MiddlewareKind k = MiddlewareKind.of(kind).orElse(null);
+        if (k == null || !k.relational) {
             return null;
         }
         String name = slug(projectId).replace('-', '_').replace('.', '_');
@@ -804,53 +699,23 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     }
 
     private static String defaultUser(String kind) {
-        return switch (kind) {
-            case "postgres" -> "postgres";
-            case "mongo" -> "root";
-            case "minio" -> "minioadmin";
-            case "rabbitmq" -> "admin";
-            default -> "root";
-        };
-    }
-
-    private static boolean needsPassword(String kind) {
-        return true;
+        return MiddlewareKind.of(kind).map(k -> k.defaultUser).orElse("root");
     }
 
     private static int defaultPort(String kind) {
-        return switch (kind) {
-            case "mysql", "mariadb" -> 3306;
-            case "redis" -> 6379;
-            case "rabbitmq" -> 5672;
-            case "minio" -> 9000;
-            case "postgres" -> 5432;
-            case "mongo" -> 27017;
-            default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
-        };
+        return MiddlewareKind.of(kind)
+                .orElseThrow(() -> new IllegalArgumentException("不支持的中间件类型：" + kind))
+                .containerPort;
     }
 
     private static String volumePath(String kind) {
-        return switch (kind) {
-            case "mysql", "mariadb" -> "/var/lib/mysql";
-            case "redis" -> "/data";
-            case "rabbitmq" -> "/var/lib/rabbitmq";
-            case "minio" -> "/data";
-            case "postgres" -> "/var/lib/postgresql/data";
-            case "mongo" -> "/data/db";
-            default -> null;
-        };
+        return MiddlewareKind.of(kind).map(k -> k.volumePath).orElse(null);
     }
 
     private static int basePort(String kind) {
-        return switch (kind) {
-            case "mysql", "mariadb" -> 13306;
-            case "redis" -> 16379;
-            case "rabbitmq" -> 15673;
-            case "minio" -> 19000;
-            case "postgres" -> 15432;
-            case "mongo" -> 17017;
-            default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
-        };
+        return MiddlewareKind.of(kind)
+                .orElseThrow(() -> new IllegalArgumentException("不支持的中间件类型：" + kind))
+                .hostPortBase;
     }
 
     /** 端口段内挑一个既没被平台登记、也没被系统占用的端口。 */
@@ -869,22 +734,12 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         int base = basePort(kind);
         for (int offset = 0; offset < 100; offset++) {
             int candidate = base + offset;
-            if (used.contains(candidate) || !free(candidate)) {
+            if (used.contains(candidate) || !PortProbe.free("127.0.0.1", candidate)) {
                 continue;
             }
             return candidate;
         }
         throw new IllegalStateException(kind + " 端口段 " + base + "–" + (base + 99) + " 已耗尽");
-    }
-
-    private static boolean free(int port) {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(false);
-            socket.bind(new InetSocketAddress("127.0.0.1", port));
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
     }
 
     private EnvResource findByName(String env, String name) {
@@ -900,19 +755,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     }
 
     private static boolean isSecret(String key) {
-        String k = key == null ? "" : key.toUpperCase(Locale.ROOT);
-        return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
-                || k.endsWith("_KEY") || k.contains("ACCESS_KEY");
-    }
-
-    private static void put(Map<String, String> out, String key, String value) {
-        if (value != null && !value.isBlank()) {
-            out.put(key, value);
-        }
-    }
-
-    private static String nullSafe(String value) {
-        return value == null ? "" : value;
+        return SecretNames.isSecret(key);
     }
 
     /** 一个中间件容器应有的凭据（来自项目声明或平台生成）。 */

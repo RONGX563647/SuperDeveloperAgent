@@ -1,9 +1,7 @@
 package top.rongx.agent.infra.persistence;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -24,71 +22,49 @@ import top.rongx.agent.domain.project.ProjectEnv;
  * 锁住文件（测试 TempDir 清理失败、项目工作区删除失败都源于此）；短连接 + WAL 不必要——
  * 平台写入频率极低（只在接入/下线时写），性能无影响。
  */
-public class IntakeProjectStore implements AutoCloseable {
+public class IntakeProjectStore extends SqliteStore implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(IntakeProjectStore.class);
 
-    private final Path dbFile;
+    private static final String SCHEMA = """
+            CREATE TABLE IF NOT EXISTS projects (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                repo_url    TEXT,
+                repo_type   TEXT,
+                type        TEXT,
+                port_start  INTEGER,
+                port_end    INTEGER,
+                source      TEXT NOT NULL,
+                local_path  TEXT,
+                created_at  INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS project_envs (
+                project_id  TEXT NOT NULL,
+                env         TEXT NOT NULL,
+                app_url     TEXT,
+                compose_dir TEXT,
+                PRIMARY KEY (project_id, env)
+            );
+            """;
 
     public IntakeProjectStore(Path dbFile) {
-        this.dbFile = dbFile.toAbsolutePath().normalize();
+        super(dbFile, SCHEMA, "项目存储");
+    }
+
+    @Override
+    protected void afterSchema(java.sql.Statement st) throws SQLException {
+        // 旧库迁移：补齐 dev 环境（历史接入只写了 test/prod，对话页因此没有「开发环境」）；
+        // dev 走本地服务、端口动态分配，故 app_url / compose_dir 留空。已存在则忽略（幂等）。
+        st.executeUpdate("""
+                INSERT OR IGNORE INTO project_envs (project_id, env, app_url, compose_dir)
+                SELECT id, 'dev', '', '' FROM projects
+                """);
         try {
-            Files.createDirectories(dbFile.getParent());
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException("无法创建项目存储目录：" + e.getMessage(), e);
-        }
-        initSchema();
-    }
-
-    private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
-    }
-
-    private void initSchema() {
-        try (Connection conn = open()) {
-            try (PreparedStatement st = conn.prepareStatement("""
-                    CREATE TABLE IF NOT EXISTS projects (
-                        id          TEXT PRIMARY KEY,
-                        name        TEXT NOT NULL,
-                        repo_url    TEXT,
-                        repo_type   TEXT,
-                        type        TEXT,
-                        port_start  INTEGER,
-                        port_end    INTEGER,
-                        source      TEXT NOT NULL,
-                        local_path  TEXT,
-                        created_at  INTEGER NOT NULL
-                    )
-                    """)) {
-                st.executeUpdate();
-            }
-            try (PreparedStatement st = conn.prepareStatement("""
-                    CREATE TABLE IF NOT EXISTS project_envs (
-                        project_id  TEXT NOT NULL,
-                        env         TEXT NOT NULL,
-                        app_url     TEXT,
-                        compose_dir TEXT,
-                        PRIMARY KEY (project_id, env)
-                    )
-                    """)) {
-                st.executeUpdate();
-            }
-            // 旧库迁移：补齐 dev 环境（历史接入只写了 test/prod，对话页因此没有「开发环境」）；
-            // dev 走本地服务、端口动态分配，故 app_url / compose_dir 留空。已存在则忽略（幂等）。
-            try (PreparedStatement st = conn.prepareStatement("""
-                    INSERT OR IGNORE INTO project_envs (project_id, env, app_url, compose_dir)
-                    SELECT id, 'dev', '', '' FROM projects
-                    """)) {
-                st.executeUpdate();
-            }
-            try (PreparedStatement st = conn.prepareStatement(
-                    "ALTER TABLE projects ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'MANAGED'")) {
-                st.executeUpdate();
-            } catch (SQLException duplicate) {
-                // 列已存在（旧库刚迁移过），忽略
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("无法初始化项目存储 " + dbFile + "：" + e.getMessage(), e);
+            st.executeUpdate(
+                    "ALTER TABLE projects ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'MANAGED'");
+        } catch (SQLException duplicate) {
+            // 列已存在（旧库刚迁移过），忽略
         }
     }
 

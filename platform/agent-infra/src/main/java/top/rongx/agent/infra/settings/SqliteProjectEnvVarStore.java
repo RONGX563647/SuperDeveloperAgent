@@ -1,8 +1,6 @@
 package top.rongx.agent.infra.settings;
 
-import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -15,8 +13,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
+import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.settings.ProjectEnvVar;
 import top.rongx.agent.domain.settings.ProjectEnvVarRepository;
+import top.rongx.agent.infra.persistence.SqliteStore;
 import top.rongx.agent.infra.security.SecretBox;
 
 /**
@@ -26,7 +26,7 @@ import top.rongx.agent.infra.security.SecretBox;
  * （非敏感项返回明文，方便核对 DB_HOST 这类值）。
  */
 @Repository
-public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
+public class SqliteProjectEnvVarStore extends SqliteStore implements ProjectEnvVarRepository {
 
     private static final Logger log = LoggerFactory.getLogger(SqliteProjectEnvVarStore.class);
 
@@ -47,28 +47,13 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
     private static final String COLUMNS =
             "project_id, env, var_key, value_enc, value_iv, is_secret, updated_by, updated_at";
 
-    private final Path dbFile;
     private final SecretBox secretBox;
 
     public SqliteProjectEnvVarStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
+        super(workspaceRoot, SCHEMA, "project_env_vars");
         this.secretBox = secretBox;
-        initSchema();
-    }
-
-    private void initSchema() {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
-            st.executeUpdate();
-        } catch (SQLException e) {
-            throw new IllegalStateException("project_env_vars 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
     }
 
     @Override
@@ -237,8 +222,8 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
     }
 
     private static void requireEnv(String env) {
-        if (!List.of("dev", "test", "prod").contains(env)) {
-            throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
+        if (!DeployRecipe.order().contains(env)) {
+            throw new IllegalArgumentException("环境只能是 " + String.join(" / ", DeployRecipe.order()) + "：" + env);
         }
     }
 

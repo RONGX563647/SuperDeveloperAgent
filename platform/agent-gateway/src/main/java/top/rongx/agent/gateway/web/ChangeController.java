@@ -6,6 +6,7 @@ import java.util.Map;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.PatchStore;
@@ -84,7 +85,7 @@ public class ChangeController {
         }
         // 2. 取出变更单（不存在即拒绝）
         ChangePlan plan = registry.find(changeId)
-                .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
+                .orElseThrow(() -> DomainException.notFound("变更不存在: " + changeId));
         // 3. 消费令牌：一次性 + 未过期 + 绑定 changeId 与当前 planHash（防篡改复用）
         tokens.consume(confirmToken, changeId, plan.planHash());
         // 4. 补丁类变更：把补丁提交到新分支（不碰用户当前分支）
@@ -104,7 +105,7 @@ public class ChangeController {
     @GetMapping("/{changeId}")
     public ChangeView view(@PathVariable String changeId) {
         ChangePlan plan = registry.find(changeId)
-                .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
+                .orElseThrow(() -> DomainException.notFound("变更不存在: " + changeId));
         return new ChangeView(plan.changeId(), plan.projectId(), plan.env(), plan.kind(),
                 plan.summary(), plan.imageDigest(), plan.highRisk(), plan.planHash(),
                 plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN");
@@ -115,7 +116,7 @@ public class ChangeController {
     public PatchView patch(@PathVariable String changeId) {
         currentUser.requireUserId();
         ChangePlan plan = registry.find(changeId)
-                .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
+                .orElseThrow(() -> DomainException.notFound("变更不存在: " + changeId));
         CodePatch patch = requirePatch(plan);
         return new PatchView(patch.patchId(), patch.baseSha(), patch.branch(), patch.diff(),
                 patch.edits().stream().map(CodePatch.FileEdit::path).toList(),
@@ -148,7 +149,8 @@ public class ChangeController {
         }
         String patchId = plan.kind().substring(PATCH_PREFIX.length());
         CodePatch patch = patches.find(patchId)
-                .orElseThrow(() -> new IllegalArgumentException("补丁不存在或已过期: " + patchId));
+                .orElseThrow(() -> DomainException.notFound(
+                        "补丁不存在或已过期: " + patchId));
         if (!patch.projectId().equals(plan.projectId())) {
             throw new IllegalArgumentException("补丁与变更单的项目不一致");
         }
@@ -167,7 +169,7 @@ public class ChangeController {
                                    @RequestBody(required = false) ConfirmRequest request) {
         String userId = currentUser.requireUserId();
         ChangePlan plan = registry.find(changeId)
-                .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
+                .orElseThrow(() -> DomainException.notFound("变更不存在: " + changeId));
 
         if (plan.highRisk()) {
             String password = request == null ? null : request.password();

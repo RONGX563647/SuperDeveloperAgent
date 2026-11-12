@@ -36,10 +36,39 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${String(seconds).padStart(2, '0')}s`
 }
 
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
 /** 时间戳格式化：MM-DD HH:mm:ss。 */
 export function formatTime(ms: number): string {
   if (!ms) return '—'
   const d = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${formatClockSeconds(ms)}`
+}
+
+/** 只到分钟：HH:mm。 */
+export function formatClock(ms: number): string {
+  const d = new Date(ms)
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+/** 到秒：HH:mm:ss。 */
+export function formatClockSeconds(ms: number): string {
+  const d = new Date(ms)
+  return `${formatClock(ms)}:${pad2(d.getSeconds())}`
+}
+
+/** 日期：YYYY-MM-DD。 */
+export function formatDate(ms: number): string {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+/** 日期时间：YYYY-MM-DD HH:mm。 */
+export function formatDateTime(ms: number): string {
+  return `${formatDate(ms)} ${formatClock(ms)}`
+}
+
+/** 精确到毫秒：YYYY-MM-DD HH:mm:ss.SSS。 */
+export function formatDateTimeMillis(ms: number): string {
+  return `${formatDate(ms)} ${formatClockSeconds(ms)}.${String(new Date(ms).getMilliseconds()).padStart(3, '0')}`
 }

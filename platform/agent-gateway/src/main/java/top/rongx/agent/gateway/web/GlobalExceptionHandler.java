@@ -13,6 +13,7 @@ import cn.dev33.satoken.exception.DisableServiceException;
 import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.exception.NotPermissionException;
 import cn.dev33.satoken.exception.NotRoleException;
+import top.rongx.agent.domain.error.DomainException;
 
 /** 统一错误响应：含 traceId，不含堆栈与内部细节（规约 §3）。 */
 @RestControllerAdvice
@@ -30,6 +31,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({NotPermissionException.class, NotRoleException.class, DisableServiceException.class})
     public ResponseEntity<Map<String, Object>> forbidden(RuntimeException e) {
         return body(HttpStatus.FORBIDDEN, "无权执行该操作");
+    }
+
+    /** 领域异常：按 Kind 映射 404 / 409 / 503，不再一律落到 500。 */
+    @ExceptionHandler(DomainException.class)
+    public ResponseEntity<Map<String, Object>> domain(DomainException e) {
+        HttpStatus status = switch (e.kind()) {
+            case NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case CONFLICT -> HttpStatus.CONFLICT;
+            case UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+        };
+        return body(status, e.getMessage());
     }
 
     /** 参数/业务校验失败 → 400。 */

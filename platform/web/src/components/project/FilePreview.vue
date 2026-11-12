@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, EditPen, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import { fsRead, type FsFile } from '../../api/project'
+import { errorMessage } from '../../utils/feedback'
+import { formatDateTime } from '../../utils/status'
 
 /**
  * 文件预览（右侧详情的文件 Tab 内容）：
@@ -32,7 +34,7 @@ async function load(): Promise<void> {
   try {
     file.value = await fsRead(props.path)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '加载文件失败'
+    error.value = errorMessage(e, '加载文件失败')
   } finally {
     loading.value = false
   }
@@ -51,9 +53,7 @@ const sizeText = computed(() => {
 
 const modifiedText = computed(() => {
   if (!file.value) return ''
-  const d = new Date(file.value.modifiedAt)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return formatDateTime(file.value.modifiedAt)
 })
 
 function download(): void {

@@ -1,5 +1,6 @@
 import type { AgentEvent } from '../types'
 import { notifyUnauthorized } from './auth'
+import { parseErrorPayload } from './http'
 
 /**
  * SSE 传输层（参考 ruoyi-copilot 的 harnessSse.ts 移植）：
@@ -82,19 +83,6 @@ function parseFrame(block: string): SseFrame | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
-}
-
-async function readErrorPayload(response: Response): Promise<{ code?: number, message?: string }> {
-  const payload = await response.clone().json().catch(() => null) as unknown
-  if (!isRecord(payload)) {
-    const text = await response.clone().text().catch(() => '')
-    return text.trim() ? { message: text.slice(0, 200) } : {}
-  }
-  const rawCode = payload.code
-  const code = typeof rawCode === 'number' ? rawCode
-    : typeof rawCode === 'string' && /^\d+$/.test(rawCode) ? Number(rawCode) : undefined
-  const rawMessage = payload.msg ?? payload.message
-  return { code, message: typeof rawMessage === 'string' && rawMessage.trim() ? rawMessage : undefined }
 }
 
 function sequenceOf(frame: SseFrame, payload: Record<string, unknown>, fallback: number): number {
@@ -191,7 +179,7 @@ export async function streamEvents(
         signal: options.signal,
       })
       if (!response.ok || !response.body) {
-        const payload = await readErrorPayload(response)
+        const payload = await parseErrorPayload(response)
         const message = payload.message ?? `事件流连接失败 (${response.status} ${response.statusText})`
         // 401：会话失效，交给统一处理跳登录页（不能当成可重试的流中断）
         if (response.status === 401) notifyUnauthorized()
@@ -268,7 +256,7 @@ export async function streamChatOnce(
   const response = await fetch(url, { ...init, signal })
   if (!response.ok || !response.body) {
     if (response.status === 401) notifyUnauthorized()
-    const payload = await readErrorPayload(response)
+    const payload = await parseErrorPayload(response)
     throw new SseProtocolError(payload.message ?? `建立事件流失败（${response.status}）`)
   }
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''

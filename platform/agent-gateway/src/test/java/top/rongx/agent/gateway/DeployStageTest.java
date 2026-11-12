@@ -20,6 +20,7 @@ import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.executor.BuiltInPipelineEngine;
+import top.rongx.agent.executor.PipelineEngineConfig;
 import top.rongx.agent.executor.ProcessActionRunner;
 import top.rongx.agent.executor.RunHistoryStore;
 import top.rongx.agent.infra.git.GitWorktreeManager;
@@ -91,9 +92,11 @@ class DeployStageTest {
         sha = sh(repo, "git", "rev-parse", "HEAD").trim();
         new GitWorktreeManager(workspaces).linkLocal("RY", repo, false);
         deployer = new RecordingDeployer();
-        engine = new BuiltInPipelineEngine(new RecipeActionResolver(),
-                new ProcessActionRunner(), new ProcessActionRunner(),
-                workspaces, RunHistoryStore.disabled(), "ci", null, deployer);
+        engine = new BuiltInPipelineEngine(PipelineEngineConfig
+                .builder(new RecipeActionResolver(), new ProcessActionRunner(),
+                        new ProcessActionRunner(), workspaces)
+                .deployers(deployer)
+                .build());
     }
 
     @Test

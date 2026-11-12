@@ -1,8 +1,6 @@
 package top.rongx.agent.infra.env;
 
-import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -16,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
+import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
@@ -26,7 +25,9 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.ServiceLease;
+import top.rongx.agent.domain.env.SecretNames;
 import top.rongx.agent.domain.env.StackAdapter;
+import top.rongx.agent.infra.persistence.SqliteStore;
 import top.rongx.agent.infra.security.SecretBox;
 
 /**
@@ -36,7 +37,7 @@ import top.rongx.agent.infra.security.SecretBox;
  * {@code project_env_overrides}（不删旧表，便于回滚）。
  */
 @Repository
-public class SqliteEnvironmentStore implements EnvironmentStore {
+public class SqliteEnvironmentStore extends SqliteStore implements EnvironmentStore {
 
     private static final Logger log = LoggerFactory.getLogger(SqliteEnvironmentStore.class);
 
@@ -128,31 +129,20 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             );
             """;
 
-    private final Path dbFile;
     private final SecretBox secretBox;
 
     public SqliteEnvironmentStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
+        super(workspaceRoot, SCHEMA, "环境");
         this.secretBox = secretBox;
-        initSchema();
     }
 
-    private void initSchema() {
-        try (Connection conn = open(); Statement st = conn.createStatement()) {
-            for (String ddl : SCHEMA.split(";")) {
-                if (!ddl.isBlank()) {
-                    st.executeUpdate(ddl);
-                }
-            }
-            ensureColumns(st);
-            seedTemplates(st);
-            migrateLegacy(st);
-        } catch (SQLException e) {
-            throw new IllegalStateException("环境表初始化失败：" + e.getMessage(), e);
-        }
+    @Override
+    protected void afterSchema(Statement st) throws SQLException {
+        ensureColumns(st);
+        seedTemplates(st);
+        migrateLegacy(st);
     }
 
     /** 老库补列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。 */
@@ -209,10 +199,6 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 SELECT project_id, env, var_key, value_enc, value_iv, is_secret, updated_at
                 FROM project_env_vars
                 """);
-    }
-
-    private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
     }
 
     // ---------------------------------------------------------------- 模板
@@ -828,9 +814,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     private static boolean looksSecret(String key) {
-        String k = key.toUpperCase(java.util.Locale.ROOT);
-        return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
-                || k.endsWith("_KEY") || k.contains("PRIVATE");
+        return SecretNames.isSecret(key);
     }
 
     // ---------------------------------------------------------------- 绑定
@@ -1101,14 +1085,6 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         }
     }
 
-    private static String newId(String prefix) {
-        return prefix + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
-    }
-
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
-    }
-
     private static void requireProject(String projectId) {
         if (projectId == null || !projectId.matches("[A-Za-z0-9_-]{1,32}")) {
             throw new IllegalArgumentException("非法项目 ID：" + projectId);
@@ -1116,7 +1092,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     private static void requireEnv(String env) {
-        if (!List.of("dev", "test", "prod").contains(env)) {
+        if (!DeployRecipe.order().contains(env)) {
             throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
         }
     }

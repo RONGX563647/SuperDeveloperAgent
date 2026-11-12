@@ -148,7 +148,7 @@ public class DockerEnvRuntime implements EnvRuntime {
         if (!"REMOTE_DOCKER".equals(r.source())) {
             StringBuilder sink = new StringBuilder();
             ProcessExecutor.StepOutcome outcome =
-                    executor.exec(CWD, localArgv, TIMEOUT_MS, sink, () -> false);
+                    executor.exec(CWD, localArgv, TIMEOUT_MS, sink, ProcessExecutor.NEVER);
             return new CmdResult(outcome.exitCode() == 0, ProcessExecutor.tail(sink));
         }
         DeployServer server = serverOf(r);

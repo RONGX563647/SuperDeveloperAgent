@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.artifact.ArtifactRef;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.RunMeta;
@@ -177,7 +178,7 @@ public class PipelineController {
     public Map<String, Object> log(@PathVariable String runId,
                                    @RequestParam(defaultValue = "0") int offset) {
         if (!engine.hasRun(runId)) {
-            throw new IllegalArgumentException("运行不存在：" + runId);
+            throw DomainException.notFound("运行不存在：" + runId);
         }
         LogSlice slice = engine.logFrom(runId, offset);
         boolean complete = engine.status(runId).isTerminal() && slice.end() == slice.offset();

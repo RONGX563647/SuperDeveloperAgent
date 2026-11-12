@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue
 import { ElMessage } from 'element-plus'
 import { ArrowDown, CopyDocument, Download, Search } from '@element-plus/icons-vue'
 import { fetchRunLog } from '../../api/pipeline'
+import { errorMessage } from '../../utils/feedback'
 
 /**
  * 运行日志（增量追加渲染）：
@@ -68,7 +69,7 @@ async function pull(): Promise<void> {
     }
     if (slice.complete) stopTimer()
   } catch (e) {
-    errorText.value = e instanceof Error ? e.message : '日志加载失败'
+    errorText.value = errorMessage(e, '日志加载失败')
   }
 }
 

@@ -51,7 +51,8 @@ class PipelinePreviewRenderTest {
 
     private static StagePreview previewOf(Path workspace, String stageId) {
         BuiltInPipelineEngine engine = new BuiltInPipelineEngine(
-                resolver(), new ProcessActionRunner(), new ProcessActionRunner(), workspace);
+                PipelineEngineConfig.builder(resolver(), new ProcessActionRunner(),
+                        new ProcessActionRunner(), workspace).build());
         return engine.preview("P", "release", "test").stream()
                 .filter(s -> s.id().equals(stageId))
                 .findFirst().orElseThrow();
@@ -129,7 +130,8 @@ class PipelinePreviewRenderTest {
         git(repo, "commit", "-q", "-m", "second");
 
         BuiltInPipelineEngine engine = new BuiltInPipelineEngine(
-                resolver(), new ProcessActionRunner(), new ProcessActionRunner(), workspace);
+                PipelineEngineConfig.builder(resolver(), new ProcessActionRunner(),
+                        new ProcessActionRunner(), workspace).build());
 
         // 所选提交是第一次提交：即使工作区已改成 backend_test，预览仍应是 backend_build
         assertEquals("backend_build", buildStage(engine.preview("P", "release", "test", first)).action());

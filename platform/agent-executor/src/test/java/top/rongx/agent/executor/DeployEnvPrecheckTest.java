@@ -149,9 +149,12 @@ class DeployEnvPrecheckTest {
 
     private static BuiltInPipelineEngine engine(Path workspace, Path repo, Deployer deployer,
                                                 ProjectEnvVarRepository envVars) {
-        return new BuiltInPipelineEngine(NO_ACTION, HOST, HOST, workspace,
-                RunHistoryStore.disabled(), "ci", locator(repo), deployer,
-                null, null, envVars);
+        return new BuiltInPipelineEngine(PipelineEngineConfig
+                .builder(NO_ACTION, HOST, HOST, workspace)
+                .repoLocator(locator(repo))
+                .deployers(deployer)
+                .envVars(envVars)
+                .build());
     }
 
     private static Path newRepoWithPipeline(Path base, String pipelineYaml) throws Exception {

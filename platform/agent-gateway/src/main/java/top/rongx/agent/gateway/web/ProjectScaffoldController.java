@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.ProjectScaffolder;
@@ -155,11 +156,11 @@ public class ProjectScaffoldController {
     private Path readableRepo(String projectId) {
         if (repoLocator.modeOf(projectId) == ProjectRepoLocator.StorageMode.MANAGED) {
             return repoLocator.repoDir(projectId)
-                    .orElseThrow(() -> new IllegalStateException("项目仓库不存在：" + projectId));
+                    .orElseThrow(() -> DomainException.notFound("项目仓库不存在：" + projectId));
         }
         return repoLocator.repoDir(projectId)
                 .filter(Files::isDirectory)
-                .orElseThrow(() -> new IllegalStateException(
+                .orElseThrow(() -> DomainException.notFound(
                         "项目目录不存在，请先完成接入：" + projectId));
     }
 }

@@ -226,8 +226,12 @@ class PipelineDefinitionGuardTest {
                                                    PipelineDefStore store, ProjectScaffolder scaffolder,
                                                    PipelineDefAuthor author) {
         PipelineDefinitionResolver resolver = new PipelineDefinitionResolver(store, scaffolder, author);
-        return new BuiltInPipelineEngine(RESOLVER, HOST, HOST, workspace,
-                RunHistoryStore.disabled(), "ci", locator, Deployers.builtin(), resolver);
+        return new BuiltInPipelineEngine(PipelineEngineConfig
+                .builder(RESOLVER, HOST, HOST, workspace)
+                .repoLocator(locator)
+                .deployers(Deployers.builtin())
+                .resolver(resolver)
+                .build());
     }
 
     private static final ActionRunner HOST = new ProcessActionRunner();

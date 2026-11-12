@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.infra.git.ProjectIntakeService;
@@ -279,7 +280,7 @@ public class ProjectIntakeController {
                     : git.worktreesDir(id);
             Path target = base.resolve(worktree);
             if (!Files.isDirectory(target)) {
-                throw new IllegalArgumentException("工作树不存在：" + worktree);
+                throw DomainException.notFound("工作树不存在：" + worktree);
             }
             return target;
         }

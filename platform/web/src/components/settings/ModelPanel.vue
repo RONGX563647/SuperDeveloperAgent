@@ -1,23 +1,12 @@
 <script setup lang="ts">
-import { nextTick, ref, useTemplateRef } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { CircleCheck, CircleClose, Plus, Star } from '@element-plus/icons-vue'
 import {
   createModel, deleteModel, listModels, setDefaultModel, testModelDraft, updateModel,
-  type ModelConnection, type ModelConnectionInput, type TestResult
+  type ModelConnection, type ModelConnectionInput
 } from '../../api/settings'
-
-/**
- * 模型连接面板：列表 + **内联表单**（不弹浮层）+ 测试连接 + 设默认（运行时热切换）。
- */
-const models = ref<ModelConnection[]>([])
-const loading = ref(false)
-const formOpen = ref(false)
-const saving = ref(false)
-const testing = ref(false)
-const testResult = ref<TestResult | null>(null)
-const editing = ref<ModelConnection | null>(null)
-const formRef = useTemplateRef<HTMLElement>('formRef')
+import { useInlineCrud } from '../../composables/useInlineCrud'
+import { errorMessage } from '../../utils/feedback'
 
 // PRESETS 必须在 emptyForm() 首次调用之前初始化（const 有 TDZ）。
 const PRESETS = [
@@ -28,8 +17,15 @@ const PRESETS = [
   { key: 'custom', label: '自定义（OpenAI 兼容）', baseUrl: '', model: '' }
 ]
 
-function emptyForm(): ModelConnectionInput {
-  return {
+const {
+  items: models, loading, saving, testing, testResult, formOpen, editing, form, formRef,
+  load, openCreate, openEdit, closeForm, save, remove, runTest
+} = useInlineCrud<ModelConnection, ModelConnectionInput>({
+  list: listModels,
+  create: createModel,
+  update: updateModel,
+  remove: deleteModel,
+  emptyForm: () => ({
     name: '',
     provider: 'dashscope',
     baseUrl: PRESETS[0].baseUrl,
@@ -39,42 +35,8 @@ function emptyForm(): ModelConnectionInput {
     enabled: true,
     isDefault: false,
     apiKey: ''
-  }
-}
-
-const form = ref<ModelConnectionInput>(emptyForm())
-
-function applyPreset(key: string): void {
-  const preset = PRESETS.find((p) => p.key === key)
-  if (!preset) return
-  form.value.provider = preset.key
-  if (preset.baseUrl) form.value.baseUrl = preset.baseUrl
-  if (preset.model) form.value.modelName = preset.model
-}
-
-async function load(): Promise<void> {
-  loading.value = true
-  try {
-    models.value = await listModels()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载模型失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-async function openCreate(): Promise<void> {
-  editing.value = null
-  form.value = emptyForm()
-  testResult.value = null
-  formOpen.value = true
-  await nextTick()
-  formRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-}
-
-async function openEdit(model: ModelConnection): Promise<void> {
-  editing.value = model
-  form.value = {
+  }),
+  toForm: (model) => ({
     name: model.name,
     provider: model.provider,
     baseUrl: model.baseUrl,
@@ -84,73 +46,27 @@ async function openEdit(model: ModelConnection): Promise<void> {
     enabled: model.enabled,
     isDefault: model.isDefault,
     apiKey: ''
-  }
-  testResult.value = null
-  formOpen.value = true
-  await nextTick()
-  formRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-}
+  }),
+  removeTip: (model) => `删除模型连接「${model.name}」？`,
+  messages: { load: '加载模型失败', save: '保存失败', remove: '删除失败', saved: '已保存，新对话即刻生效' }
+})
 
-function closeForm(): void {
-  formOpen.value = false
-  testResult.value = null
-  editing.value = null
+function applyPreset(key: string): void {
+  const preset = PRESETS.find((p) => p.key === key)
+  if (!preset) return
+  form.value.provider = preset.key
+  if (preset.baseUrl) form.value.baseUrl = preset.baseUrl
+  if (preset.model) form.value.modelName = preset.model
 }
 
 /** 编辑态也测当前表单草稿：否则改了地址/模型再测，结果仍是第一次保存的配置。 */
-async function testCurrent(): Promise<void> {
-  testing.value = true
-  testResult.value = null
-  try {
-    testResult.value = await testModelDraft({
-      baseUrl: form.value.baseUrl,
-      modelName: form.value.modelName,
-      apiKey: form.value.apiKey,
-      connectionId: editing.value?.id
-    })
-    await load()
-  } catch (e) {
-    testResult.value = {
-      ok: false,
-      latencyMs: 0,
-      message: e instanceof Error ? e.message : '测试失败'
-    }
-  } finally {
-    testing.value = false
-  }
-}
-
-async function save(): Promise<void> {
-  saving.value = true
-  try {
-    if (editing.value) {
-      await updateModel(editing.value.id, form.value)
-    } else {
-      await createModel(form.value)
-    }
-    ElMessage.success('已保存，新对话即刻生效')
-    closeForm()
-    await load()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-async function remove(model: ModelConnection): Promise<void> {
-  const ok = await ElMessageBox.confirm(
-    `删除模型连接「${model.name}」？`, '删除确认',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-  ).then(() => true).catch(() => false)
-  if (!ok) return
-  try {
-    await deleteModel(model.id)
-    ElMessage.success('已删除')
-    await load()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '删除失败')
-  }
+function testCurrent(): Promise<void> {
+  return runTest((draft, id) => testModelDraft({
+    baseUrl: draft.baseUrl,
+    modelName: draft.modelName,
+    apiKey: draft.apiKey,
+    connectionId: id
+  }))
 }
 
 async function makeDefault(model: ModelConnection): Promise<void> {
@@ -159,7 +75,7 @@ async function makeDefault(model: ModelConnection): Promise<void> {
     ElMessage.success(`默认模型：${model.name}`)
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '设置失败')
+    ElMessage.error(errorMessage(e, '设置失败'))
   }
 }
 

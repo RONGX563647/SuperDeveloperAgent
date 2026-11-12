@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Delete, DocumentCopy, Edit, Hide, Key, Plus, Refresh, View } from '@element-plus/icons-vue'
 import { ApiError } from '../../api/http'
 import { listProjects, type ProjectRow } from '../../api/project'
@@ -12,8 +12,9 @@ import {
   type LocalServiceView, type PortLeaseView, type SourceEnvVariableView,
 } from '../../api/settings'
 import { appStore } from '../../stores/app'
-import { formatTime } from '../../utils/status'
+import { formatTime, formatClockSeconds } from '../../utils/status'
 import { envLabel } from '../../utils/pipelineLabels'
+import { errorMessage, notifyError, confirmAction } from '../../utils/feedback'
 
 /**
  * 项目环境（覆盖 + 注入视图）。
@@ -156,7 +157,7 @@ async function load(): Promise<void> {
   } catch (e) {
     effective.value = null
     envCheck.value = null
-    ElMessage.error(e instanceof Error ? e.message : '加载项目环境失败')
+    notifyError(e, '加载项目环境失败')
   } finally {
     loading.value = false
   }
@@ -185,13 +186,12 @@ async function redetect(): Promise<void> {
       ? '，自检无结果'
       : check.ok ? '，自检通过' : `，自检未通过：${check.problems[0] ?? ''}`
     const c = sourceCounts.value
-    const now = new Date()
-    const at = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+    const at = formatClockSeconds(Date.now())
     detectNote.value = `重新检测于 ${at}：${rows.value.length} 个变量`
       + `（中间件 ${c.RESOURCE} · 覆盖 ${c.OVERRIDE} · 模板 ${c.TEMPLATE} · 源码 .env ${c.SOURCE}）`
       + `${delta}${checkText}`
   } catch (e) {
-    detectNote.value = `重新检测失败：${e instanceof Error ? e.message : '未知错误'}`
+    detectNote.value = `重新检测失败：${errorMessage(e, '未知错误')}`
   } finally {
     detecting.value = false
   }
@@ -250,7 +250,7 @@ async function serviceAction(service: string, action: 'start' | 'stop' | 'restar
     else ElMessage.error(result.message || '操作失败')
     services.value = result.services
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '操作失败')
+    notifyError(e, '操作失败')
     await refreshServices()
   } finally {
     serviceBusy.value = ''
@@ -302,7 +302,7 @@ async function loadLogs(): Promise<void> {
     const result = await getLocalServiceLogs(projectId.value, logService.value, env.value, 200)
     logLines.value = result.lines
   } catch (e) {
-    logLines.value = [e instanceof Error ? e.message : '读取日志失败']
+    logLines.value = [errorMessage(e, '读取日志失败')]
   } finally {
     logLoading.value = false
   }
@@ -370,25 +370,24 @@ async function save(): Promise<void> {
     closeForm()
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+    notifyError(e, '保存失败')
   } finally {
     saving.value = false
   }
 }
 
 async function remove(v: EnvRowView): Promise<void> {
-  const ok = await ElMessageBox.confirm(
+  const ok = await confirmAction(
     `取消 ${v.key} 的项目覆盖？删除后会回退到模板值（若模板也没有则不注入）。`,
-    '删除项目覆盖',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-  ).then(() => true).catch(() => false)
+    '删除项目覆盖'
+  )
   if (!ok) return
   try {
     await deleteEnvOverride(projectId.value, env.value, v.key)
     ElMessage.success('已删除')
     await load()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+    notifyError(e, '删除失败')
   }
 }
 
@@ -413,7 +412,7 @@ async function toggleReveal(v: EnvRowView): Promise<void> {
     if (e instanceof ApiError && e.status === 403) {
       ElMessage.error('当前账号没有查看明文权限（需 settings:write / settings:reveal）')
     } else {
-      ElMessage.error(e instanceof Error ? e.message : '查看失败')
+      notifyError(e, '查看失败')
     }
   } finally {
     revealingKey.value = ''
@@ -471,7 +470,7 @@ async function importAll(): Promise<void> {
       })
       ok += 1
     } catch (e) {
-      failed.push(`${entry.key}: ${e instanceof Error ? e.message : String(e)}`)
+      failed.push(`${entry.key}: ${errorMessage(e, String(e))}`)
     }
   }
   importing.value = false

@@ -88,6 +88,13 @@ public class PipelineConfig {
         return new LocalDevHostDeployer(envStore, logRoot);
     }
 
+    /** 平台侧 deploy 段解析：环境页展示的端口/健康路径与真实部署保持一致。 */
+    @Bean
+    public top.rongx.agent.domain.port.DeployDefaultsReader deployDefaultsReader(
+            top.rongx.agent.domain.port.PipelineDefStore defStore) {
+        return new PipelineDeployDefaultsReader(defStore);
+    }
+
     @Bean
     public PipelineEngine pipelineEngine(ActionResolver recipes,
                                          @Qualifier("hostActionRunner") ProcessActionRunner host,
@@ -130,9 +137,21 @@ public class PipelineConfig {
                         return target == null ? java.util.List.of() : target.advise(ctx);
                     }
                 };
-        BuiltInPipelineEngine engine = new BuiltInPipelineEngine(recipes, sandboxed, host, root, store,
-                imagePrefix, repoLocator, deployers, resolver, recipeStore, envVars, envStore,
-                envRuntime, envProvisioner, lazyRecovery, localDevHost);
+        BuiltInPipelineEngine engine = new BuiltInPipelineEngine(PipelineEngineConfig
+                .builder(recipes, sandboxed, host, root)
+                .history(store)
+                .imagePrefix(imagePrefix)
+                .repoLocator(repoLocator)
+                .deployers(deployers)
+                .resolver(resolver)
+                .recipeStore(recipeStore)
+                .envVars(envVars)
+                .envStore(envStore)
+                .envRuntime(envRuntime)
+                .envProvisioner(envProvisioner)
+                .recoveryAdvisor(lazyRecovery)
+                .localDevHost(localDevHost)
+                .build());
         // 应用关闭时中断执行线程，避免悬挂构建进程。
         // 用虚拟线程工厂创建钩子线程（规约 R04 禁止 new Thread）；
         // 虚拟线程必须为 daemon，而 JVM 退出本身会回收这些轻量线程，关闭语义不受影响。

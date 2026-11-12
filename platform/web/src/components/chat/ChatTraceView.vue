@@ -5,6 +5,8 @@ import { CopyDocument, Search } from '@element-plus/icons-vue'
 import type { ToolActivity, TraceStep, TraceTurn } from '../../types'
 import { agentProfile } from '../../api/agent'
 import { formatAmount, formatCost, formatTokens } from '../../utils/deepseekPricing'
+import { errorMessage } from '../../utils/feedback'
+import { formatClockSeconds, formatDateTimeMillis } from '../../utils/status'
 
 /**
  * 轨迹视图：左侧密集步骤列表 + 右侧详情检查器（Detail Inspector）。
@@ -97,19 +99,6 @@ function duration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
   return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
-}
-
-function clock(at: number): string {
-  const d = new Date(at)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
-
-function fullTime(at: number): string {
-  const d = new Date(at)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-    + ` ${clock(at)}.${String(d.getMilliseconds()).padStart(3, '0')}`
 }
 
 function kindLabel(step: TraceStep): string {
@@ -233,7 +222,7 @@ async function loadPrompt(): Promise<void> {
   try {
     prompt.value = (await agentProfile(props.projectId, props.env)).prompt
   } catch (e) {
-    promptError.value = e instanceof Error ? e.message : '系统提示词加载失败'
+    promptError.value = errorMessage(e, '系统提示词加载失败')
   } finally {
     promptLoading.value = false
   }
@@ -328,7 +317,7 @@ watch(() => `${props.projectId}:${props.env}`, () => {
                 <span class="round-no mono">{{ String(turn.index).padStart(2, '0') }}</span>
                 <span class="round-q">{{ turn.question || '（无文本）' }}</span>
                 <span class="round-meta mono">
-                  {{ clock(turn.at) }} · {{ turn.steps }} 步 · {{ turn.tools }} 工具 · {{ duration(turnMs(turn)) }}
+                  {{ formatClockSeconds(turn.at) }} · {{ turn.steps }} 步 · {{ turn.tools }} 工具 · {{ duration(turnMs(turn)) }}
                 </span>
                 <span v-if="turn.cost" class="round-money mono">
                   ￥{{ formatAmount(turn.cost.totalCost) }}
@@ -383,7 +372,7 @@ watch(() => `${props.projectId}:${props.env}`, () => {
             <p class="insp-sub mono">
               <template v-if="rawToolName(selStep)">{{ rawToolName(selStep) }} · </template>
               第 {{ selTurn.index }} 轮 · 第 {{ stepIndex(selTurn, selStep) }} 步
-              · {{ clock(selStep.at) }} · {{ duration(selStep.durationMs) }}
+              · {{ formatClockSeconds(selStep.at) }} · {{ duration(selStep.durationMs) }}
               <template v-if="selStep.toolCallId"> · {{ selStep.toolCallId }}</template>
             </p>
 
@@ -419,7 +408,7 @@ watch(() => `${props.projectId}:${props.env}`, () => {
                   <dt>所属轮次</dt>
                   <dd>第 {{ selTurn.index }} 轮 · 第 {{ stepIndex(selTurn, selStep) }} 步</dd>
                   <dt>开始时间</dt>
-                  <dd class="mono">{{ fullTime(selStep.at) }}</dd>
+                  <dd class="mono">{{ formatDateTimeMillis(selStep.at) }}</dd>
                   <dt>估算耗时</dt>
                   <dd class="mono">{{ duration(selStep.durationMs) }}</dd>
                   <template v-if="selStep.cost">
@@ -520,8 +509,8 @@ watch(() => `${props.projectId}:${props.env}`, () => {
 
               <template v-else>
                 <dl class="kv">
-                  <dt>开始时间</dt><dd class="mono">{{ fullTime(selStep.at) }}</dd>
-                  <dt>结束时间</dt><dd class="mono">{{ fullTime(selStep.at + selStep.durationMs) }}</dd>
+                  <dt>开始时间</dt><dd class="mono">{{ formatDateTimeMillis(selStep.at) }}</dd>
+                  <dt>结束时间</dt><dd class="mono">{{ formatDateTimeMillis(selStep.at + selStep.durationMs) }}</dd>
                   <dt>估算耗时</dt><dd class="mono">{{ duration(selStep.durationMs) }}</dd>
                   <dt>计时来源</dt><dd>相邻事件时间戳之差</dd>
                 </dl>
@@ -541,7 +530,7 @@ watch(() => `${props.projectId}:${props.env}`, () => {
               <span v-if="selTurn.failed" class="insp-status failed">失败</span>
             </header>
             <p class="insp-sub mono">
-              {{ fullTime(selTurn.startedAt) }} · {{ duration(turnMs(selTurn)) }}
+              {{ formatDateTimeMillis(selTurn.startedAt) }} · {{ duration(turnMs(selTurn)) }}
             </p>
             <div class="insp-body">
               <div class="code-head"><span class="mono">用户输入</span></div>

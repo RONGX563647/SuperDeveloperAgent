@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getToken, login, setToken } from '../api/auth'
 import { appStore } from '../stores/app'
+import { errorMessage } from '../utils/feedback'
 
 const router = useRouter()
 const route = useRoute()
@@ -39,7 +40,7 @@ async function doLogin() {
     ElMessage.success(`欢迎，${result.displayName}（${result.role}）`)
     void router.push(redirect)
   } catch (error) {
-    errorText.value = error instanceof Error ? error.message : '登录失败'
+    errorText.value = errorMessage(error, '登录失败')
   } finally {
     busy.value = false
   }

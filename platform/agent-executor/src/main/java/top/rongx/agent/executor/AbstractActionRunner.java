@@ -42,7 +42,7 @@ public abstract class AbstractActionRunner implements ActionRunner {
 
     @Override
     public ActionResult run(Path workspace, ActionSpec spec) {
-        return run(workspace, spec, () -> false);
+        return run(workspace, spec, ProcessExecutor.NEVER);
     }
 
     @Override

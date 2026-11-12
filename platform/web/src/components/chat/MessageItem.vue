@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { CopyDocument } from '@element-plus/icons-vue'
 import type { ChatMessage, ToolActivity } from '../../types'
+import { formatClock } from '../../utils/status'
 import MarkdownView from './MarkdownView.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 
@@ -77,11 +78,7 @@ watch(() => props.tool?.status, (now, prev) => {
   if (prev === 'RUNNING' && now && now !== 'RUNNING') resultOpen.value = false
 })
 
-const time = computed(() => {
-  const d = new Date(props.message.at)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
-})
+const time = computed(() => formatClock(props.message.at))
 </script>
 
 <template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   decommission, listProjects, scaffoldApply, scaffoldPreview,
   type ProjectRow, type ScaffoldPlan,
@@ -14,6 +14,7 @@ import ProjectOverview from '../components/project/ProjectOverview.vue'
 import FilePreview from '../components/project/FilePreview.vue'
 import TabbedFiles from '../components/project/TabbedFiles.vue'
 import type { TreeNode } from '../components/project/useProjectTree'
+import { notifyError, confirmAction } from '../utils/feedback'
 
 /**
  * 项目管理工作台（原"项目列表"重构）：
@@ -63,7 +64,7 @@ async function openScaffold(): Promise<void> {
   try {
     scaffoldPlan.value = await scaffoldPreview(scaffoldProjectId.value, scaffoldTarget.value)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '生成预览失败')
+    notifyError(e, '生成预览失败')
     scaffoldDialog.value = false
   } finally {
     scaffoldLoading.value = false
@@ -76,7 +77,7 @@ async function reloadScaffold(): Promise<void> {
   try {
     scaffoldPlan.value = await scaffoldPreview(scaffoldProjectId.value, scaffoldTarget.value)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '生成预览失败')
+    notifyError(e, '生成预览失败')
   } finally {
     scaffoldLoading.value = false
   }
@@ -98,7 +99,7 @@ async function applyScaffold(): Promise<void> {
       : '已保存到平台，可直接在流水线页运行')
     scaffoldDialog.value = false
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '写入失败')
+    notifyError(e, '写入失败')
   } finally {
     scaffoldApplying.value = false
   }
@@ -109,7 +110,7 @@ async function load(): Promise<void> {
   try {
     projects.value = await listProjects()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载项目失败')
+    notifyError(e, '加载项目失败')
   } finally {
     loading.value = false
   }
@@ -137,11 +138,10 @@ async function onAction(action: 'refresh' | 'rename' | 'delete', node: TreeNode)
   }
   if (action === 'delete') {
     if (node.kind === 'project') {
-      const confirmed = await ElMessageBox.confirm(
+      const confirmed = await confirmAction(
         `下线项目「${node.name}」？平台将移除托管元数据与工作树，你的本地目录不受影响。`,
-        '删除项目',
-        { confirmButtonText: '下线', cancelButtonText: '取消', type: 'warning' },
-      ).catch(() => false)
+        '删除项目'
+      )
       if (!confirmed) return
       try {
         await decommission(node.projectId)
@@ -149,7 +149,7 @@ async function onAction(action: 'refresh' | 'rename' | 'delete', node: TreeNode)
         if (selected.value?.projectId === node.projectId) selected.value = null
         await load()
       } catch (e) {
-        ElMessage.error(e instanceof Error ? e.message : '下线失败')
+        notifyError(e, '下线失败')
       }
       return
     }

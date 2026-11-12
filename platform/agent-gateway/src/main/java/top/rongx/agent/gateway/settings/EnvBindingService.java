@@ -20,7 +20,9 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.ProjectEnvFiles;
+import top.rongx.agent.domain.env.SecretNames;
 import top.rongx.agent.domain.env.StackAdapter;
+import top.rongx.agent.domain.error.DomainException;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 
 /**
@@ -167,7 +169,7 @@ public class EnvBindingService implements EnvBindingPort {
 
     private EnvBinding requireBinding(String bindingId) {
         return envStore.binding(bindingId).orElseThrow(() ->
-                new IllegalArgumentException("环境绑定不存在：" + bindingId));
+                DomainException.notFound("环境绑定不存在：" + bindingId));
     }
 
     /**
@@ -193,9 +195,7 @@ public class EnvBindingService implements EnvBindingPort {
 
     /** 变量名是否像敏感信息（设置页据此决定是否掩码）。 */
     public static boolean looksSecret(String key) {
-        String k = key.toUpperCase(java.util.Locale.ROOT);
-        return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
-                || k.endsWith("_KEY");
+        return SecretNames.isSecret(key);
     }
 
     static String sha256(String text) {

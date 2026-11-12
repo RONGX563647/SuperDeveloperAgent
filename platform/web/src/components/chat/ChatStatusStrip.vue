@@ -10,6 +10,7 @@ import {
   type ModelConnection, type ModelOptions
 } from '../../api/settings'
 import { gitCheckout, gitStatus, listProjects, type GitStatus, type ProjectRow } from '../../api/project'
+import { errorMessage, notifyError } from '../../utils/feedback'
 
 /**
  * 对话状态条：上下文用量 / 权限 / 工作树 / 模型快捷切换。
@@ -130,7 +131,7 @@ async function pickBranch(branch: string): Promise<void> {
     await loadGit()
     ElMessage.success(`已切换到分支 ${branch}`)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '分支切换失败')
+    notifyError(e, '分支切换失败')
   } finally {
     switchingBranch.value = ''
   }
@@ -172,7 +173,7 @@ async function loadModels(): Promise<void> {
   } catch (e) {
     models.value = []
     active.value = null
-    modelsError.value = (e instanceof Error ? e.message : '模型接口不可用').slice(0, 120)
+    modelsError.value = errorMessage(e, '模型接口不可用').slice(0, 120)
   } finally {
     modelsLoading.value = false
   }
@@ -187,7 +188,7 @@ async function pickModel(id: string): Promise<void> {
     const picked = models.value.find((m) => m.id === id)
     ElMessage.success(`已切换模型：${picked?.name ?? id}`)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '模型切换失败')
+    notifyError(e, '模型切换失败')
   } finally {
     switching.value = ''
   }

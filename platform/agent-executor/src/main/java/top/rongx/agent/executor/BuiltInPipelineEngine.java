@@ -2,8 +2,6 @@ package top.rongx.agent.executor;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -36,6 +34,7 @@ import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.PortLease;
+import top.rongx.agent.domain.net.PortProbe;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.PipelineEngine;
@@ -124,203 +123,25 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         workers.shutdownNow();
     }
 
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot) {
-        this(recipes, sandboxed, host, workspaceRoot, RunHistoryStore.disabled(), "ci");
-    }
-
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history) {
-        this(recipes, sandboxed, host, workspaceRoot, history, "ci");
-    }
-
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, null);
-    }
-
-    /** v2：带仓库定位器的构造（DIRECT 模式：仓库在用户目录）。 */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, Deployers.builtin());
-    }
-
-    /** 完整构造：额外注入平台部署器（DOCKER/HOST/SERVER）。 */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers, null);
-    }
-
-    /**
-     * 最完整构造：再注入定义解析器（平台侧定义 + 自动生成 + agent 兜底）。
-     *
-     * <p>{@code resolver} 为空时退化为"只认检出目录里的 ci/pipeline.yml"，
-     * 仅用于单测；生产装配必须提供。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
-                resolver, null);
-    }
-
-    /**
-     * 最完整构造：再注入环境级可复现脚本存储（recipe）。
-     *
-     * <p>给了 recipeStore 就有了三件事：运行成功自动固化、重放优先用固化脚本、
-     * 服务器环境前置"测试机成功案例"校验。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator,
-                deployers, resolver, recipeStore, null);
-    }
-
-    /**
-     * 最完整构造：再注入项目环境变量仓储（部署时注入 KEY=VALUE）。
-     *
-     * <p>环境变量按 (projectId, env) 读取，来自「设置 → 项目环境」；为空时部署行为与之前一致。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator,
-                deployers, resolver, recipeStore, envVars, null);
-    }
-
-    /**
-     * 最完整构造：再注入环境模板仓储（三套环境 + 中间件 + 项目覆盖 + 端口租约）。
-     *
-     * <p>非空时部署走新链路：有效变量来自环境模板 + 项目覆盖、注入网络、端口租约；
-     * 为空时退化为旧的 per-project 变量，方便单测与渐进迁移。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
-                                 top.rongx.agent.domain.env.EnvironmentStore envStore) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator,
-                deployers, resolver, recipeStore, envVars, envStore, null);
-    }
-
-    /**
-     * 最完整构造：再注入中间件运行时（部署前自动启动项目引用的 docker 中间件）。
-     *
-     * <p>为空时退化为"只读检查"，不会启停任何容器，方便单测。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
-                                 top.rongx.agent.domain.env.EnvironmentStore envStore,
-                                 top.rongx.agent.domain.env.EnvRuntime envRuntime) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
-                resolver, recipeStore, envVars, envStore, envRuntime, null);
-    }
-
-    /**
-     * 最完整构造：再注入环境容器自愈（部署前按需创建项目隔离的中间件容器）。
-     *
-     * <p>为空时只启动已登记的资源，不会创建新容器，方便单测。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
-                                 top.rongx.agent.domain.env.EnvironmentStore envStore,
-                                 top.rongx.agent.domain.env.EnvRuntime envRuntime,
-                                 top.rongx.agent.domain.env.EnvProvisioner envProvisioner) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator,
-                deployers, resolver, recipeStore, envVars, envStore, envRuntime, envProvisioner, null);
-    }
-
-    /**
-     * 最完整构造：再注入失败自动诊断（部署 Agent）。
-     *
-     * <p>为空时失败即终态，不调用任何模型，方便单测与无模型部署。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
-                                 top.rongx.agent.domain.env.EnvironmentStore envStore,
-                                 top.rongx.agent.domain.env.EnvRuntime envRuntime,
-                                 top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
-                                 top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
-                resolver, recipeStore, envVars, envStore, envRuntime, envProvisioner,
-                recoveryAdvisor, null);
-    }
-
-    /**
-     * 最完整构造：再注入开发环境本机托管（后端 jar + 前端 dist）。
-     *
-     * <p>为空时 dev 只能走 Docker；单测与不支持本机模式的装配保持旧行为。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
-                                 top.rongx.agent.domain.env.EnvironmentStore envStore,
-                                 top.rongx.agent.domain.env.EnvRuntime envRuntime,
-                                 top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
-                                 top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor,
-                                 LocalDevHostDeployer localDevHost) {
-        this.recipes = recipes;
-        this.sandboxed = sandboxed;
-        this.host = host;
-        this.workspaceRoot = workspaceRoot;
-        this.history = history == null ? RunHistoryStore.disabled() : history;
-        this.imagePrefix = imagePrefix == null || imagePrefix.isBlank() ? "ci" : imagePrefix;
-        this.repoLocator = repoLocator;
-        this.deployers = deployers == null ? Deployers.builtin() : deployers;
-        this.resolver = resolver;
-        this.recipeStore = recipeStore;
-        this.envVars = envVars;
-        this.envStore = envStore;
-        this.envRuntime = envRuntime;
-        this.envProvisioner = envProvisioner;
-        this.recoveryAdvisor = recoveryAdvisor;
-        this.localDevHost = localDevHost;
+    /** 装配入口：所有依赖通过 {@link PipelineEngineConfig} 一次性传入。 */
+    public BuiltInPipelineEngine(PipelineEngineConfig config) {
+        this.recipes = config.recipes();
+        this.sandboxed = config.sandboxed();
+        this.host = config.host();
+        this.workspaceRoot = config.workspaceRoot();
+        this.history = config.history() == null ? RunHistoryStore.disabled() : config.history();
+        this.imagePrefix = config.imagePrefix() == null || config.imagePrefix().isBlank()
+                ? "ci" : config.imagePrefix();
+        this.repoLocator = config.repoLocator();
+        this.deployers = config.deployers() == null ? Deployers.builtin() : config.deployers();
+        this.resolver = config.resolver();
+        this.recipeStore = config.recipeStore();
+        this.envVars = config.envVars();
+        this.envStore = config.envStore();
+        this.envRuntime = config.envRuntime();
+        this.envProvisioner = config.envProvisioner();
+        this.recoveryAdvisor = config.recoveryAdvisor();
+        this.localDevHost = config.localDevHost();
         restoreHistory();
     }
 
@@ -708,7 +529,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private List<String> defaultBranches(Path repo) {
         List<String> branches = new ArrayList<>();
         ActionResult head = host.run(repo, spec("pipeline-check", List.of(
-                List.of("git", "symbolic-ref", "--short", "HEAD"))), () -> false);
+                List.of("git", "symbolic-ref", "--short", "HEAD"))), ProcessExecutor.NEVER);
         if (head.result().status() == StageStatus.SUCCEEDED) {
             String name = head.logTail().trim();
             if (!name.isEmpty()) {
@@ -2109,13 +1930,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         List<String> branches = defaultBranches(bare);
         for (String branch : branches) {
             ActionResult reviewed = host.run(bare, spec("deploy-guard", List.of(
-                    List.of("git", "rev-parse", "--verify", branch + ":ci/pipeline.yml"))), () -> false);
+                    List.of("git", "rev-parse", "--verify", branch + ":ci/pipeline.yml"))), ProcessExecutor.NEVER);
             if (reviewed.result().status() != StageStatus.SUCCEEDED) {
                 continue;
             }
             String reviewedHash = reviewed.logTail().trim();
             ActionResult current = host.run(runDir, spec("deploy-guard", List.of(
-                    List.of("git", "hash-object", "ci/pipeline.yml"))), () -> false);
+                    List.of("git", "hash-object", "ci/pipeline.yml"))), ProcessExecutor.NEVER);
             if (current.result().status() != StageStatus.SUCCEEDED) {
                 state.log.append("[guard] 无法计算本次 pipeline.yml 哈希，跳过校验\n");
                 return true;
@@ -2172,17 +1993,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return true;
         }
 
-        EffectiveEnvironment effective = envStore == null
-                ? null : envStore.effective(state.projectId, state.env);
-        Map<String, String> deployEnv = effective != null
-                ? effective.values() : loadDeployEnv(state);
-        String network = effective == null ? null : effective.network();
-        // 环境模板绑定：运行形态 / 命名空间 / 服务器，部署语义以模板为准。
-        top.rongx.agent.domain.env.EnvTemplate template = envStore == null
-                ? null : envStore.template(state.env).orElse(null);
-        String serverId = spec.serverId() != null
-                ? spec.serverId() : (template == null ? null : template.serverId());
-
         // 部署目标自愈：产物是镜像就不可能用 HOST 跑起来，产物是 jar 就没必要再起容器。
         // 环境策略/前端默认值都可能给出错的目标，这里按本次真实产物纠正，并在日志说明。
         DeployTarget reconciled = reconcileTarget(state, target, image, rollback, runDir, spec);
@@ -2195,94 +2005,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         target = reconciled;
 
-        // 环境容器自愈（E-509 之前）：必填变量指向的中间件缺失时按需创建，
-        // 连接信息写入项目覆盖；密钥类必填变量缺失时自动生成。失败才 fail-closed。
-        if (envProvisioner != null && envStore != null && spec.envRequired() != null
-                && !spec.envRequired().isEmpty()) {
-            top.rongx.agent.domain.env.EnvProvisioner.Result provision =
-                    envProvisioner.ensure(state.projectId, state.env, spec.envRequired());
-            if (!provision.injected().isEmpty()) {
-                state.log.append("[env] 已按项目 .env 注入变量：")
-                        .append(String.join("、", provision.injected()))
-                        .append("（值不回显）\n");
-            }
-            if (!provision.created().isEmpty()) {
-                state.log.append("[env] 已创建中间件容器：")
-                        .append(String.join("、", provision.created())).append('\n');
-            }
-            if (!provision.started().isEmpty()) {
-                state.log.append("[env] 已启动中间件容器：")
-                        .append(String.join("、", provision.started())).append('\n');
-            }
-            if (!provision.generated().isEmpty()) {
-                state.log.append("[env] 已自动生成变量：")
-                        .append(String.join("、", provision.generated()))
-                        .append("（写入项目环境覆盖）\n");
-            }
-            if (!provision.ok()) {
-                state.stages.add(StageResult.failed(stageId, 1, "E-702",
-                        provision.message() + "。请检查本机 Docker 是否可用，或在「设置 → 环境」手动处理",
-                        elapsed(start)));
-                return false;
-            }
-            effective = envStore.effective(state.projectId, state.env);
-            deployEnv = effective.values();
-            network = effective.network();
-        }
-
-        // 应用也是容器：必须和中间件同处一个环境网络，才能用「容器名:容器端口」连接。
-        if (target == DeployTarget.DOCKER && (network == null || network.isBlank())) {
-            String namespace = template == null || template.namespace() == null
-                    || template.namespace().isBlank()
-                    ? "agent-" + state.env : template.namespace().trim();
-            String envNetwork = namespace + "-net";
-            StringBuilder netLog = new StringBuilder();
-            if (dockerDeployer.ensureNetwork(runDir, envNetwork, netLog)) {
-                network = envNetwork;
-                state.log.append("[deploy] 应用容器加入环境网络 ").append(envNetwork)
-                        .append("（与中间件同网，连接信息使用容器名）\n");
-            } else {
-                state.log.append("[deploy] 环境网络 ").append(envNetwork)
-                        .append(" 创建失败，按宿主机端口部署\n");
-            }
-        }
-
-        // E-509 部署前预检：应用声明的必填环境变量必须在环境模板/项目覆盖里配齐。
-        List<String> missingEnv = missingRequiredEnv(spec, deployEnv);
-        if (!missingEnv.isEmpty()) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-509",
-                    "部署前环境配置检查未通过：环境「" + state.env + "」缺少必填环境变量 "
-                            + String.join("、", missingEnv)
-                            + "。请到「设置 → 环境」或「项目覆盖」填写后重试（本次未启动容器）",
-                    elapsed(start)));
-            state.log.append("[deploy] E-509 预检失败：缺少 ").append(String.join("、", missingEnv))
-                    .append("——请到「设置 → 环境」或「项目覆盖」填写（未启动容器）\n");
+        DeployEnvironment env = prepareDeployEnvironment(state, spec, target, runDir, stageId, start);
+        if (env == null) {
             return false;
         }
-        if (!spec.envRequired().isEmpty()) {
-            state.log.append("[deploy] 环境配置预检通过：必填 ")
-                    .append(spec.envRequired().size()).append(" 项已配齐\n");
-        }
-
-        // 中间件预检（会尝试启动）：容器"没启动"不算异常，部署前把项目实际引用的
-        // 中间件自动拉起来；只有启动失败 / 连接信息缺失才 fail-closed。
-        if (effective != null && envRuntime != null) {
-            top.rongx.agent.domain.env.EnvRuntime.Result runtime =
-                    envRuntime.ensureRunning(state.projectId, state.env);
-            state.log.append("[middleware] ").append(runtime.message()).append('\n');
-            if (!runtime.ok()) {
-                state.stages.add(StageResult.failed(stageId, 1, "E-701",
-                        runtime.message() + "。请到「设置 → 环境」检查中间件连接信息或手动启动后重试",
-                        elapsed(start)));
-                return false;
-            }
-        }
+        Map<String, String> deployEnv = env.deployEnv();
+        String network = env.network();
 
         // test 形态：前后端各一个容器（nginx 反代到 <project>-backend:8080），
         // 网络与数据卷按命名空间隔离，走独立的多服务分支。
         if (target == DeployTarget.DOCKER && !spec.services().isEmpty()) {
             return deployServiceSet(state, runDir, start, stageId, spec, deployEnv, network,
-                    template, rollback, image);
+                    env.template(), rollback, image);
         }
 
         // 端口租约：冲突时自动在期望端口之后找空闲端口，保证同项目重复发布端点稳定。
@@ -2296,13 +2030,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     ? List.of(oldContainer) : List.of(oldContainer, legacyContainer);
             for (String old : toRemove) {
                 ActionResult stopped = host.run(runDir, spec("deploy-stop-old",
-                        List.of(List.of("docker", "rm", "-f", old))), () -> false);
+                        List.of(List.of("docker", "rm", "-f", old))), ProcessExecutor.NEVER);
                 if (stopped.result().status() == StageStatus.SUCCEEDED) {
                     state.log.append("[deploy] 已停止上一版容器 ").append(old).append('\n');
                 }
             }
             // docker rm 后宿主端口由 docker-proxy 异步释放：短暂等待可避免端口无谓漂移
-            for (int i = 0; i < 20 && spec.port() > 0 && !portFree(spec.port()); i++) {
+            for (int i = 0; i < 20 && spec.port() > 0 && !PortProbe.free(spec.port()); i++) {
                 try {
                     Thread.sleep(150);
                 } catch (InterruptedException e) {
@@ -2315,35 +2049,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
         // 运行环境快照（放在端口分配后，快照里能带上本次租约端口）：
         // 只存来源、key 与值哈希，既可追溯"这次用了哪套变量"，又不泄露明文。
-        if (effective != null) {
-            long secretCount = effective.vars().stream().filter(v -> v.secret()).count();
-            String digest = envDigest(deployEnv);
-            state.log.append("[env] 环境=").append(state.env)
-                    .append("，变量 ").append(deployEnv.size())
-                    .append("（模板 ").append(effective.templateCount())
-                    .append(" / 覆盖 ").append(effective.overrideCount())
-                    .append("，敏感 ").append(secretCount)
-                    .append("），网络=").append(network == null || network.isBlank() ? "（默认）" : network)
-                    .append("，端口=").append(hostPort)
-                    .append("，快照=").append(digest, 0, 12)
-                    .append(state.actor == null || state.actor.isBlank() ? "" : "，触发=" + state.actor)
-                    .append('\n');
-            Map<String, String> snapshot = new java.util.LinkedHashMap<>();
-            snapshot.put("variableCount", String.valueOf(deployEnv.size()));
-            snapshot.put("templateCount", String.valueOf(effective.templateCount()));
-            snapshot.put("overrideCount", String.valueOf(effective.overrideCount()));
-            snapshot.put("secretCount", String.valueOf(secretCount));
-            snapshot.put("network", network == null ? "" : network);
-            snapshot.put("portLease", String.valueOf(hostPort));
-            if (state.bindingId != null) {
-                snapshot.put("bindingId", state.bindingId);
-                snapshot.put("confirmedBy", state.confirmedBy == null ? "" : state.confirmedBy);
-            }
-            deployEnv.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey())
-                    .forEach(e -> snapshot.put("keyHash:" + e.getKey(), sha256(e.getValue())));
-            state.artifacts.add(new ArtifactRef("env-snapshot", "env:" + state.env, digest, 0, snapshot));
-        }
+        recordEnvSnapshot(state, env.effective(), deployEnv, network, hostPort);
 
         DeployRequest request = new DeployRequest(
                 state.projectId,
@@ -2359,7 +2065,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 spec.healthPath(),
                 previous,
                 rollback,
-                serverId,
+                env.serverId(),
                 deployEnv,
                 network,
                 state.env);
@@ -2396,6 +2102,153 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.stages.add(StageResult.success(label, 0, artifacts, elapsed(start)));
         state.artifacts.addAll(artifacts);
         return true;
+    }
+
+    /** 部署环境准备结果：变量、网络、模板与服务器一次性带给部署请求与快照。 */
+    private record DeployEnvironment(EffectiveEnvironment effective, Map<String, String> deployEnv,
+                                     String network,
+                                     top.rongx.agent.domain.env.EnvTemplate template,
+                                     String serverId) {
+    }
+
+    /**
+     * 部署第二阶段：变量注入、网络准备与中间件自愈/预检。
+     *
+     * @return null 表示已写入失败 stage（E-702 / E-509 / E-701），调用方直接结束
+     */
+    private DeployEnvironment prepareDeployEnvironment(RunState state,
+                                                       PipelineDefinition.DeploySpec spec,
+                                                       DeployTarget target, Path runDir,
+                                                       String stageId, long start) {
+        EffectiveEnvironment effective = envStore == null
+                ? null : envStore.effective(state.projectId, state.env);
+        Map<String, String> deployEnv = effective != null
+                ? effective.values() : loadDeployEnv(state);
+        String network = effective == null ? null : effective.network();
+        // 环境模板绑定：运行形态 / 命名空间 / 服务器，部署语义以模板为准。
+        top.rongx.agent.domain.env.EnvTemplate template = envStore == null
+                ? null : envStore.template(state.env).orElse(null);
+        String serverId = spec.serverId() != null
+                ? spec.serverId() : (template == null ? null : template.serverId());
+
+        // 环境容器自愈（E-509 之前）：必填变量指向的中间件缺失时按需创建，
+        // 连接信息写入项目覆盖；密钥类必填变量缺失时自动生成。失败才 fail-closed。
+        if (envProvisioner != null && envStore != null && spec.envRequired() != null
+                && !spec.envRequired().isEmpty()) {
+            top.rongx.agent.domain.env.EnvProvisioner.Result provision =
+                    envProvisioner.ensure(state.projectId, state.env, spec.envRequired());
+            if (!provision.injected().isEmpty()) {
+                state.log.append("[env] 已按项目 .env 注入变量：")
+                        .append(String.join("、", provision.injected()))
+                        .append("（值不回显）\n");
+            }
+            if (!provision.created().isEmpty()) {
+                state.log.append("[env] 已创建中间件容器：")
+                        .append(String.join("、", provision.created())).append('\n');
+            }
+            if (!provision.started().isEmpty()) {
+                state.log.append("[env] 已启动中间件容器：")
+                        .append(String.join("、", provision.started())).append('\n');
+            }
+            if (!provision.generated().isEmpty()) {
+                state.log.append("[env] 已自动生成变量：")
+                        .append(String.join("、", provision.generated()))
+                        .append("（写入项目环境覆盖）\n");
+            }
+            if (!provision.ok()) {
+                state.stages.add(StageResult.failed(stageId, 1, "E-702",
+                        provision.message() + "。请检查本机 Docker 是否可用，或在「设置 → 环境」手动处理",
+                        elapsed(start)));
+                return null;
+            }
+            effective = envStore.effective(state.projectId, state.env);
+            deployEnv = effective.values();
+            network = effective.network();
+        }
+
+        // 应用也是容器：必须和中间件同处一个环境网络，才能用「容器名:容器端口」连接。
+        if (target == DeployTarget.DOCKER && (network == null || network.isBlank())) {
+            String namespace = template == null || template.namespace() == null
+                    || template.namespace().isBlank()
+                    ? "agent-" + state.env : template.namespace().trim();
+            String envNetwork = namespace + "-net";
+            StringBuilder netLog = new StringBuilder();
+            if (dockerDeployer.ensureNetwork(runDir, envNetwork, netLog)) {
+                network = envNetwork;
+                state.log.append("[deploy] 应用容器加入环境网络 ").append(envNetwork)
+                        .append("（与中间件同网，连接信息使用容器名）\n");
+            } else {
+                state.log.append("[deploy] 环境网络 ").append(envNetwork)
+                        .append(" 创建失败，按宿主机端口部署\n");
+            }
+        }
+
+        // E-509 部署前预检：应用声明的必填环境变量必须在环境模板/项目覆盖里配齐。
+        List<String> missingEnv = missingRequiredEnv(spec, deployEnv);
+        if (!missingEnv.isEmpty()) {
+            state.stages.add(StageResult.failed(stageId, 1, "E-509",
+                    "部署前环境配置检查未通过：环境「" + state.env + "」缺少必填环境变量 "
+                            + String.join("、", missingEnv)
+                            + "。请到「设置 → 环境」或「项目覆盖」填写后重试（本次未启动容器）",
+                    elapsed(start)));
+            state.log.append("[deploy] E-509 预检失败：缺少 ").append(String.join("、", missingEnv))
+                    .append("——请到「设置 → 环境」或「项目覆盖」填写（未启动容器）\n");
+            return null;
+        }
+        if (!spec.envRequired().isEmpty()) {
+            state.log.append("[deploy] 环境配置预检通过：必填 ")
+                    .append(spec.envRequired().size()).append(" 项已配齐\n");
+        }
+
+        // 中间件预检（会尝试启动）：容器"没启动"不算异常，部署前把项目实际引用的
+        // 中间件自动拉起来；只有启动失败 / 连接信息缺失才 fail-closed。
+        if (effective != null && envRuntime != null) {
+            top.rongx.agent.domain.env.EnvRuntime.Result runtime =
+                    envRuntime.ensureRunning(state.projectId, state.env);
+            state.log.append("[middleware] ").append(runtime.message()).append('\n');
+            if (!runtime.ok()) {
+                state.stages.add(StageResult.failed(stageId, 1, "E-701",
+                        runtime.message() + "。请到「设置 → 环境」检查中间件连接信息或手动启动后重试",
+                        elapsed(start)));
+                return null;
+            }
+        }
+        return new DeployEnvironment(effective, deployEnv, network, template, serverId);
+    }
+
+    /** 运行环境快照：只存来源、key 与值哈希，可追溯又不泄露明文。 */
+    private void recordEnvSnapshot(RunState state, EffectiveEnvironment effective,
+                                   Map<String, String> deployEnv, String network, int hostPort) {
+        if (effective == null) {
+            return;
+        }
+        long secretCount = effective.vars().stream().filter(v -> v.secret()).count();
+        String digest = envDigest(deployEnv);
+        state.log.append("[env] 环境=").append(state.env)
+                .append("，变量 ").append(deployEnv.size())
+                .append("（模板 ").append(effective.templateCount())
+                .append(" / 覆盖 ").append(effective.overrideCount())
+                .append("，敏感 ").append(secretCount)
+                .append("），网络=").append(network == null || network.isBlank() ? "（默认）" : network)
+                .append("，端口=").append(hostPort)
+                .append("，快照=").append(digest, 0, 12)
+                .append(state.actor == null || state.actor.isBlank() ? "" : "，触发=" + state.actor)
+                .append('\n');
+        Map<String, String> snapshot = new java.util.LinkedHashMap<>();
+        snapshot.put("variableCount", String.valueOf(deployEnv.size()));
+        snapshot.put("templateCount", String.valueOf(effective.templateCount()));
+        snapshot.put("overrideCount", String.valueOf(effective.overrideCount()));
+        snapshot.put("secretCount", String.valueOf(secretCount));
+        snapshot.put("network", network == null ? "" : network);
+        snapshot.put("portLease", String.valueOf(hostPort));
+        if (state.bindingId != null) {
+            snapshot.put("bindingId", state.bindingId);
+            snapshot.put("confirmedBy", state.confirmedBy == null ? "" : state.confirmedBy);
+        }
+        deployEnv.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(e -> snapshot.put("keyHash:" + e.getKey(), sha256(e.getValue())));
+        state.artifacts.add(new ArtifactRef("env-snapshot", "env:" + state.env, digest, 0, snapshot));
     }
 
     /**
@@ -2566,11 +2419,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         PortLease lease = envStore.lease(state.projectId, state.env, containerPort).orElse(null);
         int candidate = lease == null ? desired : lease.hostPort();
-        boolean free = target == DeployTarget.SERVER || portFree(candidate);
+        boolean free = target == DeployTarget.SERVER || PortProbe.free(candidate);
         if (!free) {
             int found = -1;
             for (int p = Math.max(1, desired) + 1; p <= desired + 200; p++) {
-                if (portFree(p)) {
+                if (PortProbe.free(p)) {
                     found = p;
                     break;
                 }
@@ -2610,16 +2463,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             port = allocateHostPort(state, DeployTarget.HOST, port + 1, containerPort);
         }
         throw new IllegalStateException("端口分配失败：从 " + desired + " 起找不到可用端口");
-    }
-
-    private static boolean portFree(int port) {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(false);
-            socket.bind(new InetSocketAddress("0.0.0.0", port));
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     /** 从部署 endpoint 取出实际端口（http://host:port/path）；解析失败返回 -1。 */
@@ -2751,7 +2594,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         ActionResult probe = host.run(Path.of("."), spec("health-probe", List.of(
                 List.of("docker", "inspect", "-f",
-                        "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", resource))), () -> false);
+                        "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", resource))), ProcessExecutor.NEVER);
         if (probe.result().status() != StageStatus.SUCCEEDED) {
             return true; // 探测失败不阻塞：HTTP 已通即认为服务可用
         }
@@ -2763,7 +2606,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private String containerExitInfo(RunState state, String resource) {
         ActionResult probe = host.run(Path.of("."), spec("health-probe", List.of(
                 List.of("docker", "inspect", "-f",
-                        "{{.State.Status}} {{.State.ExitCode}}", resource))), () -> false);
+                        "{{.State.Status}} {{.State.ExitCode}}", resource))), ProcessExecutor.NEVER);
         if (probe.result().status() != StageStatus.SUCCEEDED) {
             return null;
         }
@@ -2800,7 +2643,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return;
         }
         host.run(Path.of("."), spec("health-cleanup", List.of(
-                List.of("docker", "rm", "-f", resource))), () -> false);
+                List.of("docker", "rm", "-f", resource))), ProcessExecutor.NEVER);
         state.log.append('[').append(stageId).append("] 已移除健康检查失败的容器 ")
                 .append(resource).append('\n');
     }
@@ -2818,7 +2661,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return null;
         }
         ActionResult logs = host.run(Path.of("."), spec("health-diag", List.of(
-                List.of("docker", "logs", "--tail", "20", resource))), () -> false);
+                List.of("docker", "logs", "--tail", "20", resource))), ProcessExecutor.NEVER);
         String tail = logs.logTail() == null ? "" : logs.logTail().trim();
         if (tail.isEmpty()) {
             return null;
@@ -2872,7 +2715,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 continue;
             }
             ActionResult result = host.run(runDir, substitute(spec.get(), Map.copyOf(merged)),
-                    () -> false);
+                    ProcessExecutor.NEVER);
             state.log.append("[on-failure:").append(stage.id()).append("] ")
                     .append(result.logTail()).append('\n');
             state.stages.add(rename(result.result(), "on-failure:" + stage.id()));
@@ -2881,7 +2724,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private String imageDigest(Path runDir, String tag) {
         ActionResult r = host.run(runDir, spec("image-digest", List.of(
-                List.of("docker", "image", "inspect", "--format", "{{.Id}}", tag))), () -> false);
+                List.of("docker", "image", "inspect", "--format", "{{.Id}}", tag))), ProcessExecutor.NEVER);
         if (r.result().status() != StageStatus.SUCCEEDED) {
             return null;
         }
@@ -2892,7 +2735,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     /** 镜像大小（字节）；取不到时返回 0，不影响构建结论。 */
     private long imageSize(Path runDir, String tag) {
         ActionResult r = host.run(runDir, spec("image-size", List.of(
-                List.of("docker", "image", "inspect", "--format", "{{.Size}}", tag))), () -> false);
+                List.of("docker", "image", "inspect", "--format", "{{.Size}}", tag))), ProcessExecutor.NEVER);
         if (r.result().status() != StageStatus.SUCCEEDED) {
             return 0L;
         }

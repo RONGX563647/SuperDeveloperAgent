@@ -10,6 +10,7 @@ import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.deploy.HealthPath;
 import top.rongx.agent.domain.port.Deployer;
 
 /**
@@ -104,7 +105,7 @@ public class DockerDeployer implements Deployer {
      * @return true = 已存在或创建成功
      */
     public boolean ensureNetwork(Path dir, String network, StringBuilder log) {
-        BooleanSupplier never = () -> false;
+        BooleanSupplier never = ProcessExecutor.NEVER;
         ProcessExecutor.StepOutcome inspect =
                 executor.exec(dir, List.of("docker", "network", "inspect", network), 15_000,
                         log, never);
@@ -129,7 +130,7 @@ public class DockerDeployer implements Deployer {
      * @return 实际删除的容器名（空 = 本来就没有）
      */
     public List<String> stopDevContainers(Path dir, String projectId, String env, StringBuilder log) {
-        BooleanSupplier never = () -> false;
+        BooleanSupplier never = ProcessExecutor.NEVER;
         String suffix = env == null || env.isBlank() ? "dev" : env.trim();
         List<String> names = List.of(containerName(projectId, suffix), containerName(projectId));
         List<String> removed = new ArrayList<>();
@@ -150,7 +151,7 @@ public class DockerDeployer implements Deployer {
     private DeployResult run(Path dir, String name, String image, int hostPort, int containerPort,
                              Map<String, String> env, String network, String healthPath,
                              List<String> extraArgs, StringBuilder log, String endpointHost) {
-        BooleanSupplier never = () -> false;
+        BooleanSupplier never = ProcessExecutor.NEVER;
 
         // 1. 停旧（幂等：不存在时 docker 返回非 0，这里不视为失败）。
         //    daemon 的 "No such container" 原文绝不进日志：它排在最前面，
@@ -194,7 +195,7 @@ public class DockerDeployer implements Deployer {
                     ProcessExecutor.redact(log.toString()));
         }
         return DeployResult.ok(DeployTarget.DOCKER,
-                "http://" + endpointHost + ":" + hostPort + safePath(healthPath),
+                "http://" + endpointHost + ":" + hostPort + HealthPath.normalize(healthPath),
                 name, ProcessExecutor.redact(log.toString()));
     }
 
@@ -268,12 +269,5 @@ public class DockerDeployer implements Deployer {
         String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9_.-]", "-");
         return value.isEmpty() ? fallback : value;
-    }
-
-    private static String safePath(String healthPath) {
-        if (healthPath == null || healthPath.isBlank()) {
-            return "/";
-        }
-        return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
     }
 }
