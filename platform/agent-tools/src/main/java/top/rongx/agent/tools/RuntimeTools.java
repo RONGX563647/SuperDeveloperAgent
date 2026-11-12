@@ -2,12 +2,16 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -15,6 +19,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvResource;
@@ -47,12 +52,17 @@ public class RuntimeTools {
     private final EnvironmentStore envStore;
     private final ServiceRuntime services;
     private final RuntimeInspector inspector;
+    /** HOST 部署状态根：{@code <workspace>/_platform/deploy/<project>-<env>/app.log}。 */
+    private final Path hostDeployRoot;
 
     public RuntimeTools(EnvironmentStore envStore, ServiceRuntime services,
-                        RuntimeInspector inspector) {
+                        RuntimeInspector inspector,
+                        @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.envStore = envStore;
         this.services = services;
         this.inspector = inspector;
+        this.hostDeployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("deploy");
     }
 
     @Tool(name = "env_runtime_status",
@@ -129,8 +139,9 @@ public class RuntimeTools {
 
     @Tool(name = "app_logs",
             description = """
-                    读取某环境应用日志（只读，已脱敏）。test/prod 用 docker logs 按 since_minutes
-                    时间窗读取并带逐行时间戳；dev 读取平台托管的进程日志尾部（无逐行时间戳时按行过滤）。
+                    读取某环境应用日志（只读，已脱敏）。test/prod 优先读 docker logs 按 since_minutes
+                    时间窗过滤；HOST 目标（本机 jar）读平台部署状态目录里持久化的 app.log；
+                    dev 读取平台托管的进程日志尾部（无逐行时间戳时按行过滤）。
                     grep 为大小写不敏感的子串过滤。部署后"应用起没起来、报什么错"先用它，不要猜。""",
             readOnly = true, concurrencySafe = true)
     public String appLogs(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
@@ -206,6 +217,20 @@ public class RuntimeTools {
             }
             wrote |= appendLogSection(sb, "docker", c.name(), serviceName, lines,
                     "时间窗 + 逐行时间戳（读取 " + lines.size() + " 行）", needle);
+        }
+
+        // HOST 部署（本机 jar）：日志写在平台数据目录，跨运行保留；
+        // 与 docker 日志并列输出，避免"部署完日志没了"。
+        boolean wantsBackend = "all".equalsIgnoreCase(wanted)
+                || "backend".equalsIgnoreCase(wanted) || "app".equalsIgnoreCase(wanted);
+        if (!"dev".equals(target) && wantsBackend) {
+            Path appLog = hostDeployRoot.resolve(ctx.projectId() + "-" + target).resolve("app.log");
+            if (Files.isRegularFile(appLog)) {
+                List<String> lines = tail(appLog, 400);
+                wrote |= appendLogSection(sb, "host-deploy", null, ServiceLease.BACKEND, lines,
+                        "HOST 部署进程日志 " + appLog + "（最近 " + lines.size()
+                                + " 行，跨多次部署追加）", needle);
+            }
         }
 
         if (!wrote) {
@@ -353,6 +378,16 @@ public class RuntimeTools {
             }
         }
         return true;
+    }
+
+    /** 读取文件末尾若干行（文件不存在或不可读时返回空）。 */
+    private static List<String> tail(Path file, int maxLines) {
+        try {
+            List<String> all = Files.readAllLines(file, StandardCharsets.UTF_8);
+            return all.size() <= maxLines ? all : all.subList(all.size() - maxLines, all.size());
+        } catch (IOException | RuntimeException e) {
+            return List.of();
+        }
     }
 
     private boolean appendLogSection(StringBuilder sb, String sourceKind, String container,
