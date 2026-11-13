@@ -50,8 +50,7 @@ function matches(o: CapabilityOption): boolean {
   return `${o.label} ${o.key} ${o.description}`.toLowerCase().includes(q)
 }
 
-const filteredSkills = computed(() => props.skillOptions.filter(matches))
-const filteredMcp = computed(() => props.mcpOptions.filter(matches))
+const filteredItems = computed(() => items.value.filter(matches))
 
 watch(items, (list) => {
   if (!list.some((i) => keyOf(i) === activeKey.value)) {
@@ -119,14 +118,10 @@ function toggleActive(on: boolean): void {
   if (active.value) toggle(active.value, on)
 }
 
-function toggleAll(kind: 'skill' | 'mcp', on: boolean): void {
-  const options = kind === 'skill' ? props.skillOptions : props.mcpOptions
-  const current = kind === 'skill' ? props.skills : props.mcp
-  const next = on
-    ? Array.from(new Set([...current, ...options.map((o) => o.key)]))
-    : current.filter((key) => !options.some((o) => o.key === key))
-  if (kind === 'skill') emit('update:skills', next)
-  else emit('update:mcp', next)
+/** 全选 / 清空：Skill 与 MCP 一起处理，列表不再分组。 */
+function toggleAll(on: boolean): void {
+  emit('update:skills', on ? props.skillOptions.map((o) => o.key) : [])
+  emit('update:mcp', on ? props.mcpOptions.map((o) => o.key) : [])
 }
 
 function kindLabel(kind: 'skill' | 'mcp'): string {
@@ -148,7 +143,7 @@ function formatTime(ts?: number): string {
         <div class="cap-head-main">
           <h1 class="cap-title">本会话能力</h1>
           <p class="cap-desc">
-            左侧选择 Skill / MCP，右侧查看完整说明；只有勾选的能力会进入本轮对话。
+            左侧统一列出全部 Skill 与 MCP，开关只影响本会话；选中后右侧查看完整说明。
           </p>
         </div>
         <div class="cap-head-side">
@@ -172,57 +167,45 @@ function formatTime(ts?: number): string {
           </div>
 
           <div class="cap-scroll">
-            <section class="cap-group">
-              <div class="group-head">
-                <span class="group-icon skill"><el-icon><MagicStick /></el-icon></span>
-                <span class="group-title">Skill</span>
-                <span class="group-count mono">{{ skills.length }}/{{ skillOptions.length }}</span>
-                <span class="group-actions">
-                  <button type="button" class="link" @click="toggleAll('skill', true)">全选</button>
-                  <button type="button" class="link" @click="toggleAll('skill', false)">清空</button>
-                </span>
-              </div>
-              <div v-if="!skillOptions.length" class="group-empty">可在 设置 → Skill 市场 接入</div>
-              <div v-else-if="!filteredSkills.length" class="group-empty">没有匹配的 Skill</div>
-              <button
-                v-for="o in filteredSkills" :key="`skill-${o.key}`" type="button"
-                class="cap-item" :class="{ active: activeKey === `skill:${o.key}` }"
-                @click="activeKey = `skill:${o.key}`"
-              >
-                <span class="item-icon skill"><el-icon><MagicStick /></el-icon></span>
-                <span class="item-main">
-                  <span class="item-name">{{ o.label }}</span>
-                  <span class="item-desc">{{ o.description || '（无描述）' }}</span>
-                </span>
-                <span class="item-on" :class="{ on: skills.includes(o.key) }" />
-              </button>
-            </section>
+            <div class="list-head">
+              <span class="list-count mono">{{ count }}/{{ items.length }} 已启用</span>
+              <span class="group-actions">
+                <button type="button" class="link" @click="toggleAll(true)">全选</button>
+                <button type="button" class="link" @click="toggleAll(false)">清空</button>
+              </span>
+            </div>
 
-            <section class="cap-group">
-              <div class="group-head">
-                <span class="group-icon mcp"><el-icon><Connection /></el-icon></span>
-                <span class="group-title">MCP</span>
-                <span class="group-count mono">{{ mcp.length }}/{{ mcpOptions.length }}</span>
-                <span class="group-actions">
-                  <button type="button" class="link" @click="toggleAll('mcp', true)">全选</button>
-                  <button type="button" class="link" @click="toggleAll('mcp', false)">清空</button>
+            <div v-if="!items.length" class="group-empty">
+              还没有能力，可在 设置 → Skill / MCP 市场 接入
+            </div>
+            <div v-else-if="!filteredItems.length" class="group-empty">没有匹配的能力</div>
+
+            <div
+              v-for="i in filteredItems" :key="keyOf(i)"
+              class="cap-item" :class="{ active: activeKey === keyOf(i) }"
+              role="button" tabindex="0"
+              @click="activeKey = keyOf(i)"
+              @keydown.enter="activeKey = keyOf(i)"
+            >
+              <span class="item-icon" :class="i.kind">
+                <el-icon><component :is="i.kind === 'skill' ? MagicStick : Connection" /></el-icon>
+              </span>
+              <span class="item-main">
+                <span class="item-title">
+                  <span class="item-name">{{ i.label }}</span>
+                  <span class="item-type" :class="i.kind">{{ kindLabel(i.kind) }}</span>
                 </span>
-              </div>
-              <div v-if="!mcpOptions.length" class="group-empty">可在 设置 → MCP 市场 接入</div>
-              <div v-else-if="!filteredMcp.length" class="group-empty">没有匹配的 MCP</div>
-              <button
-                v-for="o in filteredMcp" :key="`mcp-${o.key}`" type="button"
-                class="cap-item" :class="{ active: activeKey === `mcp:${o.key}` }"
-                @click="activeKey = `mcp:${o.key}`"
-              >
-                <span class="item-icon mcp"><el-icon><Connection /></el-icon></span>
-                <span class="item-main">
-                  <span class="item-name">{{ o.label }}</span>
-                  <span class="item-desc">{{ o.description || '（未配置地址）' }}</span>
+                <span class="item-desc">
+                  {{ i.description || (i.kind === 'skill' ? '（无描述）' : '（未配置地址）') }}
                 </span>
-                <span class="item-on" :class="{ on: mcp.includes(o.key) }" />
-              </button>
-            </section>
+              </span>
+              <el-switch
+                :model-value="isOn(i)" size="small" class="item-switch"
+                :aria-label="`本次对话启用 ${i.label}`"
+                @click.stop
+                @change="(v: string | number | boolean) => toggle(i, Boolean(v))"
+              />
+            </div>
           </div>
         </aside>
 
@@ -434,46 +417,17 @@ function formatTime(ts?: number): string {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 14px;
+  gap: 2px;
   padding: 10px 8px 12px;
   overflow-y: auto;
 }
-.cap-group {
+.list-head {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.group-head {
-  display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
-  padding: 4px 6px 7px;
+  padding: 0 6px 8px;
 }
-.group-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  font-size: 10px;
-  border-radius: 5px;
-}
-.group-icon.skill {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-.group-icon.mcp {
-  color: var(--ink-soft);
-  background: var(--surface-sunken);
-}
-.group-title {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-}
-.group-count {
+.list-count {
   flex: 1;
   font-size: 10px;
   color: var(--ink-faint);
@@ -505,18 +459,22 @@ function formatTime(ts?: number): string {
 .cap-item {
   position: relative;
   display: flex;
-  gap: 9px;
+  gap: 8px;
   align-items: center;
   width: 100%;
-  padding: 7px 9px;
+  padding: 7px 8px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: none;
   border: 1px solid transparent;
   border-radius: 8px;
+  outline: none;
   transition: background-color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.cap-item:focus-visible {
+  border-color: var(--accent);
 }
 .cap-item:hover {
   background: var(--surface-raised);
@@ -552,6 +510,7 @@ function formatTime(ts?: number): string {
   gap: 2px;
 }
 .item-name {
+  min-width: 0;
   overflow: hidden;
   font-size: 12px;
   color: var(--ink);
@@ -568,31 +527,31 @@ function formatTime(ts?: number): string {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 启用态用空心圆 → 实心对勾，比小圆点更明确 */
-.item-on {
-  position: relative;
+.item-title {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.item-type {
   flex: none;
-  width: 16px;
-  height: 16px;
-  border: 1.5px solid var(--line-strong);
-  border-radius: 50%;
-  transition: background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+  padding: 0 5px;
+  font-size: 9.5px;
+  line-height: 15px;
+  border-radius: 4px;
 }
-.item-on.on {
+.item-type.skill {
+  color: var(--accent-ink);
   background: var(--accent-soft);
-  border-color: transparent;
 }
-.item-on.on::after {
-  position: absolute;
-  top: 1px;
-  left: 4.5px;
-  width: 4px;
-  height: 8px;
-  content: '';
-  border: solid var(--accent-ink);
-  border-width: 0 1.5px 1.5px 0;
-  transform: rotate(45deg);
+.item-type.mcp {
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+}
+.item-switch {
+  flex: none;
+  --el-switch-on-color: var(--accent);
+  --el-switch-off-color: var(--line-strong);
 }
 
 /* 右栏详情 */
