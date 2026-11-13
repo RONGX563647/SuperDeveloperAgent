@@ -96,8 +96,10 @@ const action = ref<'release' | 'verify'>('release')
 
 const envRows = ref<EnvStatus[]>([])
 const envsLoading = ref(false)
-/** 当前环境的镜像版本（current / previous / 历史），来自成功运行的 image 产物。 */
+/** 当前环境的镜像版本（current / previous / 历史），来自持久化版本账本。 */
 const imageVersions = ref<ImageVersionView[]>([])
+/** 本机 Docker 是否可用：不可用时禁止「按版本部署」，避免触发后才失败。 */
+const dockerAvailable = ref(true)
 
 const history = ref<HistoryItem[]>([])
 const historyLoading = ref(false)
@@ -199,8 +201,16 @@ const showModeSwitch = computed(() => env.value === 'test')
 const modeNote = computed(() => {
   if (env.value === 'dev') return '开发环境固定本机运行：后端 jar + 前端 dist，不打镜像'
   if (deployTarget.value === 'host') return '前后端直接跑在本机（后端 jar + 前端 dist）'
+  if (!dockerAvailable.value) return '本机 Docker 不可用：已改为直接部署（后端 jar + 前端 dist）'
   return '构建镜像并在本机 Docker 运行'
 })
+
+/** Docker 不可用时不允许停留在「打包成镜像」：切到直接部署，并在方式旁说明原因。 */
+watch([dockerAvailable, env], () => {
+  if (env.value === 'test' && !dockerAvailable.value && deployTarget.value === 'docker') {
+    deployTarget.value = 'host'
+  }
+}, { immediate: true })
 
 /** 最近一次 dev 本机部署的前后端端口（来自 run 产物的 meta）。 */
 const localDeployInfo = computed(() => {
@@ -315,6 +325,8 @@ const artifactDiff = computed<{ added: ArtifactView[], removed: ArtifactView[] }
 interface ArtifactGroup {
   dir: string
   items: Array<{ a: ArtifactView, index: number }>
+  /** 文件很多（如前端 dist）时折叠成一行，需要时再展开。 */
+  collapsed: boolean
 }
 
 const artifactGroups = computed<ArtifactGroup[]>(() => {
@@ -328,9 +340,29 @@ const artifactGroups = computed<ArtifactGroup[]>(() => {
   })
   return [...groups.entries()].map(([key, items]) => ({
     dir: key.slice(key.indexOf('::') + 2),
-    items
+    items,
+    // dist 这类目录动辄几十个文件：折叠成 1 行，避免产物面板被文件名淹没
+    collapsed: items.length > 8 && items.every((it) => it.a.kind === 'file')
   }))
 })
+
+/** 手动展开的折叠目录（key = 目录）。 */
+const expandedDirs = ref<Set<string>>(new Set())
+
+function toggleDir(dir: string): void {
+  const next = new Set(expandedDirs.value)
+  if (next.has(dir)) next.delete(dir)
+  else next.add(dir)
+  expandedDirs.value = next
+}
+
+function isDirExpanded(dir: string): boolean {
+  return expandedDirs.value.has(dir)
+}
+
+function totalSize(items: Array<{ a: ArtifactView }>): number {
+  return items.reduce((sum, it) => sum + (it.a.sizeBytes || 0), 0)
+}
 
 /** 文件名词：产物行主文本（完整路径仍在 title / 复制里）。 */
 function fileName(ref: string): string {
@@ -478,6 +510,7 @@ async function loadImages(): Promise<void> {
   try {
     const res = await deployImages(projectId.value, env.value)
     imageVersions.value = res.images
+    dockerAvailable.value = res.dockerAvailable !== false
   } catch {
     imageVersions.value = []
   }
@@ -490,7 +523,8 @@ async function loadImages(): Promise<void> {
 async function deployVersion(img: ImageVersionView): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `将 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）重新部署到 ${env.value} 环境？`,
+      `将 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）重新部署到 ${env.value} 环境？`
+      + '\n不会重新构建：直接复用已登记镜像，只跑部署与健康检查。',
       '按版本部署',
       { type: 'warning', confirmButtonText: '部署', cancelButtonText: '取消' })
   } catch {
@@ -501,6 +535,7 @@ async function deployVersion(img: ImageVersionView): Promise<void> {
       img.tag, img.gitSha)
     attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: img.gitSha })
     ElMessage.success('已触发按版本部署')
+    void loadImages()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '按版本部署失败')
   }
@@ -1047,6 +1082,7 @@ async function copyDigest(digest: string): Promise<void> {
             :commits="commits"
             :commits-loading="commitsLoading"
             :show-mode-switch="showModeSwitch"
+            :docker-available="dockerAvailable"
             :mode-note="modeNote"
             :local-hint="localHint"
             :can-stop-local="canStopLocal"
@@ -1200,9 +1236,29 @@ async function copyDigest(digest: string): Promise<void> {
               <div v-for="g in artifactGroups" :key="g.dir" class="artifact-group">
                 <div v-if="g.dir" class="artifact-dir" :title="g.dir">
                   <span class="mono">{{ shortDir(g.dir) }}</span>
-                  <span class="ad-count">{{ g.items.length }} 个</span>
+                  <span class="ad-count">
+                    {{ g.items.length }} 个
+                    <button
+                      v-if="g.collapsed && isDirExpanded(g.dir)" type="button" class="ad-toggle"
+                      @click="toggleDir(g.dir)"
+                    >收起</button>
+                  </span>
                 </div>
-                <template v-for="item in g.items" :key="`${item.a.kind}-${item.a.ref}-${item.index}`">
+                <div v-if="g.collapsed && !isDirExpanded(g.dir)" class="artifact-row artifact-collapsed">
+                  <span class="art-kind">目录</span>
+                  <code class="art-ref mono" :title="g.dir" @click="copyText(g.dir, '产物目录')">
+                    {{ shortDir(g.dir) || '根目录' }} / {{ g.items.length }} 个文件
+                  </code>
+                  <span class="art-size">{{ formatBytes(totalSize(g.items)) }}</span>
+                  <span class="art-digest mono">已折叠</span>
+                  <span class="art-actions">
+                    <button type="button" class="art-act" @click="toggleDir(g.dir)">展开</button>
+                  </span>
+                </div>
+                <template v-if="!g.collapsed || isDirExpanded(g.dir)">
+                  <template
+                    v-for="item in g.items" :key="`${item.a.kind}-${item.a.ref}-${item.index}`"
+                  >
                   <div class="artifact-row">
                     <span class="art-kind">{{ item.a.kind }}</span>
                     <code class="art-ref mono" :title="item.a.ref" @click="copyText(item.a.ref, '产物地址')">{{ fileName(item.a.ref) }}</code>
@@ -1243,6 +1299,7 @@ async function copyDigest(digest: string): Promise<void> {
                       @click="copyText(imageMeta(item.a)?.local ?? '', '本地镜像地址')"
                     >{{ imageMeta(item.a)?.local }}</button>
                   </div>
+                  </template>
                 </template>
               </div>
             </section>
@@ -1250,18 +1307,31 @@ async function copyDigest(digest: string): Promise<void> {
             <section v-if="imageVersions.length" class="artifact-panel">
               <h3 class="ap-title">
                 镜像版本 <span class="ap-count">{{ imageVersions.length }}</span>
-                <span class="ap-hint">按 (项目, 环境) 独立记账；任意版本可「部署」重新发布，不重新构建</span>
+                <span class="ap-hint">独立版本账本：按 (项目, 环境) 记账，删构建历史不影响版本与回滚锚点</span>
               </h3>
               <div v-for="img in imageVersions.slice(0, 6)" :key="img.tag" class="image-row">
                 <span class="iv-badge" :class="imageBadgeClass(img)">{{ imageBadge(img) }}</span>
                 <code class="art-ref mono" :title="img.tag" @click="copyText(img.tag, '镜像 tag')">{{ img.tag }}</code>
-                <span class="iv-sha mono">{{ (img.gitSha || '').slice(0, 7) }}</span>
-                <span class="iv-time mono">{{ formatClock(img.createdAt) }}</span>
+                <span class="iv-version mono" :title="`构建版本 ${img.version || '—'}`">{{ img.version || '—' }}</span>
+                <button
+                  type="button" class="iv-digest mono"
+                  :title="img.digest ? `点击复制镜像摘要 ${img.digest}` : '未记录摘要（Docker 不可用时无法读取）'"
+                  @click="copyDigest(img.digest)"
+                >{{ shortDigest(img.digest) }}</button>
+                <span class="iv-size mono">{{ formatBytes(img.sizeBytes) }}</span>
                 <button
                   type="button" class="iv-act"
-                  title="复用该镜像重新部署：跳过构建与打包，只跑部署 + 健康检查"
+                  :disabled="!dockerAvailable"
+                  :title="dockerAvailable
+                    ? '复用该镜像重新部署：跳过构建与打包，只跑部署 + 健康检查'
+                    : '本机 Docker 不可用，无法按版本部署'"
                   @click="deployVersion(img)"
                 >部署</button>
+                <div class="iv-audit mono">
+                  <span>提交 {{ (img.gitSha || '').slice(0, 7) || '—' }}</span>
+                  <span>部署人 {{ img.deployedBy || '—' }}</span>
+                  <span>部署于 {{ formatClock(img.deployedAt || img.createdAt) }}</span>
+                </div>
               </div>
             </section>
 
@@ -1270,6 +1340,9 @@ async function copyDigest(digest: string): Promise<void> {
               <p class="ap-empty">
                 这个环境还没有镜像版本。发布（或显式打包镜像）后按环境记录当前 / 上一版，
                 回滚以「上一版」为目标；旧版本按保留策略自动清理。
+              </p>
+              <p v-if="!dockerAvailable" class="ap-empty ap-warn">
+                本机 Docker 不可用，无法按版本部署；安装并启动 Docker 后刷新即可。
               </p>
             </section>
 
@@ -1601,12 +1674,48 @@ async function copyDigest(digest: string): Promise<void> {
 /* 镜像版本谱系：当前 / 上一版 / 历史 */
 .image-row {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) 70px 92px 48px;
+  grid-template-columns: 52px minmax(0, 1fr) 64px 88px 64px 48px;
   gap: 10px;
   align-items: center;
-  padding: 5px 0;
+  padding: 6px 0;
   font-size: 11.5px;
   border-top: 1px solid var(--line-soft);
+}
+.iv-audit {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 14px;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.iv-version,
+.iv-size {
+  overflow: hidden;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iv-size {
+  text-align: right;
+}
+.iv-digest {
+  padding: 0;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.iv-digest:hover {
+  color: var(--accent-ink);
+}
+.iv-act:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 .iv-act {
   height: 22px;
@@ -1641,6 +1750,22 @@ async function copyDigest(digest: string): Promise<void> {
 }
 .iv-time {
   text-align: right;
+}
+.artifact-collapsed .art-ref {
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.ap-warn {
+  color: var(--warn-ink, #a15c00);
+}
+.ad-toggle {
+  margin-left: 6px;
+  padding: 0;
+  font-size: 10px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
 }
 .artifact-row {
   display: grid;
@@ -2056,7 +2181,8 @@ async function copyDigest(digest: string): Promise<void> {
     grid-template-columns: 46px minmax(0, 1fr) 54px 46px;
     gap: 8px;
   }
-  .iv-sha {
+  .iv-version,
+  .iv-size {
     display: none;
   }
 }

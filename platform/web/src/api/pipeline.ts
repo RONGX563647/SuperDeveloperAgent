@@ -266,26 +266,33 @@ export function deleteHistory(runId: string): Promise<{ deleted: boolean, messag
     `/api/v1/ci/history/${encodeURIComponent(runId)}`, { method: 'DELETE' })
 }
 
-/** 一个环境下的镜像版本（来自成功运行登记的 image 产物）。 */
+/** 一个环境下的镜像版本（来自持久化版本账本，删除构建历史不会丢失）。 */
 export interface ImageVersionView {
   tag: string
   digest: string
   sizeBytes: number
+  /** 构建序号对应的展示版本（test-v3）；tag 只由环境 + 提交决定。 */
   version: string
   runId: string
   gitSha: string
+  status: string
+  /** 首次构建时间。 */
   createdAt: number
-  /** 最近一次成功发布（当前版本）。 */
+  /** 最近一次部署到本环境的时间（0 = 尚未部署）。 */
+  deployedAt: number
+  /** 最近一次部署的操作者（ui:admin / agent / history）。 */
+  deployedBy: string
+  /** 最近一次部署（当前版本）。 */
   current: boolean
   /** 上一版（回滚目标）。 */
   previous: boolean
 }
 
-/** 镜像版本列表：current / previous / 历史，按发布时间倒序。 */
+/** 镜像版本列表：current / previous / 历史，按最近部署时间倒序。 */
 export function deployImages(
   projectId: string,
   env: string
-): Promise<{ projectId: string, env: string, images: ImageVersionView[] }> {
+): Promise<{ projectId: string, env: string, dockerAvailable: boolean, images: ImageVersionView[] }> {
   const q = new URLSearchParams({ projectId, env })
   return apiFetch(`/api/v1/ci/deploy/images?${q}`)
 }

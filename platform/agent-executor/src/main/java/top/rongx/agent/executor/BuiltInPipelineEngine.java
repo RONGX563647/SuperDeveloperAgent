@@ -43,6 +43,7 @@ import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.PipelineEngine.ImageVersion;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.StagePreview;
 import top.rongx.agent.domain.run.StageResult;
@@ -90,14 +91,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final Path workspaceRoot;
 
     private final Map<String, RunState> runs = new ConcurrentHashMap<>();
-    /** 每个 (项目, 环境) 最近一次成功发布的镜像 tag，供回滚使用。 */
-    private final Map<String, String> lastGood = new ConcurrentHashMap<>();
+    /** 镜像版本账本（按 (项目, 环境) 持久化；回滚锚点与按版本部署都以它为准）。 */
+    private final ImageVersionStore imageVersions;
 
-    /** 回滚锚点键：test 与 prod 各自独立，避免一个环境的发布覆盖另一个。 */
-    private static String anchorKey(String projectId, String env) {
-        return projectId + "|" + (env == null ? "test" : env);
-    }
-    /** 有界队列：全局并发上限 4；同一项目串行由 TriggerScheduler 保证。 */
+    /** 有界队列：全局并发上限 4；同一项目同一环境串行由 TriggerScheduler 保证。 */
     private final ExecutorService workers = Executors.newFixedThreadPool(4, Thread.ofVirtual().factory());
     private final TriggerScheduler scheduler = new TriggerScheduler();
     /** 构建历史持久化（重启可恢复）。 */
@@ -332,6 +329,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         this.envProvisioner = envProvisioner;
         this.recoveryAdvisor = recoveryAdvisor;
         this.localDevHost = localDevHost;
+        this.imageVersions = workspaceRoot == null
+                ? ImageVersionStore.disabled() : ImageVersionStore.file(workspaceRoot);
         restoreHistory();
     }
 
@@ -510,21 +509,36 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 blockers, warnings, stages, System.currentTimeMillis());
     }
 
-    private static boolean dockerAvailable() {
+    private volatile long dockerProbeAt;
+    private volatile boolean dockerProbeOk;
+
+    /** 本机 Docker 可用性（10 秒缓存）：dry-run 门控与界面下拉共用，避免每次刷新都阻塞在 CLI 上。 */
+    @Override
+    public boolean dockerAvailable() {
+        long now = System.currentTimeMillis();
+        if (now - dockerProbeAt < 10_000) {
+            return dockerProbeOk;
+        }
+        boolean ok;
         try {
             Process process = new ProcessBuilder("docker", "version", "--format", "{{.Server.Version}}")
                     .redirectErrorStream(true).start();
-            if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.getInputStream().readAllBytes();
+            if (!process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return false;
+                ok = false;
+            } else {
+                ok = process.exitValue() == 0;
             }
-            return process.exitValue() == 0;
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            return false;
+            ok = false;
         }
+        dockerProbeOk = ok;
+        dockerProbeAt = now;
+        return ok;
     }
 
     /**
@@ -997,7 +1011,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         runs.put(runId, state);
         history.save(state.snapshot());
-        scheduler.submit(projectId, () -> workers.submit(() -> execute(state)));
+        scheduler.submit(projectId, env, () -> workers.submit(() -> execute(state)));
         return runId;
     }
 
@@ -1158,6 +1172,84 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .toList();
     }
 
+    // ---------------------------------------------------------------- 镜像版本账本 / 部署预检
+
+    @Override
+    public List<ImageVersion> deployImages(String projectId, String env) {
+        return imageVersions.list(projectId, env);
+    }
+
+    @Override
+    public java.util.Optional<String> gitShaForImage(String projectId, String env, String tag) {
+        return imageVersions.find(projectId, env, tag).map(ImageVersion::gitSha)
+                .filter(sha -> sha != null && !sha.isBlank());
+    }
+
+    /**
+     * 按版本部署的触发前预检：把"触发后才失败"的错误提前到 400。
+     *
+     * <p>校验顺序与执行期一致：版本归属 → 镜像是否存在 / Docker 是否可用 →
+     * 环境密钥（E-704）→ 必填变量（E-509）。只读，不启动任何容器。
+     */
+    @Override
+    public List<String> deployPreflight(String projectId, String env, String tag) {
+        List<String> blockers = new ArrayList<>();
+        if (tag == null || tag.isBlank()) {
+            return List.of("镜像 tag 为空");
+        }
+        if (imageVersions.find(projectId, env, tag).isEmpty()) {
+            blockers.add("镜像版本不存在或不属于 " + projectId + " / " + env + "：" + tag);
+        }
+        if (!dockerAvailable()) {
+            blockers.add("E-705 本机 Docker 不可用，无法按版本部署镜像 " + tag);
+        } else if (!dockerImageExists(tag)) {
+            blockers.add("E-705 本机不存在镜像 " + tag + "（可能已被清理），请重新构建该版本");
+        }
+        if (envStore != null) {
+            try {
+                EffectiveEnvironment effective = envStore.effective(projectId, env);
+                if (!effective.missingSecrets().isEmpty()) {
+                    blockers.add("E-704 密钥引用无法解析：" + String.join("、", effective.missingSecrets())
+                            + "。请先在「设置 → 项目环境 → 密钥」创建或轮换对应密钥");
+                }
+                PipelineDefinition definition = readDefinition(projectId, env);
+                if (definition != null && definition.deploy() != null) {
+                    List<String> missing = missingRequiredEnv(definition.deploy(), effective.values());
+                    if (!missing.isEmpty()) {
+                        blockers.add("E-509 环境「" + env + "」缺少必填环境变量 " + String.join("、", missing)
+                                + "。请到「设置 → 环境」或「项目覆盖」填写后重试");
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // 环境数据异常不阻断触发：真正的校验仍会在执行期做
+            }
+        }
+        return blockers;
+    }
+
+    /** 触发前只读解析定义（不检出代码）；失败返回 null，避免预检本身变成阻塞源。 */
+    private PipelineDefinition readDefinition(String projectId, String env) {
+        if (resolver == null) {
+            return null;
+        }
+        try {
+            return resolver.resolveForRead(projectId, resolveRepoForRead(projectId), env).definition();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private boolean dockerImageExists(String tag) {
+        try {
+            Process p = new ProcessBuilder("docker", "image", "inspect", tag)
+                    .redirectErrorStream(true).start();
+            p.getInputStream().readAllBytes();
+            return p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     @Override
     public boolean deleteHistory(String runId) {
         RunState state = runs.get(runId);
@@ -1241,12 +1333,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 history.save(restored.snapshot());
             }
             runs.put(snap.runId(), restored);
-            if (restored.status == StageStatus.SUCCEEDED && "release".equals(restored.pipelineId)) {
-                // 回滚锚点：取该次运行登记的镜像 tag
+            if (restored.status == StageStatus.SUCCEEDED) {
+                // 升级兼容：账本里没有的旧版本从历史导入一次，保证回滚锚点/按版本部署不丢数据
                 snap.artifacts().stream()
-                        .filter(a -> a.kind().equals("image"))
-                        .findFirst()
-                        .ifPresent(a -> lastGood.put(anchorKey(snap.projectId(), snap.env()), a.ref()));
+                        .filter(a -> "image".equals(a.kind()))
+                        .filter(a -> imageVersions.find(snap.projectId(), snap.env(), a.ref()).isEmpty())
+                        .forEach(a -> imageVersions.upsert(snap.projectId(), snap.env(),
+                                new top.rongx.agent.domain.port.PipelineEngine.ImageVersion(
+                                        a.ref(), a.digest(), a.sizeBytes(),
+                                        a.meta().getOrDefault("version", ""),
+                                        snap.gitSha(), snap.runId(), "SUCCEEDED",
+                                        snap.createdAt(), snap.createdAt(), "history", snap.seq())));
             }
         }
     }
@@ -1268,7 +1365,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         } finally {
             // 每次运行结束（含异常）都落盘，保证重启后可查询历史
             history.save(state.snapshot());
-            scheduler.complete(state.projectId);
+            scheduler.complete(state.projectId, state.env);
         }
     }
 
@@ -1342,7 +1439,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             bare = projectDir.resolve("git");
             wtParent = projectDir.resolve("worktrees");
         }
-        Path runDir = wtParent.resolve("wt-build-" + state.runId);
+        Path runDir = state.deployImage != null
+                // 按版本部署：镜像已存在，不需要检出代码；用仓库根（DIRECT 是工作区，MANAGED 是 bare）
+                ? bare
+                : wtParent.resolve("wt-build-" + state.runId);
         PipelineDefinition definition = null;
         boolean worktreeCreated = false;
 
@@ -1352,9 +1452,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 throw new IllegalStateException("项目仓库不存在：" + bare
                         + "（请先通过「接入项目」完成登记）");
             }
-            // stage 1：从 bare 检出指定提交到独立 worktree
-            checkout(bare, runDir, state);
-            worktreeCreated = true;
+            if (state.deployImage != null) {
+                state.log.append("[deploy] 按版本部署：跳过检出，直接复用镜像 ")
+                        .append(state.deployImage).append('\n');
+            } else {
+                // stage 1：从 bare 检出指定提交到独立 worktree
+                checkout(bare, runDir, state);
+                worktreeCreated = true;
+            }
             if (state.cancelled) {
                 state.status = StageStatus.CANCELLED;
                 return;
@@ -1382,8 +1487,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     state.status = StageStatus.FAILED;
                     return;
                 }
-                state.artifacts.add(new ArtifactRef("image", state.deployImage, "", 0,
-                        Map.of("version", state.deployImage, "reused", "true")));
+                // 复用版本的摘要/大小/版本号沿用账本，避免按版本部署把元信息覆盖成 tag
+                ImageVersion known = imageVersions.find(state.projectId, state.env,
+                        state.deployImage).orElse(null);
+                String reusedVersion = known == null || known.version() == null
+                        || known.version().isBlank() ? state.deployImage : known.version();
+                state.artifacts.add(new ArtifactRef("image", state.deployImage,
+                        known == null ? "" : known.digest(),
+                        known == null ? 0 : known.sizeBytes(),
+                        Map.of("version", reusedVersion, "reused", "true",
+                                "localImage", state.deployImage)));
                 state.log.append("[deploy] 按版本部署：复用镜像 ").append(state.deployImage)
                         .append("（跳过构建与打包）\n");
             } else if ("verify".equals(state.pipelineId)) {
@@ -1393,9 +1506,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 definition = definition.forVerify(state.verifyImage);
             }
 
+            // 镜像 tag 只由「环境 + 提交」决定：同一提交重复构建复用同一个 tag（不会堆 vN），
+            // 版本号 vN 只写进产物 meta，用于页面展示与回滚谱系。
             String tag = state.deployImage != null ? state.deployImage
-                    : imagePrefix + "-" + state.env + "-v" + state.seq
-                            + "-" + state.gitSha.substring(0, 7);
+                    : imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
             if (state.deployImage == null) {
                 state.log.append("[image] 镜像版本 ").append(versionOf(state))
                         .append(" · 本地镜像 ").append(tag).append('\n');
@@ -1475,13 +1589,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         boolean deployed = deployedIn(state);
         if (deployed) {
             // 只有真的产出了镜像才更新锚点：host 部署没有镜像，不该污染回滚目标
-            String imageTag = state.artifacts.stream()
+            ArtifactRef imageArtifact = state.artifacts.stream()
                     .filter(a -> "image".equals(a.kind()))
                     .reduce((first, second) -> second)
-                    .map(ArtifactRef::ref)
                     .orElse(null);
-            if (imageTag != null) {
-                lastGood.put(anchorKey(state.projectId, state.env), imageTag);
+            if (imageArtifact != null) {
+                // 记账：发布成功即登记/更新版本账本（同一 tag 重复发布只保留一条，更新部署信息）
+                imageVersions.upsert(state.projectId, state.env, new ImageVersion(
+                        imageArtifact.ref(), imageArtifact.digest(), imageArtifact.sizeBytes(),
+                        imageArtifact.meta().getOrDefault("version", versionOf(state)),
+                        state.gitSha, state.runId, "SUCCEEDED",
+                        state.createdAt, System.currentTimeMillis(),
+                        state.actor == null ? "ui" : state.actor, state.seq));
             }
             // 按版本部署只切运行态：脚本仍是该版本验证过的那份，不重新固化（避免用旧提交覆盖环境脚本）
             if (state.deployImage == null) {
@@ -1520,7 +1639,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.status = StageStatus.RUNNING;
             state.cancelled = false;
             history.save(state.snapshot());
-            scheduler.submit(state.projectId, () -> workers.submit(() -> execute(state)));
+            scheduler.submit(state.projectId, state.env, () -> workers.submit(() -> execute(state)));
             return runId;
         }
         PipelineDefinition definition = state.definition;
@@ -1558,8 +1677,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.artifacts.subList(cut, state.artifacts.size()).clear();
         }
 
-        String tag = imagePrefix + "-" + state.env + "-v" + state.seq
-                + "-" + state.gitSha.substring(0, 7);
+        String tag = imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
         Map<String, String> vars = Map.of(
                 "gitSha", state.gitSha,
                 "gitSha7", state.gitSha.substring(0, 7),
@@ -1569,7 +1687,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.log.append("[retry] 从阶段 ").append(stageId).append(" 继续（复用构建现场）\n");
         history.save(state.snapshot());
         int from = idx;
-        scheduler.submit(state.projectId, () -> workers.submit(
+        scheduler.submit(state.projectId, state.env, () -> workers.submit(
                 () -> executeRetry(state, definition, runDir, vars, from)));
         return runId;
     }
@@ -1593,7 +1711,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 state.keptBare = null;
             }
             history.save(state.snapshot());
-            scheduler.complete(state.projectId);
+            scheduler.complete(state.projectId, state.env);
         }
     }
 
@@ -2230,53 +2348,52 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
-     * 镜像保留策略：每个 (项目, 环境) 只保留最近 {@link #KEEP_IMAGES} 个版本，
-     * 更旧的 tag 用 {@code docker rmi} 清掉；锚点版本与正被容器使用的镜像会失败，
-     * 失败直接忽略（下次发布再清），不影响本次运行结论。
+     * 镜像保留策略：每个 (项目, 环境) 只保留最近 {@link #KEEP_IMAGES} 个已部署版本。
+     *
+     * <p>账本与本地镜像一起收敛：先按账本挑出过期版本，再 {@code docker rmi -f}；
+     * 删镜像失败（Docker 不可用 / 仍被容器引用）只记日志，不阻断本次发布。
+     * 当前版本（账本第一条）永远保留。
      */
     private void pruneOldImages(RunState state) {
         try {
-            String prefix = imagePrefix + "-" + state.env + "-";
-            List<String> tags = history.list().stream()
-                    .filter(h -> state.projectId.equals(h.projectId()) && state.env.equals(h.env()))
-                    .filter(h -> h.status() == StageStatus.SUCCEEDED)
-                    .sorted(java.util.Comparator.comparingLong(
-                            RunHistoryStore.RunSnapshot::createdAt).reversed())
-                    .flatMap(h -> h.artifacts().stream())
-                    .filter(a -> "image".equals(a.kind()))
-                    .map(ArtifactRef::ref)
-                    .filter(t -> t != null && t.startsWith(prefix))
-                    .distinct()
-                    .toList();
-            // 当前运行的镜像还没写进历史，这里给它留一个位置
-            int keepOld = KEEP_IMAGES - 1;
-            if (tags.size() <= keepOld) {
+            List<ImageVersion> rows = imageVersions.list(state.projectId, state.env);
+            if (rows.size() <= KEEP_IMAGES) {
                 return;
             }
-            String anchor = lastGood.get(anchorKey(state.projectId, state.env));
+            List<ImageVersion> stale = rows.subList(KEEP_IMAGES, rows.size());
             int removed = 0;
-            for (String tag : tags.subList(keepOld, tags.size())) {
-                if (tag.equals(anchor)) {
-                    continue;
-                }
+            for (ImageVersion v : stale) {
+                String output = "";
                 try {
-                    Process p = new ProcessBuilder("docker", "rmi", tag)
+                    Process p = new ProcessBuilder("docker", "rmi", "-f", v.tag())
                             .redirectErrorStream(true).start();
-                    p.getInputStream().readAllBytes();
-                    if (p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0) {
+                    output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+                    if (!p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS) || p.exitValue() != 0) {
+                        state.log.append("[image] 清理镜像失败（保留账本外记录不占空间）：")
+                                .append(v.tag()).append(" — ").append(shorten(output)).append('\n');
+                    } else {
                         removed++;
                     }
-                } catch (Exception ignored) {
-                    // docker 不可用 / 镜像仍被容器引用：跳过
+                } catch (Exception e) {
+                    state.log.append("[image] 清理镜像跳过：").append(v.tag())
+                            .append("（").append(e.getMessage()).append("）\n");
                 }
+                // 账本只保留最近 KEEP_IMAGES 个：镜像没删掉也要移出，否则列表无限增长
+                imageVersions.remove(state.projectId, state.env, v.tag());
             }
-            if (removed > 0) {
-                state.log.append("[image] 已清理 ").append(removed)
-                        .append(" 个历史镜像（保留最近 ").append(KEEP_IMAGES).append(" 个版本）\n");
-            }
+            state.log.append("[image] 已清理 ").append(removed).append(" 个历史镜像，账本保留最近 ")
+                    .append(KEEP_IMAGES).append(" 个版本\n");
         } catch (Exception e) {
             state.log.append("[image] 镜像清理跳过：").append(e.getMessage()).append('\n');
         }
+    }
+
+    private static String shorten(String text) {
+        if (text == null) {
+            return "";
+        }
+        String oneLine = text.replace('\n', ' ').trim();
+        return oneLine.length() <= 160 ? oneLine : oneLine.substring(0, 160) + "…";
     }
 
     /** 把子目录 stage 的相对产物路径补成仓库根相对路径（便于统一记账/下载）。 */
@@ -2428,7 +2545,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .reduce((first, second) -> second)
                 .map(ArtifactRef::ref)
                 .orElse(null);
-        String previous = lastGood.get(anchorKey(state.projectId, state.env));
+        String previous = imageVersions.current(state.projectId, state.env)
+                .map(ImageVersion::tag).orElse(null);
         String image = rollback ? previous : currentImage;
         if (rollback && (image == null || image.isBlank())) {
             // 首次发布失败时会走到回滚：没有上一版不是错误，跳过即可，
@@ -3194,7 +3312,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 continue;
             }
             Map<String, String> merged = new java.util.HashMap<>(vars);
-            String good = lastGood.get(state.projectId);
+            String good = imageVersions.current(state.projectId, state.env)
+                    .map(ImageVersion::tag).orElse(null);
             if (good != null) {
                 merged.put("tag", good);
             }

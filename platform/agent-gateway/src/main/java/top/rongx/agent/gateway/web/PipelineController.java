@@ -137,13 +137,11 @@ public class PipelineController {
             throw new IllegalArgumentException("projectId 必填");
         }
         String sha = params.get("gitSha");
-        if (sha == null || sha.isBlank()) {
-            throw new IllegalArgumentException("gitSha 必填");
-        }
         // 环境：缺省 test（绝不让"没传环境"落到生产）
         String env = params.get("env");
         String normalizedEnv = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
         // 按版本部署：复用已存在的镜像 tag，跳过构建/打包，只跑 deploy + health。
+        // 此时 gitSha 可由版本账本反查，调用方不必传（传了也不采信，防止"tag 与提交不一致"）。
         String deployImage = params.get("deployImage");
         boolean imageOnly = deployImage != null && !deployImage.isBlank();
         if (imageOnly) {
@@ -152,12 +150,19 @@ public class PipelineController {
                 throw new IllegalArgumentException("镜像 tag 非法：" + deployImage);
             }
             // 只允许部署本项目/本环境登记过的版本，防止借接口启动任意本机镜像
-            String imageSha = shaForImage(projectId, normalizedEnv, deployImage);
-            if (imageSha == null) {
+            sha = engine.gitShaForImage(projectId, normalizedEnv, deployImage).orElse(null);
+            if (sha == null) {
                 throw new IllegalArgumentException("镜像版本不存在或不属于 " + projectId
                         + " / " + normalizedEnv + "：" + deployImage);
             }
-            sha = imageSha;
+            // 预检前移：镜像是否还在、Docker 是否可用、环境密钥/必填项是否齐全，
+            // 不通过直接 400，避免"触发成功 → 跑一半才失败"。
+            java.util.List<String> blockers = engine.deployPreflight(projectId, normalizedEnv, deployImage);
+            if (!blockers.isEmpty()) {
+                throw new IllegalArgumentException(String.join("；", blockers));
+            }
+        } else if (sha == null || sha.isBlank()) {
+            throw new IllegalArgumentException("gitSha 必填");
         }
         // 阶段门控：先 dry-run（只读预检），不通过不允许 apply；指定的报告哈希必须与当前一致。
         // 按版本部署没有待执行的构建脚本，门控换成上一步的"版本归属"校验。
@@ -208,66 +213,40 @@ public class PipelineController {
     }
 
     /**
-     * 镜像 tag → 该版本对应的提交。
+     * 镜像版本列表（按环境）：来自持久化的版本账本，不再从构建历史反推。
      *
-     * <p>只认本项目 + 本环境<b>成功运行</b>登记过的镜像：按版本部署是"把已验证过的版本
-     * 重新发出去"，不是"随便启动一个本机镜像"。
-     */
-    private String shaForImage(String projectId, String env, String tag) {
-        for (PipelineEngine.RunSummary h : engine.history()) {
-            if (!projectId.equals(h.projectId()) || !env.equalsIgnoreCase(h.env())
-                    || h.status() != StageStatus.SUCCEEDED) {
-                continue;
-            }
-            for (ArtifactRef a : engine.artifacts(h.runId())) {
-                if ("image".equals(a.kind()) && tag.equals(a.ref())) {
-                    return h.gitSha();
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 镜像版本列表（按环境）：来自构建历史里成功运行登记的 image 产物。
-     *
-     * <p>第一条是「当前版本」，第二条是「上一版」——回滚/发布前先看清版本谱系，
-     * 而不是只依赖内存里的一次性锚点。
+     * <p>删除构建历史不会丢掉版本记录；第一条是「当前版本」，第二条是「上一版」，
+     * 两者都来自同一次发布，因此不会出现"同一次运行多个当前版本"。
      */
     @GetMapping("/deploy/images")
     public Map<String, Object> deployImages(@RequestParam String projectId,
                                             @RequestParam(defaultValue = "test") String env) {
-        java.util.List<Map<String, Object>> images = new java.util.ArrayList<>();
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        int rank = 0;
-        for (PipelineEngine.RunSummary h : engine.history()) {
-            if (!projectId.equals(h.projectId()) || !env.equalsIgnoreCase(h.env())
-                    || h.status() != StageStatus.SUCCEEDED) {
-                continue;
-            }
-            java.util.List<ArtifactRef> artifacts = engine.artifacts(h.runId());
-            boolean hasImage = artifacts.stream().anyMatch(a -> "image".equals(a.kind()));
-            for (ArtifactRef a : artifacts) {
-                if (!"image".equals(a.kind()) || !seen.add(a.ref())) {
-                    continue;
-                }
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("tag", a.ref());
-                row.put("digest", a.digest() == null ? "" : a.digest());
-                row.put("sizeBytes", a.sizeBytes());
-                row.put("version", a.meta().getOrDefault("version", ""));
-                row.put("runId", h.runId());
-                row.put("gitSha", h.gitSha());
-                row.put("createdAt", h.createdAt());
-                row.put("current", rank == 0);
-                row.put("previous", rank == 1);
-                images.add(row);
-            }
-            if (hasImage) {
-                rank++;
-            }
+        java.util.List<PipelineEngine.ImageVersion> rows = engine.deployImages(projectId, env);
+        java.util.List<Map<String, Object>> images = new java.util.ArrayList<>(rows.size());
+        for (int i = 0; i < rows.size(); i++) {
+            PipelineEngine.ImageVersion v = rows.get(i);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("tag", v.tag());
+            row.put("digest", v.digest() == null ? "" : v.digest());
+            row.put("sizeBytes", v.sizeBytes());
+            row.put("version", v.version() == null ? "" : v.version());
+            row.put("runId", v.runId());
+            row.put("gitSha", v.gitSha());
+            row.put("status", v.status());
+            row.put("createdAt", v.createdAt());
+            // 部署审计：最近一次发布到本环境的时间与操作者
+            row.put("deployedAt", v.deployedAt());
+            row.put("deployedBy", v.deployedBy() == null ? "" : v.deployedBy());
+            row.put("current", i == 0);
+            row.put("previous", i == 1);
+            images.add(row);
         }
-        return Map.of("projectId", projectId, "env", env, "images", images);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("projectId", projectId);
+        out.put("env", env);
+        out.put("dockerAvailable", engine.dockerAvailable());
+        out.put("images", images);
+        return out;
     }
 
     /** 可选部署目标（前端下拉用）；available=false 时给出不可用原因。 */
@@ -279,9 +258,13 @@ public class PipelineController {
                 .map(s -> "默认服务器：" + s.name() + "（" + s.host() + "）")
                 .orElse(legacyServerConfigured
                         ? "已通过环境变量配置" : "未配置：请到「设置 → 服务器」添加");
+        // Docker 是否可用要真实探测（带缓存），否则界面显示可用、触发后才在部署阶段失败
+        boolean dockerReady = engine.dockerAvailable();
         return List.of(
-                Map.of("target", "docker", "label", "本机 Docker 容器", "available", true,
-                        "detail", "替换式发布；需要 Dockerfile 与镜像"),
+                Map.of("target", "docker", "label", "本机 Docker 容器", "available", dockerReady,
+                        "detail", dockerReady
+                                ? "替换式发布；需要 Dockerfile 与镜像"
+                                : "本机 Docker 不可用：请确认已安装并启动 Docker"),
                 Map.of("target", "host", "label", "本机直接运行", "available", true,
                         "detail", "仅 Java jar；pid 文件管理"),
                 Map.of("target", "server", "label", "远程服务器", "available",
