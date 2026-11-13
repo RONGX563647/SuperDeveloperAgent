@@ -108,7 +108,10 @@ public class GitIssueServiceImpl implements GitIssueService {
             updated = copy(updated, "", "", updated.state(), "LOCAL",
                     "未启用 " + provider + " Issue 同步配置", "PLATFORM");
         }
-        return issues.save(updated);
+        GitIssue saved = issues.save(updated);
+        // 编辑/重开/改标签后重新评估自动修复（触发器内部会校验状态与幂等）
+        bugFixTrigger.onIssueUpdated(saved);
+        return saved;
     }
 
     @Override

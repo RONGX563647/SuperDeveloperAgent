@@ -34,6 +34,8 @@ export interface BugFixRunRow {
   status: BugFixStatus
   message: string
   analysis: string
+  analysisJson: string
+  fixSummary: string
   baseSha: string
   fixSha: string
   env: string
@@ -43,6 +45,20 @@ export interface BugFixRunRow {
   createdAt: number
   updatedAt: number
   finishedAt: number | null
+}
+
+/** 单个阶段的执行记录：尝试次数、耗时与每阶段证据（验证失败回到修复后仍保留）。 */
+export interface BugFixStageRunRow {
+  id: number
+  runId: string
+  stage: BugFixStage
+  attempt: number
+  status: string
+  message: string
+  artifact: string
+  startedAt: number
+  endedAt: number
+  durationMs: number
 }
 
 export interface BugFixEventRow {
@@ -59,6 +75,7 @@ export interface BugFixRunDetail {
   progress: number
   resumable: boolean
   events: BugFixEventRow[]
+  stages: BugFixStageRunRow[]
 }
 
 export interface BugFixPolicyRow {
@@ -68,6 +85,9 @@ export interface BugFixPolicyRow {
   testEnv: string
   bindingId: string
   maxAttempts: number
+  baseUrl: string
+  buildCommand: string
+  testCommand: string
   updatedAt: number
 }
 
@@ -78,6 +98,9 @@ export interface BugFixPolicyInput {
   testEnv: string
   bindingId: string
   maxAttempts: number
+  baseUrl: string
+  buildCommand: string
+  testCommand: string
 }
 
 export function listBugFixRuns(issueId?: string): Promise<BugFixRunRow[]> {
@@ -104,11 +127,15 @@ export function cancelBugFix(id: string): Promise<BugFixRunRow> {
   return apiFetch(`/api/v1/bug-fix/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
 }
 
-export function getBugFixPolicy(): Promise<BugFixPolicyRow> {
-  return apiFetch('/api/v1/bug-fix/policy')
+/** 读取策略；传 projectId 读取项目级覆盖（未配置时后端回退平台默认）。 */
+export function getBugFixPolicy(projectId?: string): Promise<BugFixPolicyRow> {
+  const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+  return apiFetch(`/api/v1/bug-fix/policy${qs}`)
 }
 
-export function saveBugFixPolicy(input: BugFixPolicyInput): Promise<BugFixPolicyRow> {
+export function saveBugFixPolicy(
+  input: BugFixPolicyInput & { projectId?: string },
+): Promise<BugFixPolicyRow> {
   return apiFetch('/api/v1/bug-fix/policy', {
     method: 'PUT',
     body: JSON.stringify(input),

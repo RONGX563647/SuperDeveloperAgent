@@ -68,7 +68,7 @@ class BugFixOrchestratorTest {
     @Test
     void retryResumesFromBlockedStage() throws Exception {
         SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
-        BugFixPolicy blocked = new BugFixPolicy(true, false, true, "test", "", 2, 0);
+        BugFixPolicy blocked = new BugFixPolicy(true, false, true, "test", "", 2, "", "", "", 0);
         store.save(blocked);
         BugFixOrchestrator orchestrator = orchestrator(store, blocked);
         BugFixRun started = orchestrator.start(issue("task-1", "BUG"));
@@ -179,6 +179,68 @@ class BugFixOrchestratorTest {
                 "阻塞原因应可操作：" + paused.message());
     }
 
+    @Test
+    void verifyFailureReturnsToFixAndRetries() throws Exception {
+        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        AtomicInteger verifyCalls = new AtomicInteger();
+        BugFixAgentPort agent = (run, role, prompt) -> {
+            if (role == BugFixAgentPort.Role.VERIFY && verifyCalls.incrementAndGet() == 1) {
+                return "```json\n{\"fixed\":false,\"evidence\":\"仍然返回 500\","
+                        + "\"confidence\":0.9}\n```";
+            }
+            return defaultAnswer(role);
+        };
+        BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy(), agent,
+                (run, sha) -> "部署成功：" + sha);
+        BugFixRun started = orchestrator.start(issue("task-1", "BUG"));
+
+        BugFixRun done = await(orchestrator, started.id(), BugFixStatus.SUCCEEDED);
+        assertEquals(1, done.attempt(), "验证失败一次后应消耗一次重试机会");
+        assertEquals(PR_URL, done.prUrl());
+
+        List<top.rongx.agent.domain.bugfix.BugFixStageRun> stages =
+                orchestrator.stageRuns(null, started.id());
+        long fixes = stages.stream().filter(s -> s.stage() == BugFixStage.FIX).count();
+        long verifies = stages.stream().filter(s -> s.stage() == BugFixStage.VERIFY).count();
+        assertEquals(2, fixes, "验证失败后应重新进入修复阶段：" + stages);
+        assertEquals(2, verifies, "应执行两次验证：" + stages);
+        assertTrue(stages.stream().allMatch(s -> s.durationMs() >= 0), "阶段耗时应落库");
+    }
+
+    @Test
+    void recoverInterruptedRequeuesRunningRuns() {
+        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        long now = System.currentTimeMillis();
+        BugFixRun running = new BugFixRun("bf-running", "task-r", "u1", "p1", "GITHUB", "o/r",
+                "1", "标题", "描述", "agent/bugfix-running", BugFixStage.ANALYZE,
+                BugFixStatus.RUNNING, "执行中", "", "", "", "", "", "", "", "", 0, now, now, 0);
+        store.save(running);
+
+        List<String> queued = store.recoverInterrupted();
+        assertTrue(queued.contains("bf-running"), "重启后 RUNNING 应重新排队：" + queued);
+        assertEquals(BugFixStatus.QUEUED, store.find("bf-running").orElseThrow().status());
+    }
+
+    @Test
+    void triggerSkipsIssueWithNoAutoFixLabel() throws Exception {
+        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        store.save(enabledPolicy());
+        BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy());
+        DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
+        beans.registerSingleton("bugFixOrchestrator", orchestrator);
+        BugFixTriggerService trigger = new BugFixTriggerService(store,
+                beans.getBeanProvider(BugFixOrchestrator.class));
+
+        long now = System.currentTimeMillis();
+        GitIssue issue = new GitIssue("task-2", "u1", "p1", "GITHUB", "o/r", "2",
+                "支付回调失败", "click", "OPEN", "BUG", "bug,no-auto-fix", "", "PLATFORM",
+                "LOCAL", "", "", now, now);
+        trigger.onIssueCreated(issue);
+
+        Thread.sleep(200);
+        assertTrue(store.list("u1", "task-2", 10).isEmpty(), "带禁止标签的任务不应自动修复");
+    }
+
     // ---------------------------------------------------------------- 装配
 
     private BugFixOrchestrator orchestrator(SqliteBugFixStore store, BugFixPolicy policy) {
@@ -210,16 +272,16 @@ class BugFixOrchestratorTest {
                 new AnalyzeStage(agent, git, json),
                 new DeployReproStage(deploy, bindings),
                 new ReproduceStage(agent, json),
-                new FixStage(agent, git, json),
+                new FixStage(agent, git, json, new FakeChecks()),
                 new VerifyDeployStage(deploy, bindings),
-                new VerifyStage(agent, json),
+                new VerifyStage(agent, json, new FakeChecks()),
                 new PullRequestStage(git));
         return new BugFixOrchestrator(store, store, handlers, (run, message) -> {
-        });
+        }, store, new BugFixCancellationRegistry());
     }
 
     private static BugFixPolicy enabledPolicy() {
-        return new BugFixPolicy(true, true, true, "test", "b1", 2, 0);
+        return new BugFixPolicy(true, true, true, "test", "b1", 2, "", "", "", 0);
     }
 
     private static GitIssue issue(String id, String kind) {
@@ -290,8 +352,26 @@ class BugFixOrchestratorTest {
         }
 
         @Override
+        public List<String> changedFiles(BugFixRun run, String fixSha) {
+            return List.of("src/main/App.java");
+        }
+
+        @Override
         public String openPullRequest(BugFixRun run, String title, String body) {
             return PR_URL;
+        }
+    }
+
+    /** 测试中不做真实构建/冒烟，按「未配置」跳过。 */
+    private static final class FakeChecks implements top.rongx.agent.domain.bugfix.BugFixCheckPort {
+        @Override
+        public CheckResult build(BugFixRun run, BugFixPolicy policy, String sha) {
+            return CheckResult.skipped("测试环境");
+        }
+
+        @Override
+        public CheckResult smoke(BugFixRun run, BugFixPolicy policy) {
+            return CheckResult.skipped("测试环境");
         }
     }
 

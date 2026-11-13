@@ -24,6 +24,9 @@ public interface BugFixGitPort {
     /** 把文件改动提交到 run.branch，返回新提交 sha。 */
     String commitFix(BugFixRun run, List<BugFixEdit> edits, String message);
 
+    /** 修复提交相对基线的改动文件列表（相对路径），用于校验是否越界修改。 */
+    List<String> changedFiles(BugFixRun run, String fixSha);
+
     /** 推送分支并创建 PR/MR（已存在同分支 PR 时直接返回其链接），返回可访问链接。 */
     String openPullRequest(BugFixRun run, String title, String body);
 }

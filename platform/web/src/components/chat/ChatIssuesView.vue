@@ -14,6 +14,7 @@ import {
   cancelBugFix, getBugFixPolicy, getBugFixRun, listBugFixRuns, retryBugFix,
   saveBugFixPolicy, startBugFix,
   type BugFixEventRow, type BugFixPolicyRow, type BugFixRunRow, type BugFixStage,
+  type BugFixStageRunRow,
 } from '../../api/bugfix'
 import MarkdownView from './MarkdownView.vue'
 import { appStore } from '../../stores/app'
@@ -67,6 +68,7 @@ const fixLoading = ref(false)
 const fixBusy = ref('')
 const fixRun = ref<BugFixRunRow | null>(null)
 const fixEvents = ref<BugFixEventRow[]>([])
+const fixStages = ref<BugFixStageRunRow[]>([])
 let fixTimer: ReturnType<typeof setTimeout> | undefined
 
 const fixActive = computed(
@@ -94,6 +96,21 @@ function stageState(stage: BugFixStage, index: number): string {
 function fixStatusLabel(status?: string): string {
   return status ? (FIX_STATUS_LABEL[status] ?? status) : ''
 }
+
+function stageLabel(stage?: string): string {
+  if (stage === 'DONE') return '全部完成'
+  return FIX_STAGES.find((s) => s.key === stage)?.label ?? (stage ?? '')
+}
+
+function formatDuration(ms: number): string {
+  if (!ms || ms < 0) return '—'
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
+}
+
+/** 阶段记录按时间正序展示最近 12 条，验证失败回到修复的每一轮都保留。 */
+const fixStageRuns = computed(() => fixStages.value.slice(-12))
 
 /** 当前阶段序号（1/7），DONE 时显示 7/7。 */
 const fixStageNo = computed(() => {
@@ -165,16 +182,19 @@ async function loadBugFix(issueId: string): Promise<void> {
     if (!rows.length) {
       fixRun.value = null
       fixEvents.value = []
+      fixStages.value = []
       return
     }
     const detail = await getBugFixRun(rows[0].id)
     if (expandedId.value !== issueId) return
     fixRun.value = detail.run
     fixEvents.value = detail.events
+    fixStages.value = detail.stages ?? []
   } catch {
     if (expandedId.value === issueId) {
       fixRun.value = null
       fixEvents.value = []
+      fixStages.value = []
     }
   } finally {
     if (expandedId.value === issueId) fixLoading.value = false
@@ -199,6 +219,7 @@ async function startFix(row: GitIssueRow): Promise<void> {
   try {
     fixRun.value = await startBugFix(row.id)
     fixEvents.value = []
+    fixStages.value = []
     ElMessage.success('已开始自动修复')
     scheduleFixPoll()
   } catch (e) {
@@ -251,6 +272,9 @@ const policyForm = reactive({
   testEnv: 'test',
   bindingId: '',
   maxAttempts: 2,
+  baseUrl: '',
+  buildCommand: '',
+  testCommand: '',
 })
 
 async function togglePolicy(): Promise<void> {
@@ -267,6 +291,9 @@ async function togglePolicy(): Promise<void> {
       testEnv: current.testEnv,
       bindingId: current.bindingId,
       maxAttempts: current.maxAttempts,
+      baseUrl: current.baseUrl ?? '',
+      buildCommand: current.buildCommand ?? '',
+      testCommand: current.testCommand ?? '',
     })
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '读取自动修复策略失败')
@@ -429,6 +456,7 @@ async function toggleExpand(row: GitIssueRow): Promise<void> {
     clearTimeout(fixTimer)
     fixRun.value = null
     fixEvents.value = []
+    fixStages.value = []
     return
   }
   expandedId.value = row.id
@@ -436,6 +464,7 @@ async function toggleExpand(row: GitIssueRow): Promise<void> {
   clearTimeout(fixTimer)
   fixRun.value = null
   fixEvents.value = []
+  fixStages.value = []
   await loadComments()
   if ((row.kind ?? 'BUG') === 'BUG') {
     await loadBugFix(row.id)
@@ -747,6 +776,27 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
               <span class="policy-label">最大尝试次数</span>
               <el-input-number v-model="policyForm.maxAttempts" :min="1" :max="5" size="small" />
             </div>
+            <div class="policy-field">
+              <span class="policy-label">测试环境地址</span>
+              <el-input
+                v-model="policyForm.baseUrl" size="small"
+                placeholder="https://test.example.com（用于确定性冒烟检查）"
+              />
+            </div>
+            <div class="policy-field">
+              <span class="policy-label">构建命令</span>
+              <el-input
+                v-model="policyForm.buildCommand" size="small"
+                placeholder="mvn -q -DskipTests package（修复后必须通过）"
+              />
+            </div>
+            <div class="policy-field">
+              <span class="policy-label">测试命令</span>
+              <el-input
+                v-model="policyForm.testCommand" size="small"
+                placeholder="可选，例如 mvn -q test"
+              />
+            </div>
           </div>
           <div class="editor-foot">
             <span class="policy-hint">
@@ -988,6 +1038,22 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     <summary>部署 / 验证证据</summary>
                     <pre class="fix-pre">{{ fixRun.evidence }}</pre>
                   </details>
+
+                  <div v-if="fixStageRuns.length" class="fix-stages">
+                    <div class="fix-stages-head">阶段记录（尝试次数 / 耗时 / 证据）</div>
+                    <details v-for="sr in fixStageRuns" :key="sr.id" class="fix-fold">
+                      <summary>
+                        <span class="mono">{{ stageIndex(sr.stage) + 1 }}/7</span>
+                        {{ stageLabel(sr.stage) }} · 第 {{ sr.attempt }} 次 ·
+                        {{ formatDuration(sr.durationMs) }} ·
+                        <span class="mono fix-stage-run" :class="sr.status.toLowerCase()">
+                          {{ sr.status }}
+                        </span>
+                      </summary>
+                      <pre v-if="sr.message" class="fix-pre">{{ sr.message }}</pre>
+                      <pre v-if="sr.artifact" class="fix-pre">{{ sr.artifact }}</pre>
+                    </details>
+                  </div>
 
                   <div v-if="fixEvents.length" class="fix-events">
                     <div v-for="ev in fixEvents.slice(-8)" :key="ev.id" class="fix-event">
@@ -1922,6 +1988,20 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   flex-direction: column;
   gap: 3px;
 }
+.fix-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fix-stages-head {
+  font-size: 10.5px;
+  color: var(--ink-muted);
+}
+.fix-stage-run.continue { color: #2f9e6e; }
+.fix-stage-run.failed { color: #d9534f; }
+.fix-stage-run.blocked,
+.fix-stage-run.cancelled { color: #b8860b; }
+.fix-stage-run.running { color: var(--ink); }
 .fix-event {
   display: flex;
   gap: 8px;

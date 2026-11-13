@@ -28,7 +28,10 @@ public class ChatBugFixDeploy implements BugFixDeployPort {
 
     @Override
     public String deploy(BugFixRun run, String sha) {
-        BugFixPolicy policy = policies.load();
+        BugFixPolicy policy = policies.load(run.projectId());
+        if (BugFixPolicy.productionLike(policy.testEnv())) {
+            throw new IllegalStateException("自动修复禁止部署到生产环境：" + policy.testEnv());
+        }
         String purpose = switch (run.stage()) {
             case REPRO_DEPLOY -> "复现 Bug";
             case VERIFY_DEPLOY -> "验证修复";

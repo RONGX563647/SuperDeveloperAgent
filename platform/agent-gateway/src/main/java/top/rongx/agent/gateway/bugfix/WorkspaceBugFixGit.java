@@ -185,6 +185,19 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
     }
 
     @Override
+    public List<String> changedFiles(BugFixRun run, String fixSha) {
+        if (fixSha == null || !fixSha.matches("[0-9a-f]{7,40}")) {
+            throw new IllegalArgumentException("修复提交非法：" + fixSha);
+        }
+        String base = run.baseSha();
+        if (base == null || !base.matches("[0-9a-f]{7,40}")) {
+            throw new IllegalStateException("缺少合法的基线提交，无法校验改动范围");
+        }
+        Path repo = requireRepo(run.projectId());
+        return git.diffNames(repo, base, fixSha);
+    }
+
+    @Override
     public String openPullRequest(BugFixRun run, String title, String body) {
         if (remote == null) {
             throw new IllegalStateException("未配置 Git 远端客户端，无法创建 PR");

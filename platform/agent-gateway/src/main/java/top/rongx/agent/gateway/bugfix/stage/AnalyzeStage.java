@@ -92,9 +92,29 @@ public class AnalyzeStage implements BugFixStageHandler {
             if (json.text(node.get(), "rootCause").isBlank()) {
                 return BugFixStageResult.blocked("分析结论缺少 rootCause，请补充根因后再重试");
             }
-            return BugFixStageResult.ok("分析完成，基线 "
-                    + baseSha.substring(0, Math.min(8, baseSha.length())), text)
-                    .withAnalysis(clip(text, 20_000)).withBaseSha(baseSha);
+            // 结构化结论单独落库：修复阶段据此做改动范围校验，验证阶段据此复述复现步骤，
+            // 不依赖模型自然语言里可能被截断/改写的部分。
+            String artifact = node.get().toString();
+            String summary = """
+                    影响版本：%s
+                    提交范围：%s
+                    根因：%s
+                    复现步骤：
+                    %s
+                    目标文件：%s
+                    置信度：%s
+                    """.formatted(blankAsUnknown(json.text(node.get(), "version")),
+                    blankAsUnknown(json.text(node.get(), "commitRange")),
+                    json.text(node.get(), "rootCause"),
+                    bullets(node.get().get("reproSteps")),
+                    bullets(node.get().get("targetFiles")),
+                    ReproduceStage.percent(json.confidence(node.get(), "confidence")));
+            return BugFixStageResult.ok("分析完成，基线 " + shortSha(baseSha),
+                            summary + "\n---\n" + clip(text, 12_000))
+                    .withAnalysis(clip(text, 20_000))
+                    .withAnalysisJson(artifact)
+                    .withArtifact(artifact)
+                    .withBaseSha(baseSha);
         } catch (RuntimeException e) {
             return BugFixStageResult.blocked("分析 Agent 不可用：" + message(e));
         }
@@ -102,6 +122,25 @@ public class AnalyzeStage implements BugFixStageHandler {
 
     static String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    static String blankAsUnknown(String value) {
+        return value == null || value.isBlank() ? "未确定" : value;
+    }
+
+    static String shortSha(String sha) {
+        return sha == null ? "" : sha.substring(0, Math.min(8, sha.length()));
+    }
+
+    static String bullets(com.fasterxml.jackson.databind.JsonNode array) {
+        if (array == null || !array.isArray() || array.isEmpty()) {
+            return "未提供";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (com.fasterxml.jackson.databind.JsonNode item : array) {
+            builder.append("- ").append(item.asText("")).append('\n');
+        }
+        return builder.toString().stripTrailing();
     }
 
     static String clip(String value, int max) {

@@ -36,23 +36,30 @@ public class PullRequestStage implements BugFixStageHandler {
             return BugFixStageResult.blocked("缺少修复提交，无法创建 PR");
         }
         String title = "fix: " + AnalyzeStage.safe(run.issueTitle());
-        String body = """
+        // 模型输出可能复述日志中的 token/密码：评论与 PR 描述离开平台前统一脱敏
+        String body = top.rongx.agent.gateway.bugfix.BugFixRedactor.redact("""
                 ## 自动修复说明
 
                 - Bug 任务：%s
                 - 基线提交：%s
                 - 修复分支：%s
+                - 修复提交：%s
 
                 ### 分析结论
+                %s
+
+                ### 修复说明
                 %s
 
                 ### 验证证据
                 %s
 
-                > 本 PR 由平台自动修复流程创建，请人工 Review 后合并。
+                > 本 PR 由平台自动修复流程创建，请人工 Review 后合并；平台不会自动合并。
                 """.formatted(AnalyzeStage.safe(run.issueNumber()), AnalyzeStage.safe(run.baseSha()),
-                run.branch(), AnalyzeStage.clip(run.analysis(), 4000),
-                AnalyzeStage.clip(run.evidence(), 2000));
+                run.branch(), AnalyzeStage.safe(run.fixSha()),
+                AnalyzeStage.clip(run.analysis(), 4000),
+                AnalyzeStage.clip(run.fixSummary(), 2000),
+                AnalyzeStage.clip(run.evidence(), 2000)));
         try {
             String url = git.openPullRequest(run, title, body);
             return BugFixStageResult.ok("PR 已创建，等待人工合并", url).withPrUrl(url);

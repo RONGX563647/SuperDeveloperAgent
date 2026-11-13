@@ -33,13 +33,16 @@ public class GitIssueNotifier implements BugFixNotifier {
                 || run.issueNumber().isBlank()) {
             return;
         }
+        // 兜底脱敏：即使上游漏脱敏，也不会把 token/密码写进公开 Issue
+        String safe = BugFixRedactor.redact(message);
         try {
             remote.credentials(run.userId(), run.provider(), run.repo())
-                    .ifPresent(credentials -> remote.comment(credentials, run.issueNumber(),
-                            message));
+                    .ifPresent(credentials -> remote.comment(credentials, run.issueNumber(), safe));
         } catch (RuntimeException e) {
             log.warn("自动修复评论回写失败 run={} issue={}：{}", run.id(), run.issueNumber(),
                     e.getMessage());
+            // 交给发件箱调度器重试；通知失败不能影响修复运行，但也不能悄悄丢弃
+            throw e;
         }
     }
 }

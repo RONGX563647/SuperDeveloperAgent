@@ -432,6 +432,13 @@ public class GitWorktreeManager {
                 .logTail().lines().filter(l -> !l.isBlank()).toList();
     }
 
+    /** 改动文件列表（相对仓库根）：{@code from..to}。 */
+    public List<String> diffNames(Path repoDir, String from, String to) {
+        return run(repoDir, List.of("git", "diff", "--name-only", from + ".." + to),
+                "git diff --name-only")
+                .logTail().lines().map(String::trim).filter(l -> !l.isBlank()).toList();
+    }
+
     /** 列出分支（bare 内）：refs/heads/xxx。 */
     public List<String> branches(String projectId) {
         ActionResult out = run(bareDir(projectId),

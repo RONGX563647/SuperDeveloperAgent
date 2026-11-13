@@ -46,18 +46,23 @@ public class BugFixController {
     @GetMapping("/runs")
     public List<BugFixRun> runs(@RequestParam(required = false) String issueId,
                                 @RequestParam(defaultValue = "20") int limit) {
-        return orchestrator.list(currentUser.requireUserId(), issueId, limit);
+        String userId = currentUser.requireUserId();
+        // 管理员（"*"）可查看全部运行，普通用户只能看自己的
+        return orchestrator.list(currentUser.hasPermission("*") ? null : userId, issueId, limit);
     }
 
     @GetMapping("/runs/{id}")
     public Map<String, Object> run(@PathVariable String id) {
         String userId = currentUser.requireUserId();
-        BugFixRun run = orchestrator.get(userId, id);
+        String scope = currentUser.hasPermission("*") ? null : userId;
+        BugFixRun run = orchestrator.get(scope, id);
         return Map.of(
                 "run", run,
                 "progress", run.progress(),
                 "resumable", run.resumable(),
-                "events", orchestrator.events(userId, id));
+                "events", orchestrator.events(scope, id),
+                // 逐阶段记录：尝试次数、耗时、每阶段证据（验证失败回到修复后历史仍保留）
+                "stages", orchestrator.stageRuns(scope, id));
     }
 
     /** 手动启动一次自动修复（Bug 任务）。 */
@@ -73,6 +78,9 @@ public class BugFixController {
         if (!"BUG".equals(issue.kind())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "只有 Bug 任务支持自动修复");
         }
+        if (!issue.open()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "任务已关闭，无法启动自动修复");
+        }
         try {
             return orchestrator.start(issue);
         } catch (IllegalArgumentException e) {
@@ -85,7 +93,15 @@ public class BugFixController {
     @PostMapping("/runs/{id}/retry")
     public BugFixRun retry(@PathVariable String id) {
         currentUser.checkPermission("action:run");
-        return orchestrator.resume(currentUser.requireUserId(), id);
+        String userId = currentUser.requireUserId();
+        BugFixRun run = orchestrator.get(userId, id);
+        // 已关闭的任务不再自动修复：先确认任务仍然打开，再进行状态推进
+        GitIssue issue = issues.get(userId, run.issueId());
+        if (!issue.open()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "任务已关闭，请先重新打开任务再重试自动修复");
+        }
+        return orchestrator.resume(userId, id);
     }
 
     @PostMapping("/runs/{id}/cancel")
@@ -94,16 +110,18 @@ public class BugFixController {
         return orchestrator.cancel(currentUser.requireUserId(), id);
     }
 
+    /** 读取策略；传 projectId 时读取项目级覆盖（未配置回退平台默认值）。 */
     @GetMapping("/policy")
-    public BugFixPolicy policy() {
+    public BugFixPolicy policy(@RequestParam(required = false) String projectId) {
         currentUser.requireUserId();
-        return policies.load();
+        return policies.load(projectId);
     }
 
     @PutMapping("/policy")
     public BugFixPolicy savePolicy(@RequestBody Map<String, Object> body) {
         currentUser.checkPermission("action:run");
-        BugFixPolicy current = policies.load();
+        String projectId = str(body, "projectId");
+        BugFixPolicy current = policies.load(projectId);
         BugFixPolicy next = new BugFixPolicy(
                 bool(body, "enabled", current.enabled()),
                 bool(body, "autoDeploy", current.autoDeploy()),
@@ -112,8 +130,18 @@ public class BugFixController {
                 body.containsKey("bindingId") ? str(body, "bindingId") : current.bindingId(),
                 body.containsKey("maxAttempts") ? integer(body, "maxAttempts",
                         current.maxAttempts()) : current.maxAttempts(),
+                body.containsKey("baseUrl") ? str(body, "baseUrl") : current.baseUrl(),
+                body.containsKey("buildCommand") ? str(body, "buildCommand")
+                        : current.buildCommand(),
+                body.containsKey("testCommand") ? str(body, "testCommand") : current.testCommand(),
                 0);
-        return policies.save(next);
+        try {
+            // 保存前拒绝生产/预生产环境，避免把全局策略改成线上
+            next.validate();
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+        return policies.save(projectId, next);
     }
 
     private static String str(Map<String, Object> body, String key) {

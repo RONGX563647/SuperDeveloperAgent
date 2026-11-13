@@ -2,6 +2,7 @@ package top.rongx.agent.gateway.bugfix.stage;
 
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.bugfix.BugFixAgentPort;
+import top.rongx.agent.domain.bugfix.BugFixCheckPort;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.bugfix.BugFixStage;
@@ -10,10 +11,14 @@ import top.rongx.agent.gateway.bugfix.BugFixJson;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
 
 /**
- * 验证阶段：修复版本部署后，让运维 Agent 重新执行复现步骤并给出是否解决的结论。
+ * 验证阶段：确定性冒烟检查 + 运维 Agent 重新执行复现步骤，双重确认是否真的修好。
  *
- * <p>结论必须是明确 JSON，并且带<b>证据</b>与<b>置信度</b>；一项不达标就停在 PR 前，
- * 绝不在「可能修好了」的情况下自动提 PR。
+ * <p>两条硬性约束：
+ * <ul>
+ *   <li>先做与模型无关的 HTTP 冒烟检查（策略配置了 baseUrl 时），应用起不来直接判失败；</li>
+ *   <li>模型结论必须带<b>证据</b>与<b>置信度</b>；不达标返回 FAILED，编排器会回到修复阶段，
+ *       而不是让「可能修好了」直接进入 PR。</li>
+ * </ul>
  */
 @Component
 public class VerifyStage implements BugFixStageHandler {
@@ -23,10 +28,12 @@ public class VerifyStage implements BugFixStageHandler {
 
     private final BugFixAgentPort agent;
     private final BugFixJson json;
+    private final BugFixCheckPort checks;
 
-    public VerifyStage(BugFixAgentPort agent, BugFixJson json) {
+    public VerifyStage(BugFixAgentPort agent, BugFixJson json, BugFixCheckPort checks) {
         this.agent = agent;
         this.json = json;
+        this.checks = checks;
     }
 
     @Override
@@ -36,6 +43,13 @@ public class VerifyStage implements BugFixStageHandler {
 
     @Override
     public BugFixStageResult execute(BugFixRun run, BugFixPolicy policy) {
+        // 闸门 1：确定性冒烟检查，不允许模型「看到页面正常」就通过
+        BugFixCheckPort.CheckResult smoke = checks.smoke(run, policy);
+        if (!smoke.passed()) {
+            return BugFixStageResult.failed("测试环境冒烟检查未通过：" + smoke.summary()
+                    + (smoke.detail() == null || smoke.detail().isBlank() ? ""
+                    : "\n" + AnalyzeStage.clip(smoke.detail(), 1500)));
+        }
         String prompt = """
                 你是运维验证工程师。修复版本已部署到测试环境（%s，修复提交 %s）。
                 请重新执行下面 Bug 的复现步骤，判断问题是否已解决。
@@ -45,6 +59,7 @@ public class VerifyStage implements BugFixStageHandler {
                 %s
                 修复说明：
                 %s
+                确定性冒烟检查：%s
 
                 最后必须输出 JSON 代码块：
                 ```json
@@ -55,7 +70,7 @@ public class VerifyStage implements BugFixStageHandler {
                 无法确认时 fixed 设为 false 或 confidence 设为 0。
                 """.formatted(policy.testEnv(), AnalyzeStage.safe(run.fixSha()),
                 AnalyzeStage.safe(run.issueTitle()), AnalyzeStage.clip(run.analysis(), 6000),
-                AnalyzeStage.clip(run.evidence(), 4000));
+                AnalyzeStage.clip(run.fixSummary(), 4000), smoke.summary());
         String text;
         try {
             text = agent.run(run, BugFixAgentPort.Role.VERIFY, prompt);
@@ -81,6 +96,7 @@ public class VerifyStage implements BugFixStageHandler {
                     + ReproduceStage.percent(confidence) + "），请人工确认后再提 PR");
         }
         return BugFixStageResult.ok("验证通过，Bug 已解决（置信度 "
-                + ReproduceStage.percent(confidence) + "）", text);
+                        + ReproduceStage.percent(confidence) + "）",
+                "确定性冒烟：" + smoke.summary() + "\n\n" + text);
     }
 }

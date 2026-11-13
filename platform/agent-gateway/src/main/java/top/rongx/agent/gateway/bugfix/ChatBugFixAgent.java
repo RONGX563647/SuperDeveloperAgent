@@ -47,24 +47,28 @@ public class ChatBugFixAgent implements BugFixAgentPort {
     private final ProjectContextResolver contexts;
     private final ProjectRepository projects;
     private final BugFixPolicyStore policies;
+    private final BugFixCancellationRegistry cancellations;
 
     public ChatBugFixAgent(ChatService chatService, ProjectContextResolver contexts,
-                           ProjectRepository projects, BugFixPolicyStore policies) {
+                           ProjectRepository projects, BugFixPolicyStore policies,
+                           BugFixCancellationRegistry cancellations) {
         this.chatService = chatService;
         this.contexts = contexts;
         this.projects = projects;
         this.policies = policies;
+        this.cancellations = cancellations;
     }
 
     @Override
     public String run(BugFixRun run, Role role, String prompt) {
         ProjectContext ctx = context(run, role);
         String agentRole = role == Role.DEPLOY ? "deploy" : "chat";
-        String sessionId = "bugfix-" + run.id() + "-" + role.name().toLowerCase(Locale.ROOT)
-                + "-" + run.attempt();
+        String sessionId = "bugfix-" + run.id() + "-" + run.stage().name().toLowerCase(Locale.ROOT)
+                + "-" + role.name().toLowerCase(Locale.ROOT) + "-" + run.attempt();
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
-            Future<String> future = executor.submit(() -> collect(ctx, sessionId, prompt, agentRole));
+            Future<String> future = executor.submit(
+                    () -> collect(run.id(), ctx, sessionId, prompt, agentRole));
             return future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             throw new IllegalStateException("Agent 在 " + TIMEOUT_SECONDS + " 秒内未完成（"
@@ -92,7 +96,7 @@ public class ChatBugFixAgent implements BugFixAgentPort {
             throw new IllegalStateException("项目未配置任何环境：" + run.projectId());
         }
         List<String> names = envs.stream().map(ProjectEnv::env).toList();
-        String preferred = policies.load().testEnv();
+        String preferred = policies.load(run.projectId()).testEnv();
         String env = names.stream()
                 .filter(name -> name.equalsIgnoreCase(preferred))
                 .findFirst()
@@ -120,9 +124,15 @@ public class ChatBugFixAgent implements BugFixAgentPort {
                 base.worktree(), readOnly);
     }
 
-    private String collect(ProjectContext ctx, String sessionId, String prompt, String role) {
+    private String collect(String runId, ProjectContext ctx, String sessionId, String prompt,
+                           String role) {
         StringBuilder text = new StringBuilder();
         for (AgentEvent event : chatService.stream(ctx, sessionId, prompt, role).toIterable()) {
+            // 协作取消：用户取消后立即停止消费事件并中断后续工具调用，
+            // 不必等整段 Agent 输出跑完（最长 15 分钟）。
+            if (cancellations.cancelled(runId)) {
+                throw new IllegalStateException("自动修复已取消");
+            }
             if (event instanceof TextBlockDeltaEvent delta && delta.getDelta() != null) {
                 text.append(delta.getDelta());
             }
@@ -130,10 +140,9 @@ public class ChatBugFixAgent implements BugFixAgentPort {
         return text.toString().strip();
     }
 
-    /** 生产/预生产一律拒绝（prod / production / preprod）。 */
+    /** 生产/预生产一律拒绝（prod / production / preprod / prd / live / online）。 */
     private static boolean productionLike(String env) {
-        String value = env == null ? "" : env.trim().toLowerCase(Locale.ROOT);
-        return value.contains("prod");
+        return BugFixPolicy.productionLike(env);
     }
 
     private static String safe(Throwable error) {

@@ -147,6 +147,8 @@ public class GitIssueSyncService {
                 "GIT", "SYNCED", "", issue.assignee(), issue.createdAt(),
                 System.currentTimeMillis());
         issues.save(updated);
+        // 远端重新打开/补标签后再次评估自动修复（关闭状态会被触发器拒绝）
+        bugFixTrigger.onIssueUpdated(updated);
     }
 
     /**

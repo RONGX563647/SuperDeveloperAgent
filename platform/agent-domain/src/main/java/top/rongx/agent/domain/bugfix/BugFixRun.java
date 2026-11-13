@@ -4,8 +4,13 @@ package top.rongx.agent.domain.bugfix;
  * 一次 Bug 自动修复运行（状态机实例）。
  *
  * <p>该记录同时是编排器的输入与落库快照：每个阶段结束后整体覆盖保存，因此进程重启后
- * 仍能恢复阶段、证据与已产出的分支/PR 信息。{@code evidence} 保存当前阶段的执行证据
- * （部署日志摘要、复现说明等），供前端展开查看。
+ * 仍能恢复阶段、证据与已产出的分支/PR 信息。{@code evidence} 保存最近一个阶段的执行证据
+ * （部署日志摘要、复现说明等），供前端展开查看；逐阶段证据与耗时见
+ * {@link BugFixStageRun}。
+ *
+ * <p>{@code analysisJson} 保存分析阶段的结构化结论（影响版本、提交范围、根因、复现步骤、
+ * 目标文件、置信度），修复阶段据此校验改动范围；{@code fixSummary} 保存修复说明，
+ * 验证阶段只读它而不是读部署日志，避免证据互相覆盖。
  */
 public record BugFixRun(
         String id,
@@ -22,6 +27,8 @@ public record BugFixRun(
         BugFixStatus status,
         String message,
         String analysis,
+        String analysisJson,
+        String fixSummary,
         String baseSha,
         String fixSha,
         String env,
@@ -60,8 +67,9 @@ public record BugFixRun(
             return this;
         }
         return new BugFixRun(id, issueId, userId, projectId, provider, repo, issueNumber,
-                issueTitle, issueBody, branch, stage, status, message, analysis, baseSha, fixSha,
-                env, prUrl, value, attempt, createdAt, updatedAt, finishedAt);
+                issueTitle, issueBody, branch, stage, status, message, analysis, analysisJson,
+                fixSummary, baseSha, fixSha, env, prUrl, value, attempt, createdAt, updatedAt,
+                finishedAt);
     }
 
     /** 只更新 PR 链接（null 保留原值）。 */
@@ -70,7 +78,8 @@ public record BugFixRun(
             return this;
         }
         return new BugFixRun(id, issueId, userId, projectId, provider, repo, issueNumber,
-                issueTitle, issueBody, branch, stage, status, message, analysis, baseSha, fixSha,
-                env, value, evidence, attempt, createdAt, updatedAt, finishedAt);
+                issueTitle, issueBody, branch, stage, status, message, analysis, analysisJson,
+                fixSummary, baseSha, fixSha, env, value, evidence, attempt, createdAt, updatedAt,
+                finishedAt);
     }
 }
