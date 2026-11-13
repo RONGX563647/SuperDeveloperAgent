@@ -21,6 +21,8 @@ const router = useRouter()
 const data = ref<Readiness | null>(null)
 const loading = ref(false)
 const fixingKey = ref('')
+/** 默认折叠成一行摘要：操作台主按钮已经能一键发布，清单只在需要排查时展开。 */
+const open = ref(false)
 
 async function load(): Promise<void> {
   if (!props.projectId) return
@@ -34,8 +36,17 @@ async function load(): Promise<void> {
   }
 }
 
-watch(() => props.projectId, load)
+watch(() => props.projectId, () => {
+  open.value = false
+  void load()
+})
 onMounted(load)
+
+/** 供父组件在「一键发布」被前置条件挡住时自动展开。 */
+function expand(): void {
+  open.value = true
+}
+defineExpose({ expand, reload: load })
 
 /** 结果项（首次发布）不参与 ready，只是展示当前跑到哪一步。 */
 const badgeText = computed(() => {
@@ -49,6 +60,16 @@ const badgeText = computed(() => {
 const badgeClass = computed(() => {
   if (!data.value) return ''
   return data.value.ready ? 'ok' : 'warn'
+})
+
+/** 折叠态的一行摘要：只补徽标没表达的信息（第一个缺项），避免重复计数。 */
+const summary = computed(() => {
+  if (!data.value) return loading.value ? '检查中…' : ''
+  if (data.value.ready) {
+    return data.value.steps.every(s => s.ok) ? '全部就绪，可直接发布' : '可以发布到 test'
+  }
+  const missing = data.value.steps.find(s => s.required && !s.ok)
+  return missing ? `缺：${missing.label}` : ''
 })
 
 async function runFix(step: ReadinessStep): Promise<void> {
@@ -80,40 +101,47 @@ async function runFix(step: ReadinessStep): Promise<void> {
     <div class="rd-head">
       <h3 class="po-card-title" style="margin: 0">首次发布准备</h3>
       <span class="rd-badge" :class="badgeClass">{{ badgeText }}</span>
+      <span class="rd-summary">{{ summary }}</span>
+      <button type="button" class="rd-toggle" @click="open = !open">
+        {{ open ? '收起' : '展开' }}
+      </button>
       <button type="button" class="rd-refresh" :disabled="loading" title="刷新" @click="load">
         <el-icon><RefreshRight /></el-icon>
       </button>
     </div>
-    <p class="rd-sub">
-      按顺序补齐下列前置条件，然后在流水线页发布 <code class="mono">test</code>。
-    </p>
 
-    <p v-if="loading && !data" class="rd-hint">检查中…</p>
-    <div v-else-if="data" class="rd-list">
-      <div
-        v-for="s in data.steps"
-        :key="s.key"
-        class="rd-row"
-        :class="{ ok: s.ok, optional: !s.required }"
-      >
-        <el-icon class="rd-icon">
-          <CircleCheckFilled v-if="s.ok" />
-          <CircleCloseFilled v-else />
-        </el-icon>
-        <span class="rd-label">{{ s.label }}</span>
-        <span class="rd-detail" :title="s.detail">{{ s.detail }}</span>
-        <span v-if="!s.required" class="rd-tag">结果</span>
-        <button
-          v-else-if="!s.ok && s.fix"
-          type="button"
-          class="rd-fix"
-          :disabled="fixingKey === s.key"
-          @click="runFix(s)"
+    <template v-if="open">
+      <p class="rd-sub">
+        按顺序补齐下列前置条件，然后在流水线页发布 <code class="mono">test</code>。
+      </p>
+
+      <p v-if="loading && !data" class="rd-hint">检查中…</p>
+      <div v-else-if="data" class="rd-list">
+        <div
+          v-for="s in data.steps"
+          :key="s.key"
+          class="rd-row"
+          :class="{ ok: s.ok, optional: !s.required }"
         >
-          {{ fixingKey === s.key ? '处理中…' : s.fix.label }}
-        </button>
+          <el-icon class="rd-icon">
+            <CircleCheckFilled v-if="s.ok" />
+            <CircleCloseFilled v-else />
+          </el-icon>
+          <span class="rd-label">{{ s.label }}</span>
+          <span class="rd-detail" :title="s.detail">{{ s.detail }}</span>
+          <span v-if="!s.required" class="rd-tag">结果</span>
+          <button
+            v-else-if="!s.ok && s.fix"
+            type="button"
+            class="rd-fix"
+            :disabled="fixingKey === s.key"
+            @click="runFix(s)"
+          >
+            {{ fixingKey === s.key ? '处理中…' : s.fix.label }}
+          </button>
+        </div>
       </div>
-    </div>
+    </template>
   </section>
 </template>
 
@@ -147,13 +175,31 @@ async function runFix(step: ReadinessStep): Promise<void> {
   justify-content: center;
   width: 24px;
   height: 24px;
-  margin-left: auto;
   font-size: 12px;
   color: var(--ink-muted);
   cursor: pointer;
   background: none;
   border: 0;
   border-radius: var(--radius-xs);
+}
+.rd-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rd-toggle {
+  flex: none;
+  padding: 0 4px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
 }
 .rd-refresh:hover:not(:disabled) {
   color: var(--ink);

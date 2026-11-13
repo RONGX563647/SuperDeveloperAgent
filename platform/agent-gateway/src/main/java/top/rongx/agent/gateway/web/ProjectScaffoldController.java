@@ -2,6 +2,7 @@ package top.rongx.agent.gateway.web;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,8 +17,10 @@ import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
+import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
+import top.rongx.agent.infra.persistence.IntakeProjectStore;
 
 /**
  * 流水线脚手架接口：按仓库结构生成流水线定义。
@@ -35,14 +38,93 @@ public class ProjectScaffoldController {
     private final ProjectRepoLocator repoLocator;
     private final PipelineDefStore defStore;
     private final top.rongx.agent.domain.port.RecipeStore recipes;
+    private final ProjectRepository projects;
+    private final IntakeProjectStore intakeStore;
 
     public ProjectScaffoldController(ProjectScaffolder scaffolder, ProjectRepoLocator repoLocator,
                                      PipelineDefStore defStore,
-                                     top.rongx.agent.domain.port.RecipeStore recipes) {
+                                     top.rongx.agent.domain.port.RecipeStore recipes,
+                                     ProjectRepository projects,
+                                     IntakeProjectStore intakeStore) {
         this.scaffolder = scaffolder;
         this.repoLocator = repoLocator;
         this.defStore = defStore;
         this.recipes = recipes;
+        this.projects = projects;
+        this.intakeStore = intakeStore;
+    }
+
+    /**
+     * 一键准备：把「发布到测试」前能自动补齐的配置补齐（幂等，可重复调用）。
+     *
+     * <p>只做两件事，且都不覆盖用户已有配置：
+     * <ol>
+     *   <li>补登记目标环境（历史项目可能只登记了 dev/prod，导致选不到 test）；</li>
+     *   <li>仓库与平台都没有流水线定义时，按仓库结构生成平台侧 {@code ci/}（生成即可运行）。</li>
+     * </ol>
+     * 返回 {@code prepared}（本次补了什么）与 {@code notes}（仍需人工处理的项）。
+     * 是否真的可以发布仍以 {@code GET /{id}/readiness} 为准，前端只在 ready 时触发运行。
+     */
+    @PostMapping("/{id}/prepare")
+    public Map<String, Object> prepare(@PathVariable String id,
+                                       @RequestParam(defaultValue = "test") String env) {
+        String target = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
+        List<Map<String, Object>> prepared = new ArrayList<>();
+        List<String> notes = new ArrayList<>();
+
+        Path repo = repoLocator.repoDir(id).filter(Files::isDirectory).orElse(null);
+        if (repo == null) {
+            notes.add("项目仓库尚未接入");
+        }
+
+        // 1) 环境登记
+        boolean envRegistered = projects.findEnvs(id).stream()
+                .anyMatch(e -> target.equals(e.env()));
+        if (!envRegistered) {
+            if (intakeStore.find(id).isPresent()) {
+                if (intakeStore.ensureEnv(id, target)) {
+                    prepared.add(preparedRow("env", "已登记 " + target + " 环境"));
+                }
+            } else {
+                notes.add("预置项目请在项目配置里补充 " + target + " 环境");
+            }
+        }
+
+        // 2) 流水线定义：仓库 ci/pipeline.yml 优先，平台侧已有则不动，都没有才生成
+        boolean repoDefined = repo != null && Files.isRegularFile(repo.resolve("ci/pipeline.yml"));
+        // bare 仓库没有工作树，扫描不出技术栈：交给用户先完成一次接入/检出
+        boolean worktree = repo != null && Files.exists(repo.resolve(".git"));
+        if (!repoDefined && !defStore.exists(id)) {
+            if (repo == null) {
+                notes.add("仓库不存在，无法生成流水线定义");
+            } else if (!worktree) {
+                notes.add("平台托管仓库还没有工作树，无法识别技术栈，请先生成流水线定义");
+            } else {
+                ScaffoldPlan plan = scaffolder.plan(id, repo, null);
+                String pipelineYaml = fileContent(plan, "ci/pipeline.yml");
+                String actionsYaml = fileContent(plan, "ci/actions.yml");
+                if (defStore.write(id, pipelineYaml, actionsYaml)) {
+                    prepared.add(preparedRow("pipeline",
+                            "已生成平台侧流水线定义（" + plan.stack() + "）"));
+                } else {
+                    notes.add("流水线定义生成失败，请手动生成");
+                }
+            }
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("projectId", id);
+        out.put("env", target);
+        out.put("prepared", prepared);
+        out.put("notes", notes);
+        return out;
+    }
+
+    private static Map<String, Object> preparedRow(String key, String detail) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("key", key);
+        row.put("detail", detail);
+        return row;
     }
 
     /**

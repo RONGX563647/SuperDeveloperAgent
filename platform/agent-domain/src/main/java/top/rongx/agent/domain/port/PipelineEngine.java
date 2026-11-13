@@ -86,6 +86,20 @@ public interface PipelineEngine {
     }
 
     /**
+     * 构建历史分页（项目可选，按时间倒序）。
+     *
+     * <p>默认实现基于 {@link #history()} 过滤，引擎可实现为索引分页，
+     * 使接口耗时与历史条数无关。
+     */
+    default List<RunSummary> history(String projectId, int offset, int limit) {
+        java.util.stream.Stream<RunSummary> stream = history().stream();
+        if (projectId != null && !projectId.isBlank()) {
+            stream = stream.filter(h -> projectId.equals(h.projectId()));
+        }
+        return stream.skip(Math.max(0, offset)).limit(Math.max(0, limit)).toList();
+    }
+
+    /**
      * 删除一条构建历史（只对终态运行生效）。
      *
      * <p>用于工作台的滑动删除；运行中不允许删除，持久化文件不存在时返回 false。

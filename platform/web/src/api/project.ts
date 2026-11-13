@@ -368,6 +368,25 @@ export function projectReadiness(projectId: string, env = 'test'): Promise<Readi
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/readiness?${q}`)
 }
 
+/** 一键准备结果：本次自动补齐了哪些项，以及仍需人工处理的提示。 */
+export interface PrepareResult {
+  projectId: string
+  env: string
+  prepared: Array<{ key: string, detail: string }>
+  notes: string[]
+}
+
+/**
+ * 一键准备：补登记环境 + 没有定义时生成平台侧流水线定义（幂等，不覆盖已有配置）。
+ * 之后仍需调用 projectReadiness 判断是否可发布。
+ */
+export function prepareProject(projectId: string, env = 'test'): Promise<PrepareResult> {
+  const q = new URLSearchParams({ env })
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/prepare?${q}`, {
+    method: 'POST'
+  })
+}
+
 // ---------------------------------------------------------------- git
 
 export function gitStatus(projectId: string): Promise<GitStatus> {

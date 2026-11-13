@@ -1,13 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getToken, me, setUnauthorizedHandler } from './api/auth'
 import { appStore } from './stores/app'
-import ChatView from './views/ChatView.vue'
-import PipelineView from './views/PipelineView.vue'
-import LoginView from './views/LoginView.vue'
-import ProjectIntakeView from './views/ProjectIntakeView.vue'
-import ProjectDetailView from './views/ProjectDetailView.vue'
-import ProjectListView from './views/ProjectListView.vue'
-import SettingsView from './views/SettingsView.vue'
+
+// 路由级懒加载：首屏只下载当前页面（对话/流水线/设置各自一个 chunk）
+const ChatView = () => import('./views/ChatView.vue')
+const PipelineView = () => import('./views/PipelineView.vue')
+const LoginView = () => import('./views/LoginView.vue')
+const ProjectIntakeView = () => import('./views/ProjectIntakeView.vue')
+const ProjectDetailView = () => import('./views/ProjectDetailView.vue')
+const ProjectListView = () => import('./views/ProjectListView.vue')
+const SettingsView = () => import('./views/SettingsView.vue')
 
 const router = createRouter({
   history: createWebHistory(),

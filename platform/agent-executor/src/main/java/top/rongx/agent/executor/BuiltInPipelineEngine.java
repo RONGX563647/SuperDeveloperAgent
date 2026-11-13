@@ -1179,10 +1179,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     /** 构建历史列表（含重启前落盘的运行），转为 domain 视图。 */
     @Override
     public List<RunSummary> history() {
-        return history.list().stream()
+        return history.summaries(null, 0, Integer.MAX_VALUE).stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
-                        h.status(), h.createdAt(), h.seq(), h.stages().size(),
-                        h.stages().stream().mapToLong(StageResult::durationMs).sum()))
+                        h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs()))
+                .toList();
+    }
+
+    /** 历史分页直接在摘要索引上完成：不重读 YAML，耗时与历史条数无关。 */
+    @Override
+    public List<RunSummary> history(String projectId, int offset, int limit) {
+        return history.summaries(projectId, offset, limit).stream()
+                .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
+                        h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs()))
                 .toList();
     }
 

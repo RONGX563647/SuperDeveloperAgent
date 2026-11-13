@@ -6,11 +6,12 @@ import {
   Connection, Folder, Loading, Select, UserFilled, WarningFilled
 } from '@element-plus/icons-vue'
 import {
-  giteeBindStatus,
+  giteeBindStatus, gitCommits,
   intakeLocal, intakeRemote, intakeStatus,
   type GiteeBinding, type GiteeRepo,
   type IntakeStatus, type RecipeReport
 } from '../api/project'
+import { cancelRun, triggerPipeline } from '../api/pipeline'
 import DirPickerDialog from '../components/DirPickerDialog.vue'
 import GiteeRepoPicker from '../components/GiteeRepoPicker.vue'
 import { appStore } from '../stores/app'
@@ -175,6 +176,7 @@ async function poll() {
       stopPoll()
       phase.value = 'DONE'
       report.value = status.value.report as unknown as RecipeReport
+      scheduleAutoVerify()
     } else if (status.value.phase === 'INTAKE_FAILED') {
       stopPoll()
       phase.value = 'FAILED'
@@ -191,9 +193,91 @@ function stopPoll() {
 
 function retry() {
   stopPoll()
+  stopAutoVerify()
   phase.value = 'FORM'
   status.value = null
   report.value = null
+  verifyRunId.value = ''
+  verifyError.value = ''
+}
+
+/* ---------------------------------------------------------------- 接入后自动检查构建 */
+
+/** 接入成功默认自动跑一次 verify（只构建、不部署），给 3 秒反悔时间。 */
+const autoVerify = ref(true)
+const autoCountdown = ref(0)
+const verifyRunId = ref('')
+const verifyError = ref('')
+const verifyBusy = ref(false)
+let autoTimer: ReturnType<typeof setInterval> | null = null
+
+function stopAutoVerify(): void {
+  if (autoTimer) {
+    clearInterval(autoTimer)
+    autoTimer = null
+  }
+  autoCountdown.value = 0
+}
+
+function cancelAutoVerify(): void {
+  autoVerify.value = false
+  stopAutoVerify()
+  ElMessage.info('已取消自动检查构建')
+}
+
+function scheduleAutoVerify(): void {
+  if (!autoVerify.value || autoTimer) return
+  autoCountdown.value = 3
+  autoTimer = setInterval(() => {
+    autoCountdown.value -= 1
+    if (autoCountdown.value <= 0) {
+      stopAutoVerify()
+      void startVerify()
+    }
+  }, 1000)
+}
+
+/** 触发一次 verify：用最新提交 + 接入报告里的部署目标。 */
+async function startVerify(): Promise<void> {
+  if (verifyBusy.value || verifyRunId.value || !status.value) return
+  verifyBusy.value = true
+  verifyError.value = ''
+  try {
+    const page = await gitCommits(status.value.projectId, 1)
+    const sha = page.commits[0]?.sha
+    if (!sha) {
+      verifyError.value = '仓库还没有提交，跳过检查构建'
+      return
+    }
+    const t = report.value?.summary?.deployTarget
+    const target = t === 'host' || t === 'server' ? t : 'docker'
+    const run = await triggerPipeline('verify', status.value.projectId, sha, target, 'test')
+    verifyRunId.value = run.runId
+    ElMessage.success('已开始检查构建（只构建，不部署）')
+  } catch (e) {
+    verifyError.value = e instanceof Error ? e.message : '触发检查构建失败'
+  } finally {
+    verifyBusy.value = false
+  }
+}
+
+async function cancelVerify(): Promise<void> {
+  if (!verifyRunId.value) return
+  try {
+    await cancelRun(verifyRunId.value)
+    ElMessage.info('已取消检查构建')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '取消失败')
+  }
+}
+
+function openVerifyRun(): void {
+  if (!status.value || !verifyRunId.value) return
+  appStore.projectId = status.value.projectId
+  void router.push({
+    path: '/pipeline',
+    query: { projectId: status.value.projectId, runId: verifyRunId.value },
+  })
 }
 
 /** 识别结果一行摘要：stack · Java 目录 · 前端目录 · 包管理器。 */
@@ -220,7 +304,10 @@ function goPreview() {
 }
 
 onMounted(loadBinding)
-onUnmounted(stopPoll)
+onUnmounted(() => {
+  stopPoll()
+  stopAutoVerify()
+})
 </script>
 
 <template>
@@ -460,6 +547,30 @@ onUnmounted(stopPoll)
             </div>
           </details>
         </div>
+        <!-- 接入后自动检查构建：默认 3 秒后触发 verify，可取消/立即执行 -->
+        <div class="auto-verify">
+          <template v-if="autoCountdown > 0">
+            <span class="av-text">将在 {{ autoCountdown }} 秒后自动检查构建（只构建，不部署）</span>
+            <button type="button" class="mini-btn" @click="cancelAutoVerify">取消</button>
+          </template>
+          <template v-else-if="verifyRunId">
+            <span class="av-text">
+              检查构建已触发 <code class="mono">{{ verifyRunId }}</code>
+            </span>
+            <button type="button" class="mini-btn" @click="openVerifyRun">查看运行</button>
+            <button type="button" class="mini-btn" @click="cancelVerify">取消运行</button>
+          </template>
+          <template v-else>
+            <label class="av-text">
+              <input v-model="autoVerify" type="checkbox" @change="stopAutoVerify" />
+              接入后自动检查构建
+            </label>
+            <span v-if="verifyError" class="av-err">{{ verifyError }}</span>
+            <button type="button" class="mini-btn" :disabled="verifyBusy" @click="startVerify">
+              {{ verifyBusy ? '触发中…' : '立即检查' }}
+            </button>
+          </template>
+        </div>
         <div class="form-actions">
           <button type="button" class="primary-btn" @click="goPreview">
             预演一次（只构建，不部署）
@@ -487,3 +598,31 @@ onUnmounted(stopPoll)
 </template>
 
 <style scoped src="./intake-shared.css"></style>
+
+<style scoped>
+.auto-verify {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+.av-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.av-text input {
+  margin: 0;
+}
+.av-err {
+  color: var(--danger);
+}
+</style>

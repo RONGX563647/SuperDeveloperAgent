@@ -35,16 +35,28 @@ interface SectionMeta {
 const SECTIONS: SectionMeta[] = [
   { key: 'servers', label: '服务器', desc: '连接与运行环境', icon: Monitor },
   { key: 'models', label: '模型连接', desc: '推理服务与密钥', icon: Cpu },
+  { key: 'repos', label: '代码仓库', desc: '授权与连接', icon: Connection },
   { key: 'envTemplates', label: '环境模板', desc: 'dev/test/prod 默认值', icon: Files },
   { key: 'envs', label: '项目环境', desc: '覆盖 · 注入变量 · 重新检测', icon: Key },
-  { key: 'secrets', label: '密钥库', desc: 'secret:// 引用与轮换', icon: Lock },
-  { key: 'repos', label: '代码仓库', desc: '授权与连接', icon: Connection }
+  { key: 'secrets', label: '密钥库', desc: 'secret:// 引用与轮换', icon: Lock }
 ]
+
+/** 高级分区：默认收起，避免首次进入就被六个入口劝退。 */
+const ADVANCED: Section[] = ['envTemplates', 'envs', 'secrets']
+const BASIC = SECTIONS.filter((s) => !ADVANCED.includes(s.key))
+const ADVANCED_SECTIONS = SECTIONS.filter((s) => ADVANCED.includes(s.key))
 
 const route = useRoute()
 const requested = String(route.query.section ?? '')
 const active = ref<Section>(
   SECTIONS.some((s) => s.key === requested) ? requested as Section : 'servers')
+/** 深链进高级分区（如 ?section=envs）时自动展开该分组。 */
+const advancedOpen = ref(ADVANCED.includes(active.value))
+
+function selectSection(key: Section): void {
+  active.value = key
+  if (ADVANCED.includes(key)) advancedOpen.value = true
+}
 const serverRef = ref<InstanceType<typeof ServerPanel> | null>(null)
 const modelRef = ref<InstanceType<typeof ModelPanel> | null>(null)
 const envRef = ref<InstanceType<typeof ProjectEnvPanel> | null>(null)
@@ -93,10 +105,10 @@ async function refresh(): Promise<void> {
         <!-- 左：分区导航 -->
         <aside class="settings-nav" aria-label="设置分区">
           <button
-            v-for="s in SECTIONS" :key="s.key"
+            v-for="s in BASIC" :key="s.key"
             type="button" class="nav-card"
             :class="{ active: active === s.key }"
-            @click="active = s.key"
+            @click="selectSection(s.key)"
           >
             <span class="nav-icon"><el-icon><component :is="s.icon" /></el-icon></span>
             <span class="nav-copy">
@@ -104,16 +116,35 @@ async function refresh(): Promise<void> {
               <span class="nav-desc">{{ s.desc }}</span>
             </span>
           </button>
+
+          <button type="button" class="nav-group-toggle" @click="advancedOpen = !advancedOpen">
+            <span>{{ advancedOpen ? '收起高级设置' : '高级设置' }}</span>
+            <span class="nav-chevron" :class="{ open: advancedOpen }">›</span>
+          </button>
+          <template v-if="advancedOpen">
+            <button
+              v-for="s in ADVANCED_SECTIONS" :key="s.key"
+              type="button" class="nav-card sub"
+              :class="{ active: active === s.key }"
+              @click="selectSection(s.key)"
+            >
+              <span class="nav-icon"><el-icon><component :is="s.icon" /></el-icon></span>
+              <span class="nav-copy">
+                <span class="nav-title">{{ s.label }}</span>
+                <span class="nav-desc">{{ s.desc }}</span>
+              </span>
+            </button>
+          </template>
         </aside>
 
-        <!-- 右：内容卡片 -->
+        <!-- 右：内容卡片（只挂载当前分区：首开不再同时发六组请求） -->
         <section class="settings-card" :aria-label="current.label">
-          <ServerPanel v-show="active === 'servers'" ref="serverRef" />
-          <ModelPanel v-show="active === 'models'" ref="modelRef" />
-          <EnvTemplatePanel v-show="active === 'envTemplates'" ref="envTemplateRef" />
-          <ProjectEnvPanel v-show="active === 'envs'" ref="envRef" />
-          <SecretPanel v-show="active === 'secrets'" ref="secretRef" />
-          <RepoPanel v-show="active === 'repos'" ref="repoRef" />
+          <ServerPanel v-if="active === 'servers'" ref="serverRef" />
+          <ModelPanel v-else-if="active === 'models'" ref="modelRef" />
+          <RepoPanel v-else-if="active === 'repos'" ref="repoRef" />
+          <EnvTemplatePanel v-else-if="active === 'envTemplates'" ref="envTemplateRef" />
+          <ProjectEnvPanel v-else-if="active === 'envs'" ref="envRef" />
+          <SecretPanel v-else-if="active === 'secrets'" ref="secretRef" />
         </section>
       </div>
     </div>
@@ -185,6 +216,38 @@ async function refresh(): Promise<void> {
   content: '';
   background: var(--accent);
   border-radius: var(--radius-pill);
+}
+.nav-group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 13px;
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+.nav-group-toggle:hover {
+  color: var(--ink-soft);
+  background: var(--surface-hover);
+}
+.nav-chevron {
+  display: inline-block;
+  font-size: 13px;
+  line-height: 1;
+  transition: transform var(--dur-fast) ease;
+}
+.nav-chevron.open {
+  transform: rotate(90deg);
+}
+/* 高级分区：缩进一级，视觉上从属于上方常用入口 */
+.nav-card.sub {
+  padding-left: 22px;
 }
 .nav-icon {
   display: flex;
@@ -283,6 +346,20 @@ async function refresh(): Promise<void> {
   }
   .nav-card.active::before {
     content: none;
+  }
+  /* 手机端高级入口也是一枚可横滑的胶囊，不换行 */
+  .nav-group-toggle {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 6px 11px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    background: var(--panel);
+    border: 1px dashed var(--line-soft);
+    border-radius: var(--radius-pill);
+  }
+  .nav-card.sub {
+    padding-left: 9px;
   }
   .nav-icon {
     width: 20px;

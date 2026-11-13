@@ -345,18 +345,22 @@ public class ProjectIntakeController {
     /** 项目列表（预置 ∪ 接入），带来源与可下线性。 */
     @GetMapping
     public List<Map<String, Object>> listProjects() {
+        // 一次读全量接入元数据，避免每个项目单独查一次 SQLite（N+1）
+        Map<String, IntakeProjectStore.IntakeProject> intakes = new java.util.HashMap<>();
+        for (IntakeProjectStore.IntakeProject p : store.findAll()) {
+            intakes.put(p.id(), p);
+        }
         List<Map<String, Object>> out = new ArrayList<>();
         for (var p : projects.findAll()) {
-            boolean isIntake = composite.isIntake(p.id());
-            var intakeOpt = store.find(p.id());
+            IntakeProjectStore.IntakeProject intake = intakes.get(p.id());
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             row.put("id", p.id());
             row.put("name", p.name());
             row.put("type", p.type());
             row.put("repoUrl", p.repoUrl());
-            row.put("source", intakeOpt.map(IntakeProjectStore.IntakeProject::source).orElse("PRESET"));
-            row.put("localPath", intakeOpt.map(IntakeProjectStore.IntakeProject::localPath).orElse(null));
-            row.put("intake", isIntake);
+            row.put("source", intake == null ? "PRESET" : intake.source());
+            row.put("localPath", intake == null ? null : intake.localPath());
+            row.put("intake", intake != null);
             out.add(row);
         }
         return out;

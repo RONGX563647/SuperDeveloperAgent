@@ -25,6 +25,21 @@ public class RunHistoryStore {
 
     private final Path dir;
     private final boolean enabled;
+    /**
+     * 历史摘要索引：{@code runId → Summary}。
+     *
+     * <p>历史页只需要"一行摘要"，以前每次请求都要把全部 YAML 读一遍并重新解析；
+     * 现在启动/首次访问时建一次索引，之后写入与删除增量维护，分页在索引上完成，
+     * 查询耗时不再随历史条数增长。
+     */
+    private final Map<String, Summary> index = new ConcurrentHashMap<>();
+    private volatile boolean indexed = false;
+    /** 倒序摘要缓存：写入/删除时失效，避免每次分页都重新排序。 */
+    private volatile List<Summary> sortedSummaries;
+
+    private void invalidateSummaries() {
+        sortedSummaries = null;
+    }
 
     private RunHistoryStore(Path dir, boolean enabled) {
         this.dir = dir;
@@ -68,6 +83,9 @@ public class RunHistoryStore {
             data.put("artifacts", snapshot.artifacts().stream().map(RunHistoryStore::artifactMap).toList());
             Files.writeString(dir.resolve(snapshot.runId() + ".yml"),
                     new Yaml().dump(data));
+            // 增量维护摘要索引：历史页无需再读盘
+            index.put(snapshot.runId(), Summary.of(snapshot));
+            invalidateSummaries();
         } catch (IOException ignored) {
             // 持久化失败不阻断构建
         }
@@ -88,7 +106,9 @@ public class RunHistoryStore {
             stream.filter(p -> p.toString().endsWith(".yml"))
                     .forEach(p -> {
                         try {
-                            out.add(read(p));
+                            RunSnapshot snapshot = read(p);
+                            out.add(snapshot);
+                            index.put(snapshot.runId(), Summary.of(snapshot));
                         } catch (Exception ignored) {
                             // 单个损坏文件不影响其他历史
                         }
@@ -114,13 +134,56 @@ public class RunHistoryStore {
             }
         }
         numbered.sort((a, b) -> Long.compare(b.createdAt(), a.createdAt()));
+        indexed = true;
+        invalidateSummaries();
         return numbered;
+    }
+
+    /**
+     * 历史摘要分页（在内存索引上过滤/排序/分页，不读盘）。
+     *
+     * @param projectId 为空表示全部项目
+     */
+    public List<Summary> summaries(String projectId, int offset, int limit) {
+        ensureIndex();
+        List<Summary> all = sortedSummaries;
+        if (all == null) {
+            all = index.values().stream()
+                    .sorted(Comparator.comparingLong(Summary::createdAt).reversed())
+                    .toList();
+            sortedSummaries = all;
+        }
+        java.util.stream.Stream<Summary> stream = all.stream();
+        if (projectId != null && !projectId.isBlank()) {
+            stream = stream.filter(s -> projectId.equals(s.projectId()));
+        }
+        return stream.skip(Math.max(0, offset)).limit(Math.max(0, limit)).toList();
+    }
+
+    /** 按 runId 查摘要（历史运行未在内存时，日志/仓库解析用）。 */
+    public java.util.Optional<Summary> summary(String runId) {
+        ensureIndex();
+        return java.util.Optional.ofNullable(index.get(runId));
+    }
+
+    /** 首次访问时建索引：全量扫描一次 YAML，后续由 save/delete 增量维护。 */
+    private void ensureIndex() {
+        if (!enabled || indexed) {
+            return;
+        }
+        synchronized (this) {
+            if (!indexed) {
+                list();
+            }
+            indexed = true;
+        }
     }
 
     /** 同一项目 + 环境内的下一个构建序号（从 1 开始，取现有最大值 +1）。 */
     public synchronized int nextSeq(String projectId, String env) {
+        ensureIndex();
         int max = 0;
-        for (RunSnapshot s : list()) {
+        for (Summary s : index.values()) {
             if (s.projectId().equals(projectId) && s.env().equals(env)) {
                 max = Math.max(max, s.seq());
             }
@@ -134,7 +197,12 @@ public class RunHistoryStore {
             return false;
         }
         try {
-            return Files.deleteIfExists(dir.resolve(runId + ".yml"));
+            boolean removed = Files.deleteIfExists(dir.resolve(runId + ".yml"));
+            if (removed) {
+                index.remove(runId);
+                invalidateSummaries();
+            }
+            return removed;
         } catch (IOException e) {
             return false;
         }
@@ -227,6 +295,18 @@ public class RunHistoryStore {
         m.put("sizeBytes", a.sizeBytes());
         m.put("meta", a.meta() == null ? Map.of() : a.meta());
         return m;
+    }
+
+    /** 历史摘要（索引项）：历史列表只需要这些字段，不需要读回阶段/日志/产物。 */
+    public record Summary(String runId, String projectId, String env, String pipelineId, String gitSha,
+                          StageStatus status, long createdAt, int seq, int stageCount, long durationMs) {
+
+        static Summary of(RunSnapshot snapshot) {
+            return new Summary(snapshot.runId(), snapshot.projectId(), snapshot.env(),
+                    snapshot.pipelineId(), snapshot.gitSha(), snapshot.status(),
+                    snapshot.createdAt(), snapshot.seq(), snapshot.stages().size(),
+                    snapshot.stages().stream().mapToLong(StageResult::durationMs).sum());
+        }
     }
 
     /** 一次运行的不可变快照。 */

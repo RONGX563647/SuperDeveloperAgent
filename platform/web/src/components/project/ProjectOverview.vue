@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
-import { gitCommits, gitStatus, type GitCommit, type GitStatus, type ProjectRow } from '../../api/project'
+import {
+  gitCommits, gitStatus, prepareProject, projectReadiness,
+  type GitCommit, type GitStatus, type ProjectRow,
+} from '../../api/project'
+import { triggerPipeline } from '../../api/pipeline'
 import ProjectReadiness from './ProjectReadiness.vue'
 
 /**
  * 项目概览（左侧树选中根节点时的右侧详情）：
  * 名称/来源标签、Git 仓库地址（一键复制）、本地路径、分支、最近提交；
- * 底部快捷操作：运行流水线。
+ * 主操作是「发布到测试」：自动补齐环境与定义 → 取最新提交 → 触发 → 跳运行详情。
  */
 interface Props {
   project: ProjectRow
@@ -20,8 +25,11 @@ const emit = defineEmits<{
   (e: 'runPipeline'): void
 }>()
 
+const router = useRouter()
 const status = ref<GitStatus | null>(null)
 const loading = ref(false)
+const publishing = ref(false)
+const readinessRef = ref<InstanceType<typeof ProjectReadiness> | null>(null)
 
 /** 提交历史（独立分页，比概览的最近 5 条更全）。 */
 const commits = ref<GitCommit[]>([])
@@ -126,6 +134,53 @@ async function copyRepo(): Promise<void> {
     ElMessage.error('复制失败（浏览器未授权剪贴板）')
   }
 }
+
+/**
+ * 一键发布到测试：
+ * prepare（补环境 / 缺定义时生成）→ readiness（是否真能发）→ 最新提交 → 触发 release。
+ * 被前置条件挡住时就地展开清单，用户不需要再去设置页/流水线页逐个排查。
+ */
+async function publishToTest(): Promise<void> {
+  if (publishing.value) return
+  publishing.value = true
+  try {
+    const prep = await prepareProject(props.project.id, 'test')
+    if (prep.prepared.length) {
+      ElMessage.success(prep.prepared.map((p) => p.detail).join('；'))
+    }
+    const readiness = await projectReadiness(props.project.id, 'test')
+    const blocking = readiness.steps.filter((s) => s.required && !s.ok)
+    let target = readiness.target === 'server' || readiness.target === 'host'
+      ? readiness.target : 'docker'
+    // 本机没有 Docker 不算阻塞：直接降级为进程部署（与就绪清单里的修复建议一致）
+    const runtimeOnly = blocking.length === 1 && blocking[0].key === 'runtime'
+    if (blocking.length && !(runtimeOnly && target === 'docker')) {
+      readinessRef.value?.expand()
+      ElMessage.warning(prep.notes[0] ?? '还有前置条件未完成，请按清单补齐')
+      return
+    }
+    if (runtimeOnly && target === 'docker') {
+      target = 'host'
+      ElMessage.info('本机 Docker 不可用，已改用直接部署')
+    }
+    const page = await gitCommits(props.project.id, 1)
+    const sha = page.commits[0]?.sha
+    if (!sha) {
+      ElMessage.error('仓库还没有提交，无法发布')
+      return
+    }
+    const run = await triggerPipeline('release', props.project.id, sha, target, 'test')
+    ElMessage.success('已发布到测试，正在打开运行详情')
+    await router.push({
+      path: '/pipeline',
+      query: { projectId: props.project.id, runId: run.runId },
+    })
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '发布失败')
+  } finally {
+    publishing.value = false
+  }
+}
 </script>
 
 <template>
@@ -142,14 +197,20 @@ async function copyRepo(): Promise<void> {
         <button type="button" class="po-btn" :disabled="loading" @click="load">
           <el-icon><RefreshRight /></el-icon> 刷新
         </button>
-        <button type="button" class="po-btn primary" @click="emit('runPipeline')">
-          <el-icon><VideoPlay /></el-icon> 运行流水线
+        <button type="button" class="po-btn" @click="emit('runPipeline')">
+          <el-icon><VideoPlay /></el-icon> 流水线
+        </button>
+        <button
+          type="button" class="po-btn primary"
+          :disabled="publishing" @click="publishToTest"
+        >
+          <el-icon><VideoPlay /></el-icon> {{ publishing ? '发布中…' : '发布到测试' }}
         </button>
       </div>
     </div>
 
-    <!-- 首次发布就绪检查：前置条件与修复入口集中在这里，避免到处找配置 -->
-    <ProjectReadiness :project-id="project.id" />
+    <!-- 首次发布就绪检查：默认一行摘要，被挡住时自动展开 -->
+    <ProjectReadiness ref="readinessRef" :project-id="project.id" />
 
     <div class="po-grid">
       <section class="po-card">

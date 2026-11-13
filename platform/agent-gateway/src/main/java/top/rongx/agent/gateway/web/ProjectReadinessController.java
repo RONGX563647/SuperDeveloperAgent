@@ -176,10 +176,10 @@ public class ProjectReadinessController {
             return step("runtime", "运行条件", true, true, "本机 Docker 可用，仓库有 Dockerfile", null);
         }
         String detail = !docker
-                ? "本机 Docker 不可用：请确认已安装并启动 Docker"
+                ? "本机 Docker 不可用：可以改用「直接部署」（本机进程）"
                 : "仓库没有 Dockerfile，镜像无法构建";
         return step("runtime", "运行条件", false, true, detail,
-                !docker ? fixRoute("/settings?section=servers", "查看服务器") : null);
+                !docker ? fixRoute("/pipeline?target=host", "改用直接部署") : null);
     }
 
     private Map<String, Object> serverRuntime() {

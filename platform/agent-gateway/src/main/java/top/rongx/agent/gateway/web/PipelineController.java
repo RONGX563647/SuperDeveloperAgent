@@ -326,11 +326,7 @@ public class PipelineController {
                                              @RequestParam(defaultValue = "50") int limit) {
         int from = Math.max(0, offset);
         int size = Math.min(Math.max(1, limit), 200);
-        return engine.history().stream()
-                .filter(h -> projectId == null || projectId.isBlank()
-                        || h.projectId().equals(projectId))
-                .skip(from)
-                .limit(size)
+        return engine.history(projectId, from, size).stream()
                 .map(h -> Map.<String, Object>of(
                         "runId", h.runId(),
                         "projectId", h.projectId(),

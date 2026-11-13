@@ -143,6 +143,26 @@ public class IntakeProjectStore implements AutoCloseable {
         }
     }
 
+    /**
+     * 补齐一个环境登记（幂等）。
+     *
+     * <p>接入时已经会写 dev/test/prod；这里用于「一键准备」把历史项目缺的环境补上，
+     * 避免用户为了一个空环境再走一遍接入流程。
+     */
+    public boolean ensureEnv(String projectId, String env) {
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement("""
+                     INSERT OR IGNORE INTO project_envs (project_id, env, app_url, compose_dir)
+                     VALUES (?, ?, '', '')
+                     """)) {
+            st.setString(1, projectId);
+            st.setString(2, env);
+            return st.executeUpdate() > 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("环境登记失败：" + e.getMessage(), e);
+        }
+    }
+
     /** 删除项目（解除托管）。 */
     public boolean delete(String projectId) {
         try (Connection conn = open()) {

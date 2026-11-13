@@ -206,8 +206,13 @@ const previewLoading = ref(false)
 /** 预览请求序号：提交切换很快时丢弃旧响应，避免"选了 A 却显示 B 的命令"。 */
 let previewSeq = 0
 
-/** 本次要执行的动作：发布 / 只检查构建。 */
-const action = ref<'release' | 'verify'>('release')
+/**
+ * 本次要执行的动作：发布 / 只检查构建。
+ *
+ * <p>默认「只检查构建」：首次进入流水线页最安全的一步是验证能编译通过，
+ * 真要发布走工作台的「发布到测试」或在这里显式切到发布。
+ */
+const action = ref<'release' | 'verify'>('verify')
 
 const envRows = ref<EnvStatus[]>([])
 const envsLoading = ref(false)
@@ -1066,14 +1071,22 @@ watch(env, () => {
 onMounted(async () => {
   const fromQuery = typeof route.query.projectId === 'string' ? route.query.projectId : ''
   if (fromQuery) appStore.projectId = fromQuery
+  // 就绪清单里「改用直接部署」会带 target=host 跳进来
+  const qTarget = typeof route.query.target === 'string' ? route.query.target : ''
+  if (qTarget === 'host' || qTarget === 'docker' || qTarget === 'server') {
+    deployTarget.value = qTarget
+  }
   await loadProjects()
   await Promise.all([
     loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
   ])
   await loadPreview()
+  // 历史只在「有进行中的运行」时轮询，且 15s 一次：空闲页面不再每 5s 打一次接口
   historyTimer = setInterval(() => {
-    if (!document.hidden && !historyHasMore.value) void loadHistory(true, true)
-  }, 5000)
+    if (document.hidden || historyHasMore.value) return
+    const hasActive = running.value || history.value.some((h) => !isTerminalStatus(h.status))
+    if (hasActive) void loadHistory(true, true)
+  }, 15000)
   const fromUrl = typeof route.query.runId === 'string' ? route.query.runId : ''
   if (fromUrl) {
     const item = history.value.find((h) => h.runId === fromUrl)
@@ -1287,16 +1300,18 @@ async function copyDigest(digest: string): Promise<void> {
         />
 
         <div v-if="!run && !runLoading" class="run-empty">
-          <p class="re-title">选择提交后点「{{ primaryLabel }}」</p>
+          <p class="re-title">
+            选择提交后点「{{ action === 'verify' ? '开始检查构建' : primaryLabel }}」</p>
           <p class="re-sub">
             运行详情会实时显示阶段、产物与日志；也可以从左侧历史打开一次旧运行。
           </p>
           <button
             type="button" class="re-btn"
             :disabled="!canRun"
-            @click="doPrimary"
+            @click="doAction"
           >
-            <el-icon><VideoPlay /></el-icon> {{ primaryLabel }}
+            <el-icon><VideoPlay /></el-icon>
+            {{ action === 'verify' ? '开始检查构建' : primaryLabel }}
           </button>
         </div>
 
