@@ -137,23 +137,47 @@ public class PipelineController {
             throw new IllegalArgumentException("projectId 必填");
         }
         String sha = params.get("gitSha");
-        if (sha == null || sha.isBlank()) {
-            throw new IllegalArgumentException("gitSha 必填");
-        }
         // 环境：缺省 test（绝不让"没传环境"落到生产）
         String env = params.get("env");
         String normalizedEnv = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
-        // 阶段门控：先 dry-run（只读预检），不通过不允许 apply；指定的报告哈希必须与当前一致。
-        PipelineEngine.DryRunReport dryRun = engine.dryRun(projectId, pipelineId,
-                normalizedEnv, sha);
-        if (!dryRun.ok()) {
-            throw new IllegalArgumentException("E-708 dry-run 未通过："
-                    + String.join("；", dryRun.blockers()));
+        // 按版本部署：复用已存在的镜像 tag，跳过构建/打包，只跑 deploy + health。
+        // 此时 gitSha 可由版本账本反查，调用方不必传（传了也不采信，防止"tag 与提交不一致"）。
+        String deployImage = params.get("deployImage");
+        boolean imageOnly = deployImage != null && !deployImage.isBlank();
+        if (imageOnly) {
+            deployImage = deployImage.trim();
+            if (!deployImage.matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")) {
+                throw new IllegalArgumentException("镜像 tag 非法：" + deployImage);
+            }
+            // 只允许部署本项目/本环境登记过的版本，防止借接口启动任意本机镜像
+            sha = engine.gitShaForImage(projectId, normalizedEnv, deployImage).orElse(null);
+            if (sha == null) {
+                throw new IllegalArgumentException("镜像版本不存在或不属于 " + projectId
+                        + " / " + normalizedEnv + "：" + deployImage);
+            }
+            // 预检前移：镜像是否还在、Docker 是否可用、环境密钥/必填项是否齐全，
+            // 不通过直接 400，避免"触发成功 → 跑一半才失败"。
+            java.util.List<String> blockers = engine.deployPreflight(projectId, normalizedEnv, deployImage);
+            if (!blockers.isEmpty()) {
+                throw new IllegalArgumentException(String.join("；", blockers));
+            }
+        } else if (sha == null || sha.isBlank()) {
+            throw new IllegalArgumentException("gitSha 必填");
         }
-        String requestedHash = params.get("dryRunHash");
-        if (requestedHash != null && !requestedHash.isBlank()
-                && !requestedHash.equals(dryRun.reportHash())) {
-            throw new IllegalArgumentException("E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+        // 阶段门控：先 dry-run（只读预检），不通过不允许 apply；指定的报告哈希必须与当前一致。
+        // 按版本部署没有待执行的构建脚本，门控换成上一步的"版本归属"校验。
+        PipelineEngine.DryRunReport dryRun = null;
+        if (!imageOnly) {
+            dryRun = engine.dryRun(projectId, pipelineId, normalizedEnv, sha);
+            if (!dryRun.ok()) {
+                throw new IllegalArgumentException("E-708 dry-run 未通过："
+                        + String.join("；", dryRun.blockers()));
+            }
+            String requestedHash = params.get("dryRunHash");
+            if (requestedHash != null && !requestedHash.isBlank()
+                    && !requestedHash.equals(dryRun.reportHash())) {
+                throw new IllegalArgumentException("E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+            }
         }
         // 服务器（prod）的一次性人工确认令牌由引擎统一校验（E-602）：
         // UI / Agent 工具 / 内部重放都走同一条路径，不再只在 Controller 拦。
@@ -167,8 +191,13 @@ public class PipelineController {
         Map<String, String> triggerParams = new LinkedHashMap<>();
         triggerParams.put("gitSha", sha);
         triggerParams.put("env", normalizedEnv);
-        triggerParams.put("dryRunHash", dryRun.reportHash());
-        triggerParams.put("dryRunFingerprint", dryRun.fingerprint());
+        if (dryRun != null) {
+            triggerParams.put("dryRunHash", dryRun.reportHash());
+            triggerParams.put("dryRunFingerprint", dryRun.fingerprint());
+        }
+        if (imageOnly) {
+            triggerParams.put("deployImage", deployImage);
+        }
         // 令牌随触发参数下发，由引擎在校验通过后消费（一次性）
         String confirmToken = params.get("confirmToken");
         if (confirmToken != null && !confirmToken.isBlank()) {
@@ -184,7 +213,7 @@ public class PipelineController {
         if (deployTarget != null && !deployTarget.isBlank()) {
             triggerParams.put("deployTarget", deployTarget.trim().toLowerCase());
         }
-        boolean includesDeploy = dryRun.stages().stream()
+        boolean includesDeploy = imageOnly || dryRun.stages().stream()
                 .anyMatch(s -> "deploy".equalsIgnoreCase(s.type()));
         // 含部署的流水线统一走 DeployGuard：每 (project, env) 互斥 + 部署状态落库；
         // 这里是人点「运行/发布」，因此跳过预算与熔断（人已明确放行）。
@@ -192,6 +221,43 @@ public class PipelineController {
                 ? deployGuard.trigger(projectId, normalizedEnv, sha, pipelineId, triggerParams, true)
                 : engine.trigger(projectId, pipelineId, triggerParams);
         return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId));
+    }
+
+    /**
+     * 镜像版本列表（按环境）：来自持久化的版本账本，不再从构建历史反推。
+     *
+     * <p>删除构建历史不会丢掉版本记录；第一条是「当前版本」，第二条是「上一版」，
+     * 两者都来自同一次发布，因此不会出现"同一次运行多个当前版本"。
+     */
+    @GetMapping("/deploy/images")
+    public Map<String, Object> deployImages(@RequestParam String projectId,
+                                            @RequestParam(defaultValue = "test") String env) {
+        java.util.List<PipelineEngine.ImageVersion> rows = engine.deployImages(projectId, env);
+        java.util.List<Map<String, Object>> images = new java.util.ArrayList<>(rows.size());
+        for (int i = 0; i < rows.size(); i++) {
+            PipelineEngine.ImageVersion v = rows.get(i);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("tag", v.tag());
+            row.put("digest", v.digest() == null ? "" : v.digest());
+            row.put("sizeBytes", v.sizeBytes());
+            row.put("version", v.version() == null ? "" : v.version());
+            row.put("runId", v.runId());
+            row.put("gitSha", v.gitSha());
+            row.put("status", v.status());
+            row.put("createdAt", v.createdAt());
+            // 部署审计：最近一次发布到本环境的时间与操作者
+            row.put("deployedAt", v.deployedAt());
+            row.put("deployedBy", v.deployedBy() == null ? "" : v.deployedBy());
+            row.put("current", i == 0);
+            row.put("previous", i == 1);
+            images.add(row);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("projectId", projectId);
+        out.put("env", env);
+        out.put("dockerAvailable", engine.dockerAvailable());
+        out.put("images", images);
+        return out;
     }
 
     /** 可选部署目标（前端下拉用）；available=false 时给出不可用原因。 */
@@ -203,11 +269,13 @@ public class PipelineController {
                 .map(s -> "默认服务器：" + s.name() + "（" + s.host() + "）")
                 .orElse(legacyServerConfigured
                         ? "已通过环境变量配置" : "未配置：请到「设置 → 服务器」添加");
-        boolean dockerReady = engine.dockerReady();
+        // Docker 是否可用要真实探测（带缓存），否则界面显示可用、触发后才在部署阶段失败
+        boolean dockerReady = engine.dockerAvailable();
         return List.of(
                 Map.of("target", "docker", "label", "本机 Docker 容器", "available", dockerReady,
-                        "detail", dockerReady ? "替换式发布；需要 Dockerfile 与镜像"
-                                : "未检测到可用的 Docker（L3 fail-closed）"),
+                        "detail", dockerReady
+                                ? "替换式发布；需要 Dockerfile 与镜像"
+                                : "本机 Docker 不可用：请确认已安装并启动 Docker"),
                 Map.of("target", "host", "label", "本机直接运行", "available", true,
                         "detail", "仅 Java jar；pid 文件管理"),
                 Map.of("target", "server", "label", "远程服务器", "available",

@@ -216,4 +216,42 @@ public interface PipelineEngine {
     record RunSummary(String runId, String projectId, String env, String pipelineId, String gitSha,
                       StageStatus status, long createdAt, int seq, int stageCount, long durationMs) {
     }
+
+    /**
+     * 镜像版本（按 (项目, 环境) 记账，独立于构建历史）。
+     *
+     * <p>列表按最近部署时间倒序：第一条是当前版本，第二条是上一版（回滚目标）。
+     */
+    record ImageVersion(String tag, String digest, long sizeBytes, String version,
+                        String gitSha, String runId, String status,
+                        long createdAt, long deployedAt, String deployedBy, int seq) {
+    }
+
+    /** 某环境下部署过的镜像版本（最近部署在前）；不支持时返回空。 */
+    default List<ImageVersion> deployImages(String projectId, String env) {
+        return List.of();
+    }
+
+    /** 按 tag 反查该版本对应的提交；未登记返回空。 */
+    default java.util.Optional<String> gitShaForImage(String projectId, String env, String tag) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * 按版本部署的触发前预检（只读）：镜像是否存在、部署目标是否可用、环境必填项是否齐全。
+     *
+     * @return 阻塞项（空 = 可以触发）；每条都是给人看的错误原因
+     */
+    default List<String> deployPreflight(String projectId, String env, String tag) {
+        return List.of();
+    }
+
+    /**
+     * 本机 Docker 是否可用（真实探测，实现方可缓存）。
+     *
+     * <p>部署目标下拉与按版本部署预检共用，避免"界面显示可用、触发后才报错"。
+     */
+    default boolean dockerAvailable() {
+        return false;
+    }
 }

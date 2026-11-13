@@ -21,6 +21,8 @@ interface Props {
   commitsLoading?: boolean
   /** docker / host / server（prod 固定 server，不展示切换）。 */
   deployTarget: string
+  /** 本机 Docker 是否可用：不可用时禁用「打包成镜像」，避免触发后失败。 */
+  dockerAvailable?: boolean
   showModeSwitch?: boolean
   modeNote?: string
   /** 本机运行提示；有值时展示「停止本机服务」 */
@@ -259,6 +261,8 @@ const runLabel = computed(() =>
         <button
           type="button" class="mode-btn"
           :class="{ active: deployTarget === 'docker' }"
+          :disabled="dockerAvailable === false"
+          :title="dockerAvailable === false ? '本机 Docker 不可用：请安装并启动 Docker 后刷新' : ''"
           @click="emit('update:deployTarget', 'docker')"
         >
           打包成镜像
@@ -705,6 +709,11 @@ const runLabel = computed(() =>
 }
 .mode-btn:hover {
   color: var(--ink);
+}
+.mode-btn:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .mode-btn.active {
   color: var(--accent-ink);

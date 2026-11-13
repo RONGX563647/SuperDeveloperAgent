@@ -173,6 +173,20 @@ export function stopLocalDeploy(projectId: string, env = 'dev'): Promise<StopLoc
   return apiFetch<StopLocalView>(`/api/v1/ci/deploy/host/stop?${q}`, { method: 'POST' })
 }
 
+/** 按版本部署：复用历史镜像 tag，跳过构建/打包，只跑 deploy + health。 */
+export function deployImageVersion(
+  pipelineId: string,
+  projectId: string,
+  env: string,
+  tag: string,
+  gitSha: string
+): Promise<TriggerRunView> {
+  return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
+    method: 'POST',
+    body: JSON.stringify({ projectId, gitSha, env, deployImage: tag })
+  })
+}
+
 /** 一条构建历史摘要（按触发时间倒序）。 */
 export interface HistoryItem {
   runId: string
@@ -246,8 +260,39 @@ export function artifactFilePath(runId: string, index: number): string {
   return `/api/v1/ci/runs/${encodeURIComponent(runId)}/artifacts/${index}/file`
 }
 
-/** 删除一条构建历史（只删记录，不动仓库与镜像）；运行中的会被后端拒绝。 */
+/** 删除一条构建历史（记录 + 该次归档的文件产物）；运行中的会被后端拒绝。 */
 export function deleteHistory(runId: string): Promise<{ deleted: boolean, message?: string }> {
   return apiFetch<{ deleted: boolean, message?: string }>(
     `/api/v1/ci/history/${encodeURIComponent(runId)}`, { method: 'DELETE' })
+}
+
+/** 一个环境下的镜像版本（来自持久化版本账本，删除构建历史不会丢失）。 */
+export interface ImageVersionView {
+  tag: string
+  digest: string
+  sizeBytes: number
+  /** 构建序号对应的展示版本（test-v3）；tag 只由环境 + 提交决定。 */
+  version: string
+  runId: string
+  gitSha: string
+  status: string
+  /** 首次构建时间。 */
+  createdAt: number
+  /** 最近一次部署到本环境的时间（0 = 尚未部署）。 */
+  deployedAt: number
+  /** 最近一次部署的操作者（ui:admin / agent / history）。 */
+  deployedBy: string
+  /** 最近一次部署（当前版本）。 */
+  current: boolean
+  /** 上一版（回滚目标）。 */
+  previous: boolean
+}
+
+/** 镜像版本列表：current / previous / 历史，按最近部署时间倒序。 */
+export function deployImages(
+  projectId: string,
+  env: string
+): Promise<{ projectId: string, env: string, dockerAvailable: boolean, images: ImageVersionView[] }> {
+  const q = new URLSearchParams({ projectId, env })
+  return apiFetch(`/api/v1/ci/deploy/images?${q}`)
 }

@@ -12,9 +12,9 @@ import HistoryList from '../components/pipeline/HistoryList.vue'
 import StageTimeline from '../components/pipeline/StageTimeline.vue'
 import RunLog from '../components/pipeline/RunLog.vue'
 import {
-  artifactFilePath, deleteHistory, dryRunPipeline, getHistory, getRun, isTerminalStatus,
+  artifactFilePath, deleteHistory, deployImageVersion, deployImages, dryRunPipeline, getHistory, getRun, isTerminalStatus,
   listPipelines, previewPipeline, retryStage, stopLocalDeploy, triggerPipeline,
-  type ArtifactView, type DryRunReportView, type HistoryItem, type PreviewStage,
+  type ArtifactView, type DryRunReportView, type HistoryItem, type ImageVersionView, type PreviewStage,
   type RunView, type StageView,
 } from '../api/pipeline'
 import { apiBlob } from '../api/http'
@@ -96,6 +96,10 @@ const action = ref<'release' | 'verify'>('release')
 
 const envRows = ref<EnvStatus[]>([])
 const envsLoading = ref(false)
+/** 当前环境的镜像版本（current / previous / 历史），来自持久化版本账本。 */
+const imageVersions = ref<ImageVersionView[]>([])
+/** 本机 Docker 是否可用：不可用时禁止「按版本部署」，避免触发后才失败。 */
+const dockerAvailable = ref(true)
 
 const history = ref<HistoryItem[]>([])
 const historyLoading = ref(false)
@@ -125,7 +129,7 @@ const activeMeta = ref<{ env: string, pipelineId: string, sha: string } | null>(
 const {
   run, runId, loading: runLoading, errorText, startedAt, running,
   open: openRun, attach, cancel, clear,
-} = useRunTracker({ onFinished: () => { void loadHistory(); void loadEnvs() } })
+} = useRunTracker({ onFinished: () => { void loadHistory(); void loadEnvs(); void loadImages() } })
 
 /** 有运行被打开/触发时，手机端自动切到「运行详情」，避免用户再多点一次。 */
 watch(runId, (id) => {
@@ -197,8 +201,16 @@ const showModeSwitch = computed(() => env.value === 'test')
 const modeNote = computed(() => {
   if (env.value === 'dev') return '开发环境固定本机运行：后端 jar + 前端 dist，不打镜像'
   if (deployTarget.value === 'host') return '前后端直接跑在本机（后端 jar + 前端 dist）'
+  if (!dockerAvailable.value) return '本机 Docker 不可用：已改为直接部署（后端 jar + 前端 dist）'
   return '构建镜像并在本机 Docker 运行'
 })
+
+/** Docker 不可用时不允许停留在「打包成镜像」：切到直接部署，并在方式旁说明原因。 */
+watch([dockerAvailable, env], () => {
+  if (env.value === 'test' && !dockerAvailable.value && deployTarget.value === 'docker') {
+    deployTarget.value = 'host'
+  }
+}, { immediate: true })
 
 /** 最近一次 dev 本机部署的前后端端口（来自 run 产物的 meta）。 */
 const localDeployInfo = computed(() => {
@@ -309,6 +321,87 @@ const artifactDiff = computed<{ added: ArtifactView[], removed: ArtifactView[] }
   }
 })
 
+/** 产物面板按目录分组：同目录只显示一次目录，行内只显示文件名，避免一屏相同长路径。 */
+interface ArtifactGroup {
+  dir: string
+  items: Array<{ a: ArtifactView, index: number }>
+  /** 文件很多（如前端 dist）时折叠成一行，需要时再展开。 */
+  collapsed: boolean
+}
+
+const artifactGroups = computed<ArtifactGroup[]>(() => {
+  const groups = new Map<string, Array<{ a: ArtifactView, index: number }>>()
+  ;(run.value?.artifacts ?? []).forEach((a, index) => {
+    const parts = a.ref.replace(/\\/g, '/').split('/')
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+    const key = `${a.kind}::${dir}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)?.push({ a, index })
+  })
+  return [...groups.entries()].map(([key, items]) => ({
+    dir: key.slice(key.indexOf('::') + 2),
+    items,
+    // dist 这类目录动辄几十个文件：折叠成 1 行，避免产物面板被文件名淹没
+    collapsed: items.length > 8 && items.every((it) => it.a.kind === 'file')
+  }))
+})
+
+/** 手动展开的折叠目录（key = 目录）。 */
+const expandedDirs = ref<Set<string>>(new Set())
+
+function toggleDir(dir: string): void {
+  const next = new Set(expandedDirs.value)
+  if (next.has(dir)) next.delete(dir)
+  else next.add(dir)
+  expandedDirs.value = next
+}
+
+function isDirExpanded(dir: string): boolean {
+  return expandedDirs.value.has(dir)
+}
+
+function totalSize(items: Array<{ a: ArtifactView }>): number {
+  return items.reduce((sum, it) => sum + (it.a.sizeBytes || 0), 0)
+}
+
+/** 文件名词：产物行主文本（完整路径仍在 title / 复制里）。 */
+function fileName(ref: string): string {
+  const parts = ref.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || ref
+}
+
+/** 目录只留最后两段，前面用 … 省略（完整目录在 title 里）。 */
+function shortDir(dir: string): string {
+  const parts = dir.split('/').filter(Boolean)
+  return parts.length <= 2 ? dir : `…/${parts.slice(-2).join('/')}`
+}
+
+/** verify 运行只记录路径与摘要，文件没有归档，下载按钮应隐藏。 */
+function isArchived(a: ArtifactView): boolean {
+  return a.meta?.archived !== 'false'
+}
+
+/** 镜像版本徽标文案。 */
+function imageBadge(img: ImageVersionView): string {
+  if (img.current) return '当前'
+  if (img.previous) return '上一版'
+  return '历史'
+}
+
+function imageBadgeClass(img: ImageVersionView): string {
+  if (img.current) return 'is-current'
+  if (img.previous) return 'is-previous'
+  return ''
+}
+
+/** 版本时间：月-日 时:分（镜像谱系只需要相对顺序，不需要秒）。 */
+function formatClock(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 /** dev 固定本机运行，停止入口始终可见（不依赖当前选中的部署方式）。 */
 const canStopLocal = computed(() => env.value === 'dev')
 
@@ -410,6 +503,42 @@ async function loadHistory(reset = true, silent = false): Promise<void> {
 
 function loadMoreHistory(): void {
   void loadHistory(false)
+}
+
+/** 镜像版本列表：读失败只清空，不影响主流程。 */
+async function loadImages(): Promise<void> {
+  try {
+    const res = await deployImages(projectId.value, env.value)
+    imageVersions.value = res.images
+    dockerAvailable.value = res.dockerAvailable !== false
+  } catch {
+    imageVersions.value = []
+  }
+}
+
+/**
+ * 按版本部署：把某个历史镜像重新发到当前环境。
+ * 镜像已存在，后端只跑 deploy + health（不重新构建），因此秒级完成。
+ */
+async function deployVersion(img: ImageVersionView): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `将 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）重新部署到 ${env.value} 环境？`
+      + '\n不会重新构建：直接复用已登记镜像，只跑部署与健康检查。',
+      '按版本部署',
+      { type: 'warning', confirmButtonText: '部署', cancelButtonText: '取消' })
+  } catch {
+    return
+  }
+  try {
+    const result = await deployImageVersion(pipelineId.value, projectId.value, env.value,
+      img.tag, img.gitSha)
+    attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: img.gitSha })
+    ElMessage.success('已触发按版本部署')
+    void loadImages()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '按版本部署失败')
+  }
 }
 
 async function loadProjects(): Promise<void> {
@@ -800,7 +929,7 @@ watch(running, (value) => {
 watch(projectId, () => {
   sha.value = ''
   void Promise.all([
-    loadPipelines(), loadHistory(), loadEnvs(), loadCommits(),
+    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
   ]).then(() => loadPreview())
 })
 
@@ -815,6 +944,7 @@ watch(env, () => {
   choosePipeline()
   void loadEnvs()
   void loadHistory()
+  void loadImages()
   void loadPreview()
 })
 
@@ -823,7 +953,7 @@ onMounted(async () => {
   if (fromQuery) appStore.projectId = fromQuery
   await loadProjects()
   await Promise.all([
-    loadPipelines(), loadHistory(), loadEnvs(), loadCommits(),
+    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
   ])
   await loadPreview()
   historyTimer = setInterval(() => {
@@ -952,6 +1082,7 @@ async function copyDigest(digest: string): Promise<void> {
             :commits="commits"
             :commits-loading="commitsLoading"
             :show-mode-switch="showModeSwitch"
+            :docker-available="dockerAvailable"
             :mode-note="modeNote"
             :local-hint="localHint"
             :can-stop-local="canStopLocal"
@@ -1102,44 +1233,117 @@ async function copyDigest(digest: string): Promise<void> {
 
             <section v-if="run?.artifacts.length" class="artifact-panel">
               <h3 class="ap-title">产物 <span class="ap-count">{{ run.artifacts.length }}</span></h3>
-              <template v-for="(a, i) in run.artifacts" :key="`${a.kind}-${a.ref}-${i}`">
-                <div class="artifact-row">
-                  <span class="art-kind">{{ a.kind }}</span>
-                  <code class="art-ref mono" :title="a.ref" @click="copyText(a.ref, '产物地址')">{{ a.ref }}</code>
-                  <span class="art-size">{{ formatBytes(a.sizeBytes) }}</span>
-                  <button
-                    type="button" class="art-digest mono"
-                    :title="a.digest ? `点击复制 ${a.digest}` : '无摘要'"
-                    @click="copyDigest(a.digest)"
-                  >
-                    {{ shortDigest(a.digest) }}
-                  </button>
-                  <span class="art-actions">
+              <div v-for="g in artifactGroups" :key="g.dir" class="artifact-group">
+                <div v-if="g.dir" class="artifact-dir" :title="g.dir">
+                  <span class="mono">{{ shortDir(g.dir) }}</span>
+                  <span class="ad-count">
+                    {{ g.items.length }} 个
                     <button
-                      v-if="a.kind === 'file'" type="button" class="art-act"
-                      title="下载到本机" @click="downloadArtifact(a, i)"
-                    >
-                      <el-icon><Download /></el-icon> 下载
-                    </button>
-                    <button
-                      v-else-if="a.kind === 'image'" type="button" class="art-act"
-                      title="复制本机启动命令" @click="copyText(dockerRunCommand(a), 'docker run 命令')"
-                    >
-                      <el-icon><CopyDocument /></el-icon> docker run
-                    </button>
+                      v-if="g.collapsed && isDirExpanded(g.dir)" type="button" class="ad-toggle"
+                      @click="toggleDir(g.dir)"
+                    >收起</button>
                   </span>
                 </div>
-                <div v-if="imageMeta(a)" class="artifact-image">
-                  <span class="ai-label">镜像版本</span>
-                  <span class="ai-version mono">{{ imageMeta(a)?.version || '—' }}</span>
-                  <span class="ai-label">本地镜像</span>
-                  <button
-                    type="button" class="ai-local mono"
-                    :title="`点击复制本地镜像地址 ${imageMeta(a)?.local}`"
-                    @click="copyText(imageMeta(a)?.local ?? '', '本地镜像地址')"
-                  >{{ imageMeta(a)?.local }}</button>
+                <div v-if="g.collapsed && !isDirExpanded(g.dir)" class="artifact-row artifact-collapsed">
+                  <span class="art-kind">目录</span>
+                  <code class="art-ref mono" :title="g.dir" @click="copyText(g.dir, '产物目录')">
+                    {{ shortDir(g.dir) || '根目录' }} / {{ g.items.length }} 个文件
+                  </code>
+                  <span class="art-size">{{ formatBytes(totalSize(g.items)) }}</span>
+                  <span class="art-digest mono">已折叠</span>
+                  <span class="art-actions">
+                    <button type="button" class="art-act" @click="toggleDir(g.dir)">展开</button>
+                  </span>
                 </div>
-              </template>
+                <template v-if="!g.collapsed || isDirExpanded(g.dir)">
+                  <template
+                    v-for="item in g.items" :key="`${item.a.kind}-${item.a.ref}-${item.index}`"
+                  >
+                  <div class="artifact-row">
+                    <span class="art-kind">{{ item.a.kind }}</span>
+                    <code class="art-ref mono" :title="item.a.ref" @click="copyText(item.a.ref, '产物地址')">{{ fileName(item.a.ref) }}</code>
+                    <span class="art-size">{{ formatBytes(item.a.sizeBytes) }}</span>
+                    <button
+                      type="button" class="art-digest mono"
+                      :title="item.a.digest ? `点击复制 ${item.a.digest}` : '无摘要'"
+                      @click="copyDigest(item.a.digest)"
+                    >
+                      {{ shortDigest(item.a.digest) }}
+                    </button>
+                    <span class="art-actions">
+                      <span
+                        v-if="!isArchived(item.a)" class="art-pending mono"
+                        title="检查构建只记录路径与摘要，不复制文件"
+                      >未归档</span>
+                      <button
+                        v-else-if="item.a.kind === 'file'" type="button" class="art-act"
+                        title="下载到本机" @click="downloadArtifact(item.a, item.index)"
+                      >
+                        <el-icon><Download /></el-icon> 下载
+                      </button>
+                      <button
+                        v-else-if="item.a.kind === 'image'" type="button" class="art-act"
+                        title="复制本机启动命令" @click="copyText(dockerRunCommand(item.a), 'docker run 命令')"
+                      >
+                        <el-icon><CopyDocument /></el-icon> docker run
+                      </button>
+                    </span>
+                  </div>
+                  <div v-if="imageMeta(item.a)" class="artifact-image">
+                    <span class="ai-label">镜像版本</span>
+                    <span class="ai-version mono">{{ imageMeta(item.a)?.version || '—' }}</span>
+                    <span class="ai-label">本地镜像</span>
+                    <button
+                      type="button" class="ai-local mono"
+                      :title="`点击复制本地镜像地址 ${imageMeta(item.a)?.local}`"
+                      @click="copyText(imageMeta(item.a)?.local ?? '', '本地镜像地址')"
+                    >{{ imageMeta(item.a)?.local }}</button>
+                  </div>
+                  </template>
+                </template>
+              </div>
+            </section>
+
+            <section v-if="imageVersions.length" class="artifact-panel">
+              <h3 class="ap-title">
+                镜像版本 <span class="ap-count">{{ imageVersions.length }}</span>
+                <span class="ap-hint">独立版本账本：按 (项目, 环境) 记账，删构建历史不影响版本与回滚锚点</span>
+              </h3>
+              <div v-for="img in imageVersions.slice(0, 6)" :key="img.tag" class="image-row">
+                <span class="iv-badge" :class="imageBadgeClass(img)">{{ imageBadge(img) }}</span>
+                <code class="art-ref mono" :title="img.tag" @click="copyText(img.tag, '镜像 tag')">{{ img.tag }}</code>
+                <span class="iv-version mono" :title="`构建版本 ${img.version || '—'}`">{{ img.version || '—' }}</span>
+                <button
+                  type="button" class="iv-digest mono"
+                  :title="img.digest ? `点击复制镜像摘要 ${img.digest}` : '未记录摘要（Docker 不可用时无法读取）'"
+                  @click="copyDigest(img.digest)"
+                >{{ shortDigest(img.digest) }}</button>
+                <span class="iv-size mono">{{ formatBytes(img.sizeBytes) }}</span>
+                <button
+                  type="button" class="iv-act"
+                  :disabled="!dockerAvailable"
+                  :title="dockerAvailable
+                    ? '复用该镜像重新部署：跳过构建与打包，只跑部署 + 健康检查'
+                    : '本机 Docker 不可用，无法按版本部署'"
+                  @click="deployVersion(img)"
+                >部署</button>
+                <div class="iv-audit mono">
+                  <span>提交 {{ (img.gitSha || '').slice(0, 7) || '—' }}</span>
+                  <span>部署人 {{ img.deployedBy || '—' }}</span>
+                  <span>部署于 {{ formatClock(img.deployedAt || img.createdAt) }}</span>
+                </div>
+              </div>
+            </section>
+
+            <section v-else-if="env !== 'dev'" class="artifact-panel">
+              <h3 class="ap-title">镜像版本 <span class="ap-count">0</span></h3>
+              <p class="ap-empty">
+                这个环境还没有镜像版本。发布（或显式打包镜像）后按环境记录当前 / 上一版，
+                回滚以「上一版」为目标；旧版本按保留策略自动清理。
+              </p>
+              <p v-if="!dockerAvailable" class="ap-empty ap-warn">
+                本机 Docker 不可用，无法按版本部署；安装并启动 Docker 后刷新即可。
+              </p>
             </section>
 
             <RunLog
@@ -1427,6 +1631,141 @@ async function copyDigest(digest: string): Promise<void> {
   margin-left: 4px;
   font-weight: 400;
   color: var(--ink-faint);
+}
+.ap-hint {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.ap-empty {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+.artifact-group + .artifact-group {
+  margin-top: 2px;
+}
+.artifact-dir {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line-soft);
+}
+.artifact-dir .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ad-count {
+  flex: none;
+}
+.art-pending {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  cursor: help;
+}
+/* 镜像版本谱系：当前 / 上一版 / 历史 */
+.image-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 64px 88px 64px 48px;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 11.5px;
+  border-top: 1px solid var(--line-soft);
+}
+.iv-audit {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 14px;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.iv-version,
+.iv-size {
+  overflow: hidden;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iv-size {
+  text-align: right;
+}
+.iv-digest {
+  padding: 0;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.iv-digest:hover {
+  color: var(--accent-ink);
+}
+.iv-act:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.iv-act {
+  height: 22px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+}
+.iv-act:hover {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.iv-badge {
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+  text-align: center;
+}
+.iv-badge.is-current {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.iv-sha,
+.iv-time {
+  color: var(--ink-faint);
+}
+.iv-time {
+  text-align: right;
+}
+.artifact-collapsed .art-ref {
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.ap-warn {
+  color: var(--warn-ink, #a15c00);
+}
+.ad-toggle {
+  margin-left: 6px;
+  padding: 0;
+  font-size: 10px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
 }
 .artifact-row {
   display: grid;
@@ -1836,6 +2175,14 @@ async function copyDigest(digest: string): Promise<void> {
     gap: 8px;
   }
   .art-digest {
+    display: none;
+  }
+  .image-row {
+    grid-template-columns: 46px minmax(0, 1fr) 54px 46px;
+    gap: 8px;
+  }
+  .iv-version,
+  .iv-size {
     display: none;
   }
 }
