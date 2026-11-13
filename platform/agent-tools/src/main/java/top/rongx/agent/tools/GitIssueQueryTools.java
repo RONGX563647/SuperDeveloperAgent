@@ -44,8 +44,8 @@ public class GitIssueQueryTools {
             return "当前没有匹配的任务。evidence: user:" + ctx.userId();
         }
         return list.stream()
-                .map(i -> "- [%s] %s  %s%s  %s/%s#%s  labels:%s  id:%s"
-                        .formatted(i.state(), i.title(), i.syncStatus(),
+                .map(i -> "- [%s/%s] %s  %s%s  %s/%s#%s  labels:%s  id:%s"
+                        .formatted(i.state(), i.kind(), i.title(), i.syncStatus(),
                                 i.syncError().isBlank() ? "" : "(" + i.syncError() + ")",
                                 i.provider(), i.repo().isBlank() ? "-" : i.repo(),
                                 i.number().isBlank() ? "-" : i.number(),
@@ -68,6 +68,7 @@ public class GitIssueQueryTools {
                 id: %s
                 title: %s
                 state: %s
+                kind: %s
                 provider/repo/number: %s / %s / %s
                 sync: %s %s
                 url: %s
@@ -78,7 +79,7 @@ public class GitIssueQueryTools {
                 comments:
                 %s
                 evidence: task:%s
-                """.formatted(issue.id(), issue.title(), issue.state(), issue.provider(),
+                """.formatted(issue.id(), issue.title(), issue.state(), issue.kind(), issue.provider(),
                 issue.repo(), issue.number().isBlank() ? "-" : issue.number(),
                 issue.syncStatus(), issue.syncError(), issue.url(),
                 issue.labels().isBlank() ? "-" : issue.labels(),

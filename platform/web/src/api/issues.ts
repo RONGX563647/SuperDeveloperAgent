@@ -3,6 +3,8 @@ import { apiFetch } from './http'
 /** 平台任务页的 Issue 任务（与 Git 双向同步）。 */
 export type GitIssueProvider = 'GITEE' | 'GITHUB' | 'GITLAB' | ''
 export type GitIssueState = 'OPEN' | 'CLOSED'
+/** 任务分类：缺陷 / 需求。 */
+export type GitIssueKind = 'BUG' | 'FEAT'
 
 export interface GitIssueRow {
   id: string
@@ -15,6 +17,7 @@ export interface GitIssueRow {
   title: string
   body: string
   state: GitIssueState
+  kind: GitIssueKind
   labels: string
   url: string
   source: 'PLATFORM' | 'AGENT' | 'GIT' | string
@@ -41,6 +44,7 @@ export interface GitIssueInput {
   title: string
   body?: string
   state?: GitIssueState
+  kind?: GitIssueKind
   labels?: string
   assignee?: string
 }

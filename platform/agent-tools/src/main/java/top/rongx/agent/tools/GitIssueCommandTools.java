@@ -36,11 +36,13 @@ public class GitIssueCommandTools {
             @ToolParam(name = "provider", description = "GITEE / GITHUB / GITLAB，可空",
                     required = false) String provider,
             @ToolParam(name = "repo", description = "owner/repo，可空", required = false) String repo,
+            @ToolParam(name = "kind", description = "分类：BUG 或 FEAT（需求），可空", required = false)
+            String kind,
             @ToolParam(name = "labels", description = "标签，逗号分隔，可空", required = false)
             String labels,
             ProjectContext ctx) {
         GitIssue issue = issues.create(ctx.userId(), new GitIssue.Draft(ctx.projectId(),
-                provider, repo, title, body, "OPEN", labels, ""));
+                provider, repo, title, body, "OPEN", kind, labels, ""));
         return "已创建任务 %s（%s，同步状态 %s%s）。evidence: task:%s".formatted(
                 issue.id(), issue.title(), issue.syncStatus(),
                 issue.syncError().isBlank() ? "" : "：" + issue.syncError(), issue.id());
@@ -53,6 +55,8 @@ public class GitIssueCommandTools {
             @ToolParam(name = "issue_id", description = "任务 ID") String issueId,
             @ToolParam(name = "title", description = "新标题，可空", required = false) String title,
             @ToolParam(name = "body", description = "新描述，可空", required = false) String body,
+            @ToolParam(name = "kind", description = "新分类：BUG / FEAT，可空", required = false)
+            String kind,
             @ToolParam(name = "labels", description = "新标签，可空", required = false) String labels,
             ProjectContext ctx) {
         GitIssue current = issues.get(ctx.userId(), issueId);
@@ -61,6 +65,7 @@ public class GitIssueCommandTools {
                 blank(title) ? current.title() : title,
                 blank(body) ? current.body() : body,
                 current.state(),
+                blank(kind) ? current.kind() : kind,
                 blank(labels) ? current.labels() : labels,
                 current.assignee()));
         return "已更新任务 %s（同步状态 %s）。evidence: task:%s"

@@ -130,6 +130,7 @@ public class GitIssueSyncService {
                 event.title().isBlank() ? issue.title() : event.title(),
                 event.body().isBlank() ? issue.body() : event.body(),
                 event.state().isBlank() ? issue.state() : event.state(),
+                event.labels().isBlank() ? issue.kind() : GitIssue.kindOfLabels(event.labels()),
                 event.labels().isBlank() ? issue.labels() : event.labels(),
                 event.url().isBlank() ? issue.url() : event.url(),
                 "GIT", "SYNCED", "", issue.assignee(), issue.createdAt(),

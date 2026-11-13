@@ -26,6 +26,7 @@ const loading = ref(false)
 const error = ref('')
 const keyword = ref('')
 const stateFilter = ref('')
+const kindFilter = ref('')
 const expandedId = ref('')
 
 const comments = ref<GitIssueCommentRow[]>([])
@@ -39,6 +40,18 @@ const stateOptions = [
   { label: '待处理', value: 'OPEN' },
   { label: '已完成', value: 'CLOSED' },
 ]
+
+/** 任务分类：Bug（缺陷） / Feat（需求）。 */
+const kindOptions = [
+  { label: '全部类型', value: '' },
+  { label: 'Bug', value: 'BUG' },
+  { label: 'Feat', value: 'FEAT' },
+]
+
+/** 分类在前端过滤：数据量小，切 tab 无需再请求。 */
+const visibleItems = computed(() => kindFilter.value
+  ? items.value.filter((i) => (i.kind ?? 'BUG') === kindFilter.value)
+  : items.value)
 
 const PROVIDER_LABEL: Record<string, string> = {
   GITEE: 'Gitee', GITHUB: 'GitHub', GITLAB: 'GitLab',
@@ -103,6 +116,10 @@ function labelList(labels: string): string[] {
   return (labels ?? '').split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
 }
 
+function kindLabel(kind?: string): string {
+  return kind === 'FEAT' ? 'Feat' : 'Bug'
+}
+
 function isBound(row: GitIssueRow): boolean {
   return !!row.provider && !!row.repo && !!row.number
 }
@@ -139,6 +156,11 @@ watch(keyword, () => {
   keywordTimer = setTimeout(() => void load(), 260)
 })
 watch(stateFilter, () => void load())
+watch(kindFilter, () => {
+  if (expandedId.value && !visibleItems.value.some((i) => i.id === expandedId.value)) {
+    expandedId.value = ''
+  }
+})
 
 onMounted(() => {
   void load()
@@ -207,7 +229,7 @@ async function removeComment(comment: GitIssueCommentRow): Promise<void> {
 const editorOpen = ref(false)
 const editingId = ref('')
 const saving = ref(false)
-const form = reactive({ title: '', body: '', labels: '' })
+const form = reactive({ title: '', body: '', labels: '', kind: 'BUG' as 'BUG' | 'FEAT' })
 const listRef = ref<HTMLElement | null>(null)
 
 const editorTarget = computed(() => {
@@ -222,7 +244,7 @@ const editorTarget = computed(() => {
 
 function openCreate(): void {
   editingId.value = ''
-  Object.assign(form, { title: '', body: '', labels: '' })
+  Object.assign(form, { title: '', body: '', labels: '', kind: 'BUG' })
   editorOpen.value = true
   expandedId.value = ''
   scrollToEditor()
@@ -230,7 +252,9 @@ function openCreate(): void {
 
 function openEdit(row: GitIssueRow): void {
   editingId.value = row.id
-  Object.assign(form, { title: row.title, body: row.body, labels: row.labels })
+  Object.assign(form, {
+    title: row.title, body: row.body, labels: row.labels, kind: row.kind ?? 'BUG',
+  })
   editorOpen.value = true
   scrollToEditor()
 }
@@ -261,6 +285,7 @@ async function submit(): Promise<void> {
       title: form.title.trim(),
       body: form.body,
       labels: form.labels.trim(),
+      kind: form.kind,
       state: editingRow?.state ?? ('OPEN' as const),
     }
     const row = editingId.value
@@ -398,7 +423,20 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
               {{ opt.label }}
             </button>
           </div>
-          <span class="toolbar-count mono">{{ items.length }} 个任务</span>
+          <div class="state-tabs kind-tabs">
+            <button
+              v-for="opt in kindOptions" :key="opt.value" type="button"
+              class="state-tab"
+              :class="[
+                opt.value ? opt.value.toLowerCase() : '',
+                { active: kindFilter === opt.value },
+              ]"
+              @click="kindFilter = opt.value"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+          <span class="toolbar-count mono">{{ visibleItems.length }} 个任务</span>
         </div>
 
         <div ref="listRef" class="issues-list">
@@ -428,6 +466,23 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                 />
               </div>
               <div class="editor-row">
+                <div class="editor-field kind-field">
+                  <span class="editor-label">类型</span>
+                  <div class="kind-picker">
+                    <button
+                      type="button" class="kind-option bug"
+                      :class="{ active: form.kind === 'BUG' }" @click="form.kind = 'BUG'"
+                    >
+                      Bug
+                    </button>
+                    <button
+                      type="button" class="kind-option feat"
+                      :class="{ active: form.kind === 'FEAT' }" @click="form.kind = 'FEAT'"
+                    >
+                      Feat
+                    </button>
+                  </div>
+                </div>
                 <div class="editor-field grow">
                   <span class="editor-label">标签</span>
                   <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
@@ -454,17 +509,24 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
 
           <div v-if="loading && !items.length" class="list-empty">加载中…</div>
           <div v-else-if="error" class="list-empty error">{{ error }}</div>
-          <div v-else-if="!items.length" class="list-empty">
-            还没有任务。新建一个，或在 Git 上创建 Issue 自动同步过来。
+          <div v-else-if="!visibleItems.length" class="list-empty">
+            {{ items.length
+              ? '当前分类下没有任务，切换上面的分类看看。'
+              : '还没有任务。新建一个，或在 Git 上创建 Issue 自动同步过来。' }}
           </div>
 
           <article
-            v-for="row in items" :key="row.id" class="task-row"
+            v-for="row in visibleItems" :key="row.id" class="task-row"
             :class="{ open: expandedId === row.id, closed: row.state === 'CLOSED' }"
           >
             <button type="button" class="task-main" @click="toggleExpand(row)">
               <span class="state-dot" :class="row.state.toLowerCase()" />
-              <span class="task-title">{{ row.title }}</span>
+              <span class="task-text">
+                <span class="kind-chip" :class="row.kind === 'FEAT' ? 'feat' : 'bug'">
+                  {{ kindLabel(row.kind) }}
+                </span>
+                <span class="task-title">{{ row.title }}</span>
+              </span>
               <span class="task-labels">
                 <span v-for="label in labelList(row.labels).slice(0, 2)" :key="label" class="mini-chip">
                   {{ label }}
@@ -723,6 +785,12 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--surface-raised);
   box-shadow: var(--shadow-1);
 }
+.kind-tabs .state-tab.bug.active {
+  color: #b54a4a;
+}
+.kind-tabs .state-tab.feat.active {
+  color: var(--accent-ink, #4a6cf7);
+}
 .toolbar-count {
   margin-left: auto;
   font-size: 10px;
@@ -784,12 +852,36 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--ok);
 }
 .task-title {
+  min-width: 0;
   overflow: hidden;
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.task-text {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.kind-chip {
+  flex: none;
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+}
+.kind-chip.bug {
+  color: #b54a4a;
+  background: rgb(181 74 74 / 10%);
+}
+.kind-chip.feat {
+  color: var(--accent-ink, #4a6cf7);
+  background: rgb(74 108 247 / 12%);
 }
 .task-row.closed .task-title {
   color: var(--ink-muted);
@@ -1038,6 +1130,38 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+.kind-field {
+  flex: none;
+}
+.kind-picker {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.kind-option {
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+}
+.kind-option.bug.active {
+  font-weight: 600;
+  color: #b54a4a;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+.kind-option.feat.active {
+  font-weight: 600;
+  color: var(--accent-ink, #4a6cf7);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
 }
 .editor-label {
   font-size: 11px;

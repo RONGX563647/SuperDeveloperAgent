@@ -119,6 +119,7 @@ public class GitIssueController {
                 title,
                 str(body, "body"),
                 str(body, "state"),
+                str(body, "kind"),
                 str(body, "labels"),
                 str(body, "assignee"));
     }
