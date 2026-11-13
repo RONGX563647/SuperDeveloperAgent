@@ -52,8 +52,6 @@ function locate(id: string): void {
 
 <template>
   <div class="trace-rail" @mouseleave="hoverId = ''">
-    <slot name="toolbar" />
-
     <button
       v-if="turns.length"
       type="button"
@@ -110,11 +108,6 @@ function locate(id: string): void {
   align-items: flex-end;
   gap: 12px;
   transform: translateY(-50%);
-}
-
-/* 工具栏槽位（能力选择按钮）：与轨迹按钮同列，保持右侧对齐 */
-.trace-rail :deep(.cap-bar) {
-  margin-bottom: 2px;
 }
 
 /* 打开轨迹页的入口：默认安静，悬停才显形 */

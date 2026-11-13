@@ -16,7 +16,7 @@ import { formatCost, formatTokens, sumCost } from '../utils/deepseekPricing'
 import { loadHistory, saveHistory } from '../state/sessionHistory'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import ChatTraceRail from '../components/chat/ChatTraceRail.vue'
-import ChatCapabilityBar from '../components/chat/ChatCapabilityBar.vue'
+import ChatCapabilitiesView from '../components/chat/ChatCapabilitiesView.vue'
 import { useChatCapabilities } from '../composables/useChatCapabilities'
 import ChatTraceView from '../components/chat/ChatTraceView.vue'
 import ApprovalRequestCard from '../components/chat/ApprovalRequestCard.vue'
@@ -47,8 +47,8 @@ const {
   ready: capsReady, loading: capsLoading, refresh: refreshCapabilities,
 } = useChatCapabilities(sessionId)
 
-/** 视图模式：对话（默认）或轨迹（执行过程 / 系统提示词）。底部输入区两者共用。 */
-const viewMode = ref<'chat' | 'trace'>('chat')
+/** 视图模式：对话 / 轨迹 / 能力，三个平级页面共用底部输入区。 */
+const viewMode = ref<'chat' | 'trace' | 'capabilities'>('chat')
 
 /** 项目列表：只用于显示项目名与默认项目兜底（下拉已移除）。 */
 const projects = ref<ProjectRow[]>([])
@@ -492,6 +492,15 @@ onMounted(async () => {
         >
           轨迹
         </button>
+        <button
+          type="button" class="switch-tab" :class="{ on: viewMode === 'capabilities' }"
+          @click="viewMode = 'capabilities'"
+        >
+          能力
+          <span v-if="selectedSkills.length + selectedMcp.length" class="tab-badge mono">
+            {{ selectedSkills.length + selectedMcp.length }}
+          </span>
+        </button>
       </div>
       <EnvironmentStatusBar
         :project-id="projectId"
@@ -512,6 +521,20 @@ onMounted(async () => {
       :env="env"
       :streaming="streaming"
       @locate="locateTurn"
+    />
+
+    <!-- 能力视图：按会话选择 Skill / MCP，与轨迹同级 -->
+    <ChatCapabilitiesView
+      v-if="viewMode === 'capabilities'"
+      :skill-options="skillOptions"
+      :mcp-options="mcpOptions"
+      :skills="selectedSkills"
+      :mcp="selectedMcp"
+      :ready="capsReady"
+      :loading="capsLoading"
+      @update:skills="selectedSkills = $event"
+      @update:mcp="selectedMcp = $event"
+      @refresh="refreshCapabilities"
     />
 
     <!-- 消息区 + 右侧轨迹：chat-body 提供定位参照，chat-list 仍是唯一滚动容器 -->
@@ -574,21 +597,7 @@ onMounted(async () => {
         :streaming="streaming"
         @locate="scrollToTurn"
         @open-trace="viewMode = 'trace'"
-      >
-        <template #toolbar>
-          <ChatCapabilityBar
-            :skill-options="skillOptions"
-            :mcp-options="mcpOptions"
-            :skills="selectedSkills"
-            :mcp="selectedMcp"
-            :ready="capsReady"
-            :loading="capsLoading"
-            @update:skills="selectedSkills = $event"
-            @update:mcp="selectedMcp = $event"
-            @refresh="refreshCapabilities"
-          />
-        </template>
-      </ChatTraceRail>
+      />
     </div>
 
     <!-- 输入区：自然撑开在底部，不 fixed / 不 sticky -->
@@ -749,6 +758,19 @@ onMounted(async () => {
   font-weight: 600;
   color: var(--ink);
   border-bottom-color: var(--ink);
+}
+.tab-badge {
+  display: inline-block;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  margin-left: 4px;
+  font-size: 9.5px;
+  line-height: 15px;
+  color: var(--ink-muted);
+  text-align: center;
+  background: var(--surface-sunken);
+  border-radius: 8px;
 }
 
 /* ---- 消息区：只有这里滚动；正文明暗靠白纸画布，不加分隔线 ---- */

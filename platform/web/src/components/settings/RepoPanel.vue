@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Link, Plus, UserFilled } from '@element-plus/icons-vue'
 import {
@@ -64,6 +64,68 @@ const probeBusy = ref(false)
 const probe = ref<{ ok: boolean, message: string, branches?: string[] } | null>(null)
 const hostOauthBusy = ref('')
 
+// ---------------------------------------------------------------- 平台切换
+
+type Platform = 'GITEE' | GitHostProvider
+
+const PLATFORM_META: Record<Platform, { label: string, host: string, desc: string }> = {
+  GITEE: { label: 'Gitee', host: 'gitee.com', desc: '网页授权或私人令牌，绑定后可浏览你的仓库列表' },
+  GITHUB: { label: 'GitHub', host: 'github.com', desc: 'OAuth App 授权，或粘贴 Personal Access Token（repo 权限）' },
+  GITLAB: { label: 'GitLab', host: 'gitlab.com', desc: 'OAuth App 授权，或粘贴 Access Token（read_repository 权限）' },
+  CUSTOM: { label: '自定义', host: '', desc: 'Gitea / Gogs / 自建 GitLab 等，填写服务域名与访问令牌' }
+}
+
+const PLATFORM_ORDER: Platform[] = ['GITEE', 'GITHUB', 'GITLAB', 'CUSTOM']
+const activePlatform = ref<Platform>('GITEE')
+const hostPatToken = ref('')
+const hostPatBusy = ref(false)
+
+const platformAccounts = computed(() => {
+  if (activePlatform.value === 'GITEE') return []
+  return hosts.value.filter((h) => h.provider === activePlatform.value)
+})
+
+const activeMeta = computed(() => PLATFORM_META[activePlatform.value])
+const activeProviderMeta = computed(() => PROVIDER_META[
+  activePlatform.value === 'GITEE' ? 'GITHUB' : activePlatform.value
+])
+
+function platformCount(platform: Platform): number {
+  if (platform === 'GITEE') return binding.value?.bound ? 1 : 0
+  return hosts.value.filter((h) => h.provider === platform).length
+}
+
+function switchPlatform(platform: Platform): void {
+  activePlatform.value = platform
+  formOpen.value = false
+  hostPatToken.value = ''
+  if (platform === 'CUSTOM') {
+    openForm()
+    formOpen.value = true
+  }
+}
+
+/** 平台页内直接粘贴令牌绑定默认域名（GitHub / GitLab）。 */
+async function bindHostPat(): Promise<void> {
+  const token = hostPatToken.value.trim()
+  if (!token || activePlatform.value === 'GITEE' || activePlatform.value === 'CUSTOM') return
+  hostPatBusy.value = true
+  try {
+    await saveGitHost({
+      provider: activePlatform.value as GitHostProvider,
+      host: PLATFORM_META[activePlatform.value].host,
+      token
+    })
+    ElMessage.success(`已绑定 ${activeMeta.value.label}，clone / 同步会自动带凭据`)
+    hostPatToken.value = ''
+    await loadHosts()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '绑定失败')
+  } finally {
+    hostPatBusy.value = false
+  }
+}
+
 /** GitHub / GitLab 应用授权：打开授权页，回调后 token 加密写入托管账号。 */
 async function bindOauth(provider: 'github' | 'gitlab'): Promise<void> {
   hostOauthBusy.value = provider
@@ -96,25 +158,18 @@ function providerLabel(provider: GitHostProvider): string {
   return PROVIDER_META[provider]?.label ?? provider
 }
 
-function onProviderChange(value: GitHostProvider): void {
-  const meta = PROVIDER_META[value]
-  // 只在当前 host 为空或还是别家默认值时替换，避免覆盖用户填的自建域名
-  const defaults = Object.values(PROVIDER_META).map((m) => m.host)
-  if (!form.host.trim() || defaults.includes(form.host.trim())) {
-    form.host = meta.host
-  }
-}
-
 function openForm(): void {
+  const platform = activePlatform.value
   form.id = ''
-  form.provider = 'GITHUB'
-  form.host = 'github.com'
+  form.provider = platform === 'GITEE' ? 'GITHUB' : platform
+  form.host = platform === 'GITEE' ? 'github.com' : PLATFORM_META[platform].host
   form.username = ''
   form.token = ''
   formOpen.value = true
 }
 
 function editForm(account: GitHostAccount): void {
+  activePlatform.value = account.provider
   form.id = account.id
   form.provider = account.provider
   form.host = account.host
@@ -261,17 +316,30 @@ defineExpose({ load })
       <div>
         <div class="panel-title">代码仓库</div>
         <div class="panel-desc">
-          Gitee 网页授权，或 GitHub / GitLab / 自建服务的访问令牌；token 加密保存，只回显掩码
+          按平台切换授权方式：Gitee 网页授权，GitHub / GitLab OAuth 或访问令牌，也支持自建服务
         </div>
       </div>
       <el-button
-        v-if="binding?.bound" size="small" :loading="reposLoading"
+        v-if="activePlatform === 'GITEE' && binding?.bound" size="small" :loading="reposLoading"
         @click="loadRepos"
       >
         刷新仓库
       </el-button>
     </div>
 
+    <!-- 平台切换：每个平台一个独立授权页 -->
+    <div class="platform-tabs">
+      <button
+        v-for="p in PLATFORM_ORDER" :key="p" type="button" class="platform-tab"
+        :class="{ active: activePlatform === p }"
+        @click="switchPlatform(p)"
+      >
+        {{ PLATFORM_META[p].label }}
+        <span v-if="platformCount(p)" class="tab-count mono">{{ platformCount(p) }}</span>
+      </button>
+    </div>
+
+    <template v-if="activePlatform === 'GITEE'">
     <!-- 已绑定 -->
     <section v-if="binding?.bound" class="account-card">
       <span class="acct-icon"><el-icon><UserFilled /></el-icon></span>
@@ -332,58 +400,83 @@ defineExpose({ load })
         <span class="repo-desc">{{ r.description }}</span>
       </div>
     </section>
+    </template>
 
-    <!-- GitHub / GitLab / 自定义 -->
-    <section class="hosts">
-      <div class="repos-head">
-        <span class="repos-title">GitHub / GitLab / 自定义仓库</span>
-        <span class="repos-hint">保存后 clone 与同步自动带凭据</span>
-        <el-button size="small" style="margin-left: auto" @click="formOpen ? (formOpen = false) : openForm()">
-          <el-icon><Plus /></el-icon> {{ formOpen ? '收起' : '新增接入' }}
-        </el-button>
-      </div>
-
-      <div class="oauth-strip">
-        <span class="oauth-label">应用授权</span>
-        <el-button size="small" :loading="hostOauthBusy === 'github'" @click="bindOauth('github')">
-          GitHub 授权
-        </el-button>
-        <el-button size="small" :loading="hostOauthBusy === 'gitlab'" @click="bindOauth('gitlab')">
-          GitLab 授权
-        </el-button>
-        <span class="oauth-hint">
-          跳转平台授权页，回调自动绑定；也可用下方「新增接入」粘贴访问令牌
-        </span>
-      </div>
+    <!-- GitHub / GitLab / 自定义：与 Gitee 共用一套授权卡片语言 -->
+    <section v-else class="hosts">
+      <div class="platform-desc">{{ activeMeta.desc }}</div>
 
       <div v-if="hostsLoading" class="repos-empty">加载中…</div>
-      <div v-else-if="!hosts.length" class="repos-empty">
-        还没有接入 GitHub / GitLab；私有仓库需要访问令牌。
+      <template v-else>
+        <section v-if="!platformAccounts.length" class="account-card muted">
+          <span class="acct-icon"><el-icon><Link /></el-icon></span>
+          <div class="acct-main">
+            <div class="acct-name">未连接 {{ activeMeta.label }}</div>
+            <div class="acct-token">
+              {{ activePlatform === 'CUSTOM'
+                ? '填写服务域名与访问令牌后，clone / 同步会自动带凭据'
+                : '授权后自动带入凭据，无需在仓库地址里写 token' }}
+            </div>
+          </div>
+        </section>
+
+        <section v-for="h in platformAccounts" :key="h.id" class="account-card">
+          <span class="acct-icon"><el-icon><Connection /></el-icon></span>
+          <div class="acct-main">
+            <div class="acct-name">{{ activeMeta.label }}：{{ h.username || h.host }}</div>
+            <div class="acct-token mono">{{ h.host }} · {{ h.tokenMasked }}</div>
+          </div>
+          <el-tag size="small" type="success" round effect="light">已连接</el-tag>
+          <div class="acct-actions">
+            <el-button size="small" text :loading="testingHost === h.id" @click="testHost(h)">测试</el-button>
+            <el-button size="small" text @click="editForm(h)">编辑</el-button>
+            <el-button size="small" text type="danger" @click="removeHost(h)">解绑</el-button>
+          </div>
+        </section>
+      </template>
+
+      <div v-if="activePlatform !== 'CUSTOM'" class="bind-grid">
+        <div class="bind-block">
+          <div class="bind-title">方式一：网页授权（推荐）</div>
+          <p class="bind-desc">跳转 {{ activeMeta.label }} 授权页，回调后自动绑定，无需手动复制令牌。</p>
+          <el-button
+            size="small" type="primary"
+            :loading="hostOauthBusy === activePlatform.toLowerCase()"
+            @click="bindOauth(activePlatform === 'GITHUB' ? 'github' : 'gitlab')"
+          >
+            <el-icon><Connection /></el-icon> 前往授权
+          </el-button>
+        </div>
+        <div class="bind-block">
+          <div class="bind-title">方式二：访问令牌</div>
+          <p class="bind-desc">{{ activeProviderMeta.hint }}</p>
+          <div class="pat-row">
+            <el-input
+              v-model="hostPatToken" type="password" show-password size="default"
+              class="pat-input mono" placeholder="粘贴访问令牌"
+              @keydown.enter="bindHostPat"
+            />
+            <el-button
+              size="default" :disabled="!hostPatToken.trim() || hostPatBusy"
+              :loading="hostPatBusy" @click="bindHostPat"
+            >
+              绑定
+            </el-button>
+          </div>
+        </div>
       </div>
-      <div v-for="h in hosts" :key="h.id" class="host-row">
-        <span class="provider-badge" :class="h.provider.toLowerCase()">{{ providerLabel(h.provider) }}</span>
-        <span class="host-name mono">{{ h.host }}</span>
-        <span class="host-user mono">{{ h.username }}</span>
-        <span class="host-token mono">{{ h.tokenMasked }}</span>
-        <span class="host-actions">
-          <el-button size="small" text :loading="testingHost === h.id" @click="testHost(h)">测试</el-button>
-          <el-button size="small" text @click="editForm(h)">编辑</el-button>
-          <el-button size="small" text type="danger" @click="removeHost(h)">删除</el-button>
-        </span>
+
+      <div class="hosts-extra">
+        <el-button size="small" text @click="formOpen ? (formOpen = false) : openForm()">
+          <el-icon><Plus /></el-icon>
+          {{ formOpen ? '收起' : (activePlatform === 'CUSTOM' ? '新增自建服务' : '接入其他域名（企业版 / 自建）') }}
+        </el-button>
       </div>
 
       <div v-if="formOpen" class="host-form">
         <div class="form-row">
           <label class="form-label">平台</label>
-          <el-select
-            v-model="form.provider" size="default" class="form-control"
-            @change="onProviderChange"
-          >
-            <el-option
-              v-for="(meta, key) in PROVIDER_META" :key="key"
-              :label="meta.label" :value="key"
-            />
-          </el-select>
+          <span class="form-static mono">{{ providerLabel(form.provider) }}</span>
         </div>
         <div class="form-row">
           <label class="form-label">服务域名</label>
@@ -408,7 +501,7 @@ defineExpose({ load })
             @keydown.enter="saveHost"
           />
         </div>
-        <div class="form-tip">{{ PROVIDER_META[form.provider].hint }}</div>
+        <div class="form-tip">{{ activeProviderMeta.hint }}</div>
         <div class="form-actions">
           <el-button size="default" @click="formOpen = false">取消</el-button>
           <el-button size="default" type="primary" :loading="hostSaving" @click="saveHost">
@@ -470,6 +563,40 @@ defineExpose({ load })
 .panel-head .el-button {
   margin-left: auto;
 }
+
+/* 平台切换：与 MCP / Skill 面板同一套 Tab 视觉 */
+.platform-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.platform-tab {
+  padding: 6px 2px 7px;
+  margin-right: 14px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+}
+.platform-tab:hover {
+  color: var(--ink);
+}
+.platform-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.tab-count {
+  margin-left: 3px;
+  color: var(--ink-faint);
+}
+.platform-desc {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
 .account-card {
   display: flex;
   align-items: center;
@@ -510,6 +637,11 @@ defineExpose({ load })
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.acct-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
 }
 .bind-grid {
   display: grid;
@@ -573,28 +705,6 @@ defineExpose({ load })
   font-size: 11.5px;
   color: var(--ink-faint);
 }
-.oauth-strip {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  background: var(--surface-sunken);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-}
-.oauth-label {
-  font-size: 11px;
-  color: var(--ink-muted);
-}
-.oauth-hint {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .repo-row {
   display: flex;
   align-items: baseline;
@@ -631,59 +741,20 @@ defineExpose({ load })
 .hosts {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--line-soft);
-}
-.host-row {
-  display: flex;
-  align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
 }
-.provider-badge {
-  flex: none;
-  padding: 1px 8px;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--ink-soft);
-  background: var(--surface-sunken);
-  border-radius: var(--radius-pill);
-}
-.provider-badge.github {
-  color: #24292f;
-  background: #ebedf0;
-}
-.provider-badge.gitlab {
-  color: #b3471d;
-  background: #fdeee7;
-}
-.host-name {
-  flex: none;
-  font-size: 11.5px;
-  color: var(--ink);
-}
-.host-user {
-  flex: none;
-  font-size: 11px;
-  color: var(--ink-faint);
-}
-.host-token {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 11px;
-  color: var(--ink-faint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.host-actions {
+.acct-actions {
   display: flex;
   flex: none;
   gap: 2px;
+}
+.hosts-extra {
+  display: flex;
+  justify-content: flex-start;
+}
+.form-static {
+  font-size: 12px;
+  color: var(--ink);
 }
 .host-form {
   display: grid;
