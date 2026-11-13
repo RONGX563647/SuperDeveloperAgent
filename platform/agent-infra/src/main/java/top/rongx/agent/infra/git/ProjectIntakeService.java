@@ -85,11 +85,27 @@ public class ProjectIntakeService {
                                 /** DIRECT（默认，仓库留在用户目录）/ MANAGED（平台托管 bare）。 */
                                 String storageMode,
                                 /** DIRECT/REMOTE 时：clone 到用户选择的本地目录。 */
-                                String cloneTargetDir) {
+                                String cloneTargetDir,
+                                /** HTTPS 凭据（由服务端按仓库 URL 匹配，前端不传）。 */
+                                String gitUsername,
+                                String gitToken) {
         /** 兼容旧构造（测试用）。 */
         public IntakeRequest(String projectId, String localPath, String repoUrl,
                              String type, boolean gitInitIfMissing) {
-            this(projectId, localPath, repoUrl, type, gitInitIfMissing, "DIRECT", null);
+            this(projectId, localPath, repoUrl, type, gitInitIfMissing, "DIRECT", null, null, null);
+        }
+
+        public IntakeRequest(String projectId, String localPath, String repoUrl,
+                             String type, boolean gitInitIfMissing,
+                             String storageMode, String cloneTargetDir) {
+            this(projectId, localPath, repoUrl, type, gitInitIfMissing,
+                    storageMode, cloneTargetDir, null, null);
+        }
+
+        /** git 凭据（无 token 时为 null）。 */
+        public GitWorktreeManager.GitAuth auth() {
+            return gitToken == null || gitToken.isBlank()
+                    ? null : new GitWorktreeManager.GitAuth(gitUsername, gitToken);
         }
     }
 
@@ -213,12 +229,12 @@ public class ProjectIntakeService {
                     // DIRECT/REMOTE：clone 到用户选择的目录
                     update(id, "LINKING", "正在 clone 到 " + req.cloneTargetDir() + "…", null);
                     Path target = Path.of(req.cloneTargetDir());
-                    git.cloneTo(req.repoUrl(), target);
+                    git.cloneTo(req.repoUrl(), target, req.auth());
                     head = git.revParse(target, "HEAD");
                     git.addWorktreeAt(target, "wt-verify", head);
                 } else {
                     update(id, "LINKING", "正在 clone 远程仓库（托管模式）…", null);
-                    git.cloneRemote(id, req.repoUrl());
+                    git.cloneRemote(id, req.repoUrl(), req.auth());
                     head = git.revParse(git.bareDir(id), "HEAD");
                     git.addWorktree(id, "wt-verify", head);
                 }

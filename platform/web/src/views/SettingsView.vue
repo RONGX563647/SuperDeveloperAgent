@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Cpu, Connection, Files, Key, Lock, Monitor, Refresh } from '@element-plus/icons-vue'
+import {
+  Cpu, Connection, Files, Key, Lock, MagicStick, Monitor, Refresh, SetUp
+} from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import ServerPanel from '../components/settings/ServerPanel.vue'
 import ModelPanel from '../components/settings/ModelPanel.vue'
 import RepoPanel from '../components/settings/RepoPanel.vue'
+import McpPanel from '../components/settings/McpPanel.vue'
+import SkillPanel from '../components/settings/SkillPanel.vue'
 import ProjectEnvPanel from '../components/settings/ProjectEnvPanel.vue'
 import EnvTemplatePanel from '../components/settings/EnvTemplatePanel.vue'
 import SecretPanel from '../components/settings/SecretPanel.vue'
@@ -23,7 +27,8 @@ import SecretPanel from '../components/settings/SecretPanel.vue'
  * 左侧是"分区导航"而不是 Tabs：设置项会越来越多（服务器/模型/仓库/通知），
  * 纵向分组可扩展、也能承载每个分区的说明文字。
  */
-type Section = 'servers' | 'models' | 'envTemplates' | 'envs' | 'secrets' | 'repos'
+type Section = 'servers' | 'models' | 'repos' | 'mcp' | 'skills'
+  | 'envTemplates' | 'envs' | 'secrets'
 
 interface SectionMeta {
   key: Section
@@ -35,7 +40,9 @@ interface SectionMeta {
 const SECTIONS: SectionMeta[] = [
   { key: 'servers', label: '服务器', desc: '连接与运行环境', icon: Monitor },
   { key: 'models', label: '模型连接', desc: '推理服务与密钥', icon: Cpu },
-  { key: 'repos', label: '代码仓库', desc: '授权与连接', icon: Connection },
+  { key: 'repos', label: '代码仓库', desc: 'Gitee / GitHub / GitLab', icon: Connection },
+  { key: 'mcp', label: 'MCP 接入', desc: 'stdio / http 服务', icon: SetUp },
+  { key: 'skills', label: 'Skill', desc: 'SKILL.md 技能目录', icon: MagicStick },
   { key: 'envTemplates', label: '环境模板', desc: 'dev/test/prod 默认值', icon: Files },
   { key: 'envs', label: '项目环境', desc: '覆盖 · 注入变量 · 重新检测', icon: Key },
   { key: 'secrets', label: '密钥库', desc: 'secret:// 引用与轮换', icon: Lock }
@@ -63,29 +70,32 @@ const envRef = ref<InstanceType<typeof ProjectEnvPanel> | null>(null)
 const envTemplateRef = ref<InstanceType<typeof EnvTemplatePanel> | null>(null)
 const secretRef = ref<InstanceType<typeof SecretPanel> | null>(null)
 const repoRef = ref<InstanceType<typeof RepoPanel> | null>(null)
+const mcpRef = ref<InstanceType<typeof McpPanel> | null>(null)
+const skillRef = ref<InstanceType<typeof SkillPanel> | null>(null)
 const refreshing = ref(false)
 
 const current = computed(() => SECTIONS.find((s) => s.key === active.value) ?? SECTIONS[0])
 
 /** 切到某个分区时拉一次最新数据（面板首次挂载已加载，这里处理"改动后回来"）。 */
+function reloadSection(value: Section): Promise<void> | undefined {
+  if (value === 'servers') return serverRef.value?.load()
+  if (value === 'models') return modelRef.value?.load()
+  if (value === 'repos') return repoRef.value?.load()
+  if (value === 'mcp') return mcpRef.value?.load()
+  if (value === 'skills') return skillRef.value?.load()
+  if (value === 'envTemplates') return envTemplateRef.value?.load()
+  if (value === 'envs') return envRef.value?.load()
+  return secretRef.value?.load()
+}
+
 watch(active, (value) => {
-  if (value === 'servers') void serverRef.value?.load()
-  else if (value === 'models') void modelRef.value?.load()
-  else if (value === 'envTemplates') void envTemplateRef.value?.load()
-  else if (value === 'envs') void envRef.value?.load()
-  else if (value === 'secrets') void secretRef.value?.load()
-  else void repoRef.value?.load()
+  void reloadSection(value)
 })
 
 async function refresh(): Promise<void> {
   refreshing.value = true
   try {
-    if (active.value === 'servers') await serverRef.value?.load()
-    else if (active.value === 'models') await modelRef.value?.load()
-    else if (active.value === 'envTemplates') await envTemplateRef.value?.load()
-    else if (active.value === 'envs') await envRef.value?.load()
-    else if (active.value === 'secrets') await secretRef.value?.load()
-    else await repoRef.value?.load()
+    await reloadSection(active.value)
   } finally {
     refreshing.value = false
   }
@@ -142,6 +152,8 @@ async function refresh(): Promise<void> {
           <ServerPanel v-if="active === 'servers'" ref="serverRef" />
           <ModelPanel v-else-if="active === 'models'" ref="modelRef" />
           <RepoPanel v-else-if="active === 'repos'" ref="repoRef" />
+          <McpPanel v-else-if="active === 'mcp'" ref="mcpRef" />
+          <SkillPanel v-else-if="active === 'skills'" ref="skillRef" />
           <EnvTemplatePanel v-else-if="active === 'envTemplates'" ref="envTemplateRef" />
           <ProjectEnvPanel v-else-if="active === 'envs'" ref="envRef" />
           <SecretPanel v-else-if="active === 'secrets'" ref="secretRef" />

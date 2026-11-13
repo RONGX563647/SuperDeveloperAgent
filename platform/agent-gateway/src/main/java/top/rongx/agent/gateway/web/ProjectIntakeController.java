@@ -36,19 +36,22 @@ public class ProjectIntakeController {
     private final ProjectRepository projects;
     private final CompositeProjectRepository composite;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
+    private final top.rongx.agent.domain.settings.GitHostingAccountRepository gitAccounts;
 
     public ProjectIntakeController(ProjectIntakeService intake,
                                    GitWorktreeManager git,
                                    ProjectRepository projects,
                                    CompositeProjectRepository composite,
                                    top.rongx.agent.gateway.auth.CurrentUser currentUser,
-                                   IntakeProjectStore store) {
+                                   IntakeProjectStore store,
+                                   top.rongx.agent.domain.settings.GitHostingAccountRepository gitAccounts) {
         this.intake = intake;
         this.git = git;
         this.projects = projects;
         this.composite = composite;
         this.currentUser = currentUser;
         this.store = store;
+        this.gitAccounts = gitAccounts;
     }
 
     private final IntakeProjectStore store;
@@ -80,15 +83,20 @@ public class ProjectIntakeController {
     /** 远程 clone（DIRECT：clone 到用户选择的目录；MANAGED：平台 bare）。 */
     @PostMapping("/intake/remote")
     public ProjectIntakeService.IntakeState intakeRemote(@RequestBody Map<String, Object> body) {
-        currentUser.requireUserId();
+        String userId = currentUser.requireUserId();
+        String repoUrl = str(body, "repoUrl");
+        // 设置页保存的 GitHub/GitLab/自定义 token 按 URL host 自动匹配（私有仓库无需重复粘贴）
+        var credential = gitAccounts.credentialFor(userId, repoUrl);
         ProjectIntakeService.IntakeRequest req = new ProjectIntakeService.IntakeRequest(
                 str(body, "projectId"),
                 null,
-                str(body, "repoUrl"),
+                repoUrl,
                 str(body, "type"),
                 false,
                 str(body, "storageMode"),
-                str(body, "cloneTargetDir"));
+                str(body, "cloneTargetDir"),
+                credential.map(c -> c.username()).orElse(null),
+                credential.map(c -> c.token()).orElse(null));
         return intake.submit(req);
     }
 
@@ -223,17 +231,18 @@ public class ProjectIntakeController {
      */
     @PostMapping("/{id}/git/sync")
     public Map<String, Object> gitSync(@PathVariable String id) {
-        currentUser.requireUserId();
+        String userId = currentUser.requireUserId();
         RepoContext ctx = repoContext(id);
         if (!ctx.initialized()) {
             throw new IllegalArgumentException(
                     "该项目尚未完成 git 接入，无可同步内容。请先在「项目接入」页完成接入。");
         }
+        GitWorktreeManager.GitAuth auth = authFor(userId, ctx);
         if (ctx.direct()) {
             // 用户目录：直接 fetch 该仓库配置的远端（origin 等）
-            git.fetchRemoteIn(ctx.dir());
+            git.fetchRemoteIn(ctx.dir(), auth);
         } else {
-            git.fetchRemote(id);
+            git.fetchRemote(id, auth);
         }
         return Map.of("ok", true, "head", git.revParse(ctx.dir(), "HEAD"));
     }
@@ -405,6 +414,16 @@ public class ProjectIntakeController {
 
     // ---------------------------------------------------------------- helpers
 
+    /** 按仓库 origin 的 host 匹配已保存的 token（同步私有仓库用）。 */
+    private GitWorktreeManager.GitAuth authFor(String userId, RepoContext ctx) {
+        return git.remotes(ctx.dir()).stream()
+                .filter(r -> "origin".equals(r.name()))
+                .findFirst()
+                .or(() -> git.remotes(ctx.dir()).stream().findFirst())
+                .flatMap(r -> gitAccounts.credentialFor(userId, r.url()))
+                .map(c -> new GitWorktreeManager.GitAuth(c.username(), c.token()))
+                .orElse(null);
+    }
 
     private String str(Map<String, Object> body, String key) {
         Object v = body.get(key);

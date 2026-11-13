@@ -39,6 +39,15 @@ public class GitWorktreeManager {
 
     private final Path workspaceRoot;
 
+    /** 无明文凭据的 askpass 脚本（运行时从环境变量取值，避免 token 落盘/进 argv）。 */
+    private static final String ASKPASS_SCRIPT = """
+            #!/bin/sh
+            case "$1" in
+              *sername*) printf '%s\\n' "$AGENT_GIT_USERNAME" ;;
+              *) printf '%s\\n' "$AGENT_GIT_TOKEN" ;;
+            esac
+            """;
+
     public GitWorktreeManager(Path workspaceRoot) {
         this.workspaceRoot = workspaceRoot.toAbsolutePath().normalize();
     }
@@ -47,6 +56,13 @@ public class GitWorktreeManager {
     public static class GitIntakeException extends RuntimeException {
         public GitIntakeException(String message) {
             super(message);
+        }
+    }
+
+    /** HTTPS clone/fetch 凭据（GitHub PAT / GitLab PAT / 自建 token）。 */
+    public record GitAuth(String username, String token) {
+        public boolean usable() {
+            return token != null && !token.isBlank();
         }
     }
 
@@ -87,6 +103,11 @@ public class GitWorktreeManager {
      * 远程 clone（bare）。目标已存在时抛错（防覆盖）。
      */
     public void cloneRemote(String projectId, String repoUrl) {
+        cloneRemote(projectId, repoUrl, null);
+    }
+
+    /** 远程 clone（bare），auth 非空时经 askpass 注入 HTTPS 凭据。 */
+    public void cloneRemote(String projectId, String repoUrl, GitAuth auth) {
         Path bare = bareDir(projectId);
         if (Files.isDirectory(bare.resolve("objects"))) {
             throw new GitIntakeException("项目 " + projectId + " 的仓库已存在，不能重复接入");
@@ -97,7 +118,7 @@ public class GitWorktreeManager {
             throw new GitIntakeException("无法创建工作区目录：" + e.getMessage());
         }
         run(bare.getParent(), List.of("git", "clone", "--bare", "--quiet", repoUrl, posix(bare)),
-                "git clone --bare " + repoUrl);
+                "git clone --bare " + repoUrl, GIT_TIMEOUT_SECONDS, false, auth);
     }
 
     /**
@@ -313,17 +334,44 @@ public class GitWorktreeManager {
 
     /** REMOTE 来源刷新：bare 内 fetch origin。 */
     public void fetchRemote(String projectId) {
+        fetchRemote(projectId, null);
+    }
+
+    /** REMOTE 来源刷新（可带凭据，私有仓库同步用）。 */
+    public void fetchRemote(String projectId, GitAuth auth) {
         Path bare = bareDir(projectId);
         if (!Files.isDirectory(bare.resolve("objects"))) {
             throw new GitIntakeException("项目仓库不存在：" + bare);
         }
-        run(bare, List.of("git", "fetch", "--all", "--quiet"), "git fetch origin", FETCH_TIMEOUT_SECONDS);
+        run(bare, List.of("git", "fetch", "--all", "--quiet"), "git fetch origin",
+                FETCH_TIMEOUT_SECONDS, false, auth);
     }
 
     /** 在指定（用户）仓库目录内 fetch 远端（DIRECT/REMOTE 模式同步最新代码）。 */
     public void fetchRemoteIn(Path repoDir) {
+        fetchRemoteIn(repoDir, null);
+    }
+
+    /** 用户目录 fetch（可带凭据）。 */
+    public void fetchRemoteIn(Path repoDir, GitAuth auth) {
         run(repoDir, List.of("git", "fetch", "--all", "--quiet"), "git fetch（用户目录）",
-                FETCH_TIMEOUT_SECONDS);
+                FETCH_TIMEOUT_SECONDS, false, auth);
+    }
+
+    /**
+     * 探测远端可访问性：{@code git ls-remote --heads <url>}。
+     * 用于设置页「测试仓库可达」；返回分支引用行（已去掉 token 等敏感信息）。
+     */
+    public List<String> lsRemote(String repoUrl, GitAuth auth) {
+        Path dir = workspaceRoot.resolve("_platform");
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            throw new GitIntakeException("无法创建工作区目录：" + e.getMessage());
+        }
+        ActionResult result = run(dir, List.of("git", "ls-remote", "--heads", repoUrl),
+                "git ls-remote " + repoUrl, 30, false, auth);
+        return result.logTail().lines().filter(line -> !line.isBlank()).toList();
     }
 
     /**
@@ -331,6 +379,11 @@ public class GitWorktreeManager {
      * 目录已存在且非空时报错（防覆盖）。
      */
     public void cloneTo(String repoUrl, Path targetDir) {
+        cloneTo(repoUrl, targetDir, null);
+    }
+
+    /** clone 到用户目录（可带 HTTPS 凭据）。 */
+    public void cloneTo(String repoUrl, Path targetDir, GitAuth auth) {
         Path target = targetDir.toAbsolutePath().normalize();
         if (Files.exists(target)) {
             try (var stream = Files.list(target)) {
@@ -347,7 +400,7 @@ public class GitWorktreeManager {
             throw new GitIntakeException("无法创建父目录：" + e.getMessage());
         }
         run(target.getParent(), List.of("git", "clone", "--quiet", repoUrl, posix(target)),
-                "git clone → " + target);
+                "git clone → " + target, GIT_TIMEOUT_SECONDS, false, auth);
     }
 
     /** 解析引用的提交号。 */
@@ -411,7 +464,7 @@ public class GitWorktreeManager {
 
     /** 读取某个提交里的文件内容；文件不存在返回空串（新文件场景）。 */
     public String showFile(Path repoDir, String ref, String path) {
-        Raw raw = exec(repoDir, List.of("git", "show", ref + ":" + path), "git show", 60);
+        Raw raw = exec(repoDir, List.of("git", "show", ref + ":" + path), "git show", 60, null);
         return raw.exit() == 0 ? raw.output() : "";
     }
 
@@ -432,7 +485,7 @@ public class GitWorktreeManager {
             writeText(tmp.resolve("a").resolve(relPath), oldText);
             writeText(tmp.resolve("b").resolve(relPath), newText);
             Raw raw = exec(tmp, List.of("git", "diff", "--no-index", "--unified=3", "--no-color",
-                    "--", "a/" + relPath, "b/" + relPath), "git diff", 60);
+                    "--", "a/" + relPath, "b/" + relPath), "git diff", 60, null);
             if (raw.exit() > 1) {
                 throw new GitIntakeException("生成 diff 失败：\n" + raw.output());
             }
@@ -514,19 +567,12 @@ public class GitWorktreeManager {
     }
 
     private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds) {
-        return run(dir, argv, what, timeoutSeconds, false);
+        return run(dir, argv, what, timeoutSeconds, false, null);
     }
 
-    /**
-     * 允许失败的探测（如"分支没有 upstream"）：非零退出不算异常信号，不记 WARN。
-     * 仍然抛异常，由调用方决定如何降级。
-     */
-    private ActionResult tryRun(Path dir, List<String> argv, String what) {
-        return run(dir, argv, what, GIT_TIMEOUT_SECONDS, true);
-    }
-
-    private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds, boolean quiet) {
-        Raw raw = exec(dir, argv, what, timeoutSeconds);
+    private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds,
+                             boolean quiet, GitAuth auth) {
+        Raw raw = exec(dir, argv, what, timeoutSeconds, auth);
         if (raw.exit() != 0) {
             String detail = raw.output().isBlank() ? ("exit " + raw.exit()) : raw.output();
             if (!quiet) {
@@ -539,11 +585,43 @@ public class GitWorktreeManager {
                 raw.output());
     }
 
+    /**
+     * 允许失败的探测（如"分支没有 upstream"）：非零退出不算异常信号，不记 WARN。
+     * 仍然抛异常，由调用方决定如何降级。
+     */
+    private ActionResult tryRun(Path dir, List<String> argv, String what) {
+        return run(dir, argv, what, GIT_TIMEOUT_SECONDS, true);
+    }
+
+    private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds, boolean quiet) {
+        return run(dir, argv, what, timeoutSeconds, quiet, null);
+    }
+
     /** 执行结果（退出码 + 输出）；非零退出不抛异常，由调用方解释。 */
     private record Raw(int exit, String output) {
     }
 
-    private Raw exec(Path dir, List<String> argv, String what, long timeoutSeconds) {
+    /** askpass 脚本（700，内容不含密钥）；首次调用时写入，之后复用。 */
+    private synchronized Path askpassFile() {
+        Path file = workspaceRoot.resolve("_platform").resolve("git-askpass.sh");
+        try {
+            Files.createDirectories(file.getParent());
+            if (!Files.isRegularFile(file)) {
+                Files.writeString(file, ASKPASS_SCRIPT, StandardCharsets.UTF_8);
+                try {
+                    Files.setPosixFilePermissions(file,
+                            java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+                } catch (UnsupportedOperationException ignored) {
+                    // 非 POSIX 文件系统：尽力而为
+                }
+            }
+            return file;
+        } catch (IOException e) {
+            throw new GitIntakeException("无法创建 git askpass 脚本：" + e.getMessage());
+        }
+    }
+
+    private Raw exec(Path dir, List<String> argv, String what, long timeoutSeconds, GitAuth auth) {
         // 目录必须先存在：ProcessBuilder 对无效目录抛 CreateProcess error=267（目录名称无效），
         // 这种 OS 码对用户毫无意义——转成"先接入项目"的可读指引。
         if (dir == null || !Files.isDirectory(dir)) {
@@ -556,6 +634,13 @@ public class GitWorktreeManager {
                     .redirectErrorStream(true);
             // 远端不可达时 git 可能会等待凭据输入：禁止交互，让它尽快失败而不是挂住
             pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+            if (auth != null && auth.usable()) {
+                // 凭据只经环境变量传给 askpass 脚本，不进 argv（ps 可见）也不落盘明文
+                pb.environment().put("GIT_ASKPASS", askpassFile().toString());
+                pb.environment().put("AGENT_GIT_USERNAME",
+                        auth.username() == null || auth.username().isBlank() ? "git" : auth.username());
+                pb.environment().put("AGENT_GIT_TOKEN", auth.token());
+            }
             Process p = pb.start();
             // 输出必须与等待并行读取：先 readAllBytes 会一直阻塞到进程退出，
             // 超时参数就形同虚设（远端 hang 住时整条运行永远是"进行中"）。

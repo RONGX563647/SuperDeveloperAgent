@@ -32,6 +32,8 @@ const gitInitIfMissing = ref(false)
 const binding = ref<GiteeBinding | null>(null)
 const giteeDialog = ref(false)
 const selectedRepo = ref<GiteeRepo | null>(null)
+/** 手填仓库地址（GitHub / GitLab / 自建 Git）。 */
+const repoUrlInput = ref('')
 const cloneTarget = ref('')
 
 // 本地目录选择
@@ -57,8 +59,12 @@ const idOk = computed(() => /^[A-Z][A-Z0-9_]{1,15}$/.test(projectId.value))
 const canSubmit = computed(() => {
   if (!idOk.value) return false
   if (source.value === 'local') return !!selectedDir.value
-  return !!selectedRepo.value && !!cloneTarget.value
+  return hasRepoUrl.value && !!cloneTarget.value
 })
+
+/** 远程仓库：手填地址 或 Gitee 仓库列表二选一。 */
+const hasRepoUrl = computed(() =>
+  !!repoUrlInput.value.trim() || !!selectedRepo.value)
 
 // ---------------------------------------------------------------- 账号
 
@@ -76,7 +82,14 @@ function openGitee() {
 
 function pickRepo(r: GiteeRepo) {
   selectedRepo.value = r
+  repoUrlInput.value = r.cloneUrl
   giteeDialog.value = false
+  suggestId()
+}
+
+/** 手动填写仓库地址（GitHub / GitLab / 自建）：清空列表选中项。 */
+function onRepoUrlInput(): void {
+  selectedRepo.value = null
   suggestId()
 }
 
@@ -126,13 +139,20 @@ const lastSuggestedId = ref('')
  * 提交时撞上已登记的 projectId。
  */
 function suggestId() {
-  const name = source.value === 'remote'
-    ? (selectedRepo.value?.fullName.split('/')[1] ?? '')
+  const name = source.value === 'remote' ? remoteRepoName()
     : (selectedDir.value.split(/[\\/]/).filter(Boolean).pop() ?? '')
   const next = applySelection(
     { current: projectId.value, lastSuggested: lastSuggestedId.value }, name)
   projectId.value = next.current
   lastSuggestedId.value = next.lastSuggested
+}
+
+/** 远程仓库名：优先列表选中项，否则从 URL 末段推导（去掉 .git）。 */
+function remoteRepoName(): string {
+  const picked = selectedRepo.value?.fullName.split('/')[1]
+  if (picked) return picked
+  const raw = repoUrlInput.value.trim().replace(/\/+$/, '').replace(/\.git$/i, '')
+  return raw.split(/[/:]/).filter(Boolean).pop() ?? ''
 }
 
 // ---------------------------------------------------------------- 提交与轮询
@@ -156,7 +176,7 @@ async function submit() {
         })
       : await intakeRemote({
           projectId: projectId.value,
-          repoUrl: selectedRepo.value!.cloneUrl,
+          repoUrl: repoUrlInput.value.trim() || selectedRepo.value!.cloneUrl,
           storageMode: 'DIRECT',
           cloneTargetDir: cloneTarget.value
         })
@@ -344,14 +364,16 @@ onUnmounted(() => {
       <!-- Step 1: 表单 -->
       <template v-if="phase === 'FORM'">
         <h1 class="page-title">接入项目</h1>
-        <p class="page-sub">本地目录就地收编（平台只读你的目录），或从 Gitee 选择仓库 clone。</p>
+        <p class="page-sub">
+          本地目录就地收编（平台只读你的目录），或从 Gitee / GitHub / GitLab / 任意 Git 地址 clone。
+        </p>
 
         <div class="tabs">
           <button type="button" class="tab" :class="{ active: source === 'local' }" @click="source = 'local'; suggestId()">
             <el-icon><Folder /></el-icon> 本地目录
           </button>
           <button type="button" class="tab" :class="{ active: source === 'remote' }" @click="source = 'remote'; suggestId()">
-            <el-icon><Connection /></el-icon> Gitee 仓库
+            <el-icon><Connection /></el-icon> 远程仓库
           </button>
         </div>
 
@@ -381,7 +403,19 @@ onUnmounted(() => {
 
           <template v-else>
             <div class="field">
-              <span class="field-label">选择 Gitee 仓库</span>
+              <span class="field-label">仓库地址</span>
+              <el-input
+                v-model="repoUrlInput" class="mono"
+                placeholder="https://github.com/org/repo.git"
+                @input="onRepoUrlInput"
+              />
+              <span class="field-hint">
+                支持 GitHub / GitLab / 自建 Git。私有仓库先在「设置 → 代码仓库」保存访问令牌，
+                 clone 与同步时会按域名自动匹配。
+              </span>
+            </div>
+            <div class="field">
+              <span class="field-label">或从 Gitee 选择仓库</span>
               <div class="dir-pick" @click="openGitee">
                 <el-icon><Connection /></el-icon>
                 <span class="mono" :class="{ placeholder: !selectedRepo }">
@@ -390,7 +424,7 @@ onUnmounted(() => {
                 <span v-if="selectedRepo?.privateRepo" class="git-tag warn">私有</span>
               </div>
               <span v-if="!binding?.bound" class="field-hint warn-text">
-                尚未绑定 Gitee 账号——请先在上方绑定（或配置平台兜底 token）。
+                尚未绑定 Gitee 账号——可先在上方绑定，或直接填写仓库地址。
               </span>
             </div>
             <div class="field">

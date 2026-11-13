@@ -749,3 +749,155 @@ export interface PoliciesView {
 export function listPolicies(): Promise<PoliciesView> {
   return apiFetch('/api/v1/policies')
 }
+
+// ---------------------------------------------------------------- 代码托管（GitHub / GitLab / 自定义）
+
+export type GitHostProvider = 'GITHUB' | 'GITLAB' | 'CUSTOM'
+
+export interface GitHostAccount {
+  id: string
+  provider: GitHostProvider
+  host: string
+  username: string
+  hasToken: boolean
+  tokenMasked: string | null
+  updatedAt: number
+}
+
+export function listGitHosts(): Promise<GitHostAccount[]> {
+  return apiFetch('/api/v1/settings/git-hosts')
+}
+
+/** id 为空 = 新增；同 provider + host 已存在时覆盖。token 留空 = 不修改。 */
+export function saveGitHost(input: {
+  id?: string
+  provider: GitHostProvider
+  host: string
+  username?: string
+  token?: string
+}): Promise<GitHostAccount> {
+  return apiFetch('/api/v1/settings/git-hosts', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function deleteGitHost(id: string): Promise<void> {
+  return apiFetch(`/api/v1/settings/git-hosts/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function testGitHost(id: string): Promise<TestResult & { login?: string }> {
+  return apiFetch(`/api/v1/settings/git-hosts/${encodeURIComponent(id)}/test`, { method: 'POST' })
+}
+
+/** git ls-remote 验证仓库可达（accountId 为空时按 URL host 自动匹配凭据）。 */
+export function testGitRepo(repoUrl: string, accountId?: string): Promise<TestResult & {
+  branchCount?: number
+  branches?: string[]
+}> {
+  return apiFetch('/api/v1/settings/git-hosts/test-repo', {
+    method: 'POST',
+    body: JSON.stringify({ repoUrl, accountId })
+  })
+}
+
+// ---------------------------------------------------------------- MCP
+
+export type McpTransport = 'stdio' | 'http'
+
+export interface McpServer {
+  id: string
+  name: string
+  transport: McpTransport
+  command: string | null
+  args: string[]
+  url: string | null
+  headerNames: string[]
+  enabled: boolean
+  updatedAt: number
+}
+
+export interface McpServerInput {
+  id?: string
+  name: string
+  transport: McpTransport
+  command?: string
+  args?: string
+  url?: string
+  /** 一行一个 Header：Key: Value；留空 = 不修改已保存的请求头 */
+  headers?: string
+  enabled?: boolean
+}
+
+export interface McpTestResult extends TestResult {
+  serverName?: string
+  serverVersion?: string
+  protocolVersion?: string
+}
+
+export function listMcpServers(): Promise<McpServer[]> {
+  return apiFetch('/api/v1/settings/mcp-servers')
+}
+
+export function saveMcpServer(input: McpServerInput): Promise<McpServer> {
+  const { id, ...body } = input
+  const path = id ? `/api/v1/settings/mcp-servers/${encodeURIComponent(id)}` : '/api/v1/settings/mcp-servers'
+  return apiFetch(path, { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) })
+}
+
+export function deleteMcpServer(id: string): Promise<void> {
+  return apiFetch(`/api/v1/settings/mcp-servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function testMcpServer(id: string): Promise<McpTestResult> {
+  return apiFetch(`/api/v1/settings/mcp-servers/${encodeURIComponent(id)}/test`, { method: 'POST' })
+}
+
+export function testMcpDraft(input: McpServerInput): Promise<McpTestResult> {
+  return apiFetch('/api/v1/settings/mcp-servers/test', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+// ---------------------------------------------------------------- Skill
+
+export interface SkillEntry {
+  name: string
+  description: string
+  dir: string
+  fileCount: number
+  updatedAt: number
+}
+
+export interface SkillList {
+  root: string
+  skills: SkillEntry[]
+}
+
+export function listSkills(): Promise<SkillList> {
+  return apiFetch('/api/v1/settings/skills')
+}
+
+export function readSkill(name: string): Promise<{ name: string; content: string }> {
+  return apiFetch(`/api/v1/settings/skills/${encodeURIComponent(name)}`)
+}
+
+export function saveSkill(input: {
+  name: string
+  description: string
+  content: string
+}): Promise<SkillEntry> {
+  return apiFetch('/api/v1/settings/skills', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function importSkill(path: string): Promise<SkillEntry> {
+  return apiFetch('/api/v1/settings/skills/import', {
+    method: 'POST',
+    body: JSON.stringify({ path })
+  })
+}
+
+export function deleteSkill(name: string): Promise<void> {
+  return apiFetch(`/api/v1/settings/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+}
