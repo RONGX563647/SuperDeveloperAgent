@@ -533,6 +533,25 @@ public class GitWorktreeManager {
                 "git push " + name, GIT_TIMEOUT_SECONDS, false, auth);
     }
 
+    /**
+     * 强制推送平台自有的修复分支（仅 {@code agent/bugfix-*}）。
+     *
+     * <p>重试时分支会被 {@code checkout -B} 重置到基线，远端旧提交不再是快进关系；
+     * 该命名空间完全由平台管理，因此允许 force——默认分支不受影响。
+     */
+    public void forcePushBranchTo(Path repoDir, String branch, String remoteUrl, GitAuth auth) {
+        String name = validBranch(branch);
+        if (!name.startsWith("agent/bugfix-")) {
+            throw new GitIntakeException("只允许强制推送修复分支：" + name);
+        }
+        if (remoteUrl == null || remoteUrl.isBlank()) {
+            throw new GitIntakeException("缺少远端仓库地址，无法推送分支 " + name);
+        }
+        run(repoDir, List.of("git", "push", "--quiet", "--force", remoteUrl,
+                "refs/heads/" + name + ":refs/heads/" + name),
+                "git push --force " + name, GIT_TIMEOUT_SECONDS, false, auth);
+    }
+
     private static String validBranch(String branch) {
         String name = branch == null ? "" : branch.trim();
         if (!name.matches("[A-Za-z0-9._/-]+") || name.startsWith("-") || name.contains("..")) {

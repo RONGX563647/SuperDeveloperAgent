@@ -260,6 +260,59 @@ public class GitIssueRemoteClient {
     }
 
     /**
+     * 按源分支查找已打开的 PR / MR，返回网页链接。
+     *
+     * <p>创建 PR 前先查一次、创建失败后再查一次，保证「响应超时/用户重试」时不会重复建 PR。
+     * 查询失败（网络/权限/字段缺失）返回 empty，不阻塞正常的创建流程。
+     */
+    public Optional<String> findPullRequest(Credentials c, String head) {
+        if (c == null || head == null || head.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            String resp;
+            switch (c.provider()) {
+                case "GITEE" -> resp = send("GET", "https://gitee.com/api/v5/repos/" + c.repo()
+                        + "/pulls?state=open&head=" + enc(head) + "&access_token="
+                        + enc(c.token()), headers(), null);
+                case "GITHUB" -> resp = send("GET", "https://api.github.com/repos/" + c.repo()
+                        + "/pulls?state=open&head=" + enc(ownerOf(c.repo()) + ":" + head)
+                        + "&per_page=100", githubHeaders(c.token()), null);
+                case "GITLAB" -> resp = send("GET", gitlabBase(c) + "/projects/" + enc(c.repo())
+                        + "/merge_requests?state=opened&source_branch=" + enc(head)
+                        + "&per_page=100", gitlabHeaders(c.token()), null);
+                default -> {
+                    return Optional.empty();
+                }
+            }
+            JsonNode array = json.readTree(resp);
+            if (array == null || !array.isArray()) {
+                return Optional.empty();
+            }
+            boolean gitlab = "GITLAB".equals(c.provider());
+            for (JsonNode node : array) {
+                String branch = gitlab
+                        ? node.path("source_branch").asText("")
+                        : node.path("head").path("ref").asText("");
+                if (!head.equals(branch)) {
+                    continue;
+                }
+                String url = gitlab
+                        ? node.path("web_url").asText("")
+                        : node.path("html_url").asText("");
+                if (!url.isBlank()) {
+                    return Optional.of(url);
+                }
+            }
+            return Optional.empty();
+        } catch (Exception e) {
+            log.warn("查询已有 PR 失败（{}/{} head={}）：{}", c.provider(), c.repo(), head,
+                    e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * 创建 PR / MR，返回网页链接。
      *
      * <p>只创建、不合并：最终合并必须由人工完成（平台永不自动 merge）。
@@ -433,6 +486,12 @@ public class GitIssueRemoteClient {
     private static boolean typeUnsupported(IllegalStateException e) {
         String message = e.getMessage() == null ? "" : e.getMessage();
         return message.contains("返回 400") || message.contains("返回 422");
+    }
+
+    /** 仓库 owner（GitHub head 过滤需要 {@code owner:branch} 形式）。 */
+    private static String ownerOf(String repo) {
+        int slash = repo == null ? -1 : repo.indexOf('/');
+        return slash <= 0 ? "" : repo.substring(0, slash);
     }
 
     /** 规范化仓库标识：允许粘贴完整 URL 或 owner/repo.git。 */

@@ -1,7 +1,6 @@
 package top.rongx.agent.domain.bugfix;
 
 import java.util.List;
-import top.rongx.agent.domain.patch.CodePatch;
 
 /**
  * 修复分支与 PR 端口。
@@ -11,12 +10,20 @@ import top.rongx.agent.domain.patch.CodePatch;
  */
 public interface BugFixGitPort {
 
+    /**
+     * 尽力同步远端最新代码（fetch）。
+     *
+     * <p>分析前调用，避免用一个过期的本地仓库算出错误的基线；实现失败只应告警，
+     * 不应阻塞自动修复。
+     */
+    void sync(String projectId);
+
     /** 默认分支 HEAD 提交 sha（作为分析与修复的基线）。 */
     String headSha(String projectId);
 
     /** 把文件改动提交到 run.branch，返回新提交 sha。 */
-    String commitFix(BugFixRun run, List<CodePatch.FileEdit> edits, String message);
+    String commitFix(BugFixRun run, List<BugFixEdit> edits, String message);
 
-    /** 推送分支并创建 PR/MR，返回可访问链接。 */
+    /** 推送分支并创建 PR/MR（已存在同分支 PR 时直接返回其链接），返回可访问链接。 */
     String openPullRequest(BugFixRun run, String title, String body);
 }

@@ -13,8 +13,8 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import top.rongx.agent.domain.bugfix.BugFixEdit;
 import top.rongx.agent.domain.bugfix.BugFixRun;
-import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.infra.git.GitWorktreeManager;
 
@@ -36,7 +36,7 @@ class WorkspaceBugFixGitTest {
 
         BugFixRun run = run(base, "agent/bugfix-test001");
         String sha = git.commitFix(run,
-                List.of(new CodePatch.FileEdit("src/main/App.java",
+                List.of(BugFixEdit.full("src/main/App.java",
                         "public class App { public static int value() { return 1; } }")),
                 "fix(bug): 修复空值");
 
@@ -59,11 +59,67 @@ class WorkspaceBugFixGitTest {
         BugFixRun run = run(manager.revParse(repo, "HEAD"), "agent/bugfix-test002");
 
         assertThrows(IllegalArgumentException.class, () -> git.commitFix(run,
-                List.of(new CodePatch.FileEdit("../outside.txt", "x")), "bad"));
+                List.of(BugFixEdit.full("../outside.txt", "x")), "bad"));
         assertThrows(IllegalArgumentException.class, () -> git.commitFix(run,
-                List.of(new CodePatch.FileEdit(".env", "TOKEN=x")), "bad"));
+                List.of(BugFixEdit.full(".env", "TOKEN=x")), "bad"));
         assertThrows(IllegalArgumentException.class, () -> git.commitFix(run,
-                List.of(new CodePatch.FileEdit(".git/config", "x")), "bad"));
+                List.of(BugFixEdit.full(".git/config", "x")), "bad"));
+    }
+
+    @Test
+    void appliesUniqueSearchReplaceAndCreatesNewFiles() throws Exception {
+        Path repo = initRepo();
+        GitWorktreeManager manager = new GitWorktreeManager(temp.resolve("workspace"));
+        WorkspaceBugFixGit git = new WorkspaceBugFixGit(manager, direct(repo), null);
+        BugFixRun run = run(manager.revParse(repo, "HEAD"), "agent/bugfix-test003");
+
+        String sha = git.commitFix(run, List.of(
+                BugFixEdit.replace("src/main/App.java", "return 0;", "return 1;"),
+                BugFixEdit.replace("src/main/New.java", "", "class New {}\n")), "fix: 片段替换");
+
+        assertEquals("public class App { public static int value() { return 1; } }",
+                manager.showFile(repo, sha, "src/main/App.java"));
+        assertEquals("class New {}\n", manager.showFile(repo, sha, "src/main/New.java"));
+    }
+
+    @Test
+    void rejectsMissingOrAmbiguousSnippet() throws Exception {
+        Path repo = initRepo();
+        GitWorktreeManager manager = new GitWorktreeManager(temp.resolve("workspace"));
+        WorkspaceBugFixGit git = new WorkspaceBugFixGit(manager, direct(repo), null);
+        BugFixRun run = run(manager.revParse(repo, "HEAD"), "agent/bugfix-test004");
+
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> git.commitFix(run,
+                        List.of(BugFixEdit.replace("src/main/App.java", "not-found", "x")), "bad"));
+        assertTrue(missing.getMessage().contains("未在基线文件中出现"), missing.getMessage());
+
+        Files.writeString(repo.resolve("src/main/App.java"),
+                "class App { int a() { return 0; } int b() { return 0; } }",
+                StandardCharsets.UTF_8);
+        exec(repo, "git", "add", "-A");
+        exec(repo, "git", "-c", "user.name=agent", "-c", "user.email=agent@local",
+                "commit", "--quiet", "-m", "dup");
+        String base = manager.revParse(repo, "HEAD");
+        BugFixRun dupRun = run(base, "agent/bugfix-test005");
+
+        IllegalArgumentException ambiguous = assertThrows(IllegalArgumentException.class,
+                () -> git.commitFix(dupRun,
+                        List.of(BugFixEdit.replace("src/main/App.java", "return 0;", "return 1;")),
+                        "bad"));
+        assertTrue(ambiguous.getMessage().contains("出现多次"), ambiguous.getMessage());
+    }
+
+    @Test
+    void rejectsPlainDirectoryNestedInAnotherRepo() throws Exception {
+        Path repo = initRepo();
+        Path plain = Files.createDirectories(repo.resolve("sub/plain"));
+        GitWorktreeManager manager = new GitWorktreeManager(temp.resolve("workspace"));
+        WorkspaceBugFixGit git = new WorkspaceBugFixGit(manager, direct(plain), null);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> git.headSha("p1"));
+        assertTrue(error.getMessage().contains("不是 git 仓库根目录"), error.getMessage());
     }
 
     private Path initRepo() throws IOException, InterruptedException {

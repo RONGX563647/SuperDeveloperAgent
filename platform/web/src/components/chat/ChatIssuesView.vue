@@ -95,6 +95,68 @@ function fixStatusLabel(status?: string): string {
   return status ? (FIX_STATUS_LABEL[status] ?? status) : ''
 }
 
+/** 当前阶段序号（1/7），DONE 时显示 7/7。 */
+const fixStageNo = computed(() => {
+  const run = fixRun.value
+  if (!run) return ''
+  if (run.stage === 'DONE') return `${FIX_STAGES.length}/${FIX_STAGES.length}`
+  return `${stageIndex(run.stage) + 1}/${FIX_STAGES.length}`
+})
+
+const fixStageLabel = computed(() => {
+  const run = fixRun.value
+  if (!run) return ''
+  if (run.stage === 'DONE') return '全部完成'
+  return FIX_STAGES.find((s) => s.key === run.stage)?.label ?? run.stage
+})
+
+/** 失败/阻塞时给出可操作的建议，而不是只显示一行错误。 */
+const fixHint = computed(() => {
+  const run = fixRun.value
+  if (!run) return ''
+  if (run.status === 'BLOCKED') {
+    const hints: Record<string, string> = {
+      REPRO_DEPLOY: '检查策略里的测试环境与「已确认」的环境绑定，补齐后点重试。',
+      REPRODUCE: '测试环境未复现或证据不足；请补充复现步骤/日志，人工确认后再重试。',
+      FIX: '补丁未通过校验（片段不唯一或文件已变更）；可重试让 Agent 重新分析，或人工检查保留的修复分支。',
+      VERIFY_DEPLOY: '修复版本部署失败；查看时间线错误并检查环境与构建日志。',
+      VERIFY: '验证证据不足或置信度不够；请人工确认测试环境状态后再重试。',
+      PULL_REQUEST: 'PR 未创建：确认已绑定 Git 账号与仓库权限，修复分支已保留。',
+    }
+    return hints[run.stage] ?? '前置条件不满足，补齐后点重试。'
+  }
+  if (run.status === 'FAILED') {
+    return '执行失败，可点重试从当前阶段继续；连续失败请人工介入查看时间线。'
+  }
+  if (run.status === 'CANCELLED') return '已取消；点重试会从当前阶段继续。'
+  if (run.status === 'QUEUED') return '已排队；同一项目的修复会串行执行，避免同时部署测试环境。'
+  return ''
+})
+
+async function confirmCancelFix(row: GitIssueRow): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '取消后正在执行的阶段结果会被丢弃，可从当前阶段重试继续。',
+      '取消自动修复',
+      { type: 'warning', confirmButtonText: '取消运行', cancelButtonText: '继续运行' },
+    )
+  } catch {
+    return
+  }
+  await cancelFix(row)
+}
+
+async function copyBranch(): Promise<void> {
+  const branch = fixRun.value?.branch
+  if (!branch) return
+  try {
+    await navigator.clipboard.writeText(branch)
+    ElMessage.success('分支名已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择：' + branch)
+  }
+}
+
 async function loadBugFix(issueId: string): Promise<void> {
   fixLoading.value = true
   try {
@@ -855,6 +917,9 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                   <span v-if="fixRun" class="fix-status" :class="fixRun.status.toLowerCase()">
                     {{ fixStatusLabel(fixRun.status) }}
                   </span>
+                  <span v-if="fixRun" class="block-sub mono">
+                    阶段 {{ fixStageNo }} · {{ fixStageLabel }}
+                  </span>
                   <span v-else class="block-sub">尚未运行</span>
                 </div>
 
@@ -885,10 +950,16 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                 <template v-else>
                   <div class="fix-meta mono">
                     <span v-if="fixRun.branch">{{ fixRun.branch }}</span>
+                    <button
+                      v-if="fixRun.branch" type="button" class="fix-copy"
+                      title="复制修复分支名" @click="copyBranch"
+                    >
+                      复制
+                    </button>
                     <span v-if="fixRun.baseSha">base {{ fixRun.baseSha.slice(0, 8) }}</span>
                     <span v-if="fixRun.fixSha">fix {{ fixRun.fixSha.slice(0, 8) }}</span>
                     <span v-if="fixRun.env">env {{ fixRun.env }}</span>
-                    <span v-if="fixRun.attempt">第 {{ fixRun.attempt + 1 }} 次</span>
+                    <span v-if="fixRun.attempt">第 {{ fixRun.attempt + 1 }} 次尝试</span>
                   </div>
 
                   <ol class="fix-timeline">
@@ -898,13 +969,16 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     >
                       <span class="fix-dot" />
                       <div class="fix-step-body">
-                        <div class="fix-step-title">{{ stage.label }}</div>
+                        <div class="fix-step-title">
+                          {{ index + 1 }}. {{ stage.label }}
+                        </div>
                         <div class="fix-step-hint">{{ stage.hint }}</div>
                       </div>
                     </li>
                   </ol>
 
                   <div v-if="fixRun.message" class="fix-message">{{ fixRun.message }}</div>
+                  <div v-if="fixHint" class="fix-hint">{{ fixHint }}</div>
 
                   <details v-if="fixRun.analysis" class="fix-fold">
                     <summary>分析结论</summary>
@@ -935,7 +1009,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     <span v-else class="fix-pr-hint">修复分支不会自动合并，PR 创建后等待人工确认。</span>
                     <el-button
                       v-if="fixActive" size="small"
-                      :loading="fixBusy === 'cancel'" @click="cancelFix(row)"
+                      :loading="fixBusy === 'cancel'" @click="confirmCancelFix(row)"
                     >
                       取消
                     </el-button>
@@ -1796,6 +1870,29 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--ink-muted);
   background: var(--surface-sunken);
   border-radius: 7px;
+}
+.fix-hint {
+  padding: 7px 10px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--warn, #d19a00);
+  background: rgba(209, 154, 0, 0.08);
+  border-radius: 7px;
+}
+.fix-copy {
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+}
+.fix-copy:hover {
+  color: var(--ink);
+  border-color: var(--line);
 }
 .fix-fold {
   font-size: 11px;
