@@ -7,10 +7,11 @@ import {
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
   listGitIssueComments, listGitIssues, reopenGitIssue, syncGitIssue, updateGitIssue,
-  type GitIssueCommentRow, type GitIssueProvider, type GitIssueRow,
+  type GitIssueCommentRow, type GitIssueRow,
 } from '../../api/issues'
 import MarkdownView from './MarkdownView.vue'
 import { appStore } from '../../stores/app'
+import { listProjects, type ProjectRow } from '../../api/project'
 
 /**
  * 对话页「任务」Tab：Gitee / GitHub / GitLab 双向同步的 Issue 工单。
@@ -25,7 +26,6 @@ const loading = ref(false)
 const error = ref('')
 const keyword = ref('')
 const stateFilter = ref('')
-const providerFilter = ref('')
 const activeId = ref('')
 const active = computed(() => items.value.find((i) => i.id === activeId.value) ?? null)
 
@@ -43,7 +43,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 }
 
 function providerLabel(provider: string): string {
-  return PROVIDER_LABEL[provider] ?? (provider || '本地')
+  return PROVIDER_LABEL[provider] ?? (provider || 'Git')
 }
 
 function syncLabel(row: GitIssueRow): string {
@@ -72,7 +72,6 @@ async function load(silent = false): Promise<void> {
     const rows = await listGitIssues({
       keyword: keyword.value.trim() || undefined,
       state: stateFilter.value || undefined,
-      provider: providerFilter.value || undefined,
     })
     if (seq !== loadSeq) return
     items.value = rows
@@ -91,7 +90,7 @@ watch(keyword, () => {
   clearTimeout(keywordTimer)
   keywordTimer = setTimeout(() => void load(), 260)
 })
-watch([stateFilter, providerFilter], () => void load())
+watch(stateFilter, () => void load())
 
 async function loadComments(): Promise<void> {
   if (!activeId.value) {
@@ -114,50 +113,84 @@ watch(activeId, () => {
   void loadComments()
 })
 
-onMounted(() => void load())
+onMounted(() => {
+  void load()
+  void listProjects().then((rows) => { projects.value = rows }).catch(() => {})
+})
 
-// ---------------------------------------------------------------- 新建 / 编辑
+// ---------------------------------------------------------------- 新建 / 编辑（页内联表单）
 
-const dialogOpen = ref(false)
+const editorOpen = ref(false)
 const editingId = ref('')
 const saving = ref(false)
-const form = reactive<{
-  title: string
-  body: string
-  provider: GitIssueProvider
-  repo: string
-  labels: string
-}>({
-  title: '', body: '', provider: '', repo: '', labels: '',
+const form = reactive({ title: '', body: '', labels: '' })
+
+const stateOptions = [
+  { label: '全部', value: '' },
+  { label: '待处理', value: 'OPEN' },
+  { label: '已完成', value: 'CLOSED' },
+]
+
+/** 项目列表：仅用于展示任务会同步到哪个仓库，平台由托管地址自动判断。 */
+const projects = ref<ProjectRow[]>([])
+const currentProject = computed(
+  () => projects.value.find((p) => p.id === appStore.projectId) ?? null)
+
+function providerOfUrl(url?: string | null): string {
+  const text = (url ?? '').toLowerCase()
+  if (text.includes('gitee')) return 'GITEE'
+  if (text.includes('gitlab')) return 'GITLAB'
+  if (text.includes('github')) return 'GITHUB'
+  return ''
+}
+
+/** https://host/owner/repo(.git) 或 git@host:owner/repo.git → owner/repo */
+function repoOfUrl(url?: string | null): string {
+  if (!url) return ''
+  return url
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/^https?:\/\/[^/]+\//, '')
+    .replace(/\.git$/, '')
+    .replace(/\/+$/, '')
+}
+
+/** 同步目标：编辑已绑定任务用任务自己的仓库；新建任务跟随当前项目托管仓库。 */
+const editorTarget = computed(() => {
+  const row = editingId.value ? active.value : null
+  if (row && isBound(row)) {
+    return { provider: row.provider, repo: row.repo }
+  }
+  const url = currentProject.value?.repoUrl
+  return { provider: providerOfUrl(url), repo: repoOfUrl(url) }
 })
 
 function openCreate(): void {
   editingId.value = ''
-  Object.assign(form, { title: '', body: '', provider: '', repo: '', labels: '' })
-  dialogOpen.value = true
+  Object.assign(form, { title: '', body: '', labels: '' })
+  editorOpen.value = true
 }
 
 function openEdit(): void {
   const row = active.value
   if (!row) return
   editingId.value = row.id
-  Object.assign(form, {
-    title: row.title,
-    body: row.body,
-    provider: row.provider,
-    repo: row.repo,
-    labels: row.labels,
-  })
-  dialogOpen.value = true
+  Object.assign(form, { title: row.title, body: row.body, labels: row.labels })
+  editorOpen.value = true
+}
+
+function closeEditor(): void {
+  editorOpen.value = false
+  editingId.value = ''
+}
+
+function selectRow(id: string): void {
+  activeId.value = id
+  closeEditor()
 }
 
 async function submit(): Promise<void> {
   if (!form.title.trim()) {
     ElMessage.warning('请填写任务标题')
-    return
-  }
-  if (form.provider && !form.repo.trim()) {
-    ElMessage.warning('选择 Git 平台后需要填写仓库（owner/repo）')
     return
   }
   saving.value = true
@@ -166,12 +199,10 @@ async function submit(): Promise<void> {
       ? items.value.find((i) => i.id === editingId.value)
       : undefined
     const payload = {
-      // 关联当前项目：Git 评论里的指令才能唤醒项目上下文里的 Agent
-      projectId: editingRow?.projectId || appStore.projectId,
+      // 新建任务关联当前项目；编辑保留原归属，避免把已绑定任务换到别的仓库
+      projectId: editingRow ? editingRow.projectId : appStore.projectId,
       title: form.title.trim(),
       body: form.body,
-      provider: form.provider,
-      repo: form.provider ? form.repo.trim() : '',
       labels: form.labels.trim(),
       state: editingRow?.state ?? ('OPEN' as const),
     }
@@ -183,7 +214,7 @@ async function submit(): Promise<void> {
     } else {
       ElMessage.success(editingId.value ? '任务已更新' : '任务已创建')
     }
-    dialogOpen.value = false
+    closeEditor()
     await load(true)
     activeId.value = row.id
   } catch (e) {
@@ -310,7 +341,7 @@ function isBound(row: GitIssueRow): boolean {
         <div class="issues-head-main">
           <h1 class="issues-title">任务</h1>
           <p class="issues-desc">
-            Gitee / GitHub / GitLab 双向同步的 Issue 工单；Agent 可读取并操作同一批任务。
+            项目托管的 Git Issue 自动双向同步；Agent 可读取并操作同一批任务。
           </p>
         </div>
         <div class="issues-head-side">
@@ -333,18 +364,14 @@ function isBound(row: GitIssueRow): boolean {
             <el-input v-model="keyword" size="default" clearable placeholder="搜索标题 / 描述 / 仓库">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
-            <div class="filter-row">
-              <el-select v-model="stateFilter" size="small" placeholder="状态">
-                <el-option label="全部状态" value="" />
-                <el-option label="待处理" value="OPEN" />
-                <el-option label="已完成" value="CLOSED" />
-              </el-select>
-              <el-select v-model="providerFilter" size="small" placeholder="平台">
-                <el-option label="全部平台" value="" />
-                <el-option label="Gitee" value="GITEE" />
-                <el-option label="GitHub" value="GITHUB" />
-                <el-option label="GitLab" value="GITLAB" />
-              </el-select>
+            <div class="state-tabs">
+              <button
+                v-for="opt in stateOptions" :key="opt.value" type="button"
+                class="state-tab" :class="{ active: stateFilter === opt.value }"
+                @click="stateFilter = opt.value"
+              >
+                {{ opt.label }}
+              </button>
             </div>
           </div>
 
@@ -362,13 +389,12 @@ function isBound(row: GitIssueRow): boolean {
               v-for="row in items" :key="row.id"
               type="button" class="issue-item"
               :class="{ active: activeId === row.id, closed: row.state === 'CLOSED' }"
-              @click="activeId = row.id"
+              @click="selectRow(row.id)"
             >
               <span class="state-dot" :class="row.state.toLowerCase()" />
               <span class="item-main">
                 <span class="item-title">{{ row.title }}</span>
                 <span class="item-meta">
-                  <span class="item-provider">{{ providerLabel(row.provider) }}</span>
                   <span v-if="isBound(row)" class="mono item-remote">
                     {{ row.repo }}#{{ row.number }}
                   </span>
@@ -388,14 +414,63 @@ function isBound(row: GitIssueRow): boolean {
         </aside>
 
         <section class="issue-detail">
-          <template v-if="active">
+          <div v-if="editorOpen" class="issue-editor">
+            <div class="editor-head">
+              <h2 class="editor-title">{{ editingId ? '编辑任务' : '新建任务' }}</h2>
+              <p class="editor-desc">
+                {{ editingId
+                  ? '修改后会同步到已绑定的 Git Issue；Agent 也能读取并操作这条任务。'
+                  : '保存后自动同步到项目托管的 Git 仓库；Agent 也能读取并操作这条任务。' }}
+              </p>
+            </div>
+
+            <div class="editor-form">
+              <div class="editor-field">
+                <span class="editor-label">标题</span>
+                <el-input
+                  v-model="form.title" maxlength="200" show-word-limit
+                  placeholder="一句话描述问题"
+                />
+              </div>
+              <div class="editor-field">
+                <span class="editor-label">描述</span>
+                <el-input
+                  v-model="form.body" type="textarea" :rows="7" resize="none"
+                  placeholder="补充背景、复现步骤或期望结果（支持 Markdown）"
+                />
+              </div>
+              <div class="editor-field">
+                <span class="editor-label">标签</span>
+                <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
+              </div>
+
+              <div class="editor-target">
+                <span class="target-icon"><el-icon><Link /></el-icon></span>
+                <span v-if="editorTarget.repo" class="target-text">
+                  同步到 {{ providerLabel(editorTarget.provider) }}
+                  <span class="mono target-repo">{{ editorTarget.repo }}</span>
+                </span>
+                <span v-else class="target-text muted">
+                  当前项目未关联 Git 仓库，任务仅保存在平台，Agent 仍可操作
+                </span>
+              </div>
+            </div>
+
+            <div class="editor-foot">
+              <el-button @click="closeEditor">取消</el-button>
+              <el-button type="primary" :loading="saving" @click="submit">
+                {{ editingId ? '保存' : '创建任务' }}
+              </el-button>
+            </div>
+          </div>
+
+          <template v-else-if="active">
             <div class="detail-hero">
               <div class="hero-main">
                 <div class="hero-eyebrow">
                   <span class="state-pill" :class="active.state.toLowerCase()">
                     {{ active.state === 'OPEN' ? '待处理' : '已完成' }}
                   </span>
-                  <span class="provider-pill">{{ providerLabel(active.provider) }}</span>
                   <a
                     v-if="isBound(active)" class="hero-link mono"
                     :href="active.url" target="_blank" rel="noreferrer"
@@ -507,47 +582,6 @@ function isBound(row: GitIssueRow): boolean {
         </section>
       </div>
     </div>
-
-    <el-dialog
-      v-model="dialogOpen" :title="editingId ? '编辑任务' : '新建任务'"
-      width="560px" destroy-on-close
-    >
-      <el-form label-position="top" @submit.prevent>
-        <el-form-item label="标题" required>
-          <el-input v-model="form.title" maxlength="200" show-word-limit placeholder="一句话描述问题" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input
-            v-model="form.body" type="textarea" :rows="5" resize="none"
-            placeholder="补充背景、复现步骤或期望结果（支持 Markdown）"
-          />
-        </el-form-item>
-        <div class="form-row">
-          <el-form-item label="同步到 Git">
-            <el-select v-model="form.provider" placeholder="仅建本地任务">
-              <el-option label="仅本地（不同步）" value="" />
-              <el-option label="Gitee" value="GITEE" />
-              <el-option label="GitHub" value="GITHUB" />
-              <el-option label="GitLab" value="GITLAB" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="仓库">
-            <el-input
-              v-model="form.repo" :disabled="!form.provider" placeholder="owner/repo"
-            />
-          </el-form-item>
-        </div>
-        <el-form-item label="标签">
-          <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogOpen = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submit">
-          {{ editingId ? '保存' : '创建' }}
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -652,10 +686,34 @@ function isBound(row: GitIssueRow): boolean {
   padding: 11px 10px;
   border-bottom: 1px solid var(--line-soft);
 }
-.filter-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+.state-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.state-tab {
+  flex: 1;
+  padding: 5px 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.state-tab:hover {
+  color: var(--ink);
+}
+.state-tab.active {
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
 }
 .issue-scroll {
   display: flex;
@@ -749,15 +807,6 @@ function isBound(row: GitIssueRow): boolean {
   font-size: 10.5px;
   color: var(--ink-faint);
 }
-.item-provider {
-  flex: none;
-  padding: 0 5px;
-  font-size: 9.5px;
-  line-height: 15px;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: 4px;
-}
 .item-remote {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -795,6 +844,86 @@ function isBound(row: GitIssueRow): boolean {
   color: var(--ink-muted);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-pill);
+}
+
+/* 页内新建 / 编辑 */
+.issue-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 720px;
+}
+.editor-head {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.editor-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.editor-desc {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink-muted);
+}
+.editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.editor-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.editor-target {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 11px 13px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+}
+.target-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink-faint);
+}
+.target-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+}
+.target-text.muted {
+  color: var(--ink-faint);
+}
+.target-repo {
+  padding: 1px 6px;
+  font-size: 10.5px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+}
+.editor-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 2px;
 }
 
 /* 右栏 */
@@ -837,13 +966,6 @@ function isBound(row: GitIssueRow): boolean {
 .state-pill.closed {
   color: var(--ok-ink, #2f7d4f);
   background: var(--ok-soft, #e8f5ec);
-}
-.provider-pill {
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--ink-muted);
-  text-transform: uppercase;
 }
 .hero-link {
   display: inline-flex;

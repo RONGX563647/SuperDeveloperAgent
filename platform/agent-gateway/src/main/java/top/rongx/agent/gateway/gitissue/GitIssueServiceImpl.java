@@ -3,6 +3,8 @@ package top.rongx.agent.gateway.gitissue;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,8 @@ import top.rongx.agent.domain.gitissue.GitIssueIntegration;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
 import top.rongx.agent.domain.gitissue.GitIssueRepository;
 import top.rongx.agent.domain.gitissue.GitIssueService;
+import top.rongx.agent.domain.port.ProjectRepository;
+import top.rongx.agent.domain.project.Project;
 
 /**
  * Issue 任务服务实现：本地 CRUD + 按集成配置把变更推送到 Git。
@@ -27,13 +31,16 @@ public class GitIssueServiceImpl implements GitIssueService {
     private final GitIssueRepository issues;
     private final GitIssueIntegrationRepository integrations;
     private final GitIssueRemoteClient remote;
+    private final ProjectRepository projects;
 
     public GitIssueServiceImpl(GitIssueRepository issues,
                                GitIssueIntegrationRepository integrations,
-                               GitIssueRemoteClient remote) {
+                               GitIssueRemoteClient remote,
+                               ProjectRepository projects) {
         this.issues = issues;
         this.integrations = integrations;
         this.remote = remote;
+        this.projects = projects;
     }
 
     @Override
@@ -52,15 +59,17 @@ public class GitIssueServiceImpl implements GitIssueService {
             throw new IllegalArgumentException("任务标题不能为空");
         }
         long now = System.currentTimeMillis();
-        String repo = GitIssueRemoteClient.cleanRepo(draft.repo());
-        GitIssue issue = new GitIssue(newId("task"), userId, draft.projectId(), draft.provider(),
-                repo, "", draft.title(), draft.body(), draft.state(), draft.labels(), "",
-                "PLATFORM", "LOCAL", "", draft.assignee(), now, now);
-        if (shouldPush(draft.provider(), repo)) {
+        // 任务归属项目时自动使用项目托管的仓库，不再让用户手选平台/仓库
+        GitIssue.Draft resolved = resolveRemote(draft, null);
+        String repo = GitIssueRemoteClient.cleanRepo(resolved.repo());
+        GitIssue issue = new GitIssue(newId("task"), userId, resolved.projectId(), resolved.provider(),
+                repo, "", resolved.title(), resolved.body(), resolved.state(), resolved.labels(), "",
+                "PLATFORM", "LOCAL", "", resolved.assignee(), now, now);
+        if (shouldPush(resolved.provider(), repo)) {
             issue = pushCreate(issue, userId);
-        } else if (!draft.provider().isBlank() && !repo.isBlank()) {
+        } else if (!resolved.provider().isBlank() && !repo.isBlank()) {
             issue = copy(issue, "", "", issue.state(), "LOCAL",
-                    "未启用 " + draft.provider() + " Issue 同步配置", "PLATFORM");
+                    "未启用 " + resolved.provider() + " Issue 同步配置", "PLATFORM");
         }
         return issues.save(issue);
     }
@@ -71,16 +80,16 @@ public class GitIssueServiceImpl implements GitIssueService {
         if (draft.title().isBlank()) {
             throw new IllegalArgumentException("任务标题不能为空");
         }
-        String provider = draft.provider().isBlank() ? current.provider() : draft.provider();
+        GitIssue.Draft resolved = resolveRemote(draft, current);
+        String provider = resolved.provider().isBlank() ? current.provider() : resolved.provider();
         String repo = GitIssueRemoteClient.cleanRepo(
-                draft.repo().isBlank() ? current.repo() : draft.repo());
+                resolved.repo().isBlank() ? current.repo() : resolved.repo());
         boolean repoChanged = !provider.equalsIgnoreCase(current.provider())
                 || !repo.equalsIgnoreCase(current.repo());
         String number = repoChanged ? "" : current.number();
         String url = repoChanged ? "" : current.url();
         long now = System.currentTimeMillis();
-        GitIssue updated = new GitIssue(current.id(), current.userId(),
-                draft.projectId().isBlank() ? current.projectId() : draft.projectId(),
+        GitIssue updated = new GitIssue(current.id(), current.userId(), resolved.projectId(),
                 provider, repo, number, draft.title(), draft.body(), draft.state(),
                 draft.labels(), url, "PLATFORM", repoChanged ? "LOCAL" : current.syncStatus(),
                 repoChanged ? "" : current.syncError(),
@@ -157,6 +166,58 @@ public class GitIssueServiceImpl implements GitIssueService {
     @Override
     public long openCount(String userId) {
         return issues.countOpen(userId);
+    }
+
+    // ---------------------------------------------------------------- 仓库解析
+
+    /**
+     * 解析任务对应的 Git 仓库：显式指定优先，否则取项目托管仓库。
+     * 项目第一次关联或换绑时自动推导 provider / owner/repo，用户无需再选平台。
+     */
+    private GitIssue.Draft resolveRemote(GitIssue.Draft draft, GitIssue current) {
+        String projectId = !draft.projectId().isBlank()
+                ? draft.projectId()
+                : (current == null ? "" : current.projectId());
+        boolean projectChanged = current == null || !Objects.equals(projectId, current.projectId());
+        boolean repoMissing = draft.provider().isBlank() && draft.repo().isBlank();
+        // 只有项目新绑定、或本地任务还没绑仓库时才自动推导；已有绑定保持不变
+        boolean needDerive = repoMissing && !projectId.isBlank()
+                && (projectChanged || current == null || current.provider().isBlank());
+        if (!needDerive) {
+            return new GitIssue.Draft(projectId, draft.provider(),
+                    GitIssueRemoteClient.cleanRepo(draft.repo()), draft.title(), draft.body(),
+                    draft.state(), draft.labels(), draft.assignee());
+        }
+        return projects.findById(projectId)
+                .filter(p -> p.repoUrl() != null && !p.repoUrl().isBlank())
+                .map(p -> new GitIssue.Draft(projectId, providerOf(p),
+                        GitIssueRemoteClient.cleanRepo(p.repoUrl()), draft.title(), draft.body(),
+                        draft.state(), draft.labels(), draft.assignee()))
+                .filter(d -> !d.provider().isBlank())
+                .orElseGet(() -> new GitIssue.Draft(projectId, draft.provider(),
+                        GitIssueRemoteClient.cleanRepo(draft.repo()), draft.title(), draft.body(),
+                        draft.state(), draft.labels(), draft.assignee()));
+    }
+
+    private static String providerOf(Project project) {
+        String type = project.repoType() == null ? "" : project.repoType().toUpperCase(Locale.ROOT);
+        if (type.contains("GITEE")) {
+            return "GITEE";
+        }
+        if (type.contains("GITLAB")) {
+            return "GITLAB";
+        }
+        if (type.contains("GITHUB")) {
+            return "GITHUB";
+        }
+        String url = project.repoUrl() == null ? "" : project.repoUrl().toLowerCase(Locale.ROOT);
+        if (url.contains("gitee.com")) {
+            return "GITEE";
+        }
+        if (url.contains("gitlab")) {
+            return "GITLAB";
+        }
+        return url.contains("github") ? "GITHUB" : "";
     }
 
     // ---------------------------------------------------------------- 同步
