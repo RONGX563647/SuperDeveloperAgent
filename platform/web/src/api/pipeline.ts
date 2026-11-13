@@ -246,8 +246,32 @@ export function artifactFilePath(runId: string, index: number): string {
   return `/api/v1/ci/runs/${encodeURIComponent(runId)}/artifacts/${index}/file`
 }
 
-/** 删除一条构建历史（只删记录，不动仓库与镜像）；运行中的会被后端拒绝。 */
+/** 删除一条构建历史（记录 + 该次归档的文件产物）；运行中的会被后端拒绝。 */
 export function deleteHistory(runId: string): Promise<{ deleted: boolean, message?: string }> {
   return apiFetch<{ deleted: boolean, message?: string }>(
     `/api/v1/ci/history/${encodeURIComponent(runId)}`, { method: 'DELETE' })
+}
+
+/** 一个环境下的镜像版本（来自成功运行登记的 image 产物）。 */
+export interface ImageVersionView {
+  tag: string
+  digest: string
+  sizeBytes: number
+  version: string
+  runId: string
+  gitSha: string
+  createdAt: number
+  /** 最近一次成功发布（当前版本）。 */
+  current: boolean
+  /** 上一版（回滚目标）。 */
+  previous: boolean
+}
+
+/** 镜像版本列表：current / previous / 历史，按发布时间倒序。 */
+export function deployImages(
+  projectId: string,
+  env: string
+): Promise<{ projectId: string, env: string, images: ImageVersionView[] }> {
+  const q = new URLSearchParams({ projectId, env })
+  return apiFetch(`/api/v1/ci/deploy/images?${q}`)
 }

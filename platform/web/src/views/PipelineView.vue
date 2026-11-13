@@ -12,9 +12,9 @@ import HistoryList from '../components/pipeline/HistoryList.vue'
 import StageTimeline from '../components/pipeline/StageTimeline.vue'
 import RunLog from '../components/pipeline/RunLog.vue'
 import {
-  artifactFilePath, deleteHistory, dryRunPipeline, getHistory, getRun, isTerminalStatus,
+  artifactFilePath, deleteHistory, deployImages, dryRunPipeline, getHistory, getRun, isTerminalStatus,
   listPipelines, previewPipeline, retryStage, stopLocalDeploy, triggerPipeline,
-  type ArtifactView, type DryRunReportView, type HistoryItem, type PreviewStage,
+  type ArtifactView, type DryRunReportView, type HistoryItem, type ImageVersionView, type PreviewStage,
   type RunView, type StageView,
 } from '../api/pipeline'
 import { apiBlob } from '../api/http'
@@ -96,6 +96,8 @@ const action = ref<'release' | 'verify'>('release')
 
 const envRows = ref<EnvStatus[]>([])
 const envsLoading = ref(false)
+/** 当前环境的镜像版本（current / previous / 历史），来自成功运行的 image 产物。 */
+const imageVersions = ref<ImageVersionView[]>([])
 
 const history = ref<HistoryItem[]>([])
 const historyLoading = ref(false)
@@ -125,7 +127,7 @@ const activeMeta = ref<{ env: string, pipelineId: string, sha: string } | null>(
 const {
   run, runId, loading: runLoading, errorText, startedAt, running,
   open: openRun, attach, cancel, clear,
-} = useRunTracker({ onFinished: () => { void loadHistory(); void loadEnvs() } })
+} = useRunTracker({ onFinished: () => { void loadHistory(); void loadEnvs(); void loadImages() } })
 
 /** 有运行被打开/触发时，手机端自动切到「运行详情」，避免用户再多点一次。 */
 watch(runId, (id) => {
@@ -309,6 +311,65 @@ const artifactDiff = computed<{ added: ArtifactView[], removed: ArtifactView[] }
   }
 })
 
+/** 产物面板按目录分组：同目录只显示一次目录，行内只显示文件名，避免一屏相同长路径。 */
+interface ArtifactGroup {
+  dir: string
+  items: Array<{ a: ArtifactView, index: number }>
+}
+
+const artifactGroups = computed<ArtifactGroup[]>(() => {
+  const groups = new Map<string, Array<{ a: ArtifactView, index: number }>>()
+  ;(run.value?.artifacts ?? []).forEach((a, index) => {
+    const parts = a.ref.replace(/\\/g, '/').split('/')
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+    const key = `${a.kind}::${dir}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)?.push({ a, index })
+  })
+  return [...groups.entries()].map(([key, items]) => ({
+    dir: key.slice(key.indexOf('::') + 2),
+    items
+  }))
+})
+
+/** 文件名词：产物行主文本（完整路径仍在 title / 复制里）。 */
+function fileName(ref: string): string {
+  const parts = ref.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || ref
+}
+
+/** 目录只留最后两段，前面用 … 省略（完整目录在 title 里）。 */
+function shortDir(dir: string): string {
+  const parts = dir.split('/').filter(Boolean)
+  return parts.length <= 2 ? dir : `…/${parts.slice(-2).join('/')}`
+}
+
+/** verify 运行只记录路径与摘要，文件没有归档，下载按钮应隐藏。 */
+function isArchived(a: ArtifactView): boolean {
+  return a.meta?.archived !== 'false'
+}
+
+/** 镜像版本徽标文案。 */
+function imageBadge(img: ImageVersionView): string {
+  if (img.current) return '当前'
+  if (img.previous) return '上一版'
+  return '历史'
+}
+
+function imageBadgeClass(img: ImageVersionView): string {
+  if (img.current) return 'is-current'
+  if (img.previous) return 'is-previous'
+  return ''
+}
+
+/** 版本时间：月-日 时:分（镜像谱系只需要相对顺序，不需要秒）。 */
+function formatClock(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 /** dev 固定本机运行，停止入口始终可见（不依赖当前选中的部署方式）。 */
 const canStopLocal = computed(() => env.value === 'dev')
 
@@ -410,6 +471,16 @@ async function loadHistory(reset = true, silent = false): Promise<void> {
 
 function loadMoreHistory(): void {
   void loadHistory(false)
+}
+
+/** 镜像版本列表：读失败只清空，不影响主流程。 */
+async function loadImages(): Promise<void> {
+  try {
+    const res = await deployImages(projectId.value, env.value)
+    imageVersions.value = res.images
+  } catch {
+    imageVersions.value = []
+  }
 }
 
 async function loadProjects(): Promise<void> {
@@ -800,7 +871,7 @@ watch(running, (value) => {
 watch(projectId, () => {
   sha.value = ''
   void Promise.all([
-    loadPipelines(), loadHistory(), loadEnvs(), loadCommits(),
+    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
   ]).then(() => loadPreview())
 })
 
@@ -815,6 +886,7 @@ watch(env, () => {
   choosePipeline()
   void loadEnvs()
   void loadHistory()
+  void loadImages()
   void loadPreview()
 })
 
@@ -823,7 +895,7 @@ onMounted(async () => {
   if (fromQuery) appStore.projectId = fromQuery
   await loadProjects()
   await Promise.all([
-    loadPipelines(), loadHistory(), loadEnvs(), loadCommits(),
+    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
   ])
   await loadPreview()
   historyTimer = setInterval(() => {
@@ -1102,44 +1174,75 @@ async function copyDigest(digest: string): Promise<void> {
 
             <section v-if="run?.artifacts.length" class="artifact-panel">
               <h3 class="ap-title">产物 <span class="ap-count">{{ run.artifacts.length }}</span></h3>
-              <template v-for="(a, i) in run.artifacts" :key="`${a.kind}-${a.ref}-${i}`">
-                <div class="artifact-row">
-                  <span class="art-kind">{{ a.kind }}</span>
-                  <code class="art-ref mono" :title="a.ref" @click="copyText(a.ref, '产物地址')">{{ a.ref }}</code>
-                  <span class="art-size">{{ formatBytes(a.sizeBytes) }}</span>
-                  <button
-                    type="button" class="art-digest mono"
-                    :title="a.digest ? `点击复制 ${a.digest}` : '无摘要'"
-                    @click="copyDigest(a.digest)"
-                  >
-                    {{ shortDigest(a.digest) }}
-                  </button>
-                  <span class="art-actions">
-                    <button
-                      v-if="a.kind === 'file'" type="button" class="art-act"
-                      title="下载到本机" @click="downloadArtifact(a, i)"
-                    >
-                      <el-icon><Download /></el-icon> 下载
-                    </button>
-                    <button
-                      v-else-if="a.kind === 'image'" type="button" class="art-act"
-                      title="复制本机启动命令" @click="copyText(dockerRunCommand(a), 'docker run 命令')"
-                    >
-                      <el-icon><CopyDocument /></el-icon> docker run
-                    </button>
-                  </span>
+              <div v-for="g in artifactGroups" :key="g.dir" class="artifact-group">
+                <div v-if="g.dir" class="artifact-dir" :title="g.dir">
+                  <span class="mono">{{ shortDir(g.dir) }}</span>
+                  <span class="ad-count">{{ g.items.length }} 个</span>
                 </div>
-                <div v-if="imageMeta(a)" class="artifact-image">
-                  <span class="ai-label">镜像版本</span>
-                  <span class="ai-version mono">{{ imageMeta(a)?.version || '—' }}</span>
-                  <span class="ai-label">本地镜像</span>
-                  <button
-                    type="button" class="ai-local mono"
-                    :title="`点击复制本地镜像地址 ${imageMeta(a)?.local}`"
-                    @click="copyText(imageMeta(a)?.local ?? '', '本地镜像地址')"
-                  >{{ imageMeta(a)?.local }}</button>
-                </div>
-              </template>
+                <template v-for="item in g.items" :key="`${item.a.kind}-${item.a.ref}-${item.index}`">
+                  <div class="artifact-row">
+                    <span class="art-kind">{{ item.a.kind }}</span>
+                    <code class="art-ref mono" :title="item.a.ref" @click="copyText(item.a.ref, '产物地址')">{{ fileName(item.a.ref) }}</code>
+                    <span class="art-size">{{ formatBytes(item.a.sizeBytes) }}</span>
+                    <button
+                      type="button" class="art-digest mono"
+                      :title="item.a.digest ? `点击复制 ${item.a.digest}` : '无摘要'"
+                      @click="copyDigest(item.a.digest)"
+                    >
+                      {{ shortDigest(item.a.digest) }}
+                    </button>
+                    <span class="art-actions">
+                      <span
+                        v-if="!isArchived(item.a)" class="art-pending mono"
+                        title="检查构建只记录路径与摘要，不复制文件"
+                      >未归档</span>
+                      <button
+                        v-else-if="item.a.kind === 'file'" type="button" class="art-act"
+                        title="下载到本机" @click="downloadArtifact(item.a, item.index)"
+                      >
+                        <el-icon><Download /></el-icon> 下载
+                      </button>
+                      <button
+                        v-else-if="item.a.kind === 'image'" type="button" class="art-act"
+                        title="复制本机启动命令" @click="copyText(dockerRunCommand(item.a), 'docker run 命令')"
+                      >
+                        <el-icon><CopyDocument /></el-icon> docker run
+                      </button>
+                    </span>
+                  </div>
+                  <div v-if="imageMeta(item.a)" class="artifact-image">
+                    <span class="ai-label">镜像版本</span>
+                    <span class="ai-version mono">{{ imageMeta(item.a)?.version || '—' }}</span>
+                    <span class="ai-label">本地镜像</span>
+                    <button
+                      type="button" class="ai-local mono"
+                      :title="`点击复制本地镜像地址 ${imageMeta(item.a)?.local}`"
+                      @click="copyText(imageMeta(item.a)?.local ?? '', '本地镜像地址')"
+                    >{{ imageMeta(item.a)?.local }}</button>
+                  </div>
+                </template>
+              </div>
+            </section>
+
+            <section v-if="imageVersions.length" class="artifact-panel">
+              <h3 class="ap-title">
+                镜像版本 <span class="ap-count">{{ imageVersions.length }}</span>
+                <span class="ap-hint">按 (项目, 环境) 独立记账，回滚以上一版为目标</span>
+              </h3>
+              <div v-for="img in imageVersions.slice(0, 6)" :key="img.tag" class="image-row">
+                <span class="iv-badge" :class="imageBadgeClass(img)">{{ imageBadge(img) }}</span>
+                <code class="art-ref mono" :title="img.tag" @click="copyText(img.tag, '镜像 tag')">{{ img.tag }}</code>
+                <span class="iv-sha mono">{{ (img.gitSha || '').slice(0, 7) }}</span>
+                <span class="iv-time mono">{{ formatClock(img.createdAt) }}</span>
+              </div>
+            </section>
+
+            <section v-else-if="env !== 'dev'" class="artifact-panel">
+              <h3 class="ap-title">镜像版本 <span class="ap-count">0</span></h3>
+              <p class="ap-empty">
+                这个环境还没有镜像版本。发布（或显式打包镜像）后按环境记录当前 / 上一版，
+                回滚以「上一版」为目标；旧版本按保留策略自动清理。
+              </p>
             </section>
 
             <RunLog
@@ -1427,6 +1530,74 @@ async function copyDigest(digest: string): Promise<void> {
   margin-left: 4px;
   font-weight: 400;
   color: var(--ink-faint);
+}
+.ap-hint {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.ap-empty {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+.artifact-group + .artifact-group {
+  margin-top: 2px;
+}
+.artifact-dir {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line-soft);
+}
+.artifact-dir .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ad-count {
+  flex: none;
+}
+.art-pending {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  cursor: help;
+}
+/* 镜像版本谱系：当前 / 上一版 / 历史 */
+.image-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 70px 92px;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 0;
+  font-size: 11.5px;
+  border-top: 1px solid var(--line-soft);
+}
+.iv-badge {
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+  text-align: center;
+}
+.iv-badge.is-current {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.iv-sha,
+.iv-time {
+  color: var(--ink-faint);
+}
+.iv-time {
+  text-align: right;
 }
 .artifact-row {
   display: grid;

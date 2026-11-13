@@ -183,6 +183,48 @@ public class PipelineController {
         return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId));
     }
 
+    /**
+     * 镜像版本列表（按环境）：来自构建历史里成功运行登记的 image 产物。
+     *
+     * <p>第一条是「当前版本」，第二条是「上一版」——回滚/发布前先看清版本谱系，
+     * 而不是只依赖内存里的一次性锚点。
+     */
+    @GetMapping("/deploy/images")
+    public Map<String, Object> deployImages(@RequestParam String projectId,
+                                            @RequestParam(defaultValue = "test") String env) {
+        java.util.List<Map<String, Object>> images = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        int rank = 0;
+        for (PipelineEngine.RunSummary h : engine.history()) {
+            if (!projectId.equals(h.projectId()) || !env.equalsIgnoreCase(h.env())
+                    || h.status() != StageStatus.SUCCEEDED) {
+                continue;
+            }
+            java.util.List<ArtifactRef> artifacts = engine.artifacts(h.runId());
+            boolean hasImage = artifacts.stream().anyMatch(a -> "image".equals(a.kind()));
+            for (ArtifactRef a : artifacts) {
+                if (!"image".equals(a.kind()) || !seen.add(a.ref())) {
+                    continue;
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("tag", a.ref());
+                row.put("digest", a.digest() == null ? "" : a.digest());
+                row.put("sizeBytes", a.sizeBytes());
+                row.put("version", a.meta().getOrDefault("version", ""));
+                row.put("runId", h.runId());
+                row.put("gitSha", h.gitSha());
+                row.put("createdAt", h.createdAt());
+                row.put("current", rank == 0);
+                row.put("previous", rank == 1);
+                images.add(row);
+            }
+            if (hasImage) {
+                rank++;
+            }
+        }
+        return Map.of("projectId", projectId, "env", env, "images", images);
+    }
+
     /** 可选部署目标（前端下拉用）；available=false 时给出不可用原因。 */
     @GetMapping("/deploy/targets")
     public List<Map<String, Object>> deployTargets() {

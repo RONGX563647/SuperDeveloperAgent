@@ -90,8 +90,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final Path workspaceRoot;
 
     private final Map<String, RunState> runs = new ConcurrentHashMap<>();
-    /** 每个项目最近一次成功发布的镜像 tag，供回滚使用。 */
+    /** 每个 (项目, 环境) 最近一次成功发布的镜像 tag，供回滚使用。 */
     private final Map<String, String> lastGood = new ConcurrentHashMap<>();
+
+    /** 回滚锚点键：test 与 prod 各自独立，避免一个环境的发布覆盖另一个。 */
+    private static String anchorKey(String projectId, String env) {
+        return projectId + "|" + (env == null ? "test" : env);
+    }
     /** 有界队列：全局并发上限 4；同一项目串行由 TriggerScheduler 保证。 */
     private final ExecutorService workers = Executors.newFixedThreadPool(4, Thread.ofVirtual().factory());
     private final TriggerScheduler scheduler = new TriggerScheduler();
@@ -99,6 +104,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final RunHistoryStore history;
     /** 发布镜像 tag 前缀（可配置；避免测试字样进入正式发布链路）。 */
     private final String imagePrefix;
+    /** 每个 (项目, 环境) 保留的镜像版本数（含当前版本）。 */
+    private static final int KEEP_IMAGES = 5;
     /** 仓库定位器（v2 直接模式；可空 = 旧布局 workspace/<id>/git）。 */
     private final top.rongx.agent.domain.port.ProjectRepoLocator repoLocator;
     /** 平台部署器（方案 C：部署语义归平台，不再交给仓库脚本）。 */
@@ -1163,7 +1170,27 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         boolean deleted = history.delete(runId);
         runs.remove(runId);
+        deleteArtifactDir(runId);
         return deleted;
+    }
+
+    /** 删除历史时一并清掉该运行归档的产物目录（否则磁盘只增不减）。 */
+    private void deleteArtifactDir(String runId) {
+        Path dir = workspaceRoot.resolve("artifacts").resolve(runId);
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        try (var stream = Files.walk(dir)) {
+            stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                    // 单个文件被占用时不阻塞历史删除
+                }
+            });
+        } catch (IOException e) {
+            ProcessExecutor.warn("清理产物目录失败 " + dir + ": " + e.getMessage());
+        }
     }
 
     /** 排队数量（可观测性）。 */
@@ -1217,7 +1244,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 snap.artifacts().stream()
                         .filter(a -> a.kind().equals("image"))
                         .findFirst()
-                        .ifPresent(a -> lastGood.put(snap.projectId(), a.ref()));
+                        .ifPresent(a -> lastGood.put(anchorKey(snap.projectId(), snap.env()), a.ref()));
             }
         }
     }
@@ -1427,8 +1454,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // 导致环境状态带显示"已跑通"、甚至让生产晋升拿到假证据。
         boolean deployed = deployedIn(state);
         if (deployed) {
-            lastGood.put(state.projectId, vars.get("tag"));
+            // 只有真的产出了镜像才更新锚点：host 部署没有镜像，不该污染回滚目标
+            String imageTag = state.artifacts.stream()
+                    .filter(a -> "image".equals(a.kind()))
+                    .reduce((first, second) -> second)
+                    .map(ArtifactRef::ref)
+                    .orElse(null);
+            if (imageTag != null) {
+                lastGood.put(anchorKey(state.projectId, state.env), imageTag);
+            }
             freezeRecipe(state, runDir);
+            pruneOldImages(state);
         } else {
             state.log.append("[recipe] 本次是检查构建（未部署），不固化环境脚本、不更新回滚锚点\n");
         }
@@ -2090,7 +2126,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                         .append('\n');
             }
             state.stages.add(stageResult);
-            state.artifacts.addAll(prefixArtifacts(result.result().artifacts(), stage.workdir()));
+            state.artifacts.addAll(primaryArtifacts(stage, result.result().artifacts(), runDir));
 
             if (result.result().status() == StageStatus.SUCCEEDED
                     && "image_package".equals(stage.action())) {
@@ -2118,6 +2154,21 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      */
     private void preserveArtifacts(RunState state, Path runDir) {
         if (state.artifacts.isEmpty()) {
+            return;
+        }
+        // verify（只检查构建、不部署）不归档：产物只是本次构建证据，复制一份没有部署价值，
+        // 却会把每个模块的 jar（含几十 MB 的胖 jar）留在盘上。保留路径/摘要，标记未归档。
+        if ("verify".equals(state.pipelineId)) {
+            List<ArtifactRef> metadata = state.artifacts.stream()
+                    .map(a -> "file".equals(a.kind())
+                            ? new ArtifactRef(a.kind(), a.ref(), a.digest(), a.sizeBytes(),
+                                    Map.of("archived", "false"))
+                            : a)
+                    .toList();
+            state.artifacts.clear();
+            state.artifacts.addAll(metadata);
+            state.log.append("[artifacts] 检查构建不归档 ").append(metadata.size())
+                    .append(" 个文件产物（仅记录路径与摘要）\n");
             return;
         }
         Path dir = workspaceRoot.resolve("artifacts").resolve(state.runId);
@@ -2155,6 +2206,56 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
     }
 
+    /**
+     * 镜像保留策略：每个 (项目, 环境) 只保留最近 {@link #KEEP_IMAGES} 个版本，
+     * 更旧的 tag 用 {@code docker rmi} 清掉；锚点版本与正被容器使用的镜像会失败，
+     * 失败直接忽略（下次发布再清），不影响本次运行结论。
+     */
+    private void pruneOldImages(RunState state) {
+        try {
+            String prefix = imagePrefix + "-" + state.env + "-";
+            List<String> tags = history.list().stream()
+                    .filter(h -> state.projectId.equals(h.projectId()) && state.env.equals(h.env()))
+                    .filter(h -> h.status() == StageStatus.SUCCEEDED)
+                    .sorted(java.util.Comparator.comparingLong(
+                            RunHistoryStore.RunSnapshot::createdAt).reversed())
+                    .flatMap(h -> h.artifacts().stream())
+                    .filter(a -> "image".equals(a.kind()))
+                    .map(ArtifactRef::ref)
+                    .filter(t -> t != null && t.startsWith(prefix))
+                    .distinct()
+                    .toList();
+            // 当前运行的镜像还没写进历史，这里给它留一个位置
+            int keepOld = KEEP_IMAGES - 1;
+            if (tags.size() <= keepOld) {
+                return;
+            }
+            String anchor = lastGood.get(anchorKey(state.projectId, state.env));
+            int removed = 0;
+            for (String tag : tags.subList(keepOld, tags.size())) {
+                if (tag.equals(anchor)) {
+                    continue;
+                }
+                try {
+                    Process p = new ProcessBuilder("docker", "rmi", tag)
+                            .redirectErrorStream(true).start();
+                    p.getInputStream().readAllBytes();
+                    if (p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0) {
+                        removed++;
+                    }
+                } catch (Exception ignored) {
+                    // docker 不可用 / 镜像仍被容器引用：跳过
+                }
+            }
+            if (removed > 0) {
+                state.log.append("[image] 已清理 ").append(removed)
+                        .append(" 个历史镜像（保留最近 ").append(KEEP_IMAGES).append(" 个版本）\n");
+            }
+        } catch (Exception e) {
+            state.log.append("[image] 镜像清理跳过：").append(e.getMessage()).append('\n');
+        }
+    }
+
     /** 把子目录 stage 的相对产物路径补成仓库根相对路径（便于统一记账/下载）。 */
     private List<ArtifactRef> prefixArtifacts(List<ArtifactRef> artifacts, String workdir) {
         if (workdir == null || workdir.isBlank()) {
@@ -2165,6 +2266,40 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .map(a -> new ArtifactRef(a.kind(), prefix + a.ref(), a.digest(),
                         a.sizeBytes(), a.meta()))
                 .toList();
+    }
+
+    /**
+     * 产物收口：多模块 Maven 会把每个子模块的 jar 都算成产物，但真正可部署的
+     * 只有含 {@code BOOT-INF/} 的胖 jar。其余是构建中间物，不展示、不归档。
+     *
+     * <p>非 Spring Boot 工程（找不到胖 jar）保持原行为，避免误判「没有产物」。
+     */
+    private List<ArtifactRef> primaryArtifacts(PipelineDefinition.StageDef stage,
+                                               List<ArtifactRef> artifacts, Path runDir) {
+        List<ArtifactRef> prefixed = prefixArtifacts(artifacts, stage.workdir());
+        if (!"backend_build".equals(stage.action())) {
+            return prefixed;
+        }
+        List<ArtifactRef> jars = prefixed.stream()
+                .filter(a -> "file".equals(a.kind()) && a.ref().endsWith(".jar"))
+                .filter(a -> !a.ref().endsWith("-sources.jar"))
+                .filter(a -> !a.ref().endsWith("-javadoc.jar"))
+                .toList();
+        if (jars.size() <= 1) {
+            return prefixed;
+        }
+        List<ArtifactRef> runnable = jars.stream()
+                .filter(a -> isExecutableJar(runDir.resolve(a.ref()).normalize()))
+                .toList();
+        if (runnable.isEmpty()) {
+            return prefixed;
+        }
+        List<ArtifactRef> others = prefixed.stream()
+                .filter(a -> !("file".equals(a.kind()) && a.ref().endsWith(".jar")))
+                .toList();
+        List<ArtifactRef> out = new ArrayList<>(others);
+        out.addAll(runnable);
+        return out;
     }
 
     /**
@@ -2270,7 +2405,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .reduce((first, second) -> second)
                 .map(ArtifactRef::ref)
                 .orElse(null);
-        String previous = lastGood.get(state.projectId);
+        String previous = lastGood.get(anchorKey(state.projectId, state.env));
         String image = rollback ? previous : currentImage;
         if (rollback && (image == null || image.isBlank())) {
             // 首次发布失败时会走到回滚：没有上一版不是错误，跳过即可，
