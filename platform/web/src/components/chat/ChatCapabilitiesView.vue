@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Connection, MagicStick, Refresh, Search } from '@element-plus/icons-vue'
+import { Check, Connection, MagicStick, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import type { CapabilityOption } from '../../composables/useChatCapabilities'
 import { readSkill } from '../../api/settings'
 import MarkdownView from './MarkdownView.vue'
@@ -258,13 +258,13 @@ function formatTime(ts?: number): string {
                 </div>
               </div>
               <div class="hero-switch">
-                <el-switch
-                  :model-value="isOn(active)"
-                  @change="(v: string | number | boolean) => toggleActive(Boolean(v))"
-                />
-                <span class="switch-label" :class="{ on: isOn(active) }">
-                  {{ isOn(active) ? '本会话已启用' : '本会话未启用' }}
-                </span>
+                <button
+                  type="button" class="cap-toggle" :class="{ on: isOn(active) }"
+                  @click="toggleActive(!isOn(active))"
+                >
+                  <el-icon><Check v-if="isOn(active)" /><Plus v-else /></el-icon>
+                  {{ isOn(active) ? '已启用' : '启用' }}
+                </button>
               </div>
             </div>
 
@@ -484,15 +484,19 @@ function formatTime(ts?: number): string {
   gap: 8px;
 }
 .link {
-  padding: 0;
+  padding: 2px 6px;
   font-size: 10.5px;
   color: var(--ink-faint);
   cursor: pointer;
   background: none;
   border: 0;
+  border-radius: var(--radius-xs);
+  transition: color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
 }
 .link:hover {
-  color: var(--accent-ink);
+  color: var(--ink-soft);
+  background: var(--surface-hover);
 }
 .group-empty {
   padding: 8px 7px;
@@ -577,8 +581,8 @@ function formatTime(ts?: number): string {
     border-color var(--dur-fast) var(--ease-out);
 }
 .item-on.on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
 }
 .item-on.on::after {
   position: absolute;
@@ -587,7 +591,7 @@ function formatTime(ts?: number): string {
   width: 4px;
   height: 8px;
   content: '';
-  border: solid var(--brand-mark-ink);
+  border: solid var(--accent-ink);
   border-width: 0 1.5px 1.5px 0;
   transform: rotate(45deg);
 }
@@ -689,16 +693,41 @@ function formatTime(ts?: number): string {
 .hero-switch {
   display: flex;
   flex: none;
-  flex-direction: column;
+  align-items: flex-start;
+  padding-top: 2px;
+}
+/* 开关用按钮形态：比滑块更轻，和整页的胶囊语言一致 */
+.cap-toggle {
+  display: inline-flex;
   gap: 5px;
-  align-items: flex-end;
+  align-items: center;
+  height: 30px;
+  padding: 0 13px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
-.switch-label {
-  font-size: 10.5px;
-  color: var(--ink-faint);
+.cap-toggle:hover {
+  color: var(--ink);
+  background: var(--code-bg);
+  border-color: var(--line-strong);
 }
-.switch-label.on {
+.cap-toggle.on {
   color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+.cap-toggle.on:hover {
+  opacity: 0.88;
 }
 
 /* SKILL.md / 连接方式 */

@@ -260,12 +260,15 @@ defineExpose({ load })
         {{ s.transport === 'stdio' ? [s.command, ...s.args].filter(Boolean).join(' ') : s.url }}
       </span>
       <span v-if="s.headerNames.length" class="mcp-meta">headers: {{ s.headerNames.join(', ') }}</span>
-      <el-switch
-        size="small"
-        :model-value="s.enabled"
+      <button
+        type="button"
+        class="toggle-btn"
+        :class="{ on: s.enabled }"
         :title="s.enabled ? '默认启用：对话未单独勾选时调用' : '已停用：对话里需手动勾选'"
-        @change="(v: string | number | boolean) => toggleEnabled(s, Boolean(v))"
-      />
+        @click="toggleEnabled(s, !s.enabled)"
+      >
+        {{ s.enabled ? '已启用' : '已停用' }}
+      </button>
       <span class="mcp-actions">
         <el-button size="small" text :loading="testing === s.id" @click="test(s)">测试</el-button>
         <el-button size="small" text @click="editForm(s)">编辑</el-button>
@@ -407,9 +410,38 @@ defineExpose({ load })
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
-  background: var(--bg);
+  background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.mcp-row:hover {
+  border-color: var(--line);
+}
+.toggle-btn {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.toggle-btn:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.toggle-btn.on {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: transparent;
 }
 .mcp-name {
   flex: none;

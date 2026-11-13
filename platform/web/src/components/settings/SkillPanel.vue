@@ -233,12 +233,15 @@ defineExpose({ load })
         </div>
         <div class="skill-desc">{{ s.description || '（SKILL.md 未填写 description）' }}</div>
       </div>
-      <el-switch
-        size="small"
-        :model-value="s.enabled"
+      <button
+        type="button"
+        class="toggle-btn"
+        :class="{ on: s.enabled }"
         :title="s.enabled ? '默认启用：对话未单独勾选时加载' : '已停用：对话里需手动勾选'"
-        @change="(v: string | number | boolean) => toggleEnabled(s, Boolean(v))"
-      />
+        @click="toggleEnabled(s, !s.enabled)"
+      >
+        {{ s.enabled ? '已启用' : '已停用' }}
+      </button>
       <div class="skill-actions">
         <el-button size="small" text @click="preview(s)">查看</el-button>
         <el-button size="small" text type="danger" @click="remove(s)">删除</el-button>
@@ -358,9 +361,38 @@ defineExpose({ load })
   align-items: center;
   gap: 12px;
   padding: 11px 13px;
-  background: var(--bg);
+  background: var(--surface-raised);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.skill-card:hover {
+  border-color: var(--line);
+}
+.toggle-btn {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.toggle-btn:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.toggle-btn.on {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: transparent;
 }
 .skill-main {
   flex: 1;
