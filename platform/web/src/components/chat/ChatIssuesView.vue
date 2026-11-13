@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ChatDotRound, Close, Delete, Edit, Link, Plus, Refresh, RefreshRight, Search,
+  ArrowRight, ChatDotRound, Close, Delete, Edit, Link, Plus, Refresh, RefreshRight, Search,
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
@@ -14,10 +14,10 @@ import { appStore } from '../../stores/app'
 import { listProjects, type ProjectRow } from '../../api/project'
 
 /**
- * 对话页「任务」Tab：Gitee / GitHub / GitLab 双向同步的 Issue 工单。
+ * 对话页「任务」Tab：项目托管的 Git Issue 双向同步任务。
  *
- * 左列筛选 + 任务列表，右侧详情 / 编辑 / 评论。数据来自 /api/v1/git-issues，
- * 与 Agent 工具（list_git_issues / create_git_issue / comment_git_issue ...）完全同源。
+ * 采用单列列表：一行一个任务，点击行展开描述 / 评论 / 操作；新建与编辑
+ * 直接以列表顶部的卡片形式出现，不使用悬浮弹窗。数据与 Agent 工具同源。
  */
 const emit = defineEmits<{ (e: 'count', value: number): void }>()
 
@@ -26,8 +26,7 @@ const loading = ref(false)
 const error = ref('')
 const keyword = ref('')
 const stateFilter = ref('')
-const activeId = ref('')
-const active = computed(() => items.value.find((i) => i.id === activeId.value) ?? null)
+const expandedId = ref('')
 
 const comments = ref<GitIssueCommentRow[]>([])
 const commentsLoading = ref(false)
@@ -35,15 +34,55 @@ const commentText = ref('')
 const commenting = ref(false)
 const actionBusy = ref('')
 
-let loadSeq = 0
-let keywordTimer: ReturnType<typeof setTimeout> | undefined
+const stateOptions = [
+  { label: '全部', value: '' },
+  { label: '待处理', value: 'OPEN' },
+  { label: '已完成', value: 'CLOSED' },
+]
 
 const PROVIDER_LABEL: Record<string, string> = {
   GITEE: 'Gitee', GITHUB: 'GitHub', GITLAB: 'GitLab',
 }
 
+const projects = ref<ProjectRow[]>([])
+const currentProject = computed(
+  () => projects.value.find((p) => p.id === appStore.projectId) ?? null)
+
+/** 当前项目托管的仓库（通常只有一个），用于页头提示与新建任务同步目标。 */
+const currentRepo = computed(() => {
+  const url = currentProject.value?.repoUrl
+  return { provider: providerOfUrl(url), repo: repoOfUrl(url) }
+})
+
+/** 已绑定仓库去重：只有一个仓库时行内只显示 #编号，避免每行重复仓库名。 */
+const boundRepos = computed(() => [
+  ...new Set(items.value.filter((i) => isBound(i)).map((i) => `${i.provider}/${i.repo}`)),
+])
+const singleRepo = computed(() => boundRepos.value.length <= 1)
+
+let loadSeq = 0
+let keywordTimer: ReturnType<typeof setTimeout> | undefined
+
 function providerLabel(provider: string): string {
   return PROVIDER_LABEL[provider] ?? (provider || 'Git')
+}
+
+function providerOfUrl(url?: string | null): string {
+  const text = (url ?? '').toLowerCase()
+  if (text.includes('gitee')) return 'GITEE'
+  if (text.includes('gitlab')) return 'GITLAB'
+  if (text.includes('github')) return 'GITHUB'
+  return ''
+}
+
+/** https://host/owner/repo(.git) 或 git@host:owner/repo.git → owner/repo */
+function repoOfUrl(url?: string | null): string {
+  if (!url) return ''
+  return url
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/^https?:\/\/[^/]+\//, '')
+    .replace(/\.git$/, '')
+    .replace(/\/+$/, '')
 }
 
 function syncLabel(row: GitIssueRow): string {
@@ -64,6 +103,15 @@ function labelList(labels: string): string[] {
   return (labels ?? '').split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
 }
 
+function isBound(row: GitIssueRow): boolean {
+  return !!row.provider && !!row.repo && !!row.number
+}
+
+function remoteText(row: GitIssueRow): string {
+  if (!isBound(row)) return '仅本地'
+  return singleRepo.value ? `#${row.number}` : `${row.repo}#${row.number}`
+}
+
 async function load(silent = false): Promise<void> {
   const seq = ++loadSeq
   if (!silent) loading.value = true
@@ -76,8 +124,8 @@ async function load(silent = false): Promise<void> {
     if (seq !== loadSeq) return
     items.value = rows
     emit('count', rows.filter((r) => r.state === 'OPEN').length)
-    if (!rows.some((r) => r.id === activeId.value)) {
-      activeId.value = rows[0]?.id ?? ''
+    if (!rows.some((r) => r.id === expandedId.value)) {
+      expandedId.value = ''
     }
   } catch (e) {
     if (seq === loadSeq) error.value = e instanceof Error ? e.message : '加载任务失败'
@@ -92,14 +140,33 @@ watch(keyword, () => {
 })
 watch(stateFilter, () => void load())
 
+onMounted(() => {
+  void load()
+  void listProjects().then((rows) => { projects.value = rows }).catch(() => {})
+})
+
+// ---------------------------------------------------------------- 展开 / 评论
+
+async function toggleExpand(row: GitIssueRow): Promise<void> {
+  if (expandedId.value === row.id) {
+    expandedId.value = ''
+    return
+  }
+  expandedId.value = row.id
+  commentText.value = ''
+  await loadComments()
+}
+
 async function loadComments(): Promise<void> {
-  if (!activeId.value) {
+  if (!expandedId.value) {
     comments.value = []
     return
   }
+  const id = expandedId.value
   commentsLoading.value = true
   try {
-    comments.value = await listGitIssueComments(activeId.value)
+    const rows = await listGitIssueComments(id)
+    if (expandedId.value === id) comments.value = rows
   } catch (e) {
     comments.value = []
     ElMessage.error(e instanceof Error ? e.message : '加载评论失败')
@@ -108,84 +175,74 @@ async function loadComments(): Promise<void> {
   }
 }
 
-watch(activeId, () => {
-  commentText.value = ''
-  void loadComments()
-})
+async function submitComment(): Promise<void> {
+  const id = expandedId.value
+  const text = commentText.value.trim()
+  if (!id || !text) return
+  commenting.value = true
+  try {
+    const comment = await addGitIssueComment(id, text)
+    comments.value = [...comments.value, comment]
+    commentText.value = ''
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '评论失败')
+  } finally {
+    commenting.value = false
+  }
+}
 
-onMounted(() => {
-  void load()
-  void listProjects().then((rows) => { projects.value = rows }).catch(() => {})
-})
+async function removeComment(comment: GitIssueCommentRow): Promise<void> {
+  const id = expandedId.value
+  if (!id || comment.source !== 'PLATFORM') return
+  try {
+    await deleteGitIssueComment(id, comment.id)
+    comments.value = comments.value.filter((c) => c.id !== comment.id)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '删除评论失败')
+  }
+}
 
-// ---------------------------------------------------------------- 新建 / 编辑（页内联表单）
+// ---------------------------------------------------------------- 新建 / 编辑
 
 const editorOpen = ref(false)
 const editingId = ref('')
 const saving = ref(false)
 const form = reactive({ title: '', body: '', labels: '' })
+const listRef = ref<HTMLElement | null>(null)
 
-const stateOptions = [
-  { label: '全部', value: '' },
-  { label: '待处理', value: 'OPEN' },
-  { label: '已完成', value: 'CLOSED' },
-]
-
-/** 项目列表：仅用于展示任务会同步到哪个仓库，平台由托管地址自动判断。 */
-const projects = ref<ProjectRow[]>([])
-const currentProject = computed(
-  () => projects.value.find((p) => p.id === appStore.projectId) ?? null)
-
-function providerOfUrl(url?: string | null): string {
-  const text = (url ?? '').toLowerCase()
-  if (text.includes('gitee')) return 'GITEE'
-  if (text.includes('gitlab')) return 'GITLAB'
-  if (text.includes('github')) return 'GITHUB'
-  return ''
-}
-
-/** https://host/owner/repo(.git) 或 git@host:owner/repo.git → owner/repo */
-function repoOfUrl(url?: string | null): string {
-  if (!url) return ''
-  return url
-    .replace(/^git@([^:]+):/, 'https://$1/')
-    .replace(/^https?:\/\/[^/]+\//, '')
-    .replace(/\.git$/, '')
-    .replace(/\/+$/, '')
-}
-
-/** 同步目标：编辑已绑定任务用任务自己的仓库；新建任务跟随当前项目托管仓库。 */
 const editorTarget = computed(() => {
-  const row = editingId.value ? active.value : null
+  const row = editingId.value
+    ? items.value.find((i) => i.id === editingId.value)
+    : undefined
   if (row && isBound(row)) {
     return { provider: row.provider, repo: row.repo }
   }
-  const url = currentProject.value?.repoUrl
-  return { provider: providerOfUrl(url), repo: repoOfUrl(url) }
+  return currentRepo.value
 })
 
 function openCreate(): void {
   editingId.value = ''
   Object.assign(form, { title: '', body: '', labels: '' })
   editorOpen.value = true
+  expandedId.value = ''
+  scrollToEditor()
 }
 
-function openEdit(): void {
-  const row = active.value
-  if (!row) return
+function openEdit(row: GitIssueRow): void {
   editingId.value = row.id
   Object.assign(form, { title: row.title, body: row.body, labels: row.labels })
   editorOpen.value = true
+  scrollToEditor()
+}
+
+/** 编辑卡片在列表顶部，滚动到顶避免用户看不到刚打开的卡片。 */
+function scrollToEditor(): void {
+  void nextTick(() => listRef.value?.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
 function closeEditor(): void {
   editorOpen.value = false
   editingId.value = ''
-}
-
-function selectRow(id: string): void {
-  activeId.value = id
-  closeEditor()
 }
 
 async function submit(): Promise<void> {
@@ -199,7 +256,7 @@ async function submit(): Promise<void> {
       ? items.value.find((i) => i.id === editingId.value)
       : undefined
     const payload = {
-      // 新建任务关联当前项目；编辑保留原归属，避免把已绑定任务换到别的仓库
+      // 新建跟随当前项目；编辑保留原归属，避免把已绑定任务换到别的仓库
       projectId: editingRow ? editingRow.projectId : appStore.projectId,
       title: form.title.trim(),
       body: form.body,
@@ -216,7 +273,8 @@ async function submit(): Promise<void> {
     }
     closeEditor()
     await load(true)
-    activeId.value = row.id
+    expandedId.value = row.id
+    await loadComments()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存任务失败')
   } finally {
@@ -232,10 +290,8 @@ function replaceRow(row: GitIssueRow): void {
   emit('count', items.value.filter((i) => i.state === 'OPEN').length)
 }
 
-async function toggleState(): Promise<void> {
-  const row = active.value
-  if (!row) return
-  actionBusy.value = 'state'
+async function toggleState(row: GitIssueRow): Promise<void> {
+  actionBusy.value = 'state:' + row.id
   try {
     const next = row.state === 'OPEN'
       ? await closeGitIssue(row.id)
@@ -253,10 +309,8 @@ async function toggleState(): Promise<void> {
   }
 }
 
-async function resync(): Promise<void> {
-  const row = active.value
-  if (!row) return
-  actionBusy.value = 'sync'
+async function resync(row: GitIssueRow): Promise<void> {
+  actionBusy.value = 'sync:' + row.id
   try {
     const next = await syncGitIssue(row.id)
     replaceRow(next)
@@ -272,9 +326,7 @@ async function resync(): Promise<void> {
   }
 }
 
-async function removeIssue(): Promise<void> {
-  const row = active.value
-  if (!row) return
+async function removeIssue(row: GitIssueRow): Promise<void> {
   try {
     await ElMessageBox.confirm(
       isBound(row)
@@ -286,11 +338,11 @@ async function removeIssue(): Promise<void> {
   } catch {
     return
   }
-  actionBusy.value = 'delete'
+  actionBusy.value = 'delete:' + row.id
   try {
     await deleteGitIssue(row.id)
     items.value = items.value.filter((i) => i.id !== row.id)
-    activeId.value = items.value[0]?.id ?? ''
+    if (expandedId.value === row.id) expandedId.value = ''
     emit('count', items.value.filter((i) => i.state === 'OPEN').length)
     ElMessage.success('任务已删除')
   } catch (e) {
@@ -298,39 +350,6 @@ async function removeIssue(): Promise<void> {
   } finally {
     actionBusy.value = ''
   }
-}
-
-// ---------------------------------------------------------------- 评论
-
-async function submitComment(): Promise<void> {
-  const row = active.value
-  const text = commentText.value.trim()
-  if (!row || !text) return
-  commenting.value = true
-  try {
-    const comment = await addGitIssueComment(row.id, text)
-    comments.value = [...comments.value, comment]
-    commentText.value = ''
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '评论失败')
-  } finally {
-    commenting.value = false
-  }
-}
-
-async function removeComment(comment: GitIssueCommentRow): Promise<void> {
-  const row = active.value
-  if (!row || comment.source !== 'PLATFORM') return
-  try {
-    await deleteGitIssueComment(row.id, comment.id)
-    comments.value = comments.value.filter((c) => c.id !== comment.id)
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '删除评论失败')
-  }
-}
-
-function isBound(row: GitIssueRow): boolean {
-  return !!row.provider && !!row.repo && !!row.number
 }
 </script>
 
@@ -345,8 +364,12 @@ function isBound(row: GitIssueRow): boolean {
           </p>
         </div>
         <div class="issues-head-side">
+          <span v-if="currentRepo.repo" class="repo-chip">
+            <span class="repo-dot" />
+            {{ providerLabel(currentRepo.provider) }}
+            <span class="mono">{{ currentRepo.repo }}</span>
+          </span>
           <span class="issues-stat">
-            <span class="stat-dot" />
             待处理 <b class="mono">{{ items.filter((i) => i.state === 'OPEN').length }}</b>
           </span>
           <el-button size="small" type="primary" @click="openCreate">
@@ -358,63 +381,29 @@ function isBound(row: GitIssueRow): boolean {
         </div>
       </header>
 
-      <div class="issues-body">
-        <aside class="issue-list">
-          <div class="issue-filters">
-            <el-input v-model="keyword" size="default" clearable placeholder="搜索标题 / 描述 / 仓库">
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-            <div class="state-tabs">
-              <button
-                v-for="opt in stateOptions" :key="opt.value" type="button"
-                class="state-tab" :class="{ active: stateFilter === opt.value }"
-                @click="stateFilter = opt.value"
-              >
-                {{ opt.label }}
-              </button>
-            </div>
-          </div>
-
-          <div class="issue-scroll">
-            <div class="list-head">
-              <span class="list-count mono">{{ items.length }} 个任务</span>
-            </div>
-            <div v-if="loading && !items.length" class="group-empty">加载中…</div>
-            <div v-else-if="error" class="group-empty error">{{ error }}</div>
-            <div v-else-if="!items.length" class="group-empty">
-              还没有任务。新建任务，或在 Git 上创建 Issue 自动同步过来。
-            </div>
-
+      <div class="issues-panel">
+        <div class="issues-toolbar">
+          <el-input
+            v-model="keyword" size="default" clearable class="search"
+            placeholder="搜索标题 / 描述"
+          >
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+          <div class="state-tabs">
             <button
-              v-for="row in items" :key="row.id"
-              type="button" class="issue-item"
-              :class="{ active: activeId === row.id, closed: row.state === 'CLOSED' }"
-              @click="selectRow(row.id)"
+              v-for="opt in stateOptions" :key="opt.value" type="button"
+              class="state-tab" :class="{ active: stateFilter === opt.value }"
+              @click="stateFilter = opt.value"
             >
-              <span class="state-dot" :class="row.state.toLowerCase()" />
-              <span class="item-main">
-                <span class="item-title">{{ row.title }}</span>
-                <span class="item-meta">
-                  <span v-if="isBound(row)" class="mono item-remote">
-                    {{ row.repo }}#{{ row.number }}
-                  </span>
-                  <span v-else class="item-remote">仅本地</span>
-                </span>
-                <span class="item-foot">
-                  <span class="sync-pill" :class="row.syncStatus.toLowerCase()">
-                    {{ syncLabel(row) }}
-                  </span>
-                  <span v-for="label in labelList(row.labels)" :key="label" class="mini-chip">
-                    {{ label }}
-                  </span>
-                </span>
-              </span>
+              {{ opt.label }}
             </button>
           </div>
-        </aside>
+          <span class="toolbar-count mono">{{ items.length }} 个任务</span>
+        </div>
 
-        <section class="issue-detail">
-          <div v-if="editorOpen" class="issue-editor">
+        <div ref="listRef" class="issues-list">
+          <!-- 新建 / 编辑：页内卡片，不遮挡列表 -->
+          <section v-if="editorOpen" class="editor-card">
             <div class="editor-head">
               <h2 class="editor-title">{{ editingId ? '编辑任务' : '新建任务' }}</h2>
               <p class="editor-desc">
@@ -423,8 +412,7 @@ function isBound(row: GitIssueRow): boolean {
                   : '保存后自动同步到项目托管的 Git 仓库；Agent 也能读取并操作这条任务。' }}
               </p>
             </div>
-
-            <div class="editor-form">
+            <div class="editor-body">
               <div class="editor-field">
                 <span class="editor-label">标题</span>
                 <el-input
@@ -435,151 +423,163 @@ function isBound(row: GitIssueRow): boolean {
               <div class="editor-field">
                 <span class="editor-label">描述</span>
                 <el-input
-                  v-model="form.body" type="textarea" :rows="7" resize="none"
+                  v-model="form.body" type="textarea" :rows="4" resize="none"
                   placeholder="补充背景、复现步骤或期望结果（支持 Markdown）"
                 />
               </div>
-              <div class="editor-field">
-                <span class="editor-label">标签</span>
-                <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
-              </div>
-
-              <div class="editor-target">
-                <span class="target-icon"><el-icon><Link /></el-icon></span>
-                <span v-if="editorTarget.repo" class="target-text">
-                  同步到 {{ providerLabel(editorTarget.provider) }}
-                  <span class="mono target-repo">{{ editorTarget.repo }}</span>
-                </span>
-                <span v-else class="target-text muted">
-                  当前项目未关联 Git 仓库，任务仅保存在平台，Agent 仍可操作
-                </span>
+              <div class="editor-row">
+                <div class="editor-field grow">
+                  <span class="editor-label">标签</span>
+                  <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
+                </div>
+                <div class="editor-target">
+                  <span class="target-icon"><el-icon><Link /></el-icon></span>
+                  <span v-if="editorTarget.repo" class="target-text">
+                    同步到 {{ providerLabel(editorTarget.provider) }}
+                    <span class="mono target-repo">{{ editorTarget.repo }}</span>
+                  </span>
+                  <span v-else class="target-text muted">
+                    项目未关联 Git 仓库，任务仅保存在平台
+                  </span>
+                </div>
               </div>
             </div>
-
             <div class="editor-foot">
-              <el-button @click="closeEditor">取消</el-button>
-              <el-button type="primary" :loading="saving" @click="submit">
+              <el-button size="small" @click="closeEditor">取消</el-button>
+              <el-button size="small" type="primary" :loading="saving" @click="submit">
                 {{ editingId ? '保存' : '创建任务' }}
               </el-button>
             </div>
+          </section>
+
+          <div v-if="loading && !items.length" class="list-empty">加载中…</div>
+          <div v-else-if="error" class="list-empty error">{{ error }}</div>
+          <div v-else-if="!items.length" class="list-empty">
+            还没有任务。新建一个，或在 Git 上创建 Issue 自动同步过来。
           </div>
 
-          <template v-else-if="active">
-            <div class="detail-hero">
-              <div class="hero-main">
-                <div class="hero-eyebrow">
-                  <span class="state-pill" :class="active.state.toLowerCase()">
-                    {{ active.state === 'OPEN' ? '待处理' : '已完成' }}
-                  </span>
+          <article
+            v-for="row in items" :key="row.id" class="task-row"
+            :class="{ open: expandedId === row.id, closed: row.state === 'CLOSED' }"
+          >
+            <button type="button" class="task-main" @click="toggleExpand(row)">
+              <span class="state-dot" :class="row.state.toLowerCase()" />
+              <span class="task-title">{{ row.title }}</span>
+              <span class="task-labels">
+                <span v-for="label in labelList(row.labels).slice(0, 2)" :key="label" class="mini-chip">
+                  {{ label }}
+                </span>
+              </span>
+              <span class="task-remote mono" :class="{ local: !isBound(row) }">
+                {{ remoteText(row) }}
+              </span>
+              <span
+                v-if="isBound(row) || row.syncStatus === 'FAILED'"
+                class="sync-pill" :class="row.syncStatus.toLowerCase()"
+              >
+                {{ syncLabel(row) }}
+              </span>
+              <span v-else class="sync-pill spacer" aria-hidden="true" />
+              <span class="task-time mono">{{ formatTime(row.updatedAt) }}</span>
+              <el-icon class="chevron"><ArrowRight /></el-icon>
+            </button>
+
+            <div v-if="expandedId === row.id" class="task-detail">
+              <div v-if="row.syncError" class="sync-error">{{ row.syncError }}</div>
+
+              <div class="detail-block">
+                <div class="block-head">
+                  <span class="block-title">描述</span>
                   <a
-                    v-if="isBound(active)" class="hero-link mono"
-                    :href="active.url" target="_blank" rel="noreferrer"
+                    v-if="isBound(row)" class="block-link mono"
+                    :href="row.url" target="_blank" rel="noreferrer"
                   >
-                    <el-icon><Link /></el-icon> {{ active.repo }}#{{ active.number }}
+                    <el-icon><Link /></el-icon> {{ row.repo }}#{{ row.number }}
                   </a>
-                  <span v-else class="hero-link muted">未绑定远端仓库</span>
+                  <span class="block-sub mono">{{ row.id }}</span>
                 </div>
-                <h2 class="hero-title">{{ active.title }}</h2>
-                <div class="hero-chips">
-                  <span class="chip" :class="active.syncStatus.toLowerCase()">
-                    {{ syncLabel(active) }}
-                  </span>
-                  <span class="chip">更新 {{ formatTime(active.updatedAt) }}</span>
-                  <span v-for="label in labelList(active.labels)" :key="label" class="chip on">
-                    {{ label }}
-                  </span>
+                <div v-if="!row.body" class="block-empty">（无描述）</div>
+                <div v-else class="markdown-body">
+                  <MarkdownView :content="row.body" />
                 </div>
-                <p v-if="active.syncError" class="sync-error">{{ active.syncError }}</p>
               </div>
-              <div class="hero-actions">
-                <el-button size="small" @click="openEdit">
+
+              <div class="task-actions">
+                <el-button size="small" @click="openEdit(row)">
                   <el-icon><Edit /></el-icon> 编辑
                 </el-button>
                 <el-button
-                  size="small" :loading="actionBusy === 'state'" @click="toggleState"
+                  size="small" :loading="actionBusy === 'state:' + row.id"
+                  @click="toggleState(row)"
                 >
-                  <el-icon><component :is="active.state === 'OPEN' ? Close : RefreshRight" /></el-icon>
-                  {{ active.state === 'OPEN' ? '关闭' : '重开' }}
+                  <el-icon><component :is="row.state === 'OPEN' ? Close : RefreshRight" /></el-icon>
+                  {{ row.state === 'OPEN' ? '关闭' : '重开' }}
                 </el-button>
                 <el-button
-                  size="small" :loading="actionBusy === 'sync'"
-                  :disabled="!active.provider || !active.repo" @click="resync"
+                  size="small" :loading="actionBusy === 'sync:' + row.id"
+                  :disabled="!isBound(row)" @click="resync(row)"
                 >
                   <el-icon><Refresh /></el-icon> 同步
                 </el-button>
                 <el-button
-                  size="small" type="danger" plain :loading="actionBusy === 'delete'"
-                  @click="removeIssue"
+                  size="small" type="danger" plain
+                  :loading="actionBusy === 'delete:' + row.id" @click="removeIssue(row)"
                 >
                   <el-icon><Delete /></el-icon> 删除
                 </el-button>
               </div>
-            </div>
 
-            <div class="detail-block">
-              <div class="block-head">
-                <span class="block-title">任务描述</span>
-                <span class="block-sub mono">{{ active.id }}</span>
-              </div>
-              <div v-if="!active.body" class="block-empty">（无描述）</div>
-              <div v-else class="markdown-body">
-                <MarkdownView :content="active.body" />
-              </div>
-            </div>
+              <div class="comment-block">
+                <div class="block-head">
+                  <span class="block-title">评论</span>
+                  <span class="block-sub">
+                    {{ comments.length }} 条 · 平台与 Git 双向同步
+                  </span>
+                </div>
 
-            <div class="comment-block">
-              <div class="block-head">
-                <span class="block-title">评论</span>
-                <span class="block-sub">{{ comments.length }} 条 · 平台与 Git 双向同步</span>
-              </div>
-
-              <div v-if="commentsLoading" class="block-empty">加载评论…</div>
-              <div v-else-if="!comments.length" class="block-empty">还没有评论</div>
-              <div v-else class="comment-list">
-                <div v-for="c in comments" :key="c.id" class="comment-item">
-                  <div class="comment-head">
-                    <span class="comment-author">
-                      <el-icon><ChatDotRound /></el-icon>
-                      {{ c.author }}
-                    </span>
-                    <span class="comment-source" :class="c.source.toLowerCase()">
-                      {{ c.source === 'GIT' ? 'Git' : c.source === 'AGENT' ? 'Agent' : '平台' }}
-                    </span>
-                    <span class="comment-time mono">{{ formatTime(c.createdAt) }}</span>
-                    <button
-                      v-if="c.source === 'PLATFORM'" type="button" class="comment-del"
-                      @click="removeComment(c)"
-                    >
-                      删除
-                    </button>
+                <div v-if="commentsLoading" class="block-empty">加载评论…</div>
+                <div v-else-if="!comments.length" class="block-empty">还没有评论</div>
+                <div v-else class="comment-list">
+                  <div v-for="c in comments" :key="c.id" class="comment-item">
+                    <div class="comment-head">
+                      <span class="comment-author">
+                        <el-icon><ChatDotRound /></el-icon>
+                        {{ c.author }}
+                      </span>
+                      <span class="comment-source" :class="c.source.toLowerCase()">
+                        {{ c.source === 'GIT' ? 'Git' : c.source === 'AGENT' ? 'Agent' : '平台' }}
+                      </span>
+                      <span class="comment-time mono">{{ formatTime(c.createdAt) }}</span>
+                      <button
+                        v-if="c.source === 'PLATFORM'" type="button" class="comment-del"
+                        @click="removeComment(c)"
+                      >
+                        删除
+                      </button>
+                    </div>
+                    <div class="comment-body">{{ c.body }}</div>
                   </div>
-                  <div class="comment-body">{{ c.body }}</div>
                 </div>
-              </div>
 
-              <div class="comment-compose">
-                <el-input
-                  v-model="commentText" type="textarea" :rows="3" resize="none"
-                  placeholder="写评论；已绑定 Git 的任务会同步为远端评论"
-                />
-                <div class="compose-foot">
-                  <span class="compose-hint">Agent 也可以直接调用工具评论 / 关闭任务</span>
-                  <el-button
-                    size="small" type="primary" :loading="commenting"
-                    :disabled="!commentText.trim()" @click="submitComment"
-                  >
-                    发表评论
-                  </el-button>
+                <div class="comment-compose">
+                  <el-input
+                    v-model="commentText" type="textarea" :rows="2" resize="none"
+                    placeholder="写评论；已绑定 Git 的任务会同步为远端评论"
+                  />
+                  <div class="compose-foot">
+                    <span class="compose-hint">Agent 也可以直接调用工具评论 / 关闭任务</span>
+                    <el-button
+                      size="small" type="primary" :loading="commenting"
+                      :disabled="!commentText.trim()" @click="submitComment"
+                    >
+                      发表评论
+                    </el-button>
+                  </div>
                 </div>
               </div>
             </div>
-          </template>
-
-          <div v-else class="detail-empty">
-            <span class="empty-icon"><el-icon><ChatDotRound /></el-icon></span>
-            <span>{{ loading ? '正在加载任务…' : '从左侧选择一个任务' }}</span>
-          </div>
-        </section>
+          </article>
+        </div>
       </div>
     </div>
   </div>
@@ -596,9 +596,9 @@ function isBound(row: GitIssueRow): boolean {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   width: 100%;
-  max-width: 1160px;
+  max-width: 1080px;
   min-height: 0;
   margin: 0 auto;
 }
@@ -632,13 +632,32 @@ function isBound(row: GitIssueRow): boolean {
 .issues-head-side {
   display: flex;
   flex: none;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
+  justify-content: flex-end;
 }
-.issues-stat {
-  display: flex;
+.repo-chip {
+  display: inline-flex;
   gap: 6px;
   align-items: center;
+  padding: 4px 10px;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+}
+.repo-chip .mono {
+  color: var(--ink);
+}
+.repo-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+.issues-stat {
   padding: 4px 10px;
   font-size: 11px;
   color: var(--ink-muted);
@@ -651,18 +670,12 @@ function isBound(row: GitIssueRow): boolean {
   font-weight: 600;
   color: var(--ink);
 }
-.stat-dot {
-  width: 6px;
-  height: 6px;
-  background: var(--warn, #d19a00);
-  border-radius: 50%;
-}
 
-/* 左右两栏 */
-.issues-body {
-  display: grid;
+/* 列表容器 */
+.issues-panel {
+  display: flex;
   flex: 1;
-  grid-template-columns: 320px minmax(0, 1fr);
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
   background: var(--surface-raised);
@@ -670,32 +683,27 @@ function isBound(row: GitIssueRow): boolean {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-1);
 }
-.issue-list {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--sidebar-background-color);
-  border-right: 1px solid var(--line-soft);
-}
-.issue-filters {
+.issues-toolbar {
   display: flex;
   flex: none;
-  flex-direction: column;
-  gap: 8px;
-  padding: 11px 10px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--sidebar-background-color);
   border-bottom: 1px solid var(--line-soft);
+}
+.search {
+  max-width: 320px;
 }
 .state-tabs {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   padding: 3px;
   background: var(--surface-sunken);
   border-radius: 8px;
 }
 .state-tab {
-  flex: 1;
-  padding: 5px 0;
+  padding: 5px 12px;
   font-family: inherit;
   font-size: 11px;
   color: var(--ink-muted);
@@ -715,64 +723,58 @@ function isBound(row: GitIssueRow): boolean {
   background: var(--surface-raised);
   box-shadow: var(--shadow-1);
 }
-.issue-scroll {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 8px 12px;
-  overflow-y: auto;
-}
-.list-head {
-  display: flex;
-  align-items: center;
-  padding: 0 6px 8px;
-}
-.list-count {
+.toolbar-count {
+  margin-left: auto;
   font-size: 10px;
   color: var(--ink-faint);
 }
-.group-empty {
-  padding: 8px 7px;
-  font-size: 11px;
-  color: var(--ink-faint);
+.issues-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
 }
-.group-empty.error {
+.list-empty {
+  padding: 28px 20px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+.list-empty.error {
   color: var(--danger, #c45656);
 }
-.issue-item {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
+
+/* 任务行 */
+.task-row {
+  border-bottom: 1px solid var(--line-soft);
+}
+.task-row:last-child {
+  border-bottom: 0;
+}
+.task-main {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto auto auto 14px;
+  gap: 12px;
+  align-items: center;
   width: 100%;
-  padding: 9px 9px;
+  padding: 12px 16px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: none;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  transition: background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  border: 0;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
-.issue-item:hover {
-  background: var(--surface-raised);
+.task-main:hover {
+  background: var(--surface-hover);
 }
-.issue-item.active {
-  background: var(--surface-raised);
-  border-color: var(--line);
-  box-shadow: var(--shadow-1), inset 2px 0 var(--accent);
-}
-.issue-item.closed .item-title {
-  color: var(--ink-muted);
-  text-decoration: line-through;
-  text-decoration-color: var(--line-strong);
+.task-row.open .task-main {
+  background: var(--surface-sunken);
 }
 .state-dot {
-  flex: none;
   width: 7px;
   height: 7px;
-  margin-top: 5px;
   border-radius: 50%;
 }
 .state-dot.open {
@@ -781,47 +783,44 @@ function isBound(row: GitIssueRow): boolean {
 .state-dot.closed {
   background: var(--ok);
 }
-.item-main {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.item-title {
-  display: -webkit-box;
+.task-title {
   overflow: hidden;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--ink);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.issue-item.active .item-title {
-  font-weight: 600;
-}
-.item-meta {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-}
-.item-remote {
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.item-foot {
+.task-row.closed .task-title {
+  color: var(--ink-muted);
+}
+.task-labels {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
   align-items: center;
 }
-.sync-pill {
-  padding: 0 5px;
+.mini-chip {
+  padding: 0 6px;
   font-size: 9px;
-  line-height: 15px;
+  line-height: 16px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+}
+.task-remote {
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.task-remote.local {
+  color: var(--ink-faint);
+}
+.sync-pill {
+  padding: 0 6px;
+  font-size: 9px;
+  line-height: 16px;
+  white-space: nowrap;
   border-radius: 4px;
 }
 .sync-pill.synced {
@@ -837,200 +836,36 @@ function isBound(row: GitIssueRow): boolean {
   color: var(--ink-faint);
   background: var(--surface-sunken);
 }
-.mini-chip {
-  padding: 0 5px;
-  font-size: 9px;
-  line-height: 15px;
-  color: var(--ink-muted);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-pill);
+.sync-pill.spacer {
+  visibility: hidden;
 }
-
-/* 页内新建 / 编辑 */
-.issue-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  max-width: 720px;
-}
-.editor-head {
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.editor-title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--ink);
-}
-.editor-desc {
-  margin: 5px 0 0;
-  font-size: 11.5px;
-  line-height: 1.65;
-  color: var(--ink-muted);
-}
-.editor-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.editor-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.editor-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--ink-muted);
-}
-.editor-target {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  padding: 11px 13px;
-  font-size: 11.5px;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border: 1px solid var(--line-soft);
-  border-radius: 9px;
-}
-.target-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--ink-faint);
-}
-.target-text {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  align-items: center;
-  min-width: 0;
-}
-.target-text.muted {
-  color: var(--ink-faint);
-}
-.target-repo {
-  padding: 1px 6px;
-  font-size: 10.5px;
-  color: var(--ink);
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: 5px;
-}
-.editor-foot {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  padding-top: 2px;
-}
-
-/* 右栏 */
-.issue-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-  min-height: 0;
-  padding: 22px 24px;
-  overflow-y: auto;
-}
-.detail-hero {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.hero-main {
-  flex: 1;
-  min-width: 0;
-}
-.hero-eyebrow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.state-pill {
-  padding: 1px 8px;
+.task-time {
   font-size: 10px;
-  font-weight: 600;
-  border-radius: var(--radius-pill);
-}
-.state-pill.open {
-  color: var(--warn-ink, #8a6200);
-  background: var(--warn-soft, #fff4d6);
-}
-.state-pill.closed {
-  color: var(--ok-ink, #2f7d4f);
-  background: var(--ok-soft, #e8f5ec);
-}
-.hero-link {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-  overflow: hidden;
-  font-size: 10.5px;
-  color: var(--accent-ink);
-  text-decoration: none;
-  text-overflow: ellipsis;
+  color: var(--ink-faint);
   white-space: nowrap;
 }
-.hero-link.muted {
+.chevron {
+  font-size: 11px;
   color: var(--ink-faint);
+  transition: transform var(--dur-fast) var(--ease-out);
 }
-.hero-title {
-  margin: 6px 0 0;
-  font-size: 18px;
-  font-weight: 650;
-  line-height: 1.4;
-  letter-spacing: -0.01em;
-  color: var(--ink);
-}
-.hero-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 9px;
-}
-.chip {
-  padding: 2px 9px;
-  font-size: 10.5px;
-  color: var(--ink-muted);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-}
-.chip.on {
+.task-row.open .chevron {
   color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-color: transparent;
+  transform: rotate(90deg);
 }
-.chip.synced {
-  color: var(--ok-ink, #2f7d4f);
-  background: var(--ok-soft, #e8f5ec);
-  border-color: transparent;
-}
-.chip.failed {
-  color: var(--danger, #c45656);
-  background: var(--danger-soft, #fdecec);
-  border-color: transparent;
+
+/* 展开详情 */
+.task-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 20px 18px 36px;
 }
 .sync-error {
-  margin: 9px 0 0;
   font-size: 11px;
   line-height: 1.6;
   color: var(--danger, #c45656);
   overflow-wrap: anywhere;
-}
-.hero-actions {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-  max-width: 250px;
 }
 .detail-block,
 .comment-block {
@@ -1039,40 +874,54 @@ function isBound(row: GitIssueRow): boolean {
   overflow: hidden;
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 10px;
+  border-radius: 9px;
 }
 .block-head {
   display: flex;
   flex: none;
-  gap: 8px;
+  gap: 10px;
   align-items: baseline;
-  padding: 10px 14px;
+  padding: 9px 13px;
   background: var(--code-bg);
   border-bottom: 1px solid var(--line-soft);
 }
 .block-title {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--ink);
 }
 .block-sub {
   overflow: hidden;
-  font-size: 10.5px;
+  margin-left: auto;
+  font-size: 10px;
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.block-link {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--accent-ink);
+  text-decoration: none;
+}
 .block-empty {
-  padding: 16px 13px;
+  padding: 14px 13px;
   font-size: 11px;
   color: var(--ink-faint);
 }
 .markdown-body {
-  padding: 14px 16px;
+  padding: 12px 14px;
 }
 .markdown-body :deep(.markdown-view) {
   font-size: 12.5px;
   line-height: 1.75;
+}
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .comment-list {
   display: flex;
@@ -1081,8 +930,8 @@ function isBound(row: GitIssueRow): boolean {
 .comment-item {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 11px 14px;
+  gap: 4px;
+  padding: 10px 13px;
 }
 .comment-item + .comment-item {
   border-top: 1px solid var(--line-soft);
@@ -1096,7 +945,7 @@ function isBound(row: GitIssueRow): boolean {
   display: inline-flex;
   gap: 4px;
   align-items: center;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--ink);
 }
@@ -1131,7 +980,7 @@ function isBound(row: GitIssueRow): boolean {
   background: var(--surface-hover);
 }
 .comment-body {
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.65;
   color: var(--ink-soft);
   white-space: pre-wrap;
@@ -1141,7 +990,7 @@ function isBound(row: GitIssueRow): boolean {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 11px 13px;
   border-top: 1px solid var(--line-soft);
 }
 .compose-foot {
@@ -1154,57 +1003,135 @@ function isBound(row: GitIssueRow): boolean {
   font-size: 10.5px;
   color: var(--ink-faint);
 }
-.detail-empty {
+
+/* 页内编辑卡片 */
+.editor-card {
+  margin: 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--accent-line, var(--line));
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
+}
+.editor-head {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.editor-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.editor-desc {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+.editor-body {
   display: flex;
-  flex: 1;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.editor-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.editor-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.editor-target {
+  display: flex;
+  flex: none;
+  gap: 7px;
   align-items: center;
-  justify-content: center;
-  font-size: 12px;
+  max-width: 300px;
+  padding: 8px 11px;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.target-icon {
+  display: inline-flex;
+  flex: none;
   color: var(--ink-faint);
 }
-.empty-icon {
+.target-text {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
   align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  font-size: 19px;
-  color: var(--ink-muted);
-  background: var(--code-bg);
+  min-width: 0;
+}
+.target-text.muted {
+  color: var(--ink-faint);
+}
+.target-repo {
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--ink);
+  background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 13px;
+  border-radius: 4px;
 }
-.form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-@media (max-width: 900px) {
-  .issues-body {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
-  }
-  .issue-list {
-    max-height: 300px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line-soft);
-  }
-  .issue-detail {
-    overflow: visible;
-  }
-  .detail-hero {
-    flex-direction: column;
-  }
-  .hero-actions {
-    max-width: none;
-    justify-content: flex-start;
-  }
+.editor-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 10px 16px;
+  background: var(--surface-sunken);
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0 0 10px 10px;
 }
 
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (max-width: 860px) {
+  .issues-view {
+    padding: 16px;
+  }
+  .task-main {
+    grid-template-columns: 8px minmax(0, 1fr) auto 14px;
+  }
+  .task-labels,
+  .sync-pill,
+  .task-time {
+    display: none;
+  }
+  .task-remote {
+    font-size: 10px;
+  }
+  .issues-head {
+    flex-direction: column;
+  }
+  .issues-head-side {
+    justify-content: flex-start;
+  }
+  .editor-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .editor-target {
+    max-width: none;
+  }
+  .task-detail {
+    padding: 4px 14px 16px 26px;
+  }
 }
 </style>

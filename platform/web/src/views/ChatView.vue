@@ -617,8 +617,8 @@ onMounted(async () => {
       />
     </div>
 
-    <!-- 输入区：自然撑开在底部，不 fixed / 不 sticky -->
-    <div class="composer-wrap">
+    <!-- 输入区：自然撑开在底部，不 fixed / 不 sticky；任务页不涉及对话，隐藏以留出列表高度 -->
+    <div v-if="viewMode !== 'issues'" class="composer-wrap">
       <div class="composer">
         <textarea
           ref="inputRef"
