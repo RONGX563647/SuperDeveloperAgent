@@ -1,7 +1,9 @@
 package top.rongx.agent.domain.env;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 中间件寻址规则：同一份资源登记，在不同运行形态下映射成不同的连接地址。
@@ -77,5 +79,118 @@ public final class EnvAddressing {
             return r.port();
         }
         return r.containerPort();
+    }
+
+    /**
+     * 把变量里以「容器名/内网名」登记的地址改写为宿主机可达地址（本机模式部署用）。
+     *
+     * <p>这是地址改写的唯一实现：DB / REDIS / RABBITMQ / MINIO / MONGO 全部覆盖，
+     * 不再由执行器各自维护一套。找不到同名资源时原值保持不变。
+     */
+    public static Map<String, String> rewriteToHost(Map<String, String> values,
+                                                    List<EnvResource> resources) {
+        Map<String, String> out = new LinkedHashMap<>(values == null ? Map.of() : values);
+        if (resources == null || resources.isEmpty()) {
+            return out;
+        }
+        rewriteHost(out, resources, "DB", "mysql", "mariadb", "postgres");
+        rewriteHost(out, resources, "REDIS", "redis");
+        rewriteHost(out, resources, "RABBITMQ", "rabbitmq");
+        rewriteHost(out, resources, "MONGO", "mongo");
+        rewriteMinio(out, resources);
+        return out;
+    }
+
+    private static void rewriteHost(Map<String, String> vars, List<EnvResource> resources,
+                                    String prefix, String... kinds) {
+        String host = vars.get(prefix + "_HOST");
+        if (host == null || host.isBlank()) {
+            return;
+        }
+        EnvResource matched = match(host, resources, kinds);
+        if (matched == null) {
+            return;
+        }
+        if (matched.host() != null && !matched.host().isBlank()) {
+            vars.put(prefix + "_HOST", matched.host());
+        }
+        if (matched.port() > 0) {
+            vars.put(prefix + "_PORT", String.valueOf(matched.port()));
+        }
+        if ("DB".equals(prefix) && matched.databaseName() != null
+                && !matched.databaseName().isBlank()) {
+            vars.put(prefix + "_NAME", matched.databaseName());
+        }
+        if (!"REDIS".equals(prefix) && matched.username() != null
+                && !matched.username().isBlank()) {
+            vars.put(prefix + "_USERNAME", matched.username());
+        }
+        if (matched.password() != null && !matched.password().isEmpty()) {
+            vars.put(prefix + "_PASSWORD", matched.password());
+        }
+    }
+
+    private static void rewriteMinio(Map<String, String> vars, List<EnvResource> resources) {
+        String endpoint = vars.get("MINIO_ENDPOINT");
+        if (endpoint == null || endpoint.isBlank()) {
+            return;
+        }
+        String host = endpoint;
+        int scheme = host.indexOf("://");
+        if (scheme >= 0) {
+            host = host.substring(scheme + 3);
+        }
+        int slash = host.indexOf('/');
+        if (slash >= 0) {
+            host = host.substring(0, slash);
+        }
+        int colon = host.lastIndexOf(':');
+        if (colon >= 0) {
+            host = host.substring(0, colon);
+        }
+        EnvResource matched = match(host, resources, "minio");
+        if (matched == null) {
+            return;
+        }
+        if (matched.host() != null && !matched.host().isBlank() && matched.port() > 0) {
+            vars.put("MINIO_ENDPOINT", "http://" + matched.host() + ":" + matched.port());
+        }
+        if (matched.username() != null && !matched.username().isBlank()) {
+            vars.put("MINIO_ACCESS_KEY", matched.username());
+        }
+        if (matched.password() != null && !matched.password().isEmpty()) {
+            vars.put("MINIO_SECRET_KEY", matched.password());
+        }
+    }
+
+    /** 按 internalHost/name 精确匹配；同名资源优先取正在运行的那个。 */
+    private static EnvResource match(String host, List<EnvResource> resources, String... kinds) {
+        String name = host.trim();
+        EnvResource matched = null;
+        for (EnvResource r : resources) {
+            if (r == null) {
+                continue;
+            }
+            boolean kindOk = false;
+            for (String kind : kinds) {
+                if (kind.equals(r.kind())) {
+                    kindOk = true;
+                    break;
+                }
+            }
+            if (!kindOk) {
+                continue;
+            }
+            if (!name.equalsIgnoreCase(internalHost(r)) && !name.equalsIgnoreCase(r.name())) {
+                continue;
+            }
+            if (matched == null || (!matched.running() && r.running())) {
+                matched = r;
+            }
+            if (r.running()) {
+                break;
+            }
+        }
+        return matched;
     }
 }

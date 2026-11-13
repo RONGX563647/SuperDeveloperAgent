@@ -28,6 +28,7 @@ import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvResource;
+import top.rongx.agent.domain.env.EnvResolution;
 import top.rongx.agent.domain.env.EnvRuntime;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvVariable;
@@ -97,8 +98,7 @@ public class EnvironmentController {
         requireRead();
         List<Map<String, Object>> out = new ArrayList<>();
         for (EnvTemplate t : envStore.templates()) {
-            // 首次进入时把资源连接信息落成模板变量，卡片上的变量数才和详情一致。
-            syncResourceVars(t.env());
+            // 卡片上的变量数为「派生 + 人工模板变量」的实时视图。
             List<EnvResource> resources = envStore.resources(t.env());
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("template", t);
@@ -125,7 +125,6 @@ public class EnvironmentController {
         requireRead();
         // 每次打开详情时把中间件连接信息同步成模板变量（幂等），
         // 让"发现/导入"得到的账号密码可以直接看到、也可以在部署时注入。
-        syncResourceVars(env);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("template", envStore.template(env).orElseThrow(() ->
                 new IllegalArgumentException("环境不存在：" + env)));
@@ -152,7 +151,6 @@ public class EnvironmentController {
                 str(body, "autonomy", current.autonomy()),
                 System.currentTimeMillis()));
         // 形态/命名空间变化会改变中间件寻址，变量必须跟着重算。
-        syncResourceVars(env);
         return envStore.template(env).orElseThrow();
     }
 
@@ -166,7 +164,6 @@ public class EnvironmentController {
     @GetMapping("/envs/{env}/document")
     public Map<String, Object> document(@PathVariable String env) {
         requireRead();
-        syncResourceVars(env);
         return documentService.document(EnvNames.normalize(env));
     }
 
@@ -177,7 +174,6 @@ public class EnvironmentController {
         requireWrite();
         Map<String, Object> result = documentService.apply(EnvNames.normalize(env),
                 str(body, "markdown", null));
-        syncResourceVars(env);
         return result;
     }
 
@@ -304,7 +300,6 @@ public class EnvironmentController {
                     candidate.running(), candidate.lastCheckAt(), candidate.lastError()));
             out.add(resourceView(saved));
         }
-        syncResourceVars(env);
         return out;
     }
 
@@ -326,7 +321,6 @@ public class EnvironmentController {
                 str(body, "network", null),
                 str(body, "serverId", null),
                 "MANUAL", false, 0, null, str(body, "image", null)));
-        syncResourceVars(env);
         return resourceView(saved);
     }
 
@@ -334,7 +328,6 @@ public class EnvironmentController {
     public Map<String, Object> deleteResource(@PathVariable String env, @PathVariable String id) {
         requireWrite();
         envStore.deleteResource(id);
-        syncResourceVars(env);
         return Map.of("ok", true);
     }
 
@@ -356,7 +349,6 @@ public class EnvironmentController {
     public Map<String, Object> startResource(@PathVariable String env, @PathVariable String id) {
         requireWrite();
         EnvRuntime.Result result = envRuntime.start(id);
-        syncResourceVars(env);
         return runtimeView(id, result);
     }
 
@@ -365,7 +357,6 @@ public class EnvironmentController {
     public Map<String, Object> stopResource(@PathVariable String env, @PathVariable String id) {
         requireWrite();
         EnvRuntime.Result result = envRuntime.stop(id);
-        syncResourceVars(env);
         return runtimeView(id, result);
     }
 
@@ -552,6 +543,14 @@ public class EnvironmentController {
         return out;
     }
 
+    /** 变量来源解释：每个键最终由哪一层生效、哪些层参与过（值掩码）。 */
+    @GetMapping("/projects/{projectId}/env-explain")
+    public EnvResolution envExplain(@PathVariable String projectId,
+                                    @RequestParam(defaultValue = "test") String env) {
+        requireRead();
+        return envStore.resolve(projectId, env);
+    }
+
     /** 读取当前环境生效的发布摘要；缺失或解析失败时返回 null（退回环境模板默认值）。 */
     private PipelineEngine.DeploySummary pipelineDeploy(String projectId, String env) {
         return pipelineEngine.deploySummary(projectId, env).orElse(null);
@@ -613,6 +612,9 @@ public class EnvironmentController {
                 referencedRunning++;
             }
         }
+        if (!e.missingSecrets().isEmpty()) {
+            problems.add("密钥引用无法解析：" + String.join("、", e.missingSecrets()));
+        }
         if (!missingVars.isEmpty()) {
             problems.add(0, "缺少必填环境变量：" + String.join("、", missingVars));
         }
@@ -622,6 +624,7 @@ public class EnvironmentController {
         out.put("projectId", projectId);
         out.put("requiredCount", required.size());
         out.put("missingVars", missingVars);
+        out.put("missingSecrets", e.missingSecrets());
         out.put("sourceProvidedVars", sourceProvided);
         out.put("missingResources", missingResources);
         out.put("stoppedResources", stoppedResources);
@@ -705,17 +708,6 @@ public class EnvironmentController {
         out.put("stopped", result.stopped());
         out.put("failed", result.failed());
         return out;
-    }
-
-    /** 资源连接信息 → 模板变量（source=RESOURCE），并清掉已失效的资源变量。 */
-    private void syncResourceVars(String env) {
-        envStore.syncResourceVars(env);
-        Set<String> keep = StackAdapter.derive(envStore.resources(env)).keySet();
-        for (EnvVariable v : envStore.envVars(env)) {
-            if ("RESOURCE".equals(v.source()) && !keep.contains(v.key())) {
-                envStore.deleteEnvVar(env, v.key());
-            }
-        }
     }
 
     // ---------------------------------------------------------------- Agent 绑定

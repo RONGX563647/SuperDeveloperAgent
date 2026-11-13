@@ -58,9 +58,6 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     private static final Duration PROBE_TIMEOUT = Duration.ofMillis(1500);
     private static final Pattern NAME = Pattern.compile("[a-z0-9][a-z0-9_.-]{0,63}");
     private static final Pattern KEY = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,63}");
-    private static final Set<String> ENDPOINT_KEYS = Set.of("DB_HOST", "DB_PORT", "REDIS_HOST",
-            "REDIS_PORT", "RABBITMQ_HOST", "RABBITMQ_PORT", "MINIO_ENDPOINT", "MONGO_HOST",
-            "MONGO_PORT");
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final EnvironmentStore store;
@@ -142,7 +139,6 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         boolean running = Boolean.TRUE.equals(liveRunning(name));
         if (existing != null && running && sameCreds(existing, creds)) {
             store.recordHealth(existing.id(), true, null);
-            applyOverrides(projectId, existing, true);
             return;
         }
         if (containerExists(name)) {
@@ -163,7 +159,6 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                 defaultPort(kind), name, creds.database(), creds.username(), creds.password(),
                 network, existing == null ? null : existing.serverId(), "LOCAL_DOCKER", true,
                 System.currentTimeMillis(), null));
-        applyOverrides(projectId, saved, true);
         (existing == null ? created : started).add(name + "(" + port + ")");
         log.info("环境容器已就绪：project={} env={} name={} port={} recreate={}",
                 projectId, env, name, port, existing != null);
@@ -478,47 +473,13 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         return seedFromProjectFiles(projectId, env);
     }
 
+    /**
+     * 连接信息无需再写入项目覆盖：地址/账号/口令由 {@link StackAdapter#derive} 按资源实时派生，
+     * {@code EnvironmentStore.effective} 每次部署都会重新计算，避免落库后变旧。
+     */
     @Override
     public List<String> syncEndpoints(String projectId, String env) {
-        if (projectId == null || projectId.isBlank() || env == null || env.isBlank()
-                || internalAddressing(env)) {
-            return List.of();
-        }
-        Map<String, String> values = store.effective(projectId, env).values();
-        List<String> updated = new ArrayList<>();
-        for (EnvResource r : store.resources(env)) {
-            if (r == null || !StackAdapter.isReferenced(r, values)) {
-                continue;
-            }
-            // dev 用 host + 发布端口；同一次调用里把历史容器名纠正为 127.0.0.1
-            applyOverrides(projectId, r, true);
-            updated.add(r.name());
-        }
-        return updated;
-    }
-
-    // ---------------------------------------------------------------- 变量注入
-
-    /**
-     * 连接信息写入项目覆盖。
-     *
-     * @param forceEndpoint true = 地址/端口以容器实际值为准（容器由平台创建/复用），
-     *                      其它键（库名/账号/密码）只在缺失时补，避免覆盖项目声明
-     */
-    private void applyOverrides(String projectId, EnvResource r, boolean forceEndpoint) {
-        if (r == null || projectId == null || projectId.isBlank() || r.env() == null) {
-            return;
-        }
-        EffectiveEnvironment effective = store.effective(projectId, r.env());
-        for (Map.Entry<String, String> entry : derive(r, internalAddressing(r.env())).entrySet()) {
-            String key = entry.getKey();
-            String current = effective.values().get(key);
-            boolean endpoint = forceEndpoint && ENDPOINT_KEYS.contains(key);
-            if (!endpoint && current != null && !current.isBlank()) {
-                continue;
-            }
-            store.saveOverride(projectId, r.env(), key, entry.getValue(), isSecret(key));
-        }
+        return List.of();
     }
 
     /**

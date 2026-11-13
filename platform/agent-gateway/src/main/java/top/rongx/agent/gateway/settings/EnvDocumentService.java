@@ -39,7 +39,9 @@ public class EnvDocumentService {
         EnvTemplate t = store.template(env).orElseThrow(() ->
                 new IllegalArgumentException("环境不存在：" + env));
         List<EnvResource> resources = store.resources(env);
-        List<EnvVariable> vars = store.envVars(env);
+        List<EnvVariable> vars = store.envVars(env).stream()
+                .filter(v -> !"RESOURCE".equals(v.source()))
+                .toList();
         Map<String, String> varValues = new LinkedHashMap<>();
         for (EnvVariable v : vars) {
             varValues.put(v.key(), v.value());
@@ -125,8 +127,7 @@ public class EnvDocumentService {
 
         int templateChanged = applyTemplate(env, parsed.overview);
         Map<String, Integer> resources = applyResources(env, parsed.resources, parsed.sawResourcesTable);
-        // 资源连接信息变了，先同步成 RESOURCE 变量，再覆盖人工变量，避免两边打架。
-        store.syncResourceVars(env);
+        // 文档只维护人工变量；中间件连接信息由资源实时派生，不落模板变量。
         Map<String, Integer> vars = applyVars(env, parsed.vars, parsed.sawVarsTable);
         // 场景词条区填的值只补「还没有」的键，不覆盖模板变量表里更明确的值。
         int scenarioFilled = fillScenarioValues(env, parsed.scenarioValues);
@@ -243,7 +244,9 @@ public class EnvDocumentService {
     private Map<String, Integer> applyVars(String env, List<Map<String, String>> rows, boolean sawTable) {
         Map<String, EnvVariable> existing = new LinkedHashMap<>();
         for (EnvVariable v : store.envVars(env)) {
-            existing.put(v.key(), v);
+            if (!"RESOURCE".equals(v.source())) {
+                existing.put(v.key(), v);
+            }
         }
         int created = 0;
         int updated = 0;
@@ -295,7 +298,9 @@ public class EnvDocumentService {
     private int fillScenarioValues(String env, Map<String, String> values) {
         Map<String, EnvVariable> existing = new LinkedHashMap<>();
         for (EnvVariable v : store.envVars(env)) {
-            existing.put(v.key(), v);
+            if (!"RESOURCE".equals(v.source())) {
+                existing.put(v.key(), v);
+            }
         }
         int filled = 0;
         for (ScenarioCatalog.Scenario s : ScenarioCatalog.all()) {

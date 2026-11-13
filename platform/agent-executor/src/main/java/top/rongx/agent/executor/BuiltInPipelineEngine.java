@@ -123,9 +123,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final LocalDevHostDeployer localDevHost;
     /** 环境级可复现脚本（空 = 关闭"固化/重放/晋升校验"）。 */
     private final top.rongx.agent.domain.port.RecipeStore recipeStore;
-    /** 项目环境变量（旧模型；envStore 非空时不使用）。 */
-    private final top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars;
-    /** 环境模板/资源/覆盖/端口租约（新模型）。 */
+    /** 环境模板/资源/覆盖/端口租约（变量注入的唯一来源）。 */
     private final top.rongx.agent.domain.env.EnvironmentStore envStore;
     /** 中间件运行时（部署前自动启动项目引用的 docker 中间件）；空 = 不启停。 */
     private final top.rongx.agent.domain.env.EnvRuntime envRuntime;
@@ -212,27 +210,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
-     * 最完整构造：再注入项目环境变量仓储（部署时注入 KEY=VALUE）。
-     *
-     * <p>环境变量按 (projectId, env) 读取，来自「设置 → 项目环境」；为空时部署行为与之前一致。
-     */
-    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
-                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
-                                 String imagePrefix,
-                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
-                                 top.rongx.agent.domain.port.Deployer deployers,
-                                 PipelineDefinitionResolver resolver,
-                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars) {
-        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator,
-                deployers, resolver, recipeStore, envVars, null);
-    }
-
-    /**
      * 最完整构造：再注入环境模板仓储（三套环境 + 中间件 + 项目覆盖 + 端口租约）。
      *
      * <p>非空时部署走新链路：有效变量来自环境模板 + 项目覆盖、注入网络、端口租约；
-     * 为空时退化为旧的 per-project 变量，方便单测与渐进迁移。
+     * 为空时退化为不注入任何变量，方便单测。
      */
     public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
                                  ActionRunner host, Path workspaceRoot, RunHistoryStore history,
@@ -241,10 +222,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.port.Deployer deployers,
                                  PipelineDefinitionResolver resolver,
                                  top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
                                  top.rongx.agent.domain.env.EnvironmentStore envStore) {
         this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator,
-                deployers, resolver, recipeStore, envVars, envStore, null);
+                deployers, resolver, recipeStore, envStore, null);
     }
 
     /**
@@ -259,11 +239,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.port.Deployer deployers,
                                  PipelineDefinitionResolver resolver,
                                  top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
                                  top.rongx.agent.domain.env.EnvironmentStore envStore,
                                  top.rongx.agent.domain.env.EnvRuntime envRuntime) {
         this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
-                resolver, recipeStore, envVars, envStore, envRuntime, null);
+                resolver, recipeStore, envStore, envRuntime, null);
     }
 
     /**
@@ -278,12 +257,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.port.Deployer deployers,
                                  PipelineDefinitionResolver resolver,
                                  top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
                                  top.rongx.agent.domain.env.EnvironmentStore envStore,
                                  top.rongx.agent.domain.env.EnvRuntime envRuntime,
                                  top.rongx.agent.domain.env.EnvProvisioner envProvisioner) {
         this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator,
-                deployers, resolver, recipeStore, envVars, envStore, envRuntime, envProvisioner, null);
+                deployers, resolver, recipeStore, envStore, envRuntime, envProvisioner, null);
     }
 
     /**
@@ -298,13 +276,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.port.Deployer deployers,
                                  PipelineDefinitionResolver resolver,
                                  top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
                                  top.rongx.agent.domain.env.EnvironmentStore envStore,
                                  top.rongx.agent.domain.env.EnvRuntime envRuntime,
                                  top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
                                  top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor) {
         this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
-                resolver, recipeStore, envVars, envStore, envRuntime, envProvisioner,
+                resolver, recipeStore, envStore, envRuntime, envProvisioner,
                 recoveryAdvisor, null);
     }
 
@@ -320,14 +297,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.port.Deployer deployers,
                                  PipelineDefinitionResolver resolver,
                                  top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
                                  top.rongx.agent.domain.env.EnvironmentStore envStore,
                                  top.rongx.agent.domain.env.EnvRuntime envRuntime,
                                  top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
                                  top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor,
                                  LocalDevHostDeployer localDevHost) {
         this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
-                resolver, recipeStore, envVars, envStore, envRuntime, envProvisioner,
+                resolver, recipeStore, envStore, envRuntime, envProvisioner,
                 recoveryAdvisor, localDevHost, null);
     }
 
@@ -344,7 +320,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.port.Deployer deployers,
                                  PipelineDefinitionResolver resolver,
                                  top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
                                  top.rongx.agent.domain.env.EnvironmentStore envStore,
                                  top.rongx.agent.domain.env.EnvRuntime envRuntime,
                                  top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
@@ -361,7 +336,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         this.deployers = deployers == null ? Deployers.builtin() : deployers;
         this.resolver = resolver;
         this.recipeStore = recipeStore;
-        this.envVars = envVars;
         this.envStore = envStore;
         this.envRuntime = envRuntime;
         this.envProvisioner = envProvisioner;
@@ -2069,8 +2043,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
 
         Map<String, String> deployEnv = envStore == null
-                ? loadDeployEnv(state)
-                : localHostEnv(envStore.effective(state.projectId, state.env).values(), state.env);
+                ? Map.of()
+                : top.rongx.agent.domain.env.EnvAddressing.rewriteToHost(
+                        envStore.effective(state.projectId, state.env).values(),
+                        envStore.resources(state.env));
 
         int backendPort = allocateHostPort(state, DeployTarget.HOST, 8688, 8688);
         int frontendPort = dist == null ? 0
@@ -2115,64 +2091,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.stages.add(StageResult.success("health", 0, List.of(), elapsed(healthStart)));
         state.log.append("[recipe] 本机模式不固化环境脚本（直接使用工作区）\n");
         state.status = StageStatus.SUCCEEDED;
-    }
-
-    /**
-     * 本机模式的环境变量处理：平台中间件用容器内网名，宿主机解析不到，
-     * 这里换成「127.0.0.1 + 发布端口」；项目配置（DB_* / REDIS_*）本身不用改。
-     */
-    private Map<String, String> localHostEnv(Map<String, String> effective, String env) {
-        Map<String, String> out = new LinkedHashMap<>(effective);
-        resolveToHost(out, env, "DB", "mysql");
-        resolveToHost(out, env, "REDIS", "redis");
-        return out;
-    }
-
-    /** 变量里的地址是容器名/内网名时，替换成宿主机可达的 host:port（找不到同名资源就原样保留）。 */
-    private void resolveToHost(Map<String, String> vars, String env, String prefix, String kind) {
-        String host = vars.get(prefix + "_HOST");
-        if (envStore == null || host == null || host.isBlank()) {
-            return;
-        }
-        String name = host.trim();
-        EnvResource matched = null;
-        for (EnvResource resource : envStore.resources(env)) {
-            if (resource == null || !kind.equals(resource.kind())) {
-                continue;
-            }
-            if (!name.equalsIgnoreCase(resource.internalHost())
-                    && !name.equalsIgnoreCase(resource.name())) {
-                continue;
-            }
-            // 同名资源里优先取正在运行的那个，避免命中同名的历史/已停资源
-            if (matched == null || (!matched.running() && resource.running())) {
-                matched = resource;
-            }
-            if (resource.running()) {
-                break;
-            }
-        }
-        if (matched == null) {
-            return;
-        }
-        if (matched.host() != null && !matched.host().isBlank()) {
-            vars.put(prefix + "_HOST", matched.host());
-        }
-        if (matched.port() > 0) {
-            vars.put(prefix + "_PORT", String.valueOf(matched.port()));
-        }
-        // 库名/账号/口令同样以匹配到的中间件资源为准：否则会残留别的资源（如 pg 的 postgres/5432）
-        if ("DB".equals(prefix)) {
-            if (matched.databaseName() != null && !matched.databaseName().isBlank()) {
-                vars.put("DB_NAME", matched.databaseName());
-            }
-            if (matched.username() != null && !matched.username().isBlank()) {
-                vars.put("DB_USERNAME", matched.username());
-            }
-        }
-        if (matched.password() != null && !matched.password().isEmpty()) {
-            vars.put(prefix + "_PASSWORD", matched.password());
-        }
     }
 
     private void failLocalDev(RunState state, String stageId, String code, String summary,
@@ -2769,7 +2687,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 ? null : envStore.effective(state.projectId, state.env);
         state.sensitiveValues = secretValues(effective);
         Map<String, String> deployEnv = effective != null
-                ? effective.values() : loadDeployEnv(state);
+                ? effective.values() : Map.of();
         String network = effective == null ? null : effective.network();
         // 环境模板绑定：运行形态 / 命名空间 / 服务器，部署语义以模板为准。
         top.rongx.agent.domain.env.EnvTemplate template = envStore == null
@@ -3158,19 +3076,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .append("（容器 ").append(primaryResource).append("）\n");
         state.stages.add(StageResult.success(stageId, 0, artifacts, elapsed(start)));
         return true;
-    }
-
-    /**
-     * 读取本次部署要注入的环境变量。
-     *
-     * <p>读不到（DB 损坏/主密钥不匹配）时**不吞异常**：带着错误配置部署比失败更危险，
-     * 由 stage 的异常处理给出 E-2xx。
-     */
-    private Map<String, String> loadDeployEnv(RunState state) {
-        if (envVars == null) {
-            return Map.of();
-        }
-        return envVars.resolve(state.projectId, state.env);
     }
 
     /**

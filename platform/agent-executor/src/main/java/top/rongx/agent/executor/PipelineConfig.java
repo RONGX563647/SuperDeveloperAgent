@@ -100,7 +100,6 @@ public class PipelineConfig {
                                          top.rongx.agent.domain.port.PipelineDefStore defStore,
                                          top.rongx.agent.domain.port.ProjectScaffolder scaffolder,
                                          top.rongx.agent.domain.port.RecipeStore recipeStore,
-                                         top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
                                          top.rongx.agent.domain.env.EnvironmentStore envStore,
                                          LocalDevHostDeployer localDevHost,
                                          top.rongx.agent.domain.env.EnvRuntime envRuntime,
@@ -150,7 +149,7 @@ public class PipelineConfig {
                     }
                 };
         BuiltInPipelineEngine engine = new BuiltInPipelineEngine(recipes, sandboxed, host, root, store,
-                imagePrefix, repoLocator, deployers, resolver, recipeStore, envVars, envStore,
+                imagePrefix, repoLocator, deployers, resolver, recipeStore, envStore,
                 envRuntime, envProvisioner, lazyRecovery, localDevHost, lazyGate);
         // 应用关闭时中断执行线程，避免悬挂构建进程。
         // 用虚拟线程工厂创建钩子线程（规约 R04 禁止 new Thread）；

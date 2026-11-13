@@ -16,13 +16,13 @@ import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.env.EffectiveEnvironment;
+import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.run.StageStatus;
-import top.rongx.agent.domain.settings.ProjectEnvVar;
-import top.rongx.agent.domain.settings.ProjectEnvVarRepository;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -148,10 +148,10 @@ class DeployEnvPrecheckTest {
     // ---------------------------------------------------------------- 夹具
 
     private static BuiltInPipelineEngine engine(Path workspace, Path repo, Deployer deployer,
-                                                ProjectEnvVarRepository envVars) {
+                                                EnvironmentStore envStore) {
         return new BuiltInPipelineEngine(NO_ACTION, HOST, HOST, workspace,
                 RunHistoryStore.disabled(), "ci", locator(repo), deployer,
-                null, null, envVars);
+                null, null, envStore);
     }
 
     private static Path newRepoWithPipeline(Path base, String pipelineYaml) throws Exception {
@@ -185,29 +185,24 @@ class DeployEnvPrecheckTest {
         }
     }
 
-    private static ProjectEnvVarRepository envVars(Map<String, String> values) {
-        return new ProjectEnvVarRepository() {
-            @Override
-            public List<ProjectEnvVar> findAll(String projectId, String env) {
-                return List.of();
-            }
-
-            @Override
-            public Map<String, String> resolve(String projectId, String env) {
-                return values;
-            }
-
-            @Override
-            public ProjectEnvVar save(String projectId, String env, String key, String value,
-                                      boolean secret, String updatedBy) {
-                throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public void delete(String projectId, String env, String key) {
-                // 测试只读
-            }
-        };
+    /** 仅提供 effective(values) 的最小 EnvironmentStore：部署预检只依赖它。 */
+    private static EnvironmentStore envVars(Map<String, String> values) {
+        return (EnvironmentStore) java.lang.reflect.Proxy.newProxyInstance(
+                EnvironmentStore.class.getClassLoader(),
+                new Class<?>[]{EnvironmentStore.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "effective" -> new EffectiveEnvironment(
+                            (String) args[0], (String) args[1], null, 0, null,
+                            List.of(), values, List.of(), values.size(), 0);
+                    case "template" -> Optional.empty();
+                    case "resources", "overrides", "envVars", "secrets",
+                         "leases", "serviceLeases", "allServiceLeases" -> List.of();
+                    case "lease" -> Optional.empty();
+                    case "equals" -> proxy == args[0];
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "toString" -> "FakeEnvironmentStore";
+                    default -> null;
+                });
     }
 
     private static final ActionRunner HOST = new ProcessActionRunner();

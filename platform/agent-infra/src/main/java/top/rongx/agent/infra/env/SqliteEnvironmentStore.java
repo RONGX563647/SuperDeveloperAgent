@@ -21,6 +21,7 @@ import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvResource;
+import top.rongx.agent.domain.env.EnvResolution;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.EnvironmentStore;
@@ -35,8 +36,8 @@ import top.rongx.agent.infra.security.SecretBox;
 /**
  * 环境模板 / 中间件资源 / 环境变量 / 项目覆盖 / 绑定 / 端口租约的 SQLite 实现。
  *
- * <p>与旧的 {@code project_env_vars} 共存：启动时把旧表迁移到
- * {@code project_env_overrides}（不删旧表，便于回滚）。
+ * <p>启动时把旧的 {@code project_env_vars} 迁移到 {@code project_env_overrides} 后删除旧表；
+ * 环境变量只有「环境模板 + 项目覆盖」一套模型，中间件连接信息按资源实时派生。
  */
 @Repository
 public class SqliteEnvironmentStore implements EnvironmentStore {
@@ -237,6 +238,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 SELECT project_id, env, var_key, value_enc, value_iv, is_secret, updated_at
                 FROM project_env_vars
                 """);
+        // 迁移完成后删旧表：变量模型收敛为「环境模板 + 项目覆盖」，不再保留第二套。
+        st.executeUpdate("DROP TABLE IF EXISTS project_env_vars");
     }
 
     private Connection open() throws SQLException {
@@ -485,7 +488,14 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public List<EnvVariable> envVars(String env) {
         requireEnv(env);
         Map<String, String> plain = plainEnvVars(env);
-        List<EnvVariable> out = new ArrayList<>();
+        Map<String, EnvVariable> merged = new java.util.TreeMap<>();
+        // 派生视图（不落库）：中间件连接信息实时计算，运行状态不参与。
+        for (Map.Entry<String, String> e : derivedEnvVars(env).entrySet()) {
+            String key = e.getKey();
+            boolean secret = looksSecret(key);
+            merged.put(key, new EnvVariable(null, env, key, secret,
+                    secret ? secretBox.mask(e.getValue()) : e.getValue(), "RESOURCE", 0));
+        }
         try (Connection conn = open();
              PreparedStatement st = conn.prepareStatement(
                      "SELECT var_key, is_secret, source, updated_at, value_kind, secret_ref "
@@ -493,6 +503,12 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(1, env);
             try (ResultSet rs = st.executeQuery()) {
                 while (rs.next()) {
+                    String source = rs.getString("source") == null
+                            ? "TEMPLATE" : rs.getString("source");
+                    // 旧版 RESOURCE 落库镜像已废弃，展示以派生视图为准。
+                    if ("RESOURCE".equals(source)) {
+                        continue;
+                    }
                     String key = rs.getString("var_key");
                     boolean secret = rs.getInt("is_secret") == 1;
                     String kind = rs.getString("value_kind");
@@ -501,15 +517,15 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                     String shown = EnvVariable.KIND_SECRET_REF.equals(kind) && ref != null
                             ? "secret://" + ref
                             : secret ? secretBox.mask(value) : value;
-                    out.add(new EnvVariable(null, env, key, secret, shown,
-                            rs.getString("source") == null ? "TEMPLATE" : rs.getString("source"),
+                    // 存储覆盖派生：同 key 以人工维护的 TEMPLATE 为准。
+                    merged.put(key, new EnvVariable(null, env, key, secret, shown, source,
                             rs.getLong("updated_at"), kind, ref));
                 }
-                return out;
             }
         } catch (SQLException e) {
             throw new IllegalStateException("环境变量查询失败：" + e.getMessage(), e);
         }
+        return List.copyOf(merged.values());
     }
 
     @Override
@@ -576,7 +592,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(2, key);
             try (ResultSet rs = st.executeQuery()) {
                 if (!rs.next()) {
-                    return Optional.empty();
+                    // 未落库的派生变量（RESOURCE）回落到实时派生值。
+                    return Optional.ofNullable(derivedEnvVars(env).get(key));
                 }
                 return Optional.of(secretBox.decrypt(rs.getString("value_enc"),
                         rs.getString("value_iv")));
@@ -586,36 +603,9 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         }
     }
 
-    /**
-     * 资源连接信息 → 环境模板变量（source=RESOURCE）。
-     *
-     * <p>不覆盖人工维护的变量；值没变化时不重写，避免刷新页面就改 updated_at。
-     */
-    @Override
-    public int syncResourceVars(String env) {
-        requireEnv(env);
-        Map<String, String> derived = StackAdapter.derive(
-                EnvAddressing.resolve(resources(env), template(env).orElse(null)));
-        if (derived.isEmpty()) {
-            return 0;
-        }
-        Map<String, String> current = plainEnvVars(env);
-        Map<String, String> sources = envVarSources(env);
-        int written = 0;
-        for (Map.Entry<String, String> e : derived.entrySet()) {
-            String key = e.getKey();
-            String source = sources.get(key);
-            if (source != null && !"RESOURCE".equals(source)) {
-                // 人工变量优先，资源只补空缺
-                continue;
-            }
-            if (e.getValue().equals(current.get(key))) {
-                continue;
-            }
-            saveEnvVar(env, key, e.getValue(), looksSecret(key), "RESOURCE");
-            written++;
-        }
-        return written;
+    /** 中间件资源 → 连接变量（按运行形态解析后的地址；运行状态不参与）。 */
+    private Map<String, String> derivedEnvVars(String env) {
+        return StackAdapter.derive(EnvAddressing.resolve(resources(env), template(env).orElse(null)));
     }
 
     /** 变量名 → 来源（TEMPLATE / RESOURCE）。 */
@@ -646,7 +636,11 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                      "DELETE FROM env_vars WHERE env=? AND var_key=?")) {
             st.setString(1, env);
             st.setString(2, key);
-            st.executeUpdate();
+            int deleted = st.executeUpdate();
+            if (deleted == 0 && derivedEnvVars(env).containsKey(key)) {
+                throw new IllegalArgumentException("变量 " + key
+                        + " 由中间件资源派生，不能删除；请修改或删除对应的中间件资源");
+            }
         } catch (SQLException e) {
             throw new IllegalStateException("环境变量删除失败：" + e.getMessage(), e);
         }
@@ -1094,6 +1088,36 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 template.defaultPort(), template.healthPath(), vars, values, resources,
                 templateVars.size() + derived.size(), overrides.size(), missingSecrets,
                 secretVersions);
+    }
+
+    @Override
+    public EnvResolution resolve(String projectId, String env) {
+        requireProject(projectId);
+        requireEnv(env);
+        EffectiveEnvironment e = effective(projectId, env);
+        java.util.Set<String> derivedKeys = derivedEnvVars(env).keySet();
+        java.util.Set<String> templateKeys = new java.util.HashSet<>();
+        for (Map.Entry<String, String> entry : envVarSources(env).entrySet()) {
+            if (!"RESOURCE".equals(entry.getValue())) {
+                templateKeys.add(entry.getKey());
+            }
+        }
+        java.util.Set<String> overrideKeys = storedOverrides(projectId, env).keySet();
+        List<EnvResolution.Var> out = new ArrayList<>();
+        for (EnvVariable v : e.vars()) {
+            List<String> layers = new ArrayList<>();
+            if (derivedKeys.contains(v.key())) {
+                layers.add("RESOURCE");
+            }
+            if (templateKeys.contains(v.key())) {
+                layers.add("TEMPLATE");
+            }
+            if (overrideKeys.contains(v.key())) {
+                layers.add("OVERRIDE");
+            }
+            out.add(new EnvResolution.Var(v.key(), v.source(), v.secret(), v.value(), layers));
+        }
+        return new EnvResolution(projectId, env, out);
     }
 
     private boolean isSecretEnvVar(String env, String key) {

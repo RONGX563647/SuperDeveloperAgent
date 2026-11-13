@@ -43,16 +43,6 @@ public interface EnvironmentStore {
     /** 单个模板变量的明文（仅"查看密码"接口使用，调用方负责权限与审计）。 */
     Optional<String> envVarValue(String env, String key);
 
-    /**
-     * 把中间件资源的连接信息同步成环境模板变量（source=RESOURCE）。
-     *
-     * <p>只补/更新 RESOURCE 来源的键，不覆盖人工维护的 TEMPLATE 变量；
-     * 运行状态不参与，容器没启动也照常保存连接信息。
-     *
-     * @return 实际写入的变量数
-     */
-    int syncResourceVars(String env);
-
     void deleteEnvVar(String env, String key);
 
     // ---------------------------------------------------------------- 项目覆盖
@@ -83,6 +73,9 @@ public interface EnvironmentStore {
 
     /** 环境模板 + 项目覆盖；values 含明文，只给执行面用。 */
     EffectiveEnvironment effective(String projectId, String env);
+
+    /** 变量来源解释（掩码）：每个键最终由哪一层生效、哪些层参与过。 */
+    EnvResolution resolve(String projectId, String env);
 
     // ---------------------------------------------------------------- Agent 绑定
 

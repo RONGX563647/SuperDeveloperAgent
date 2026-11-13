@@ -74,7 +74,7 @@ const stoppedCount = computed(() =>
 const missingCount = computed(() => resources.value.filter((r) => r.status === 'MISSING').length)
 
 async function load(): Promise<void> {
-  // 先详情（会把中间件账号密码同步成模板变量），再刷新卡片统计。
+  // 先详情（含中间件派生的实时变量），再刷新卡片统计。
   await loadDetail()
   await loadSummary()
 }
@@ -487,6 +487,7 @@ interface BookVar {
   key: string
   value: string
   secret: boolean
+  source?: string
 }
 
 const SHEETS: Array<{ id: BookSheet; label: string }> = [
@@ -586,9 +587,11 @@ async function loadBook(): Promise<void> {
       password: r.passwordMasked ?? '',
       network: r.network ?? '',
     })))
-    bookVars.value = details.flatMap((d) => d.vars.map((v) => ({
-      env: d.template.env, key: v.key, value: v.value, secret: v.secret,
-    })))
+    bookVars.value = details.flatMap((d) => d.vars
+      .filter((v) => v.source !== 'RESOURCE')
+      .map((v) => ({
+        env: d.template.env, key: v.key, value: v.value, secret: v.secret, source: v.source,
+      })))
     bookScenarios.value = catalog
     bookSnapshot.value = bookPayload.value
     bookSel.value = null
@@ -1322,7 +1325,18 @@ defineExpose({ load })
                   </button>
                 </span>
               </el-tooltip>
-              <el-tooltip content="删除变量" placement="top" :show-after="200">
+              <el-tooltip
+                v-if="v.source === 'RESOURCE'"
+                content="由中间件资源派生，删除请到「中间件」里移除对应资源"
+                placement="top" :show-after="200"
+              >
+                <span class="et-tip-wrap">
+                  <button type="button" class="et-icon" disabled>
+                    <el-icon><Delete /></el-icon>
+                  </button>
+                </span>
+              </el-tooltip>
+              <el-tooltip v-else content="删除变量" placement="top" :show-after="200">
                 <span class="et-tip-wrap">
                   <button type="button" class="et-icon danger" @click="removeVar(v)">
                     <el-icon><Delete /></el-icon>
