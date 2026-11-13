@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Document, DocumentCopy, Hide, Plus, Refresh, Search, VideoPause, VideoPlay, View } from '@element-plus/icons-vue'
+import { ArrowLeft, Delete, Document, DocumentCopy, Hide, Plus, Refresh, Search, VideoPause, VideoPlay, View } from '@element-plus/icons-vue'
 import { ApiError } from '../../api/http'
 import {
   applyEnvDocument, checkEnvResource, deleteEnvResource, deleteEnvTemplateVar, discoverEnvResources,
@@ -14,6 +14,7 @@ import {
 import { appStore } from '../../stores/app'
 import { formatTime } from '../../utils/status'
 import { envLabel } from '../../utils/pipelineLabels'
+import MarkdownView from '../chat/MarkdownView.vue'
 
 /**
  * 环境模板（dev / test / prod）：
@@ -461,9 +462,11 @@ function scenarioKeyConfigured(key: string): boolean {
 
 /**
  * 一份 Markdown 同时承载：模板参数、中间件镜像、模板变量、场景词条。
- * 编辑器里的改动点「同步到平台」才会写回；敏感值显示为 ****，保留即为不修改。
+ * 页面内大面板展示：左侧源码、右侧实时渲染；改动点「同步到平台」才写回，
+ * 敏感值显示为 ****，保留即为不修改。
  */
-const docDialog = ref(false)
+const docOpen = ref(false)
+const docMode = ref<'split' | 'edit' | 'preview'>('split')
 const docLoading = ref(false)
 const docSaving = ref(false)
 const docText = ref('')
@@ -471,8 +474,18 @@ const docSaved = ref('')
 const docDirty = computed(() => docText.value !== docSaved.value)
 
 async function openDoc(): Promise<void> {
-  docDialog.value = true
+  docOpen.value = true
   await loadDoc()
+}
+
+/** 返回模板页；有未同步修改时先确认，避免白改。 */
+async function closeDoc(): Promise<void> {
+  if (docDirty.value) {
+    const ok = await ElMessageBox.confirm('文档有未同步的修改，返回后这些修改会丢失。仍要返回？', '未同步修改',
+      { confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning' }).then(() => true).catch(() => false)
+    if (!ok) return
+  }
+  docOpen.value = false
 }
 
 async function loadDoc(): Promise<void> {
@@ -483,7 +496,6 @@ async function loadDoc(): Promise<void> {
     docSaved.value = view.markdown
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载文档失败')
-    docDialog.value = false
   } finally {
     docLoading.value = false
   }
@@ -525,8 +537,8 @@ async function saveDoc(): Promise<void> {
     }
     if (result.scenarioFilled) parts.push(`词条补值 ${result.scenarioFilled}`)
     ElMessage.success(parts.length ? `已同步：${parts.join('，')}` : '已同步（无变化）')
-    docDialog.value = false
     await load()
+    await loadDoc()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '同步失败')
   } finally {
@@ -604,6 +616,58 @@ defineExpose({ load })
 
 <template>
   <section class="env-template-panel" aria-label="环境模板">
+    <!-- 文档视图：原页面整体替换为大面板（不用弹窗），左侧源码、右侧实时渲染 -->
+    <section v-if="docOpen" class="et-doc-page" aria-label="环境模板文档">
+      <header class="et-doc-head">
+        <div class="et-doc-heading">
+          <el-button text :icon="ArrowLeft" class="et-doc-back" @click="closeDoc">返回模板</el-button>
+          <h2 class="et-title">环境模板文档</h2>
+          <el-tag size="small" effect="plain">{{ envLabel(env) }}</el-tag>
+          <el-tag v-if="docDirty" size="small" type="warning" effect="light">有未同步修改</el-tag>
+        </div>
+        <div class="et-doc-actions">
+          <el-radio-group v-model="docMode" size="small" class="et-doc-mode">
+            <el-radio-button label="split">分屏</el-radio-button>
+            <el-radio-button label="edit">编辑</el-radio-button>
+            <el-radio-button label="preview">预览</el-radio-button>
+          </el-radio-group>
+          <el-button size="small" :icon="Refresh" :loading="docLoading" @click="loadDoc">重新生成</el-button>
+          <el-button size="small" :icon="DocumentCopy" @click="copyDoc">复制</el-button>
+          <el-button
+            size="small" type="primary" :loading="docSaving" :disabled="!docDirty || docLoading"
+            @click="saveDoc"
+          >同步到平台</el-button>
+        </div>
+      </header>
+      <p class="et-doc-tip">
+        直接改左侧 Markdown，右侧实时渲染；点「同步到平台」写回概览参数、中间件镜像与模板变量。
+        <code>****</code> 表示保留原值；删除表格行 = 删除对应条目；场景词条区同名键以「模板变量」表为准。
+      </p>
+      <div class="et-doc-body" :class="`mode-${docMode}`">
+        <div v-show="docMode !== 'preview'" class="et-doc-pane">
+          <div class="et-pane-head">
+            <span>Markdown 源码</span>
+            <span class="et-pane-meta">{{ docText.length }} 字符</span>
+          </div>
+          <textarea
+            v-model="docText" class="et-doc-source" spellcheck="false" :disabled="docLoading"
+            placeholder="正在生成环境模板文档…"
+          />
+        </div>
+        <div v-show="docMode !== 'edit'" class="et-doc-pane">
+          <div class="et-pane-head">
+            <span>渲染预览</span>
+            <span class="et-pane-meta">只读</span>
+          </div>
+          <div class="et-doc-preview">
+            <MarkdownView v-if="docText" :content="docText" />
+            <p v-else class="et-empty">暂无内容</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <template v-else>
     <header class="et-head">
       <div>
         <h2 class="et-title">环境模板</h2>
@@ -1003,34 +1067,7 @@ defineExpose({ load })
       </template>
     </el-dialog>
 
-    <!-- 文档视图：模板参数 / 中间件 / 变量 / 词条 同一份 Markdown -->
-    <el-dialog
-      v-model="docDialog" :title="`环境模板文档 · ${envLabel(env)}`" width="880px" top="3vh"
-      destroy-on-close
-    >
-      <div class="et-doc-bar">
-        <span class="et-doc-tip">
-          编辑后点「同步到平台」写回概览参数、中间件镜像与模板变量。<code>****</code> 表示保留原值，
-          删除表格行 = 删除对应条目；场景词条区同名键以「模板变量」表为准。
-        </span>
-        <span class="et-doc-actions">
-          <el-tag v-if="docDirty" size="small" type="warning" effect="light">有未同步修改</el-tag>
-          <el-button size="small" :icon="Refresh" :loading="docLoading" @click="loadDoc">重新生成</el-button>
-          <el-button size="small" :icon="DocumentCopy" @click="copyDoc">复制</el-button>
-        </span>
-      </div>
-      <el-input
-        v-model="docText" type="textarea" class="et-doc-editor"
-        :autosize="{ minRows: 24, maxRows: 32 }" spellcheck="false"
-        :disabled="docLoading" placeholder="正在生成环境模板文档…"
-      />
-      <template #footer>
-        <el-button @click="docDialog = false">关闭</el-button>
-        <el-button type="primary" :loading="docSaving" :disabled="!docDirty" @click="saveDoc">
-          同步到平台
-        </el-button>
-      </template>
-    </el-dialog>
+    </template>
 
     <!-- 添加变量 -->
     <el-dialog v-model="varDialog" title="添加模板变量" width="480px">
@@ -1507,15 +1544,42 @@ defineExpose({ load })
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   box-shadow: 0 2px 10px rgb(0 0 0 / 5%);
 }
-.et-doc-bar {
+.et-doc-page {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  height: calc(100vh - 136px);
+  min-height: 520px;
+}
+.et-doc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: 10px;
+}
+.et-doc-heading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.et-doc-heading .et-title {
+  margin: 0;
+}
+.et-doc-back {
+  margin-right: 2px;
+  font-size: 12px;
+}
+.et-doc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 .et-doc-tip {
-  max-width: 560px;
+  max-width: 1180px;
+  margin: 0;
   font-size: 11.5px;
   line-height: 1.7;
   color: var(--ink-faint);
@@ -1525,17 +1589,74 @@ defineExpose({ load })
   background: var(--surface-sunken);
   border-radius: 3px;
 }
-.et-doc-actions {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
+.et-doc-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-height: 0;
 }
-.et-doc-editor :deep(.el-textarea__inner) {
+.et-doc-body.mode-edit,
+.et-doc-body.mode-preview {
+  grid-template-columns: minmax(0, 1fr);
+}
+.et-doc-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.et-pane-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--line-soft);
+}
+.et-doc-source {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  padding: 12px 14px;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-  font-size: 12px;
-  line-height: 1.65;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--ink);
   tab-size: 2;
+  resize: none;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+.et-doc-preview {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 18px 18px;
+  overflow: auto;
+}
+/* 预览里的表格：单元格不按字折行，宽表在表格容器内横向滚动 */
+.et-doc-preview :deep(.markdown-view th),
+.et-doc-preview :deep(.markdown-view td) {
+  white-space: nowrap;
+}
+@media (max-width: 1000px) {
+  .et-doc-page {
+    height: auto;
+  }
+  .et-doc-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .et-doc-source {
+    min-height: 340px;
+  }
+  .et-doc-preview {
+    max-height: 60vh;
+  }
 }
 @media (max-width: 900px) {
   .et-cards {

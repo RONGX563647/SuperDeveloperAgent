@@ -20,12 +20,12 @@ function escapeHtml(value: string): string {
 
 /* ---- GFM 表格辅助 ---- */
 
-/** 按 | 切分一行；容忍首尾竖线。 */
+/** 按 | 切分一行；容忍首尾竖线，单元格内的 \| 不参与切分。 */
 function splitTableRow(line: string): string[] {
   let row = line.trim()
   if (row.startsWith('|')) row = row.slice(1)
   if (row.endsWith('|')) row = row.slice(0, -1)
-  return row.split('|').map((cell) => cell.trim())
+  return row.split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll('\\|', '|'))
 }
 
 /** 分隔行：每格都是 --- / :--- / ---: / :---:。 */
