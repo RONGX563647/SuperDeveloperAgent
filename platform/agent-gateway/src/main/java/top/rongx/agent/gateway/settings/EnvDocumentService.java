@@ -53,6 +53,7 @@ public class EnvDocumentService {
 
         md.append("## 概览\n\n");
         md.append("- 运行形态: ").append(t.runtimeMode()).append('\n');
+        md.append("- 自治级别: ").append(t.level().name()).append('\n');
         md.append("- 命名空间: ").append(t.namespace()).append('\n');
         md.append("- 部署网络: ").append(nullToEmpty(t.network())).append('\n');
         md.append("- 默认部署目标: ").append(t.defaultTarget()).append('\n');
@@ -147,6 +148,7 @@ public class EnvDocumentService {
         EnvTemplate current = store.template(env).orElseThrow(() ->
                 new IllegalArgumentException("环境不存在：" + env));
         String runtimeMode = value(overview, "运行形态", current.runtimeMode());
+        String autonomy = value(overview, "自治级别", current.autonomy());
         String namespace = value(overview, "命名空间", current.namespace());
         String network = value(overview, "部署网络", nullToEmpty(current.network()));
         String defaultTarget = value(overview, "默认部署目标", current.defaultTarget());
@@ -162,13 +164,14 @@ public class EnvDocumentService {
                 runtimeMode.trim(),
                 namespace.trim(),
                 serverId.isBlank() ? null : serverId.trim(),
+                autonomy.trim(),
                 current.updatedAt());
         if (next.equals(current)) {
             return 0;
         }
         store.saveTemplate(new EnvTemplate(env, next.network(), next.defaultTarget(),
                 next.defaultPort(), next.healthPath(), next.runtimeMode(), next.namespace(),
-                next.serverId(), System.currentTimeMillis()));
+                next.serverId(), next.autonomy(), System.currentTimeMillis()));
         return 1;
     }
 

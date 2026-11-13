@@ -10,6 +10,7 @@ import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.deploy.ReasonCode;
 import top.rongx.agent.domain.port.Deployer;
 
 /**
@@ -45,7 +46,13 @@ public class DockerDeployer implements Deployer {
     @Override
     public DeployResult deploy(DeployRequest request) {
         StringBuilder log = new StringBuilder();
-        if (request.imageRef() == null || request.imageRef().isBlank()) {
+        boolean rollback = request.rollback();
+        String image = rollback ? request.previousImageRef() : request.imageRef();
+        if (image == null || image.isBlank()) {
+            if (rollback) {
+                return DeployResult.failed(DeployTarget.DOCKER, "E-507",
+                        "没有可回滚的上一版镜像（previousImageRef 为空）", "");
+            }
             return DeployResult.failed(DeployTarget.DOCKER, "E-501",
                     "DOCKER 目标需要镜像：请先执行 image_package，或检查 Dockerfile", "");
         }
@@ -56,8 +63,30 @@ public class DockerDeployer implements Deployer {
                 "--label", "agent.project=" + request.projectId(),
                 "--label", "agent.run=" + request.runId(),
                 "--label", "agent.sha=" + request.gitSha());
-        return run(dir, name, request.imageRef(), request.hostPort(), request.containerPort(),
+        if (rollback) {
+            log.append("[deploy] 回滚到上一版镜像 ").append(image).append('\n');
+        }
+        DeployResult first = run(dir, name, image, request.hostPort(), request.containerPort(),
                 request.env(), request.network(), request.healthPath(), labels, log, "127.0.0.1");
+
+        // 非回滚失败且存在上一版镜像：自动回滚，保证"失败不会把环境留在半死状态"。
+        if (!first.success() && !rollback
+                && request.previousImageRef() != null && !request.previousImageRef().isBlank()) {
+            log.append("[deploy] 新版本启动失败（").append(first.reasonCode().wireName())
+                    .append("），尝试自动回滚到 ").append(request.previousImageRef()).append('\n');
+            DeployResult restored = run(dir, name, request.previousImageRef(), request.hostPort(),
+                    request.containerPort(), request.env(), request.network(), request.healthPath(),
+                    labels, log, "127.0.0.1");
+            if (restored.success()) {
+                return new DeployResult(false, DeployTarget.DOCKER, restored.endpoint(),
+                        restored.resource(), first.errorCode(), first.summary(),
+                        ProcessExecutor.redact(log.toString()), ReasonCode.ROLLED_BACK,
+                        "根因：" + first.reasonCode().label() + "；" + first.reasonCode().suggestion()
+                                + "（运行态已回到上一版）", true);
+            }
+            log.append("[deploy] 自动回滚也失败：").append(restored.summary()).append('\n');
+        }
+        return first;
     }
 
     /**

@@ -1,5 +1,7 @@
 package top.rongx.agent.domain.env;
 
+import top.rongx.agent.domain.policy.AutonomyLevel;
+
 /**
  * 环境模板：dev / test / prod 三套全局配置。
  *
@@ -11,6 +13,7 @@ package top.rongx.agent.domain.env;
  * @param runtimeMode   运行形态（LOCAL_DEV / LOCAL_TEST / SERVER），空则按 env 推导
  * @param namespace     资源命名空间（agent-dev / agent-test / agent-prod），用于隔离与过滤
  * @param serverId      SERVER 形态绑定的服务器 id（空 = 默认服务器）
+ * @param autonomy      自治级别（AUTO / REVIEW / PROD），空则按 env 推导
  * @param updatedAt     更新时间
  */
 public record EnvTemplate(
@@ -22,10 +25,12 @@ public record EnvTemplate(
         String runtimeMode,
         String namespace,
         String serverId,
+        String autonomy,
         long updatedAt) {
 
     public EnvTemplate {
         runtimeMode = RuntimeMode.of(runtimeMode, env).name();
+        autonomy = AutonomyLevel.of(autonomy, env).name();
         if (namespace == null || namespace.isBlank()) {
             namespace = defaultNamespace(env);
         }
@@ -34,10 +39,18 @@ public record EnvTemplate(
         }
     }
 
-    /** 兼容旧调用：只声明基础字段，形态/命名空间按环境推导。 */
+    /** 兼容旧调用：不声明自治级别，按环境推导。 */
+    public EnvTemplate(String env, String network, String defaultTarget, int defaultPort,
+                       String healthPath, String runtimeMode, String namespace, String serverId,
+                       long updatedAt) {
+        this(env, network, defaultTarget, defaultPort, healthPath, runtimeMode, namespace, serverId,
+                null, updatedAt);
+    }
+
+    /** 兼容更旧调用：只声明基础字段，形态/命名空间按环境推导。 */
     public EnvTemplate(String env, String network, String defaultTarget, int defaultPort,
                        String healthPath, long updatedAt) {
-        this(env, network, defaultTarget, defaultPort, healthPath, null, null, null, updatedAt);
+        this(env, network, defaultTarget, defaultPort, healthPath, null, null, null, null, updatedAt);
     }
 
     public static String defaultNamespace(String env) {
@@ -46,5 +59,9 @@ public record EnvTemplate(
 
     public RuntimeMode mode() {
         return RuntimeMode.of(runtimeMode, env);
+    }
+
+    public AutonomyLevel level() {
+        return AutonomyLevel.of(autonomy, env);
     }
 }

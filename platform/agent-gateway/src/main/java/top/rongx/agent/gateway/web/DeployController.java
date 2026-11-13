@@ -19,6 +19,7 @@ import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.deploy.DeployGate;
+import top.rongx.agent.tools.DeployGuard;
 
 /**
  * 环境视角的部署接口：每个环境跑通过什么、重放、脚本版本、以及"上服务器"的确认。
@@ -35,15 +36,18 @@ public class DeployController {
     private final RecipeStore recipes;
     private final PipelineEngine engine;
     private final DeployGate gate;
+    private final DeployGuard guard;
     private final CurrentUser currentUser;
     private final top.rongx.agent.domain.env.EnvironmentStore envStore;
 
     public DeployController(RecipeStore recipes, PipelineEngine engine,
-                            DeployGate gate, CurrentUser currentUser,
+                            DeployGate gate, DeployGuard guard,
+                            CurrentUser currentUser,
                             top.rongx.agent.domain.env.EnvironmentStore envStore) {
         this.recipes = recipes;
         this.engine = engine;
         this.gate = gate;
+        this.guard = guard;
         this.currentUser = currentUser;
         this.envStore = envStore;
     }
@@ -149,7 +153,8 @@ public class DeployController {
         if (confirmToken != null && !confirmToken.isBlank()) {
             params.put("confirmToken", confirmToken);
         }
-        String runId = engine.trigger(projectId, releasePipeline(projectId), params);
+        // 人类点「重放」= 明确放行：跳过预算与熔断，但仍受每环境互斥保护。
+        String runId = guard.trigger(projectId, env, sha, releasePipeline(projectId), params, true);
         return Map.of("runId", runId, "env", env, "status", engine.status(runId).name());
     }
 

@@ -21,6 +21,10 @@
             <artifactId>agent-governance</artifactId>
         </dependency>
         <dependency>
+            <groupId>top.rongx</groupId>
+            <artifactId>agent-executor</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-core</artifactId>
         </dependency>

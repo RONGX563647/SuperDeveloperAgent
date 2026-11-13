@@ -16,6 +16,8 @@ import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.domain.deploy.DeployDiagnosis;
+import top.rongx.agent.domain.deploy.ReasonCode;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import org.springframework.stereotype.Component;
 
@@ -147,6 +149,7 @@ public class CiQueryTools {
         }
         List<StageResult> stageList = engine.stages(runId);
         String failedPart = "";
+        String diagnosis = "";
         if (status == StageStatus.FAILED) {
             failedPart = stageList.stream()
                     .filter(s -> s.status() == StageStatus.FAILED)
@@ -154,6 +157,11 @@ public class CiQueryTools {
                             s.errorCode() == null ? "" : s.errorCode(),
                             s.errorSummary() == null ? "" : s.errorSummary()))
                     .collect(Collectors.joining("\n", "failed:\n", ""));
+            String logText = engine.logTail(runId);
+            ReasonCode code = DeployDiagnosis.classify(false, "", failedPart, logText);
+            diagnosis = "reasonCode: " + code.name() + "\n"
+                    + "reason: " + code.label() + "\n"
+                    + "suggestion: " + code.suggestion() + "\n";
         }
         String log = engine.logTail(runId);
         String tail = log == null ? "" : log;
@@ -167,12 +175,12 @@ public class CiQueryTools {
                 terminal: %s
                 waitedSeconds: %d
                 stages: %d
-                %slog:
+                %s%slog:
                 ---
                 %s
                 ---
                 evidence: run:%s""".formatted(runId, status, status.isTerminal(), timeout,
-                stageList.size(), failedPart, tail.isBlank() ? "(暂无日志)" : tail, runId);
+                stageList.size(), failedPart, diagnosis, tail.isBlank() ? "(暂无日志)" : tail, runId);
     }
 
     @Tool(name = "ci_history",

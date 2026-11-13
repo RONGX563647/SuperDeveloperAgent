@@ -38,11 +38,16 @@ public class DeployTools {
     private final RecipeStore recipes;
     private final PipelineEngine engine;
     private final EnvBindingPort bindings;
+    private final DeployGuard guard;
+    private final ToolAuditRecorder audit;
 
-    public DeployTools(RecipeStore recipes, PipelineEngine engine, EnvBindingPort bindings) {
+    public DeployTools(RecipeStore recipes, PipelineEngine engine, EnvBindingPort bindings,
+                       DeployGuard guard, ToolAuditRecorder audit) {
         this.recipes = recipes;
         this.engine = engine;
         this.bindings = bindings;
+        this.guard = guard;
+        this.audit = audit;
     }
 
     @Tool(name = "deploy_env_status",
@@ -69,6 +74,15 @@ public class DeployTools {
                     .append("gitSha: ").append(r.gitSha()).append('\n');
         }
         sb.append("versions: ").append(recipes.versions(ctx.projectId(), target).size()).append('\n');
+        sb.append("activeDeploy: ").append(guard.active(ctx.projectId(), target)
+                .map(r -> r.id() + " / run=" + r.runId() + " / " + r.status())
+                .orElse("无")).append('\n');
+        sb.append("lastDeploy: ").append(guard.latest(ctx.projectId(), target)
+                .map(r -> r.status() + (r.reasonCode().isBlank() ? "" : " / " + r.reasonCode())
+                        + (r.message().isBlank() ? "" : " / " + r.message()))
+                .orElse("无")).append('\n');
+        sb.append("consecutiveFailures: ").append(guard.consecutiveFailures(ctx.projectId(), target))
+                .append('\n');
         return sb.toString();
     }
 
@@ -88,6 +102,16 @@ public class DeployTools {
                       @ToolParam(name = "binding_id", description = "人工确认过的环境绑定 id（env_mapping_draft 生成）")
                       String bindingId,
                       ProjectContext ctx) {
+        return audit.call(ctx, "deploy_run",
+                java.util.Map.of("pipeline", pipelineId == null ? "" : pipelineId,
+                        "sha", sha == null ? "" : sha,
+                        "env", env == null ? "" : env,
+                        "binding", bindingId == null ? "" : bindingId),
+                () -> runChecked(pipelineId, sha, env, bindingId, ctx));
+    }
+
+    private String runChecked(String pipelineId, String sha, String env, String bindingId,
+                              ProjectContext ctx) {
         String target = normalize(env);
         if ("prod".equals(target)) {
             return "err: prod 不能用工具触发：先在测试环境跑通并固化，再到部署面板点「确认发布」";
@@ -119,7 +143,8 @@ public class DeployTools {
         params.put("actor", "agent");
         params.put("bindingId", binding.id());
         params.put("confirmedBy", binding.confirmedBy() == null ? "" : binding.confirmedBy());
-        String runId = engine.trigger(ctx.projectId(), pipelineId, params);
+        // 互斥 / 每日预算 / 连续失败熔断都在 DeployGuard 内统一执行
+        String runId = guard.trigger(ctx.projectId(), target, sha, pipelineId, params, false);
         return "runId: " + runId + "\nenv: " + target + "\nstatus: " + engine.status(runId);
     }
 
@@ -146,6 +171,17 @@ public class DeployTools {
                              String healthPath,
                              @ToolParam(name = "port", description = "部署端口，默认 8080") String port,
                              ProjectContext ctx) {
+        return audit.call(ctx, "deploy_save_recipe",
+                java.util.Map.of("env", env == null ? "" : env,
+                        "actions", actions == null ? "" : actions,
+                        "withDeploy", String.valueOf(withDeploy),
+                        "target", target == null ? "" : target),
+                () -> saveRecipeChecked(env, actions, withDeploy, target, healthPath, port, ctx));
+    }
+
+    private String saveRecipeChecked(String env, String actions, String withDeploy,
+                                     String target, String healthPath, String port,
+                                     ProjectContext ctx) {
         String targetEnv = normalize(env);
         if ("prod".equals(targetEnv)) {
             return "err: 不要把生产环境当探索目标；测试环境跑通后直接 replay 到生产即可";

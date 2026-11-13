@@ -149,6 +149,7 @@ public class EnvironmentController {
                 str(body, "runtimeMode", current.runtimeMode()),
                 str(body, "namespace", current.namespace()),
                 str(body, "serverId", current.serverId()),
+                str(body, "autonomy", current.autonomy()),
                 System.currentTimeMillis()));
         // 形态/命名空间变化会改变中间件寻址，变量必须跟着重算。
         syncResourceVars(env);

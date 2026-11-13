@@ -53,6 +53,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 runtime_mode   TEXT,
                 namespace      TEXT,
                 server_id      TEXT,
+                autonomy       TEXT,
                 updated_at     INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS env_resources (
@@ -180,6 +181,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         ensureColumn(st, "env_templates", "runtime_mode", "runtime_mode TEXT");
         ensureColumn(st, "env_templates", "namespace", "namespace TEXT");
         ensureColumn(st, "env_templates", "server_id", "server_id TEXT");
+        ensureColumn(st, "env_templates", "autonomy", "autonomy TEXT");
         ensureColumn(st, "env_resources", "container_port",
                 "container_port INTEGER NOT NULL DEFAULT 0");
         ensureColumn(st, "env_resources", "internal_host", "internal_host TEXT");
@@ -214,8 +216,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.executeUpdate("""
                     INSERT OR IGNORE INTO env_templates
                         (env, network, default_target, default_port, health_path,
-                         runtime_mode, namespace, server_id, updated_at)
-                    VALUES ('%s', %s, '%s', %s, '%s', '%s', '%s', NULL, %d)
+                         runtime_mode, namespace, server_id, autonomy, updated_at)
+                    VALUES ('%s', %s, '%s', %s, '%s', '%s', '%s', NULL, NULL, %d)
                     """.formatted(r[0], r[6] == null ? "NULL" : "'" + r[6] + "'",
                     r[1], r[2], r[3], r[4], r[5], now));
         }
@@ -248,7 +250,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         try (Connection conn = open();
              PreparedStatement st = conn.prepareStatement(
                      "SELECT env, network, default_target, default_port, health_path, "
-                             + "runtime_mode, namespace, server_id, updated_at "
+                             + "runtime_mode, namespace, server_id, autonomy, updated_at "
                              + "FROM env_templates ORDER BY CASE env WHEN 'dev' THEN 1 "
                              + "WHEN 'test' THEN 2 ELSE 3 END")) {
             try (ResultSet rs = st.executeQuery()) {
@@ -269,7 +271,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         try (Connection conn = open();
              PreparedStatement st = conn.prepareStatement(
                      "SELECT env, network, default_target, default_port, health_path, "
-                             + "runtime_mode, namespace, server_id, updated_at "
+                             + "runtime_mode, namespace, server_id, autonomy, updated_at "
                              + "FROM env_templates WHERE env = ?")) {
             st.setString(1, env);
             try (ResultSet rs = st.executeQuery()) {
@@ -287,8 +289,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
              PreparedStatement st = conn.prepareStatement("""
                      INSERT INTO env_templates
                          (env, network, default_target, default_port, health_path,
-                          runtime_mode, namespace, server_id, updated_at)
-                     VALUES (?,?,?,?,?,?,?,?,?)
+                          runtime_mode, namespace, server_id, autonomy, updated_at)
+                     VALUES (?,?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(env) DO UPDATE SET
                          network=excluded.network,
                          default_target=excluded.default_target,
@@ -297,6 +299,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                          runtime_mode=excluded.runtime_mode,
                          namespace=excluded.namespace,
                          server_id=excluded.server_id,
+                         autonomy=excluded.autonomy,
                          updated_at=excluded.updated_at
                      """)) {
             st.setString(1, t.env());
@@ -311,7 +314,8 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(7, t.namespace() == null || t.namespace().isBlank()
                     ? EnvTemplate.defaultNamespace(t.env()) : t.namespace());
             st.setString(8, blankToNull(t.serverId()));
-            st.setLong(9, System.currentTimeMillis());
+            st.setString(9, t.level().name());
+            st.setLong(10, System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("环境模板保存失败：" + e.getMessage(), e);
@@ -323,7 +327,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 rs.getString("default_target"), rs.getInt("default_port"),
                 rs.getString("health_path"), rs.getString("runtime_mode"),
                 rs.getString("namespace"), rs.getString("server_id"),
-                rs.getLong("updated_at"));
+                rs.getString("autonomy"), rs.getLong("updated_at"));
     }
 
     // ---------------------------------------------------------------- 资源

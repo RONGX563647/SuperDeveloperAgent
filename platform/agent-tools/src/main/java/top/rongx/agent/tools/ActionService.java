@@ -20,6 +20,7 @@ import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.tool.ToolLevel;
 import top.rongx.agent.domain.policy.PolicyPort;
+import top.rongx.agent.governance.CapabilityService;
 
 /**
  * 动作编排服务（工具与 HTTP 共用同一套门禁，避免两条路径行为不一致）。
@@ -46,6 +47,8 @@ public class ActionService {
     private final ActionRunner runner;
     private final ChangeStore changes;
     private final PolicyPort policy;
+    private final CapabilityService capability;
+    private final ToolAuditRecorder audit;
     private final String workspaceRoot;
     /** 仅供测试：让可用性测试在无 Docker 环境也能验证 L3 令牌闭环。生产恒为 false。 */
     private final boolean allowTestL3;
@@ -54,12 +57,16 @@ public class ActionService {
                          ActionRunner runner,
                          ChangeStore changes,
                          PolicyPort policy,
+                         CapabilityService capability,
+                         ToolAuditRecorder audit,
                          @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
                          @Value("${agent.sandbox.allow-test-l3:false}") boolean allowTestL3) {
         this.resolver = resolver;
         this.runner = runner;
         this.changes = changes;
         this.policy = policy;
+        this.capability = capability;
+        this.audit = audit;
         this.workspaceRoot = workspaceRoot;
         this.allowTestL3 = allowTestL3;
     }
@@ -94,9 +101,21 @@ public class ActionService {
      * 覆盖值会经 {@code allowed} 枚举校验，并注入 steps 的 ${param.x} 占位符。
      */
     public ActionResult run(ProjectContext ctx, ActionId action, Map<String, String> overrides) {
+        return audit.call(ctx, "run_action",
+                Map.of("action", action.wireName(), "overrides", overrides == null ? "" : overrides),
+                () -> runChecked(ctx, action, overrides),
+                r -> r.result().status() == top.rongx.agent.domain.run.StageStatus.FAILED);
+    }
+
+    private ActionResult runChecked(ProjectContext ctx, ActionId action,
+                                    Map<String, String> overrides) {
         if (!action.autoExecutable()) {
             throw new IllegalStateException(action.wireName()
                     + " 属 L3（影响生产），不能直接执行。请先 request → confirm → apply。");
+        }
+        if (!capability.writeAllowed(ctx.env())) {
+            throw new IllegalStateException("环境 " + ctx.env() + " 为 "
+                    + capability.autonomy(ctx.env()) + "（只读），不允许直接执行动作");
         }
         policy.requireNotDenied(ctx, ToolLevel.L2_EXECUTE_ISOLATED, action.wireName());
         Path root = requireWorkspace(ctx);
@@ -137,8 +156,21 @@ public class ActionService {
      */
     public ActionResult apply(ProjectContext ctx, ActionId action, String confirmedPlanHash,
                               Map<String, String> overrides) {
+        return audit.call(ctx, "apply_action",
+                Map.of("action", action.wireName(),
+                        "planHash", confirmedPlanHash == null ? "" : confirmedPlanHash),
+                () -> applyChecked(ctx, action, confirmedPlanHash, overrides),
+                r -> r.result().status() == top.rongx.agent.domain.run.StageStatus.FAILED);
+    }
+
+    private ActionResult applyChecked(ProjectContext ctx, ActionId action, String confirmedPlanHash,
+                                      Map<String, String> overrides) {
         if (action.autoExecutable()) {
             throw new IllegalStateException(action.wireName() + " 属 L2，请直接执行。");
+        }
+        // 自治级别不改变 L3 的令牌要求：AUTO/REVIEW/PROD 都必须有确认令牌（fail-closed）。
+        if (!capability.requiresConfirm(ctx.env(), action.level())) {
+            throw new IllegalStateException("当前自治级别不允许执行 " + action.wireName());
         }
         policy.requireNotDenied(ctx, ToolLevel.L3_EXECUTE_PROD, action.wireName());
         Path root = requireWorkspace(ctx);

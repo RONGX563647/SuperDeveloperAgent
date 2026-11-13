@@ -58,6 +58,7 @@ const settingForm = reactive({
   runtimeMode: 'LOCAL_DEV',
   namespace: 'agent-dev',
   serverId: '',
+  autonomy: 'AUTO' as 'AUTO' | 'REVIEW' | 'PROD',
 })
 
 /** 形态说明：决定中间件怎么寻址、前后端跑在哪。 */
@@ -103,6 +104,7 @@ async function loadDetail(): Promise<void> {
     settingForm.runtimeMode = detail.template.runtimeMode || 'LOCAL_DEV'
     settingForm.namespace = detail.template.namespace || `agent-${env.value}`
     settingForm.serverId = detail.template.serverId || ''
+    settingForm.autonomy = detail.template.autonomy || 'AUTO'
     try {
       scenarios.value = await listScenarios(env.value)
     } catch {
@@ -136,6 +138,7 @@ async function saveSetting(): Promise<void> {
       runtimeMode: settingForm.runtimeMode as RuntimeMode,
       namespace: settingForm.namespace.trim() || undefined,
       serverId: settingForm.serverId || null,
+      autonomy: settingForm.autonomy,
     })
     ElMessage.success(`${envLabel(env.value)} 模板已保存`)
     await loadDetail()
@@ -493,8 +496,9 @@ const SHEETS: Array<{ id: BookSheet; label: string }> = [
   { id: 'scenarios', label: '场景词条' },
 ]
 
-const OVERVIEW_FIELDS: Array<{ key: string; label: string; kind: 'text' | 'number' | 'mode' | 'target' | 'server' }> = [
+const OVERVIEW_FIELDS: Array<{ key: string; label: string; kind: 'text' | 'number' | 'mode' | 'target' | 'server' | 'autonomy' }> = [
   { key: 'runtimeMode', label: '运行形态', kind: 'mode' },
+  { key: 'autonomy', label: '自治级别', kind: 'autonomy' },
   { key: 'namespace', label: '命名空间', kind: 'text' },
   { key: 'network', label: '部署网络', kind: 'text' },
   { key: 'defaultTarget', label: '默认部署目标', kind: 'target' },
@@ -679,6 +683,7 @@ function markdownFor(envName: string): string {
     `# 环境模板 · ${envLabel(envName)}（${envName}）`, '',
     '## 概览', '',
     `- 运行形态: ${t?.runtimeMode ?? ''}`,
+    `- 自治级别: ${t?.autonomy ?? ''}`,
     `- 命名空间: ${t?.namespace ?? ''}`,
     `- 部署网络: ${t?.network ?? ''}`,
     `- 默认部署目标: ${t?.defaultTarget ?? ''}`,
@@ -876,6 +881,14 @@ defineExpose({ load })
                     :value="templateValue(t, f.key)" @change="onTemplateInput(t, f.key, $event)"
                   >
                     <option v-for="o in TARGET_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                  <select
+                    v-else-if="f.kind === 'autonomy'" class="xl-input"
+                    :value="templateValue(t, f.key)" @change="onTemplateInput(t, f.key, $event)"
+                  >
+                    <option value="AUTO">AUTO · 自主执行</option>
+                    <option value="REVIEW">REVIEW · 受控执行</option>
+                    <option value="PROD">PROD · 只读</option>
                   </select>
                   <select
                     v-else-if="f.kind === 'server'" class="xl-input"
@@ -1096,6 +1109,14 @@ defineExpose({ load })
             <el-option label="本机进程 + 本机容器（开发）" value="LOCAL_DEV" />
             <el-option label="本机容器，前后端各一个（测试）" value="LOCAL_TEST" />
             <el-option label="服务器容器（生产）" value="SERVER" />
+          </el-select>
+        </label>
+        <label class="et-field">
+          <span>自治级别（写权限 / 确认强度）</span>
+          <el-select v-model="settingForm.autonomy" size="small">
+            <el-option label="AUTO · 自主执行（dev）" value="AUTO" />
+            <el-option label="REVIEW · 受控执行（test）" value="REVIEW" />
+            <el-option label="PROD · 只读（prod）" value="PROD" />
           </el-select>
         </label>
         <label class="et-field">

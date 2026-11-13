@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ScenarioCatalog;
+import top.rongx.agent.domain.env.ValueState;
 import top.rongx.agent.domain.project.ProjectContext;
 
 /**
@@ -25,10 +26,13 @@ public class ConfigTools {
 
     private final ConfigResolver resolver;
     private final EnvironmentStore envStore;
+    private final ToolAuditRecorder audit;
 
-    public ConfigTools(ConfigResolver resolver, EnvironmentStore envStore) {
+    public ConfigTools(ConfigResolver resolver, EnvironmentStore envStore,
+                       ToolAuditRecorder audit) {
         this.resolver = resolver;
         this.envStore = envStore;
+        this.audit = audit;
     }
 
     @Tool(name = "config_resolve",
@@ -44,6 +48,12 @@ public class ConfigTools {
             @ToolParam(name = "keys", description = "可选，逗号分隔的变量名；不传则返回全部声明/已配置项",
                     required = false) String keys,
             ProjectContext ctx) {
+        return audit.call(ctx, "config_resolve",
+                java.util.Map.of("env", env == null ? "" : env, "keys", keys == null ? "" : keys),
+                () -> resolveChecked(env, keys, ctx));
+    }
+
+    private String resolveChecked(String env, String keys, ProjectContext ctx) {
         List<String> requested = keys == null || keys.isBlank()
                 ? List.of()
                 : Arrays.stream(keys.split(","))
@@ -55,7 +65,9 @@ public class ConfigTools {
             sb.append("values:\n");
             resolution.resolved().forEach((key, value) ->
                     sb.append("  ").append(key).append(" = ").append(value)
-                            .append(" @ ").append(resolution.resolvedSource().get(key)).append('\n'));
+                            .append(" @ ").append(resolution.resolvedSource().get(key))
+                            .append(" [").append(resolution.states()
+                                    .getOrDefault(key, ValueState.MISSING)).append("]\n"));
         }
         return sb.toString();
     }
@@ -80,10 +92,24 @@ public class ConfigTools {
             @ToolParam(name = "env", description = "环境：dev / test / prod；用于标注是否已配置",
                     required = false) String env,
             ProjectContext ctx) {
+        return audit.call(ctx, "config_catalog",
+                java.util.Map.of("scenario", scenario == null ? "" : scenario,
+                        "env", env == null ? "" : env),
+                () -> catalogChecked(scenario, env, ctx));
+    }
+
+    private String catalogChecked(String scenario, String env, ProjectContext ctx) {
         String target = ConfigResolver.normalize(env == null ? ctx.env() : env);
         Set<String> configured = new LinkedHashSet<>();
+        Set<String> placeholders = new LinkedHashSet<>();
         for (EnvVariable v : envStore.envVars(target)) {
-            if (v.value() != null && !v.value().isBlank()) {
+            if (v.value() == null || v.value().isBlank()) {
+                continue;
+            }
+            if (ValueState.of(v.key(), v.value()) == ValueState.PLACEHOLDER
+                    && !v.secret() && !EnvVariable.KIND_SECRET_REF.equals(v.valueKind())) {
+                placeholders.add(v.key());
+            } else {
                 configured.add(v.key());
             }
         }
@@ -99,9 +125,9 @@ public class ConfigTools {
             any = true;
             sb.append('\n').append(ScenarioCatalog.describe(s));
             for (ScenarioCatalog.Key k : s.keys()) {
-                sb.append("    ").append(k.key()).append(": ")
-                        .append(configured.contains(k.key()) ? "已配置" : "未配置")
-                        .append('\n');
+                String state = configured.contains(k.key()) ? "已配置"
+                        : placeholders.contains(k.key()) ? "疑似占位值（需替换）" : "未配置";
+                sb.append("    ").append(k.key()).append(": ").append(state).append('\n');
             }
         }
         if (!any) {

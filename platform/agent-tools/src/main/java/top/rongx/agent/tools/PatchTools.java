@@ -11,7 +11,9 @@ import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.PatchStore;
+import top.rongx.agent.domain.patch.PatchTier;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.governance.CapabilityService;
 
 /**
  * 受限代码补丁工具：让 Agent 真正具备「改仓库」的能力，但只在受控范围内。
@@ -32,11 +34,16 @@ public class PatchTools {
     private final CodePatcher patcher;
     private final PatchStore patches;
     private final ChangeStore changes;
+    private final CapabilityService capability;
+    private final ToolAuditRecorder audit;
 
-    public PatchTools(CodePatcher patcher, PatchStore patches, ChangeStore changes) {
+    public PatchTools(CodePatcher patcher, PatchStore patches, ChangeStore changes,
+                      CapabilityService capability, ToolAuditRecorder audit) {
         this.patcher = patcher;
         this.patches = patches;
         this.changes = changes;
+        this.capability = capability;
+        this.audit = audit;
     }
 
     @Tool(name = "propose_patch",
@@ -62,8 +69,17 @@ public class PatchTools {
             @ToolParam(name = "reason",
                     description = "一句话说明为什么要改（会写进变更单，便于人工复核）") String reason,
             ProjectContext ctx) {
-        if (ctx.isProduction()) {
-            return "err: 生产环境不允许提交代码补丁；请先在 dev/test 验证";
+        return audit.call(ctx, "propose_patch",
+                java.util.Map.of("baseSha", baseSha == null ? "" : baseSha,
+                        "reason", reason == null ? "" : reason),
+                () -> proposeChecked(baseSha, edits, reason, ctx));
+    }
+
+    private String proposeChecked(String baseSha, String edits, String reason,
+                                  ProjectContext ctx) {
+        if (!capability.writeAllowed(ctx.env())) {
+            return "err: 环境 " + ctx.env() + " 为只读（" + capability.autonomy(ctx.env())
+                    + "），不允许提交代码补丁";
         }
         if (reason == null || reason.isBlank() || reason.length() > 120) {
             return "err: reason 不能为空且不超过 120 字";
@@ -74,16 +90,22 @@ public class PatchTools {
         } catch (IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
+        String scopeProblem = capability.patchProblem(ctx.env(),
+                files.stream().map(CodePatch.FileEdit::path).toList());
+        if (scopeProblem != null) {
+            return "err: " + scopeProblem;
+        }
         CodePatcher.Staged staged;
+        String base = baseSha == null ? "" : baseSha.trim();
         try {
-            staged = patcher.stage(ctx.projectId(), baseSha == null ? "" : baseSha.trim(), files);
+            staged = patcher.stage(ctx.projectId(), base, files);
         } catch (IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
 
         String patchId = "pt-" + UUID.randomUUID().toString().substring(0, 8);
         String branch = "agent/fix-" + patchId;
-        CodePatch patch = new CodePatch(patchId, ctx.projectId(), ctx.env(), baseSha.trim(),
+        CodePatch patch = new CodePatch(patchId, ctx.projectId(), ctx.env(), base,
                 branch, files, staged.diff(), staged.diffHash(), staged.added(), staged.removed(), 0L);
         patches.save(patch);
         ChangePlan plan = changes.registerWithHash(ctx.projectId(), ctx.env(),
@@ -94,12 +116,17 @@ public class PatchTools {
         if (truncated) {
             diff = diff.substring(0, MAX_DIFF_CHARS) + "\n…（diff 已截断，完整内容见确认卡片）";
         }
+        List<PatchTier> tiers = files.stream().map(f -> PatchTier.classify(f.path()))
+                .distinct().toList();
+        String confirmLevel = tiers.contains(PatchTier.SOURCE) ? "STRONG（业务源码）" : "STANDARD";
         return """
                 patchId: %s
                 changeId: %s
                 baseSha: %s
                 branch: %s（应用时创建）
                 files: %s
+                tiers: %s
+                confirmLevel: %s
                 changes: +%d -%d
                 apply: 不支持由 Agent 直接应用（需要人工确认）
                 next: 请把 changeId 告诉用户，让其在平台的确认卡片上确认并点「带令牌执行」；确认前不会修改仓库。
@@ -107,7 +134,9 @@ public class PatchTools {
                 %s
                 evidence: patch:%s change:%s
                 """.formatted(patchId, plan.changeId(), patch.baseSha(), branch,
-                String.join(", ", staged.files()), staged.added(), staged.removed(),
+                String.join(", ", staged.files()),
+                tiers.stream().map(Enum::name).collect(java.util.stream.Collectors.joining(",")),
+                confirmLevel, staged.added(), staged.removed(),
                 diff, patchId, plan.changeId());
     }
 

@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>只用 {@code ProcessBuilder(List)}，不经 shell；输出边读边收集（否则管道写满会死锁）。
  */
-final class ProcessExecutor {
+public final class ProcessExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessExecutor.class);
 
@@ -27,8 +27,8 @@ final class ProcessExecutor {
     private static final int MAX_LOG_CHARS = 200_000;
 
     /** 一步的结果。 */
-    record StepOutcome(int exitCode, String errorCode, String summary) {
-        static StepOutcome ok() {
+    public record StepOutcome(int exitCode, String errorCode, String summary) {
+        public static StepOutcome ok() {
             return new StepOutcome(0, null, null);
         }
 
@@ -37,8 +37,8 @@ final class ProcessExecutor {
         }
     }
 
-    StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
-                     BooleanSupplier cancelled) {
+    public StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
+                            BooleanSupplier cancelled) {
         return exec(dir, argv, budgetMillis, sink, cancelled, null);
     }
 
@@ -46,8 +46,8 @@ final class ProcessExecutor {
      * @param live 实时输出回调：每读到一段就回传一次（用于运行日志边跑边看）；
      *             为 {@code null} 时只在 {@code sink} 里攒尾部。
      */
-    StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
-                     BooleanSupplier cancelled, Consumer<String> live) {
+    public StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
+                            BooleanSupplier cancelled, Consumer<String> live) {
         long deadline = System.nanoTime() + Math.max(1, budgetMillis) * 1_000_000L;
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(dir.toFile())
@@ -148,7 +148,7 @@ final class ProcessExecutor {
     }
 
     /** 日志尾部：最后 30 行且不超过 4000 字符。输出前经 {@link #redact} 脱敏。 */
-    static String tail(StringBuilder sink) {
+    public static String tail(StringBuilder sink) {
         String text;
         synchronized (sink) {
             text = sink.toString();
@@ -166,7 +166,7 @@ final class ProcessExecutor {
      * 日志脱敏（规约 §1.6 redactor）：过滤常见的密钥/凭证形状，避免写入证据链。
      * 仅做形态匹配，不做内容解析；命中即替换为 {@code ***}。
      */
-    static String redact(String text) {
+    public static String redact(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }

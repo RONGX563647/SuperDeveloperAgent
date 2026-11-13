@@ -222,8 +222,12 @@ export interface EnvTemplate {
   namespace: string
   /** SERVER 形态绑定的服务器 id */
   serverId: string | null
+  /** 自治级别：AUTO=dev 自主，REVIEW=test 受控，PROD=prod 只读 */
+  autonomy: AutonomyLevel
   updatedAt: number
 }
+
+export type AutonomyLevel = 'AUTO' | 'REVIEW' | 'PROD'
 
 export interface EnvTemplateRow {
   template: EnvTemplate
@@ -478,6 +482,7 @@ export function saveEnvTemplate(
     runtimeMode?: RuntimeMode
     namespace?: string
     serverId?: string | null
+    autonomy?: AutonomyLevel
   }
 ): Promise<EnvTemplate> {
   return apiFetch(`/api/v1/settings/envs/${encodeURIComponent(env)}`, {

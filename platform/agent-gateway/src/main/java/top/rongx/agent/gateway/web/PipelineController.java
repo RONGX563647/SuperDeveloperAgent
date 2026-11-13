@@ -18,6 +18,7 @@ import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.RunMeta;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.tools.DeployGuard;
 
 /** 流水线运行查询（CI 的"构建历史/阶段视图"）。 */
 @RestController
@@ -29,17 +30,20 @@ public class PipelineController {
     private final top.rongx.agent.domain.settings.DeployServerRepository deployServers;
     private final top.rongx.agent.gateway.settings.EnvBindingService bindings;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
+    private final DeployGuard deployGuard;
 
     public PipelineController(PipelineEngine engine,
                               @Value("${agent.deploy.server.host:}") String serverHost,
                               top.rongx.agent.domain.settings.DeployServerRepository deployServers,
                               top.rongx.agent.gateway.settings.EnvBindingService bindings,
-                              top.rongx.agent.gateway.auth.CurrentUser currentUser) {
+                              top.rongx.agent.gateway.auth.CurrentUser currentUser,
+                              DeployGuard deployGuard) {
         this.engine = engine;
         this.legacyServerConfigured = serverHost != null && !serverHost.isBlank();
         this.deployServers = deployServers;
         this.bindings = bindings;
         this.currentUser = currentUser;
+        this.deployGuard = deployGuard;
     }
 
     @GetMapping("/pipelines")
@@ -180,7 +184,13 @@ public class PipelineController {
         if (deployTarget != null && !deployTarget.isBlank()) {
             triggerParams.put("deployTarget", deployTarget.trim().toLowerCase());
         }
-        String runId = engine.trigger(projectId, pipelineId, triggerParams);
+        boolean includesDeploy = dryRun.stages().stream()
+                .anyMatch(s -> "deploy".equalsIgnoreCase(s.type()));
+        // 含部署的流水线统一走 DeployGuard：每 (project, env) 互斥 + 部署状态落库；
+        // 这里是人点「运行/发布」，因此跳过预算与熔断（人已明确放行）。
+        String runId = includesDeploy
+                ? deployGuard.trigger(projectId, normalizedEnv, sha, pipelineId, triggerParams, true)
+                : engine.trigger(projectId, pipelineId, triggerParams);
         return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId));
     }
 

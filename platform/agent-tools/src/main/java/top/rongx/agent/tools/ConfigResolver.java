@@ -23,6 +23,7 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.ProjectEnvFiles;
 import top.rongx.agent.domain.env.ScenarioCatalog;
+import top.rongx.agent.domain.env.ValueState;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.project.ProjectContext;
 
@@ -63,6 +64,7 @@ public class ConfigResolver {
             String env,
             Map<String, String> resolved,
             Map<String, String> resolvedSource,
+            Map<String, ValueState> states,
             List<String> missing,
             Map<String, List<Candidate>> candidates,
             List<String> conflicts,
@@ -76,8 +78,15 @@ public class ConfigResolver {
                     .append("resolved: ").append(resolved.size())
                     .append("（来自项目环境配置）\n")
                     .append("missing: ").append(missing.isEmpty() ? "无" : String.join(", ", missing))
-                    .append('\n')
-                    .append("scannedFiles: ").append(scannedFiles).append('\n');
+                    .append('\n');
+            List<String> placeholders = states.entrySet().stream()
+                    .filter(e -> e.getValue() == ValueState.PLACEHOLDER)
+                    .map(Map.Entry::getKey).toList();
+            if (!placeholders.isEmpty()) {
+                sb.append("placeholders: ").append(String.join(", ", placeholders))
+                        .append("（疑似示例值/掩码，等同于没配）\n");
+            }
+            sb.append("scannedFiles: ").append(scannedFiles).append('\n');
             if (!candidates.isEmpty()) {
                 sb.append("candidates:\n");
                 candidates.entrySet().stream().limit(30).forEach(e -> {
@@ -129,6 +138,7 @@ public class ConfigResolver {
 
         Map<String, String> resolved = new LinkedHashMap<>();
         Map<String, String> sources = new LinkedHashMap<>();
+        Map<String, ValueState> states = new LinkedHashMap<>();
         List<String> missing = new ArrayList<>();
         Map<String, List<Candidate>> candidates = new LinkedHashMap<>();
         List<String> conflicts = new ArrayList<>();
@@ -143,6 +153,10 @@ public class ConfigResolver {
             if (v != null && !v.value().isBlank()) {
                 resolved.put(key, v.value());
                 sources.put(key, v.source());
+                // 敏感项的展示值本身就是掩码，不能按字面判断占位；有值即视为已配置。
+                boolean masked = v.secret()
+                        || EnvVariable.KIND_SECRET_REF.equals(v.valueKind());
+                states.put(key, masked ? ValueState.PRESENT : ValueState.of(key, v.value()));
                 continue;
             }
             String declaredValue = declared.values().get(key);
@@ -150,6 +164,8 @@ public class ConfigResolver {
                 boolean secretValue = looksSecret(key) || looksSecretValue(declaredValue);
                 resolved.put(key, secretValue ? "****" : declaredValue);
                 sources.put(key, "REPO_DECLARED");
+                states.put(key, secretValue ? ValueState.PRESENT
+                        : ValueState.of(key, declaredValue));
                 continue;
             }
             List<Candidate> found = scanned.getOrDefault(key, List.of());
@@ -163,6 +179,7 @@ public class ConfigResolver {
             if (declared.required().contains(key) || known.containsKey(key)
                     || ScenarioCatalog.key(key).isPresent()) {
                 missing.add(key);
+                states.putIfAbsent(key, ValueState.MISSING);
             }
         }
 
@@ -173,11 +190,12 @@ public class ConfigResolver {
                 .forEach(e -> candidates.put(e.getKey(), e.getValue()));
 
         boolean needsUserInput = !missing.isEmpty() || !conflicts.isEmpty()
+                || states.values().stream().anyMatch(s -> s == ValueState.PLACEHOLDER)
                 || candidates.entrySet().stream().anyMatch(e -> declared.required().contains(e.getKey()))
                 // 项目环境与仓库声明都没有可用值时，扫描候选不能自行拍板：交给用户选。
                 || (keys.isEmpty() && resolved.isEmpty() && !candidates.isEmpty());
-        return new Resolution(ctx.projectId(), target, resolved, sources, missing, candidates,
-                conflicts, scan.files(), needsUserInput);
+        return new Resolution(ctx.projectId(), target, resolved, sources, states, missing,
+                candidates, conflicts, scan.files(), needsUserInput);
     }
 
     private Path repo(String projectId) {
