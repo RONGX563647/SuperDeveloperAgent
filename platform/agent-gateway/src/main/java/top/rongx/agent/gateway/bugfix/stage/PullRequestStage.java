@@ -1,11 +1,13 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import java.util.Map;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.bugfix.BugFixGitPort;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStageResult;
+import top.rongx.agent.gateway.bugfix.BugFixPromptTemplates;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
 
 /**
@@ -17,9 +19,11 @@ import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
 public class PullRequestStage implements BugFixStageHandler {
 
     private final BugFixGitPort git;
+    private final BugFixPromptTemplates prompts;
 
-    public PullRequestStage(BugFixGitPort git) {
+    public PullRequestStage(BugFixGitPort git, BugFixPromptTemplates prompts) {
         this.git = git;
+        this.prompts = prompts;
     }
 
     @Override
@@ -37,29 +41,15 @@ public class PullRequestStage implements BugFixStageHandler {
         }
         String title = "fix: " + AnalyzeStage.safe(run.issueTitle());
         // 模型输出可能复述日志中的 token/密码：评论与 PR 描述离开平台前统一脱敏
-        String body = top.rongx.agent.gateway.bugfix.BugFixRedactor.redact("""
-                ## 自动修复说明
-
-                - Bug 任务：%s
-                - 基线提交：%s
-                - 修复分支：%s
-                - 修复提交：%s
-
-                ### 分析结论
-                %s
-
-                ### 修复说明
-                %s
-
-                ### 验证证据
-                %s
-
-                > 本 PR 由平台自动修复流程创建，请人工 Review 后合并；平台不会自动合并。
-                """.formatted(AnalyzeStage.safe(run.issueNumber()), AnalyzeStage.safe(run.baseSha()),
-                run.branch(), AnalyzeStage.safe(run.fixSha()),
-                AnalyzeStage.clip(run.analysis(), 4000),
-                AnalyzeStage.clip(run.fixSummary(), 2000),
-                AnalyzeStage.clip(run.evidence(), 2000)));
+        String body = top.rongx.agent.gateway.bugfix.BugFixRedactor.redact(
+                prompts.render("pull-request", Map.of(
+                        "issueNumber", AnalyzeStage.safe(run.issueNumber()),
+                        "baseSha", AnalyzeStage.safe(run.baseSha()),
+                        "branch", AnalyzeStage.safe(run.branch()),
+                        "fixSha", AnalyzeStage.safe(run.fixSha()),
+                        "analysis", AnalyzeStage.clip(run.analysis(), 4000),
+                        "fixSummary", AnalyzeStage.clip(run.fixSummary(), 2000),
+                        "evidence", AnalyzeStage.clip(run.evidence(), 2000))));
         try {
             String url = git.openPullRequest(run, title, body);
             return BugFixStageResult.ok("PR 已创建，等待人工合并", url).withPrUrl(url);

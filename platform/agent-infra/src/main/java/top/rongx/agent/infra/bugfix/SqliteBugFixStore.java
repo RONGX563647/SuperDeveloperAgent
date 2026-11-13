@@ -22,6 +22,7 @@ import top.rongx.agent.domain.bugfix.BugFixNotificationStore;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixPolicyStore;
 import top.rongx.agent.domain.bugfix.BugFixRun;
+import top.rongx.agent.domain.bugfix.BugFixRunArtifacts;
 import top.rongx.agent.domain.bugfix.BugFixRunStore;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStageRun;
@@ -316,6 +317,27 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
     }
 
     @Override
+    public List<BugFixRun> listWaitingMerge(int limit) {
+        List<BugFixRun> runs = new ArrayList<>();
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement("""
+                     SELECT %s FROM bugfix_runs
+                     WHERE status = 'WAITING_MERGE' AND pr_url IS NOT NULL AND pr_url <> ''
+                     ORDER BY updated_at LIMIT ?
+                     """.formatted(RUN_COLUMNS))) {
+            st.setInt(1, limit <= 0 ? 20 : Math.min(limit, 100));
+            try (ResultSet rs = st.executeQuery()) {
+                while (rs.next()) {
+                    runs.add(read(rs));
+                }
+            }
+            return runs;
+        } catch (SQLException e) {
+            throw new IllegalStateException("待合并运行查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public Optional<BugFixRun> activeByIssue(String issueId) {
         if (issueId == null || issueId.isBlank()) {
             return Optional.empty();
@@ -448,14 +470,15 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 stage(rs.getString("stage")),
                 status(rs.getString("status")),
                 rs.getString("message"),
-                rs.getString("analysis"),
-                rs.getString("analysis_json"),
-                rs.getString("fix_summary"),
-                rs.getString("base_sha"),
-                rs.getString("fix_sha"),
-                rs.getString("env"),
-                rs.getString("pr_url"),
-                rs.getString("evidence"),
+                new BugFixRunArtifacts(
+                        rs.getString("analysis"),
+                        rs.getString("analysis_json"),
+                        rs.getString("fix_summary"),
+                        rs.getString("base_sha"),
+                        rs.getString("fix_sha"),
+                        rs.getString("env"),
+                        rs.getString("pr_url"),
+                        rs.getString("evidence")),
                 rs.getInt("attempt"),
                 rs.getLong("created_at"),
                 rs.getLong("updated_at"),

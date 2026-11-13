@@ -313,6 +313,84 @@ public class GitIssueRemoteClient {
     }
 
     /**
+     * 查询 PR/MR 的远端状态：OPEN / MERGED / CLOSED / UNKNOWN。
+     *
+     * <p>合并追踪器据此把「等待合并」推进为「已完成」。任何解析/网络失败都返回 UNKNOWN，
+     * 由下一轮轮询重试，绝不让运行状态倒退。
+     */
+    public String pullRequestState(Credentials c, String prUrl) {
+        if (c == null || prUrl == null || prUrl.isBlank()) {
+            return "UNKNOWN";
+        }
+        try {
+            switch (c.provider()) {
+                case "GITHUB" -> {
+                    String path = prUrl.replaceFirst("^https?://[^/]+/", "")
+                            .replace("/pull/", "/pulls/");
+                    JsonNode node = json.readTree(send("GET",
+                            "https://api.github.com/repos/" + path,
+                            githubHeaders(c.token()), null));
+                    if (node.path("merged").asBoolean(false)) {
+                        return "MERGED";
+                    }
+                    return "closed".equalsIgnoreCase(node.path("state").asText(""))
+                            ? "CLOSED" : "OPEN";
+                }
+                case "GITLAB" -> {
+                    String iid = trailingNumber(prUrl);
+                    if (iid.isBlank()) {
+                        return "UNKNOWN";
+                    }
+                    JsonNode node = json.readTree(send("GET", gitlabBase(c) + "/projects/"
+                                    + enc(c.repo()) + "/merge_requests/" + iid,
+                            gitlabHeaders(c.token()), null));
+                    String state = node.path("state").asText("").toLowerCase(Locale.ROOT);
+                    return switch (state) {
+                        case "merged" -> "MERGED";
+                        case "closed" -> "CLOSED";
+                        case "opened", "open" -> "OPEN";
+                        default -> "UNKNOWN";
+                    };
+                }
+                case "GITEE" -> {
+                    String number = trailingNumber(prUrl);
+                    if (number.isBlank()) {
+                        return "UNKNOWN";
+                    }
+                    JsonNode node = json.readTree(send("GET",
+                            "https://gitee.com/api/v5/repos/" + c.repo() + "/pulls/" + number
+                                    + "?access_token=" + enc(c.token()), headers(), null));
+                    String state = node.path("state").asText("").toLowerCase(Locale.ROOT);
+                    if ("merged".equals(state) || !node.path("merged_at").asText("").isBlank()) {
+                        return "MERGED";
+                    }
+                    return "closed".equals(state) ? "CLOSED" : "OPEN";
+                }
+                default -> {
+                    return "UNKNOWN";
+                }
+            }
+        } catch (Exception e) {
+            log.warn("查询 PR 状态失败（{}/{} url={}）：{}", c.provider(), c.repo(), prUrl,
+                    e.getMessage());
+            return "UNKNOWN";
+        }
+    }
+
+    /** 取 URL 末尾的数字（GitLab MR iid / Gitee PR 编号）。 */
+    private static String trailingNumber(String url) {
+        int end = url.length();
+        while (end > 0 && !Character.isDigit(url.charAt(end - 1))) {
+            end--;
+        }
+        int start = end;
+        while (start > 0 && Character.isDigit(url.charAt(start - 1))) {
+            start--;
+        }
+        return end == start ? "" : url.substring(start, end);
+    }
+
+    /**
      * 创建 PR / MR，返回网页链接。
      *
      * <p>只创建、不合并：最终合并必须由人工完成（平台永不自动 merge）。

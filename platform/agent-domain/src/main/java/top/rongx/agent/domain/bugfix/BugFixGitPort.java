@@ -29,4 +29,20 @@ public interface BugFixGitPort {
 
     /** 推送分支并创建 PR/MR（已存在同分支 PR 时直接返回其链接），返回可访问链接。 */
     String openPullRequest(BugFixRun run, String title, String body);
+
+    /**
+     * 查询 PR/MR 的远端状态，用于把「等待合并」推进为「已合并」或「已关闭」。
+     *
+     * <p>查询失败必须返回 {@link PullRequestState#UNKNOWN} 而不是抛异常：合并追踪器是
+     * 尽力而为的后台任务，网络抖动不能让运行状态倒退。
+     */
+    PullRequestState pullRequestState(BugFixRun run);
+
+    /** PR/MR 的远端状态。 */
+    enum PullRequestState {
+        OPEN,
+        MERGED,
+        CLOSED,
+        UNKNOWN
+    }
 }

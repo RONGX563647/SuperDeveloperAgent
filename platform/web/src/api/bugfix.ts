@@ -14,10 +14,22 @@ export type BugFixStage =
 export type BugFixStatus =
   | 'QUEUED'
   | 'RUNNING'
+  | 'WAITING_MERGE'
   | 'SUCCEEDED'
   | 'FAILED'
   | 'BLOCKED'
   | 'CANCELLED'
+
+export interface BugFixRunArtifacts {
+  analysis: string
+  analysisJson: string
+  fixSummary: string
+  baseSha: string
+  fixSha: string
+  env: string
+  prUrl: string
+  evidence: string
+}
 
 export interface BugFixRunRow {
   id: string
@@ -33,14 +45,7 @@ export interface BugFixRunRow {
   stage: BugFixStage
   status: BugFixStatus
   message: string
-  analysis: string
-  analysisJson: string
-  fixSummary: string
-  baseSha: string
-  fixSha: string
-  env: string
-  prUrl: string
-  evidence: string
+  artifacts: BugFixRunArtifacts
   attempt: number
   createdAt: number
   updatedAt: number

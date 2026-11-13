@@ -232,6 +232,30 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
         }
     }
 
+    @Override
+    public PullRequestState pullRequestState(BugFixRun run) {
+        if (remote == null || run == null || run.prUrl() == null || run.prUrl().isBlank()) {
+            return PullRequestState.UNKNOWN;
+        }
+        try {
+            GitIssueRemoteClient.Credentials credentials = remote.credentials(
+                            run.userId(), run.provider(), run.repo())
+                    .orElse(null);
+            if (credentials == null) {
+                return PullRequestState.UNKNOWN;
+            }
+            return switch (remote.pullRequestState(credentials, run.prUrl())) {
+                case "MERGED" -> PullRequestState.MERGED;
+                case "CLOSED" -> PullRequestState.CLOSED;
+                case "OPEN" -> PullRequestState.OPEN;
+                default -> PullRequestState.UNKNOWN;
+            };
+        } catch (RuntimeException e) {
+            log.warn("读取 PR 状态失败 run={}：{}", run.id(), e.getMessage());
+            return PullRequestState.UNKNOWN;
+        }
+    }
+
     private Path requireRepo(String projectId) {
         Path repo = locator.repoDir(projectId).orElseThrow(() ->
                 new IllegalStateException("项目尚未接入 git 仓库：" + projectId));

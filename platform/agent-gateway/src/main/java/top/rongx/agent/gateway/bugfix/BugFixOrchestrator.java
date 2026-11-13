@@ -22,11 +22,13 @@ import top.rongx.agent.domain.bugfix.BugFixNotifier;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixPolicyStore;
 import top.rongx.agent.domain.bugfix.BugFixRun;
+import top.rongx.agent.domain.bugfix.BugFixRunArtifacts;
 import top.rongx.agent.domain.bugfix.BugFixRunStore;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStageResult;
 import top.rongx.agent.domain.bugfix.BugFixStageRun;
 import top.rongx.agent.domain.bugfix.BugFixStatus;
+import top.rongx.agent.domain.bugfix.BugFixTransitions;
 import top.rongx.agent.domain.gitissue.GitIssue;
 
 /**
@@ -108,7 +110,8 @@ public class BugFixOrchestrator {
         }
         // 已成功提过 PR 的任务不再重复跑，避免为同一个 Bug 建出多个 PR
         runs.list(issue.userId(), issue.id(), 10).stream()
-                .filter(run -> run.status() == BugFixStatus.SUCCEEDED
+                .filter(run -> (run.status() == BugFixStatus.SUCCEEDED
+                        || run.status() == BugFixStatus.WAITING_MERGE)
                         && run.prUrl() != null && !run.prUrl().isBlank())
                 .findFirst()
                 .ifPresent(run -> {
@@ -120,8 +123,8 @@ public class BugFixOrchestrator {
         BugFixRun run = new BugFixRun(
                 id, issue.id(), issue.userId(), issue.projectId(), issue.provider(), issue.repo(),
                 issue.number(), issue.title(), issue.body(), branch,
-                BugFixStage.ANALYZE, BugFixStatus.QUEUED, "已入队，等待执行", "",
-                "", "", "", "", "", "", "", 0, now, now, 0);
+                BugFixStage.ANALYZE, BugFixStatus.QUEUED, "已入队，等待执行",
+                BugFixRunArtifacts.EMPTY, 0, now, now, 0);
         runs.save(run);
         runs.appendEvent(BugFixEvent.info(id, BugFixStage.ANALYZE, "自动修复已入队"));
         submit(id);
@@ -135,6 +138,9 @@ public class BugFixOrchestrator {
             if (run.stage() == BugFixStage.DONE) {
                 throw new IllegalStateException("该运行已完成，无需重试");
             }
+            if (run.status() == BugFixStatus.WAITING_MERGE) {
+                throw new IllegalStateException("PR 正在等待人工合并，无需重试");
+            }
             if (run.status().active()) {
                 return run;
             }
@@ -144,8 +150,8 @@ public class BugFixOrchestrator {
                         + "），请人工处理后再继续");
             }
             long now = System.currentTimeMillis();
-            BugFixRun next = copy(run, run.stage(), BugFixStatus.QUEUED, "等待重试",
-                    null, null, null, null, null, null, null, run.attempt() + 1, now, 0);
+            BugFixRun next = run.withState(run.stage(), BugFixStatus.QUEUED, "等待重试",
+                    run.attempt() + 1, now, 0);
             runs.save(next);
             runs.appendEvent(BugFixEvent.info(id, run.stage(), "用户触发重试"));
             cancellations.clear(id);
@@ -163,8 +169,8 @@ public class BugFixOrchestrator {
                 return run;
             }
             long now = System.currentTimeMillis();
-            BugFixRun cancelled = copy(run, run.stage(), BugFixStatus.CANCELLED, "用户取消",
-                    null, null, null, null, null, null, null, run.attempt(), now, now);
+            BugFixRun cancelled = run.withState(run.stage(), BugFixStatus.CANCELLED, "用户取消",
+                    run.attempt(), now, now);
             runs.save(cancelled);
             runs.closeOpenStages(id, BugFixStageRun.CANCELLED, "用户取消", now);
             runs.releaseEnvLeases(id);
@@ -175,6 +181,45 @@ public class BugFixOrchestrator {
 
     public BugFixRun get(String userId, String id) {
         return require(userId, id);
+    }
+
+    /**
+     * 合并追踪器确认 PR 已合并：这是运行进入 {@link BugFixStatus#SUCCEEDED} 的唯一入口。
+     *
+     * <p>「创建了 PR」与「Bug 真正修复」是两件事，只有远端确认 merged 才闭环完成。
+     */
+    public BugFixRun markMerged(String id) {
+        synchronized (lockFor(id)) {
+            BugFixRun run = runs.find(id).orElse(null);
+            if (run == null || !run.waitingMerge()) {
+                return run;
+            }
+            long now = System.currentTimeMillis();
+            BugFixRun done = run.completed(now);
+            runs.save(done);
+            runs.appendEvent(BugFixEvent.info(id, BugFixStage.PULL_REQUEST, "PR 已合并，自动修复完成"));
+            runs.releaseEnvLeases(id);
+            enqueue(done, "自动修复 · PR 已合并\n\nBug 修复已合入主干：" + safeUrl(done.prUrl()));
+            return done;
+        }
+    }
+
+    /** PR 被关闭但未合并：回到可重试状态，避免运行永远停在等待合并。 */
+    public BugFixRun markPrClosed(String id) {
+        synchronized (lockFor(id)) {
+            BugFixRun run = runs.find(id).orElse(null);
+            if (run == null || !run.waitingMerge()) {
+                return run;
+            }
+            long now = System.currentTimeMillis();
+            BugFixRun blocked = run.withState(BugFixStage.PULL_REQUEST, BugFixStatus.BLOCKED,
+                    "PR 已被关闭但未合并，请人工确认后重试", run.attempt(), now, now);
+            runs.save(blocked);
+            runs.appendEvent(BugFixEvent.warn(id, BugFixStage.PULL_REQUEST, blocked.message()));
+            enqueue(blocked, "自动修复 · PR 已关闭但未合并\n\n" + safeUrl(blocked.prUrl())
+                    + "\n可人工确认后重试。");
+            return blocked;
+        }
     }
 
     public List<BugFixRun> list(String userId, String issueId, int limit) {
@@ -276,6 +321,7 @@ public class BugFixOrchestrator {
             if (run.status() == BugFixStatus.CANCELLED
                     || run.status() == BugFixStatus.BLOCKED
                     || run.status() == BugFixStatus.FAILED
+                    || run.status() == BugFixStatus.WAITING_MERGE
                     || run.status() == BugFixStatus.SUCCEEDED) {
                 return;
             }
@@ -288,10 +334,9 @@ public class BugFixOrchestrator {
             }
             BugFixPolicy policy = policies.load(run.projectId());
             if (run.status() == BugFixStatus.QUEUED) {
-                run = runs.save(copy(run, run.stage(), BugFixStatus.RUNNING,
-                        "正在执行：" + run.stage().label(), null, null, null, null, null, null,
-                        null,
-                        run.attempt(), System.currentTimeMillis(), 0));
+                run = runs.save(run.withState(run.stage(), BugFixStatus.RUNNING,
+                        "正在执行：" + run.stage().label(), run.attempt(),
+                        System.currentTimeMillis(), 0));
                 runs.appendEvent(BugFixEvent.info(id, run.stage(),
                         "阶段开始：" + run.stage().label()));
             }
@@ -350,54 +395,23 @@ public class BugFixOrchestrator {
                     result.artifact() == null ? AnalyzeClip.clip(result.evidence(), 20_000)
                             : result.artifact(),
                     endedAt, endedAt - startedAt);
-            if (!apply(latest, result, policy, stageAttempt, endedAt)) {
+            if (!apply(latest, result, policy, endedAt)) {
                 return;
             }
         }
     }
 
-    /** 应用阶段结果；返回 false 表示本次运行已停（阻塞/失败/完成/取消/等待退避重试）。 */
-    private boolean apply(BugFixRun run, BugFixStageResult result, BugFixPolicy policy,
-                          int stageAttempt, long now) {
+    /** 应用阶段结果；返回 false 表示本次运行已停（阻塞/失败/完成/等待合并/等待退避重试）。 */
+    private boolean apply(BugFixRun run, BugFixStageResult result, BugFixPolicy policy, long now) {
         BugFixStage stage = run.stage();
         BugFixStageResult.Outcome outcome = result.outcome();
-        BugFixStage nextStage;
-        BugFixStatus status;
-        int attempt = run.attempt();
-        boolean autoRetry = false;
-        long retryDelay = 0;
-        if (outcome == BugFixStageResult.Outcome.CONTINUE) {
-            nextStage = stage.next();
-            status = nextStage == BugFixStage.DONE ? BugFixStatus.SUCCEEDED : BugFixStatus.RUNNING;
-        } else if (outcome == BugFixStageResult.Outcome.BLOCKED) {
-            nextStage = stage;
-            status = BugFixStatus.BLOCKED;
-        } else {
-            attempt = run.attempt() + 1;
-            if (stage == BugFixStage.VERIFY && attempt < policy.maxAttempts()) {
-                // 验证不通过不是终态：回到修复阶段，带上验证证据重新修
-                nextStage = BugFixStage.FIX;
-                status = BugFixStatus.RUNNING;
-            } else if ((stage == BugFixStage.REPRO_DEPLOY || stage == BugFixStage.VERIFY_DEPLOY)
-                    && attempt < policy.maxAttempts()) {
-                // 部署失败多为环境抖动：退避后自动重试，而不是立刻把任务判死
-                nextStage = stage;
-                status = BugFixStatus.QUEUED;
-                autoRetry = true;
-                retryDelay = Math.min(60_000L,
-                        5_000L * (1L << Math.min(attempt, 4)));
-            } else {
-                nextStage = stage;
-                status = BugFixStatus.FAILED;
-            }
-        }
-        boolean finished = status == BugFixStatus.SUCCEEDED
-                || status == BugFixStatus.FAILED || status == BugFixStatus.BLOCKED;
+        BugFixTransitions.Decision decision = BugFixTransitions.decide(
+                stage, outcome, run.attempt(), policy.maxAttempts());
         String message = result.message() == null || result.message().isBlank()
-                ? stage.label() + "：" + status.name() : result.message();
-        if (autoRetry) {
-            message = message + "（" + (retryDelay / 1000) + " 秒后自动重试，第 "
-                    + (attempt + 1) + " 次）";
+                ? stage.label() + "：" + decision.status().name() : result.message();
+        if (decision.autoRetry()) {
+            message = message + "（" + (decision.retryDelayMs() / 1000) + " 秒后自动重试，第 "
+                    + (decision.attempt() + 1) + " 次）";
         }
         BugFixRun saved;
         synchronized (lockFor(run.id())) {
@@ -408,24 +422,23 @@ public class BugFixOrchestrator {
             if (current.status() != BugFixStatus.RUNNING || current.stage() != stage) {
                 return false;
             }
-            saved = runs.save(copy(current, nextStage, status, message,
-                    result.analysis(), result.analysisJson(), result.fixSummary(),
-                    result.baseSha(), result.branch(), result.fixSha(), result.env(), attempt, now,
-                    finished ? now : 0)
-                    .withEvidence(result.evidence())
-                    .withPrUrl(result.prUrl()));
+            saved = runs.save(current
+                    .withState(decision.nextStage(), decision.status(), message, decision.attempt(),
+                            now, decision.finished() ? now : 0)
+                    .withResult(result));
             runs.appendEvent(eventFor(saved, stage, result));
-            if (finished) {
+            if (decision.finished()) {
                 runs.releaseEnvLeases(run.id());
             }
         }
         notifyResult(stage, saved, result);
-        if (autoRetry) {
+        if (decision.autoRetry()) {
             String runId = run.id();
-            retryScheduler.schedule(() -> submit(runId), retryDelay, TimeUnit.MILLISECONDS);
+            retryScheduler.schedule(() -> submit(runId), decision.retryDelayMs(),
+                    TimeUnit.MILLISECONDS);
             return false;
         }
-        return status == BugFixStatus.RUNNING;
+        return decision.status() == BugFixStatus.RUNNING;
     }
 
     /** 关键节点写通知发件箱；投递由后台重试，失败绝不影响运行。 */
@@ -454,6 +467,11 @@ public class BugFixOrchestrator {
         if (message == null) {
             return;
         }
+        enqueue(run, message);
+    }
+
+    /** 通知先脱敏再入发件箱；投递失败由后台重试，绝不影响状态机。 */
+    private void enqueue(BugFixRun run, String message) {
         String safe = BugFixRedactor.redact(message);
         try {
             if (notifications != null) {
@@ -483,8 +501,8 @@ public class BugFixOrchestrator {
                 return;
             }
             long now = System.currentTimeMillis();
-            runs.save(copy(current, current.stage(), BugFixStatus.BLOCKED, message,
-                    null, null, null, null, null, null, null, current.attempt(), now, now));
+            runs.save(current.withState(current.stage(), BugFixStatus.BLOCKED, message,
+                    current.attempt(), now, now));
             runs.appendEvent(BugFixEvent.warn(run.id(), run.stage(), message));
             runs.releaseEnvLeases(run.id());
         }
@@ -498,8 +516,8 @@ public class BugFixOrchestrator {
             }
             BugFixRun current = run.get();
             long now = System.currentTimeMillis();
-            runs.save(copy(current, current.stage(), BugFixStatus.FAILED, message,
-                    null, null, null, null, null, null, null, current.attempt() + 1, now, now));
+            runs.save(current.withState(current.stage(), BugFixStatus.FAILED, message,
+                    current.attempt() + 1, now, now));
             runs.appendEvent(BugFixEvent.error(id, current.stage(), message));
             runs.closeOpenStages(id, BugFixStageRun.FAILED, message, now);
             runs.releaseEnvLeases(id);
@@ -514,27 +532,15 @@ public class BugFixOrchestrator {
         return sha == null ? "" : sha.substring(0, Math.min(8, sha.length()));
     }
 
+    private static String safeUrl(String url) {
+        return url == null ? "" : url;
+    }
+
     private static String clip(String value, int max) {
         if (value == null) {
             return "";
         }
         return value.length() <= max ? value : value.substring(0, max) + "…";
-    }
-
-    private static BugFixRun copy(BugFixRun run, BugFixStage stage, BugFixStatus status,
-                                  String message, String analysis, String analysisJson,
-                                  String fixSummary, String baseSha, String branch, String fixSha,
-                                  String env, int attempt, long updatedAt, long finishedAt) {
-        return new BugFixRun(run.id(), run.issueId(), run.userId(), run.projectId(),
-                run.provider(), run.repo(), run.issueNumber(), run.issueTitle(), run.issueBody(),
-                branch == null ? run.branch() : branch, stage, status, message,
-                analysis == null ? run.analysis() : analysis,
-                analysisJson == null ? run.analysisJson() : analysisJson,
-                fixSummary == null ? run.fixSummary() : fixSummary,
-                baseSha == null ? run.baseSha() : baseSha,
-                fixSha == null ? run.fixSha() : fixSha,
-                env == null ? run.env() : env, run.prUrl(), run.evidence(), attempt,
-                run.createdAt(), updatedAt, finishedAt);
     }
 
     private static String message(RuntimeException e) {

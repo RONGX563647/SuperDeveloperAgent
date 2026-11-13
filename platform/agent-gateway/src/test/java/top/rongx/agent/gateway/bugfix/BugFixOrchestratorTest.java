@@ -20,6 +20,7 @@ import top.rongx.agent.domain.bugfix.BugFixEdit;
 import top.rongx.agent.domain.bugfix.BugFixGitPort;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixRun;
+import top.rongx.agent.domain.bugfix.BugFixRunArtifacts;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStatus;
 import top.rongx.agent.domain.env.EnvBinding;
@@ -54,15 +55,59 @@ class BugFixOrchestratorTest {
         BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy());
         BugFixRun started = orchestrator.start(issue("task-1", "BUG"));
 
-        BugFixRun done = await(orchestrator, started.id(), BugFixStatus.SUCCEEDED);
+        BugFixRun waiting = await(orchestrator, started.id(), BugFixStatus.WAITING_MERGE);
+        assertEquals(BugFixStage.PULL_REQUEST, waiting.stage(), "提 PR 后应等待人工合并");
+        assertEquals(FIX_SHA, waiting.fixSha());
+        assertEquals(HEAD_SHA, waiting.baseSha());
+        assertEquals(PR_URL, waiting.prUrl());
+        assertEquals("test", waiting.env());
+        assertTrue(waiting.analysis().contains("根因"), "分析结论应落库：" + waiting.analysis());
+        assertTrue(waiting.evidence() != null && !waiting.evidence().isBlank(), "证据应落库");
+        assertEquals(100, waiting.progress());
+        assertFalse(orchestrator.events(waiting.userId(), waiting.id()).isEmpty(),
+                "时间线应有事件");
+    }
+
+    @Test
+    void mergeTrackerCompletesRunOnlyAfterPullRequestMerged() throws Exception {
+        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        FakeGit git = new FakeGit();
+        BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy(), new FakeAgent(),
+                (run, sha) -> "部署成功：" + sha, git);
+        BugFixRun started = orchestrator.start(issue("task-1", "BUG"));
+        BugFixRun waiting = await(orchestrator, started.id(), BugFixStatus.WAITING_MERGE);
+
+        BugFixMergeTracker tracker = new BugFixMergeTracker(store, git, orchestrator);
+        assertEquals(0, tracker.pollOnce(), "PR 仍打开时不应改变状态");
+        assertEquals(BugFixStatus.WAITING_MERGE,
+                orchestrator.get(null, waiting.id()).status());
+
+        git.prState = BugFixGitPort.PullRequestState.MERGED;
+        assertEquals(1, tracker.pollOnce());
+        BugFixRun done = orchestrator.get(null, waiting.id());
+        assertEquals(BugFixStatus.SUCCEEDED, done.status());
         assertEquals(BugFixStage.DONE, done.stage());
-        assertEquals(FIX_SHA, done.fixSha());
-        assertEquals(HEAD_SHA, done.baseSha());
-        assertEquals(PR_URL, done.prUrl());
-        assertEquals("test", done.env());
-        assertTrue(done.analysis().contains("根因"), "分析结论应落库：" + done.analysis());
-        assertTrue(done.evidence() != null && !done.evidence().isBlank(), "证据应落库");
-        assertFalse(orchestrator.events(done.userId(), done.id()).isEmpty(), "时间线应有事件");
+        assertTrue(done.message().contains("合并"), done.message());
+    }
+
+    @Test
+    void mergeTrackerBlocksRunWhenPullRequestClosedWithoutMerge() {
+        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        long now = System.currentTimeMillis();
+        BugFixRun waiting = new BugFixRun("bf-waiting", "task-w", "u1", "p1", "GITHUB", "o/r",
+                "1", "标题", "描述", "agent/bugfix-w", BugFixStage.PULL_REQUEST,
+                BugFixStatus.WAITING_MERGE, "PR 已创建",
+                new BugFixRunArtifacts("", "", "", "", "", "", PR_URL, ""), 0, now, now, 0);
+        store.save(waiting);
+        FakeGit git = new FakeGit();
+        git.prState = BugFixGitPort.PullRequestState.CLOSED;
+        BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy());
+
+        BugFixMergeTracker tracker = new BugFixMergeTracker(store, git, orchestrator);
+        assertEquals(1, tracker.pollOnce());
+        BugFixRun blocked = store.find(waiting.id()).orElseThrow();
+        assertEquals(BugFixStatus.BLOCKED, blocked.status());
+        assertTrue(blocked.message().contains("关闭"), blocked.message());
     }
 
     @Test
@@ -82,8 +127,8 @@ class BugFixOrchestratorTest {
         assertEquals(paused.stage(), resumed.stage());
         assertEquals(1, resumed.attempt());
 
-        BugFixRun done = await(orchestrator, started.id(), BugFixStatus.SUCCEEDED);
-        assertEquals(PR_URL, done.prUrl());
+        BugFixRun waiting = await(orchestrator, started.id(), BugFixStatus.WAITING_MERGE);
+        assertEquals(PR_URL, waiting.prUrl());
     }
 
     @Test
@@ -107,7 +152,7 @@ class BugFixOrchestratorTest {
         List<BugFixRun> runs = store.list("u1", null, 10);
         assertEquals(1, runs.size());
         // 等异步执行结束，避免测试结束时临时目录被清理导致写入失败
-        await(orchestrator, runs.get(0).id(), BugFixStatus.SUCCEEDED);
+        await(orchestrator, runs.get(0).id(), BugFixStatus.WAITING_MERGE);
     }
 
     @Test
@@ -157,8 +202,8 @@ class BugFixOrchestratorTest {
 
         BugFixRun first = orchestrator.start(issue("task-1", "BUG"));
         BugFixRun second = orchestrator.start(issue("task-2", "BUG"));
-        await(orchestrator, first.id(), BugFixStatus.SUCCEEDED);
-        await(orchestrator, second.id(), BugFixStatus.SUCCEEDED);
+        await(orchestrator, first.id(), BugFixStatus.WAITING_MERGE);
+        await(orchestrator, second.id(), BugFixStatus.WAITING_MERGE);
 
         assertEquals(1, max.get(), "同一项目的运行必须串行，避免同时部署同一测试环境");
     }
@@ -194,9 +239,9 @@ class BugFixOrchestratorTest {
                 (run, sha) -> "部署成功：" + sha);
         BugFixRun started = orchestrator.start(issue("task-1", "BUG"));
 
-        BugFixRun done = await(orchestrator, started.id(), BugFixStatus.SUCCEEDED);
-        assertEquals(1, done.attempt(), "验证失败一次后应消耗一次重试机会");
-        assertEquals(PR_URL, done.prUrl());
+        BugFixRun waiting = await(orchestrator, started.id(), BugFixStatus.WAITING_MERGE);
+        assertEquals(1, waiting.attempt(), "验证失败一次后应消耗一次重试机会");
+        assertEquals(PR_URL, waiting.prUrl());
 
         List<top.rongx.agent.domain.bugfix.BugFixStageRun> stages =
                 orchestrator.stageRuns(null, started.id());
@@ -213,7 +258,7 @@ class BugFixOrchestratorTest {
         long now = System.currentTimeMillis();
         BugFixRun running = new BugFixRun("bf-running", "task-r", "u1", "p1", "GITHUB", "o/r",
                 "1", "标题", "描述", "agent/bugfix-running", BugFixStage.ANALYZE,
-                BugFixStatus.RUNNING, "执行中", "", "", "", "", "", "", "", "", 0, now, now, 0);
+                BugFixStatus.RUNNING, "执行中", BugFixRunArtifacts.EMPTY, 0, now, now, 0);
         store.save(running);
 
         List<String> queued = store.recoverInterrupted();
@@ -244,15 +289,22 @@ class BugFixOrchestratorTest {
     // ---------------------------------------------------------------- 装配
 
     private BugFixOrchestrator orchestrator(SqliteBugFixStore store, BugFixPolicy policy) {
-        return orchestrator(store, policy, new FakeAgent(), (run, sha) -> "部署成功：" + sha);
+        return orchestrator(store, policy, new FakeAgent(), (run, sha) -> "部署成功：" + sha,
+                new FakeGit());
     }
 
     private BugFixOrchestrator orchestrator(SqliteBugFixStore store, BugFixPolicy policy,
                                             BugFixAgentPort agent, BugFixDeployPort deploy) {
+        return orchestrator(store, policy, agent, deploy, new FakeGit());
+    }
+
+    private BugFixOrchestrator orchestrator(SqliteBugFixStore store, BugFixPolicy policy,
+                                            BugFixAgentPort agent, BugFixDeployPort deploy,
+                                            BugFixGitPort git) {
         store.save(policy);
         ObjectMapper mapper = new ObjectMapper();
         BugFixJson json = new BugFixJson(mapper);
-        BugFixGitPort git = new FakeGit();
+        BugFixPromptTemplates prompts = new BugFixPromptTemplates();
         EnvBindingPort bindings = new EnvBindingPort() {
             @Override
             public EnvBinding draft(String projectId, String env, String actor) {
@@ -269,13 +321,13 @@ class BugFixOrchestratorTest {
             }
         };
         List<BugFixStageHandler> handlers = List.of(
-                new AnalyzeStage(agent, git, json),
+                new AnalyzeStage(agent, git, json, prompts),
                 new DeployReproStage(deploy, bindings),
-                new ReproduceStage(agent, json),
-                new FixStage(agent, git, json, new FakeChecks()),
+                new ReproduceStage(agent, json, prompts),
+                new FixStage(agent, git, json, new FakeChecks(), prompts),
                 new VerifyDeployStage(deploy, bindings),
-                new VerifyStage(agent, json, new FakeChecks()),
-                new PullRequestStage(git));
+                new VerifyStage(agent, json, new FakeChecks(), prompts),
+                new PullRequestStage(git, prompts));
         return new BugFixOrchestrator(store, store, handlers, (run, message) -> {
         }, store, new BugFixCancellationRegistry());
     }
@@ -336,6 +388,8 @@ class BugFixOrchestratorTest {
     }
 
     private static final class FakeGit implements BugFixGitPort {
+        private PullRequestState prState = PullRequestState.OPEN;
+
         @Override
         public void sync(String projectId) {
         }
@@ -359,6 +413,11 @@ class BugFixOrchestratorTest {
         @Override
         public String openPullRequest(BugFixRun run, String title, String body) {
             return PR_URL;
+        }
+
+        @Override
+        public PullRequestState pullRequestState(BugFixRun run) {
+            return prState;
         }
     }
 

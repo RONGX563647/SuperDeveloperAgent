@@ -58,6 +58,7 @@ const FIX_STAGES: { key: BugFixStage; label: string; hint: string }[] = [
 const FIX_STATUS_LABEL: Record<string, string> = {
   QUEUED: '排队中',
   RUNNING: '执行中',
+  WAITING_MERGE: '等待合并',
   SUCCEEDED: '已完成',
   FAILED: '失败',
   BLOCKED: '待人工处理',
@@ -85,6 +86,8 @@ function stageState(stage: BugFixStage, index: number): string {
   const run = fixRun.value
   if (!run) return 'pending'
   if (run.stage === 'DONE' || run.status === 'SUCCEEDED') return 'done'
+  // PR 已创建但等人工合并：PR 阶段视为完成，进度 100%
+  if (run.status === 'WAITING_MERGE') return 'done'
   const current = stageIndex(run.stage)
   if (index < current) return 'done'
   if (index > current) return 'pending'
@@ -1006,9 +1009,9 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     >
                       复制
                     </button>
-                    <span v-if="fixRun.baseSha">base {{ fixRun.baseSha.slice(0, 8) }}</span>
-                    <span v-if="fixRun.fixSha">fix {{ fixRun.fixSha.slice(0, 8) }}</span>
-                    <span v-if="fixRun.env">env {{ fixRun.env }}</span>
+                    <span v-if="fixRun.artifacts.baseSha">base {{ fixRun.artifacts.baseSha.slice(0, 8) }}</span>
+                    <span v-if="fixRun.artifacts.fixSha">fix {{ fixRun.artifacts.fixSha.slice(0, 8) }}</span>
+                    <span v-if="fixRun.artifacts.env">env {{ fixRun.artifacts.env }}</span>
                     <span v-if="fixRun.attempt">第 {{ fixRun.attempt + 1 }} 次尝试</span>
                   </div>
 
@@ -1030,13 +1033,13 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                   <div v-if="fixRun.message" class="fix-message">{{ fixRun.message }}</div>
                   <div v-if="fixHint" class="fix-hint">{{ fixHint }}</div>
 
-                  <details v-if="fixRun.analysis" class="fix-fold">
+                  <details v-if="fixRun.artifacts.analysis" class="fix-fold">
                     <summary>分析结论</summary>
-                    <pre class="fix-pre">{{ fixRun.analysis }}</pre>
+                    <pre class="fix-pre">{{ fixRun.artifacts.analysis }}</pre>
                   </details>
-                  <details v-if="fixRun.evidence" class="fix-fold">
+                  <details v-if="fixRun.artifacts.evidence" class="fix-fold">
                     <summary>部署 / 验证证据</summary>
-                    <pre class="fix-pre">{{ fixRun.evidence }}</pre>
+                    <pre class="fix-pre">{{ fixRun.artifacts.evidence }}</pre>
                   </details>
 
                   <div v-if="fixStageRuns.length" class="fix-stages">
@@ -1067,8 +1070,8 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
 
                   <div class="fix-actions">
                     <a
-                      v-if="fixRun.prUrl" class="block-link"
-                      :href="fixRun.prUrl" target="_blank" rel="noreferrer"
+                      v-if="fixRun.artifacts.prUrl" class="block-link"
+                      :href="fixRun.artifacts.prUrl" target="_blank" rel="noreferrer"
                     >
                       <el-icon><Link /></el-icon> 查看 PR（等待人工合并）
                     </a>
@@ -1820,7 +1823,8 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--accent-ink, #4a6cf7);
   background: var(--accent-soft, rgba(74, 108, 247, 0.12));
 }
-.fix-status.succeeded {
+.fix-status.succeeded,
+.fix-status.waiting_merge {
   color: var(--ok);
   background: rgba(46, 160, 67, 0.12);
 }

@@ -173,7 +173,8 @@ class WorkspaceBugFixGitTest {
         return new BugFixRun("bf-test", "task-1", "u1", "p1", "GITHUB", "o/r", "1",
                 "空值导致 500", "打开页面报错", branch,
                 top.rongx.agent.domain.bugfix.BugFixStage.FIX,
-                top.rongx.agent.domain.bugfix.BugFixStatus.RUNNING, "执行中", "", "", "",
-                baseSha, "", "test", "", "", 0, now, now, 0);
+                top.rongx.agent.domain.bugfix.BugFixStatus.RUNNING, "执行中",
+                new top.rongx.agent.domain.bugfix.BugFixRunArtifacts("", "", "", baseSha, "",
+                        "test", "", ""), 0, now, now, 0);
     }
 }

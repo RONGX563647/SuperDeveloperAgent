@@ -12,7 +12,9 @@ public enum BugFixStatus {
     QUEUED,
     /** 正在执行某一阶段。 */
     RUNNING,
-    /** PR 已创建，等待人工合并。 */
+    /** PR 已创建，等待人工合并（平台永不自动合并）。 */
+    WAITING_MERGE,
+    /** PR 已合并，闭环真正完成。 */
     SUCCEEDED,
     /** 执行失败（异常/验证不通过）。 */
     FAILED,

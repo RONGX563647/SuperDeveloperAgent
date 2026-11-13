@@ -25,6 +25,9 @@ public interface BugFixRunStore {
     /** 同一 issue 尚未结束的运行（用于幂等：一个任务同时只允许一个自动化）。 */
     Optional<BugFixRun> activeByIssue(String issueId);
 
+    /** 等待人工合并的运行（合并追踪器轮询用），按更新时间升序，避免老运行饿死。 */
+    List<BugFixRun> listWaitingMerge(int limit);
+
     void appendEvent(BugFixEvent event);
 
     List<BugFixEvent> events(String runId);
