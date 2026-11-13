@@ -237,10 +237,12 @@ defineExpose({ load })
         type="button"
         class="toggle-btn"
         :class="{ on: s.enabled }"
+        role="switch" :aria-checked="s.enabled"
         :title="s.enabled ? '默认启用：对话未单独勾选时加载' : '已停用：对话里需手动勾选'"
         @click="toggleEnabled(s, !s.enabled)"
       >
-        {{ s.enabled ? '已启用' : '已停用' }}
+        <span class="track"><span class="thumb" /></span>
+        <span>{{ s.enabled ? '已启用' : '已停用' }}</span>
       </button>
       <div class="skill-actions">
         <el-button size="small" text @click="preview(s)">查看</el-button>
@@ -370,15 +372,18 @@ defineExpose({ load })
   border-color: var(--line);
 }
 .toggle-btn {
+  display: inline-flex;
   flex: none;
-  height: 24px;
-  padding: 0 10px;
+  gap: 7px;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px 0 6px;
   font-family: inherit;
   font-size: 11px;
   color: var(--ink-muted);
   white-space: nowrap;
   cursor: pointer;
-  background: transparent;
+  background: var(--surface-raised);
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
   transition: color var(--dur-fast) var(--ease-out),
@@ -389,10 +394,37 @@ defineExpose({ load })
   color: var(--ink);
   border-color: var(--line-strong);
 }
+.toggle-btn .track {
+  position: relative;
+  display: block;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  background: var(--line-strong);
+  border-radius: 999px;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.toggle-btn .thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 24%);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
 .toggle-btn.on {
   color: var(--accent-ink);
   background: var(--accent-soft);
   border-color: transparent;
+}
+.toggle-btn.on .track {
+  background: var(--accent);
+}
+.toggle-btn.on .thumb {
+  transform: translateX(12px);
 }
 .skill-main {
   flex: 1;

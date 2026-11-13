@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Check, Connection, MagicStick, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Connection, MagicStick, Refresh, Search } from '@element-plus/icons-vue'
 import type { CapabilityOption } from '../../composables/useChatCapabilities'
 import { readSkill } from '../../api/settings'
 import MarkdownView from './MarkdownView.vue'
@@ -260,10 +260,12 @@ function formatTime(ts?: number): string {
               <div class="hero-switch">
                 <button
                   type="button" class="cap-toggle" :class="{ on: isOn(active) }"
+                  role="switch" :aria-checked="isOn(active)"
+                  :title="isOn(active) ? '本次对话会调用它' : '本次对话不会调用它'"
                   @click="toggleActive(!isOn(active))"
                 >
-                  <el-icon><Check v-if="isOn(active)" /><Plus v-else /></el-icon>
-                  {{ isOn(active) ? '已启用' : '启用' }}
+                  <span class="track"><span class="thumb" /></span>
+                  <span class="cap-toggle-text">{{ isOn(active) ? '已启用' : '未启用' }}</span>
                 </button>
               </div>
             </div>
@@ -696,13 +698,13 @@ function formatTime(ts?: number): string {
   align-items: flex-start;
   padding-top: 2px;
 }
-/* 开关用按钮形态：比滑块更轻，和整页的胶囊语言一致 */
+/* 开关：胶囊按钮内嵌轨道 + 滑块，状态一眼可辨 */
 .cap-toggle {
   display: inline-flex;
-  gap: 5px;
+  gap: 8px;
   align-items: center;
   height: 30px;
-  padding: 0 13px;
+  padding: 0 12px 0 7px;
   font-family: inherit;
   font-size: 12px;
   font-weight: 500;
@@ -718,16 +720,39 @@ function formatTime(ts?: number): string {
 }
 .cap-toggle:hover {
   color: var(--ink);
-  background: var(--code-bg);
   border-color: var(--line-strong);
+}
+.cap-toggle .track {
+  position: relative;
+  display: block;
+  flex: none;
+  width: 32px;
+  height: 18px;
+  background: var(--line-strong);
+  border-radius: 999px;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.cap-toggle .thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 24%);
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 .cap-toggle.on {
   color: var(--accent-ink);
   background: var(--accent-soft);
   border-color: transparent;
 }
-.cap-toggle.on:hover {
-  opacity: 0.88;
+.cap-toggle.on .track {
+  background: var(--accent);
+}
+.cap-toggle.on .thumb {
+  transform: translateX(14px);
 }
 
 /* SKILL.md / 连接方式 */
