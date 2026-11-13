@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowRight, ChatDotRound, Close, Delete, Edit, Link, Plus, Refresh, RefreshRight, Search,
+  Setting,
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
   listGitIssueComments, listGitIssues, reopenGitIssue, syncGitIssue, updateGitIssue,
   type GitIssueCommentRow, type GitIssueRow,
 } from '../../api/issues'
+import {
+  cancelBugFix, getBugFixPolicy, getBugFixRun, listBugFixRuns, retryBugFix,
+  saveBugFixPolicy, startBugFix,
+  type BugFixEventRow, type BugFixPolicyRow, type BugFixRunRow, type BugFixStage,
+} from '../../api/bugfix'
 import MarkdownView from './MarkdownView.vue'
 import { appStore } from '../../stores/app'
 import { listProjects, type ProjectRow } from '../../api/project'
@@ -34,6 +40,190 @@ const commentsLoading = ref(false)
 const commentText = ref('')
 const commenting = ref(false)
 const actionBusy = ref('')
+
+// ---------------------------------------------------------------- Bug 自动修复
+
+/** 自动修复阶段（与后端状态机一致，DONE 只在结束后出现）。 */
+const FIX_STAGES: { key: BugFixStage; label: string; hint: string }[] = [
+  { key: 'ANALYZE', label: '分析版本', hint: '锁定基线提交并给出根因与影响文件' },
+  { key: 'REPRO_DEPLOY', label: '部署测试环境', hint: '把基线提交发布到测试环境' },
+  { key: 'REPRODUCE', label: '尝试复现', hint: '按复现步骤确认问题可重现' },
+  { key: 'FIX', label: '代码修复', hint: '生成补丁并提交到独立修复分支' },
+  { key: 'VERIFY_DEPLOY', label: '部署修复版本', hint: '重新部署修复提交' },
+  { key: 'VERIFY', label: '验证修复', hint: '确认问题已解决且无回归' },
+  { key: 'PULL_REQUEST', label: '提交 PR', hint: '推送分支并创建 PR，等待人工合并' },
+]
+
+const FIX_STATUS_LABEL: Record<string, string> = {
+  QUEUED: '排队中',
+  RUNNING: '执行中',
+  SUCCEEDED: '已完成',
+  FAILED: '失败',
+  BLOCKED: '待人工处理',
+  CANCELLED: '已取消',
+}
+
+const fixLoading = ref(false)
+const fixBusy = ref('')
+const fixRun = ref<BugFixRunRow | null>(null)
+const fixEvents = ref<BugFixEventRow[]>([])
+let fixTimer: ReturnType<typeof setTimeout> | undefined
+
+const fixActive = computed(
+  () => !!fixRun.value && ['QUEUED', 'RUNNING'].includes(fixRun.value.status))
+
+function stageIndex(stage?: string): number {
+  if (stage === 'DONE') return FIX_STAGES.length
+  const index = FIX_STAGES.findIndex((s) => s.key === stage)
+  return index < 0 ? 0 : index
+}
+
+/** 阶段状态：done / active / error / muted / pending。 */
+function stageState(stage: BugFixStage, index: number): string {
+  const run = fixRun.value
+  if (!run) return 'pending'
+  if (run.stage === 'DONE' || run.status === 'SUCCEEDED') return 'done'
+  const current = stageIndex(run.stage)
+  if (index < current) return 'done'
+  if (index > current) return 'pending'
+  if (run.status === 'FAILED' || run.status === 'BLOCKED') return 'error'
+  if (run.status === 'CANCELLED') return 'muted'
+  return 'active'
+}
+
+function fixStatusLabel(status?: string): string {
+  return status ? (FIX_STATUS_LABEL[status] ?? status) : ''
+}
+
+async function loadBugFix(issueId: string): Promise<void> {
+  fixLoading.value = true
+  try {
+    const rows = await listBugFixRuns(issueId)
+    if (expandedId.value !== issueId) return
+    if (!rows.length) {
+      fixRun.value = null
+      fixEvents.value = []
+      return
+    }
+    const detail = await getBugFixRun(rows[0].id)
+    if (expandedId.value !== issueId) return
+    fixRun.value = detail.run
+    fixEvents.value = detail.events
+  } catch {
+    if (expandedId.value === issueId) {
+      fixRun.value = null
+      fixEvents.value = []
+    }
+  } finally {
+    if (expandedId.value === issueId) fixLoading.value = false
+  }
+}
+
+/** 运行中每 3 秒刷新一次，结束后自动停止，避免常驻轮询。 */
+function scheduleFixPoll(): void {
+  clearTimeout(fixTimer)
+  const run = fixRun.value
+  const issueId = expandedId.value
+  if (!issueId || !run || !['QUEUED', 'RUNNING'].includes(run.status)) return
+  fixTimer = setTimeout(async () => {
+    if (expandedId.value !== issueId) return
+    await loadBugFix(issueId)
+    scheduleFixPoll()
+  }, 3000)
+}
+
+async function startFix(row: GitIssueRow): Promise<void> {
+  fixBusy.value = 'start'
+  try {
+    fixRun.value = await startBugFix(row.id)
+    fixEvents.value = []
+    ElMessage.success('已开始自动修复')
+    scheduleFixPoll()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '启动自动修复失败')
+  } finally {
+    fixBusy.value = ''
+  }
+}
+
+async function retryFix(row: GitIssueRow): Promise<void> {
+  const run = fixRun.value
+  if (!run) return
+  fixBusy.value = 'retry'
+  try {
+    fixRun.value = await retryBugFix(run.id)
+    await loadBugFix(row.id)
+    ElMessage.success('已重新排队，将从中断阶段继续')
+    scheduleFixPoll()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '重试失败')
+  } finally {
+    fixBusy.value = ''
+  }
+}
+
+async function cancelFix(row: GitIssueRow): Promise<void> {
+  const run = fixRun.value
+  if (!run) return
+  fixBusy.value = 'cancel'
+  try {
+    fixRun.value = await cancelBugFix(run.id)
+    await loadBugFix(row.id)
+    ElMessage.success('已取消本次自动修复')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '取消失败')
+  } finally {
+    fixBusy.value = ''
+  }
+}
+
+// 自动修复策略（测试环境 + 已确认环境绑定 + PR 开关）
+const policyOpen = ref(false)
+const policyLoading = ref(false)
+const policySaving = ref(false)
+const policy = ref<BugFixPolicyRow | null>(null)
+const policyForm = reactive({
+  enabled: false,
+  autoDeploy: true,
+  autoCreatePr: true,
+  testEnv: 'test',
+  bindingId: '',
+  maxAttempts: 2,
+})
+
+async function togglePolicy(): Promise<void> {
+  policyOpen.value = !policyOpen.value
+  if (!policyOpen.value) return
+  policyLoading.value = true
+  try {
+    const current = await getBugFixPolicy()
+    policy.value = current
+    Object.assign(policyForm, {
+      enabled: current.enabled,
+      autoDeploy: current.autoDeploy,
+      autoCreatePr: current.autoCreatePr,
+      testEnv: current.testEnv,
+      bindingId: current.bindingId,
+      maxAttempts: current.maxAttempts,
+    })
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '读取自动修复策略失败')
+  } finally {
+    policyLoading.value = false
+  }
+}
+
+async function submitPolicy(): Promise<void> {
+  policySaving.value = true
+  try {
+    policy.value = await saveBugFixPolicy({ ...policyForm })
+    ElMessage.success('自动修复策略已保存')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存策略失败')
+  } finally {
+    policySaving.value = false
+  }
+}
 
 const stateOptions = [
   { label: '全部', value: '' },
@@ -167,16 +357,28 @@ onMounted(() => {
   void listProjects().then((rows) => { projects.value = rows }).catch(() => {})
 })
 
+onUnmounted(() => clearTimeout(fixTimer))
+
 // ---------------------------------------------------------------- 展开 / 评论
 
 async function toggleExpand(row: GitIssueRow): Promise<void> {
   if (expandedId.value === row.id) {
     expandedId.value = ''
+    clearTimeout(fixTimer)
+    fixRun.value = null
+    fixEvents.value = []
     return
   }
   expandedId.value = row.id
   commentText.value = ''
+  clearTimeout(fixTimer)
+  fixRun.value = null
+  fixEvents.value = []
   await loadComments()
+  if ((row.kind ?? 'BUG') === 'BUG') {
+    await loadBugFix(row.id)
+    scheduleFixPoll()
+  }
 }
 
 async function loadComments(): Promise<void> {
@@ -397,6 +599,9 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
           <span class="issues-stat">
             待处理 <b class="mono">{{ items.filter((i) => i.state === 'OPEN').length }}</b>
           </span>
+          <el-button size="small" @click="togglePolicy">
+            <el-icon><Setting /></el-icon> 自动修复
+          </el-button>
           <el-button size="small" type="primary" @click="openCreate">
             <el-icon><Plus /></el-icon> 新建任务
           </el-button>
@@ -438,6 +643,58 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
           </div>
           <span class="toolbar-count mono">{{ visibleItems.length }} 个任务</span>
         </div>
+
+        <!-- 自动修复策略：页内卡片，说明清楚“PR 必须人工合并” -->
+        <section v-if="policyOpen" class="policy-card">
+          <div class="editor-head">
+            <div>
+              <h2 class="editor-title">Bug 自动修复</h2>
+              <p class="editor-desc">
+                Bug 任务创建后自动：分析版本 → 部署测试环境复现 → 修复 → 重新部署验证 → 提交 PR。
+                平台只创建 PR，最终合并必须由人工完成。
+              </p>
+            </div>
+            <el-button text size="small" @click="policyOpen = false">收起</el-button>
+          </div>
+          <div v-if="policyLoading" class="block-empty">加载策略…</div>
+          <div v-else class="policy-grid">
+            <label class="policy-switch">
+              <el-switch v-model="policyForm.enabled" />
+              <span>启用自动修复（新建 Bug 自动入队）</span>
+            </label>
+            <label class="policy-switch">
+              <el-switch v-model="policyForm.autoDeploy" />
+              <span>允许运维 Agent 自动部署测试环境</span>
+            </label>
+            <label class="policy-switch">
+              <el-switch v-model="policyForm.autoCreatePr" />
+              <span>验证通过后自动推送分支并创建 PR</span>
+            </label>
+            <div class="policy-field">
+              <span class="policy-label">测试环境</span>
+              <el-input v-model="policyForm.testEnv" size="small" placeholder="test" />
+            </div>
+            <div class="policy-field">
+              <span class="policy-label">环境绑定 ID</span>
+              <el-input
+                v-model="policyForm.bindingId" size="small"
+                placeholder="已人工确认的 EnvBinding id"
+              />
+            </div>
+            <div class="policy-field">
+              <span class="policy-label">最大尝试次数</span>
+              <el-input-number v-model="policyForm.maxAttempts" :min="1" :max="5" size="small" />
+            </div>
+          </div>
+          <div class="editor-foot">
+            <span class="policy-hint">
+              {{ policy?.enabled ? '当前已启用，新建 Bug 会自动执行。' : '当前未启用，仅同步不自动执行。' }}
+            </span>
+            <el-button size="small" type="primary" :loading="policySaving" @click="submitPolicy">
+              保存策略
+            </el-button>
+          </div>
+        </section>
 
         <div ref="listRef" class="issues-list">
           <!-- 新建 / 编辑：页内卡片，不遮挡列表 -->
@@ -589,6 +846,108 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                 >
                   <el-icon><Delete /></el-icon> 删除
                 </el-button>
+              </div>
+
+              <!-- Bug 自动修复：阶段时间线 + 证据 + PR -->
+              <div v-if="row.kind === 'BUG'" class="fix-block">
+                <div class="block-head">
+                  <span class="block-title">自动修复</span>
+                  <span v-if="fixRun" class="fix-status" :class="fixRun.status.toLowerCase()">
+                    {{ fixStatusLabel(fixRun.status) }}
+                  </span>
+                  <span v-else class="block-sub">尚未运行</span>
+                </div>
+
+                <div v-if="fixLoading" class="block-empty">加载自动修复状态…</div>
+                <div v-else-if="!fixRun" class="fix-empty">
+                  <div class="fix-idle">
+                    <span>可按平台策略自动执行，也可以立即手动启动一次。</span>
+                    <el-button
+                      size="small" type="primary"
+                      :loading="fixBusy === 'start'" @click="startFix(row)"
+                    >
+                      立即自动修复
+                    </el-button>
+                  </div>
+                  <ol class="fix-timeline fix-timeline-idle">
+                    <li
+                      v-for="stage in FIX_STAGES" :key="stage.key"
+                      class="fix-step pending"
+                    >
+                      <span class="fix-dot" />
+                      <div class="fix-step-body">
+                        <div class="fix-step-title">{{ stage.label }}</div>
+                        <div class="fix-step-hint">{{ stage.hint }}</div>
+                      </div>
+                    </li>
+                  </ol>
+                </div>
+                <template v-else>
+                  <div class="fix-meta mono">
+                    <span v-if="fixRun.branch">{{ fixRun.branch }}</span>
+                    <span v-if="fixRun.baseSha">base {{ fixRun.baseSha.slice(0, 8) }}</span>
+                    <span v-if="fixRun.fixSha">fix {{ fixRun.fixSha.slice(0, 8) }}</span>
+                    <span v-if="fixRun.env">env {{ fixRun.env }}</span>
+                    <span v-if="fixRun.attempt">第 {{ fixRun.attempt + 1 }} 次</span>
+                  </div>
+
+                  <ol class="fix-timeline">
+                    <li
+                      v-for="(stage, index) in FIX_STAGES" :key="stage.key"
+                      class="fix-step" :class="stageState(stage.key, index)"
+                    >
+                      <span class="fix-dot" />
+                      <div class="fix-step-body">
+                        <div class="fix-step-title">{{ stage.label }}</div>
+                        <div class="fix-step-hint">{{ stage.hint }}</div>
+                      </div>
+                    </li>
+                  </ol>
+
+                  <div v-if="fixRun.message" class="fix-message">{{ fixRun.message }}</div>
+
+                  <details v-if="fixRun.analysis" class="fix-fold">
+                    <summary>分析结论</summary>
+                    <pre class="fix-pre">{{ fixRun.analysis }}</pre>
+                  </details>
+                  <details v-if="fixRun.evidence" class="fix-fold">
+                    <summary>部署 / 验证证据</summary>
+                    <pre class="fix-pre">{{ fixRun.evidence }}</pre>
+                  </details>
+
+                  <div v-if="fixEvents.length" class="fix-events">
+                    <div v-for="ev in fixEvents.slice(-8)" :key="ev.id" class="fix-event">
+                      <span class="fix-event-time mono">{{ formatTime(ev.createdAt) }}</span>
+                      <span class="fix-event-stage mono">{{ ev.stage }}</span>
+                      <span class="fix-event-msg" :class="ev.level.toLowerCase()">
+                        {{ ev.message }}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="fix-actions">
+                    <a
+                      v-if="fixRun.prUrl" class="block-link"
+                      :href="fixRun.prUrl" target="_blank" rel="noreferrer"
+                    >
+                      <el-icon><Link /></el-icon> 查看 PR（等待人工合并）
+                    </a>
+                    <span v-else class="fix-pr-hint">修复分支不会自动合并，PR 创建后等待人工确认。</span>
+                    <el-button
+                      v-if="fixActive" size="small"
+                      :loading="fixBusy === 'cancel'" @click="cancelFix(row)"
+                    >
+                      取消
+                    </el-button>
+                    <el-button
+                      v-else-if="['BLOCKED', 'FAILED', 'CANCELLED'].includes(fixRun.status)"
+                      size="small" type="primary"
+                      :loading="fixBusy === 'retry'" @click="retryFix(row)"
+                    >
+                      重试 / 继续
+                    </el-button>
+                  </div>
+                </template>
               </div>
 
               <div class="comment-block">
@@ -1257,5 +1616,248 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   .task-detail {
     padding: 4px 14px 16px 26px;
   }
+}
+
+/* 自动修复策略卡片 */
+.policy-card {
+  margin: 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--accent-line, var(--line));
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
+}
+.policy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 18px;
+  padding: 14px 16px;
+}
+.policy-switch {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.policy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.policy-label {
+  font-size: 10.5px;
+  color: var(--ink-muted);
+}
+.policy-hint {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+
+/* 自动修复时间线 */
+.fix-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 13px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+}
+.fix-block .block-head {
+  padding: 0 0 8px;
+  background: none;
+  border-bottom: 1px solid var(--line-soft);
+}
+.fix-status {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 10px;
+  border-radius: var(--radius-pill);
+}
+.fix-status.queued,
+.fix-status.running {
+  color: var(--accent-ink, #4a6cf7);
+  background: var(--accent-soft, rgba(74, 108, 247, 0.12));
+}
+.fix-status.succeeded {
+  color: var(--ok);
+  background: rgba(46, 160, 67, 0.12);
+}
+.fix-status.failed {
+  color: var(--danger, #c45656);
+  background: rgba(196, 86, 86, 0.12);
+}
+.fix-status.blocked {
+  color: var(--warn, #d19a00);
+  background: rgba(209, 154, 0, 0.12);
+}
+.fix-status.cancelled {
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+}
+.fix-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.fix-idle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.fix-timeline-idle {
+  opacity: 0.72;
+}
+.fix-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.fix-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.fix-step {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  padding: 5px 0 5px 2px;
+}
+.fix-step:not(:last-child)::before {
+  position: absolute;
+  top: 16px;
+  left: 6px;
+  width: 1px;
+  height: calc(100% - 10px);
+  content: '';
+  background: var(--line-soft);
+}
+.fix-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  background: var(--surface-sunken);
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  z-index: 1;
+}
+.fix-step.done .fix-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.fix-step.active .fix-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft, rgba(74, 108, 247, 0.15));
+}
+.fix-step.error .fix-dot {
+  background: var(--danger, #c45656);
+  border-color: var(--danger, #c45656);
+}
+.fix-step.muted .fix-dot {
+  background: var(--ink-faint);
+  border-color: var(--ink-faint);
+}
+.fix-step-body {
+  min-width: 0;
+}
+.fix-step-title {
+  font-size: 11.5px;
+  color: var(--ink);
+}
+.fix-step.pending .fix-step-title {
+  color: var(--ink-faint);
+}
+.fix-step.active .fix-step-title {
+  font-weight: 600;
+}
+.fix-step-hint {
+  margin-top: 1px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+.fix-message {
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: 7px;
+}
+.fix-fold {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.fix-fold summary {
+  cursor: pointer;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+}
+.fix-pre {
+  max-height: 220px;
+  padding: 8px 10px;
+  margin: 6px 0 0;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--code-bg);
+  border-radius: 7px;
+}
+.fix-events {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.fix-event {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 10px;
+}
+.fix-event-time {
+  flex: none;
+  color: var(--ink-faint);
+}
+.fix-event-stage {
+  flex: none;
+  color: var(--ink-muted);
+}
+.fix-event-msg {
+  min-width: 0;
+  color: var(--ink-muted);
+}
+.fix-event-msg.warn {
+  color: var(--warn, #d19a00);
+}
+.fix-event-msg.error {
+  color: var(--danger, #c45656);
+}
+.fix-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.fix-pr-hint {
+  font-size: 10px;
+  color: var(--ink-faint);
 }
 </style>

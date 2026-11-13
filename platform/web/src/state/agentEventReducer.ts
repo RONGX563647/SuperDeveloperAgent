@@ -88,57 +88,72 @@ const toolDisplayNames: Record<string, string> = {
 }
 
 /**
- * 后端 AgentEventMapper 直接下发 AgentScope 事件类名（如 TextBlockDeltaEvent），
- * 这里归一化成 reducer 认识的稳定事件名 + 归一化 payload。
+ * 把后端事件归一化成 reducer 认识的稳定事件名 + 归一化 payload。
+ *
+ * <p>后端协议 v2 起直接下发稳定类型（{@code text.delta} / {@code tool.started} ...），
+ * 这里同时兼容旧版 AgentScope 类名（{@code TextBlockDeltaEvent}），滚动升级期间两边都能渲染。
  *
  * <p>两个关键点：
  * <ul>
  *   <li>{@code payload.id} 是每条事件各自的唯一 id，不能当流式游标——否则每个增量都会
  *       重置正文，最终只剩最后一小段；正文游标用 {@code replyId:blockId}（一次模型调用一段正文）；</li>
- *   <li>工具名在 ToolCallStartEvent 里叫 toolCallName；工具参数/结果是碎片增量，不能当正文渲染。</li>
+ *   <li>工具名统一读 {@code name}（旧协议为 {@code toolCallName}）；工具参数/结果是碎片增量，
+ *       不能当正文渲染。</li>
  * </ul>
  */
 function normalizeEvent(event: AgentEvent): AgentEvent {
   const p = event.payload
   const replyId = typeof p.replyId === 'string' ? p.replyId : ''
   const blockId = typeof p.blockId === 'string' ? p.blockId : ''
-  switch (event.type) {
-    case 'TextBlockDeltaEvent':
-      return {
-        ...event,
-        type: 'text.delta',
-        payload: { ...p, effectId: `${replyId}:${blockId || 'text'}` },
-      }
-    case 'ThinkingBlockDeltaEvent':
-      return {
-        ...event,
-        type: 'assistant.thinking.delta',
-        payload: { ...p, effectId: `${replyId}:thinking` },
-      }
-    case 'ToolCallStartEvent':
-      return { ...event, type: 'tool.started', payload: { ...p, name: p.toolCallName } }
-    case 'ToolCallDeltaEvent':
-    case 'ToolCallEndEvent':
-      return { ...event, type: 'tool.arguments' }
-    case 'ToolResultTextDeltaEvent':
-      return { ...event, type: 'tool.result.delta' }
-    case 'ToolResultEndEvent':
-      return {
-        ...event,
-        type: 'tool.completed',
-        payload: { ...p, name: p.toolCallName, ...(p.state === 'success' ? {} : { error: true }) },
-      }
-    // 每次模型调用结束都会带 usage（inputTokens/outputTokens/cachedTokens）。
-    // 归一化成 model.usage，由 reducer 本地算价；模型名由后端 DTO 注入。
-    case 'ModelCallEndEvent':
-      return {
-        ...event,
-        type: 'model.usage',
-        payload: { model: p.model, usage: p.usage },
-      }
-    default:
-      return event
+  const type = event.type
+  if (type === 'TextBlockDeltaEvent' || type === 'text.delta') {
+    return {
+      ...event,
+      type: 'text.delta',
+      payload: { ...p, effectId: `${replyId}:${blockId || 'text'}` },
+    }
   }
+  if (type === 'ThinkingBlockDeltaEvent' || type === 'assistant.thinking.delta') {
+    return {
+      ...event,
+      type: 'assistant.thinking.delta',
+      payload: { ...p, effectId: `${replyId}:thinking` },
+    }
+  }
+  if (type === 'ToolCallStartEvent' || type === 'tool.started') {
+    return {
+      ...event,
+      type: 'tool.started',
+      payload: { ...p, name: p.name ?? p.toolCallName },
+    }
+  }
+  if (type === 'ToolCallDeltaEvent' || type === 'ToolCallEndEvent' || type === 'tool.arguments') {
+    return { ...event, type: 'tool.arguments' }
+  }
+  if (type === 'ToolResultTextDeltaEvent' || type === 'tool.result.delta') {
+    return { ...event, type: 'tool.result.delta' }
+  }
+  if (type === 'ToolResultEndEvent' || type === 'tool.completed') {
+    return {
+      ...event,
+      type: 'tool.completed',
+      payload: {
+        ...p,
+        name: p.name ?? p.toolCallName,
+        ...(p.state === 'success' ? {} : { error: true }),
+      },
+    }
+  }
+  // 每次模型调用结束都会带 usage（inputTokens/outputTokens/cachedTokens）。
+  // 归一化成 model.usage，由 reducer 本地算价；模型名由后端 DTO 注入。
+  if (type === 'ModelCallEndEvent' || type === 'model.usage') {
+    return {
+      ...event,
+      type: 'model.usage',
+      payload: { model: p.model, usage: p.usage },
+    }
+  }
+  return event
 }
 
 /** 切换流式游标：旧正文先落盘，避免新一段正文把它覆盖掉。 */

@@ -234,6 +234,89 @@ public class GitIssueRemoteClient {
                 gitlabHeaders(c.token()), jsonBody(payload));
     }
 
+    // ---------------------------------------------------------------- PR / MR
+
+    /** 仓库默认分支（读取远端仓库信息）；失败时回退 main，避免自动修复停在分支查询。 */
+    public String defaultBranch(Credentials c) {
+        try {
+            String resp = switch (c.provider()) {
+                case "GITEE" -> send("GET", "https://gitee.com/api/v5/repos/" + c.repo()
+                        + "?access_token=" + enc(c.token()), headers(), null);
+                case "GITHUB" -> send("GET", "https://api.github.com/repos/" + c.repo(),
+                        githubHeaders(c.token()), null);
+                case "GITLAB" -> send("GET", gitlabBase(c) + "/projects/" + enc(c.repo()),
+                        gitlabHeaders(c.token()), null);
+                default -> "";
+            };
+            if (resp.isBlank()) {
+                return "main";
+            }
+            String branch = json.readTree(resp).path("default_branch").asText("");
+            return branch.isBlank() ? "main" : branch;
+        } catch (Exception e) {
+            log.warn("读取默认分支失败（{}/{}）：{}", c.provider(), c.repo(), e.getMessage());
+            return "main";
+        }
+    }
+
+    /**
+     * 创建 PR / MR，返回网页链接。
+     *
+     * <p>只创建、不合并：最终合并必须由人工完成（平台永不自动 merge）。
+     */
+    public String openPullRequest(Credentials c, String head, String base, String title,
+                                  String body) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        String url;
+        switch (c.provider()) {
+            case "GITEE" -> {
+                payload.put("title", title);
+                payload.put("head", head);
+                payload.put("base", base);
+                payload.put("body", body);
+                url = "https://gitee.com/api/v5/repos/" + c.repo() + "/pulls?access_token="
+                        + enc(c.token());
+            }
+            case "GITHUB" -> {
+                payload.put("title", title);
+                payload.put("head", head);
+                payload.put("base", base);
+                payload.put("body", body);
+                url = "https://api.github.com/repos/" + c.repo() + "/pulls";
+            }
+            case "GITLAB" -> {
+                payload.put("title", title);
+                payload.put("source_branch", head);
+                payload.put("target_branch", base);
+                payload.put("description", body);
+                url = gitlabBase(c) + "/projects/" + enc(c.repo()) + "/merge_requests";
+            }
+            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+        }
+        String resp = "GITHUB".equals(c.provider())
+                ? send("POST", url, githubHeaders(c.token()), jsonBody(payload))
+                : "GITLAB".equals(c.provider())
+                ? send("POST", url, gitlabHeaders(c.token()), jsonBody(payload))
+                : send("POST", url, headers(), jsonBody(payload));
+        return parsePullRequestUrl(resp, head, base);
+    }
+
+    private String parsePullRequestUrl(String resp, String head, String base) {
+        try {
+            JsonNode node = json.readTree(resp);
+            String url = node.has("html_url") ? node.path("html_url").asText("")
+                    : node.path("web_url").asText("");
+            if (url.isBlank()) {
+                throw new IllegalStateException("PR 已创建但未返回链接（" + head + " → " + base + "）");
+            }
+            return url;
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("解析 PR 响应失败：" + e.getMessage(), e);
+        }
+    }
+
     // ---------------------------------------------------------------- HTTP
 
     private String send(String method, String url, Map<String, String> headers, String body) {

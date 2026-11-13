@@ -14,6 +14,7 @@ import top.rongx.agent.domain.gitissue.GitIssueIntegration;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
 import top.rongx.agent.domain.gitissue.GitIssueRepository;
 import top.rongx.agent.domain.gitissue.GitIssueService;
+import top.rongx.agent.domain.bugfix.BugFixTrigger;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
 
@@ -31,15 +32,18 @@ public class GitIssueServiceImpl implements GitIssueService {
     private final GitIssueRepository issues;
     private final GitIssueIntegrationRepository integrations;
     private final GitIssueRemoteClient remote;
+    private final BugFixTrigger bugFixTrigger;
     private final ProjectRepository projects;
 
     public GitIssueServiceImpl(GitIssueRepository issues,
                                GitIssueIntegrationRepository integrations,
                                GitIssueRemoteClient remote,
+                               BugFixTrigger bugFixTrigger,
                                ProjectRepository projects) {
         this.issues = issues;
         this.integrations = integrations;
         this.remote = remote;
+        this.bugFixTrigger = bugFixTrigger;
         this.projects = projects;
     }
 
@@ -71,7 +75,10 @@ public class GitIssueServiceImpl implements GitIssueService {
             issue = copy(issue, "", "", issue.state(), "LOCAL",
                     "未启用 " + resolved.provider() + " Issue 同步配置", "PLATFORM");
         }
-        return issues.save(issue);
+        GitIssue saved = issues.save(issue);
+        // 平台新建的 Bug 任务同样进入自动修复（策略关闭时触发器内部直接返回）
+        bugFixTrigger.onIssueCreated(saved);
+        return saved;
     }
 
     @Override

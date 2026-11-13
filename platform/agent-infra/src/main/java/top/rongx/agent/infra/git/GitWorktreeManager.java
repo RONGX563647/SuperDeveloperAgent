@@ -505,6 +505,42 @@ public class GitWorktreeManager {
                 "git checkout -b " + name);
     }
 
+    /**
+     * 创建或重置分支到当前 HEAD（{@code git checkout -B}）。
+     *
+     * <p>自动修复重试时同一分支已存在，用 {@code -B} 把它重置到基线提交，
+     * 避免重复提交叠在旧的失败尝试上。
+     */
+    public void resetBranch(Path repoDir, String branch) {
+        String name = validBranch(branch);
+        run(repoDir, List.of("git", "checkout", "--quiet", "-B", name),
+                "git checkout -B " + name);
+    }
+
+    /**
+     * 把本地分支推送到指定远端地址（HTTPS，凭据经 askpass 注入）。
+     *
+     * <p>显式指定远端地址而不是依赖 origin：修复分支必须落到任务所属仓库，
+     * 避免本地目录的 origin 被改到别处后推错仓库。
+     */
+    public void pushBranchTo(Path repoDir, String branch, String remoteUrl, GitAuth auth) {
+        String name = validBranch(branch);
+        if (remoteUrl == null || remoteUrl.isBlank()) {
+            throw new GitIntakeException("缺少远端仓库地址，无法推送分支 " + name);
+        }
+        run(repoDir, List.of("git", "push", "--quiet", remoteUrl,
+                "refs/heads/" + name + ":refs/heads/" + name),
+                "git push " + name, GIT_TIMEOUT_SECONDS, false, auth);
+    }
+
+    private static String validBranch(String branch) {
+        String name = branch == null ? "" : branch.trim();
+        if (!name.matches("[A-Za-z0-9._/-]+") || name.startsWith("-") || name.contains("..")) {
+            throw new GitIntakeException("分支名不合法：" + branch);
+        }
+        return name;
+    }
+
     /** 暂存全部改动并提交，返回新提交 sha。 */
     public String commitAll(Path repoDir, String message) {
         run(repoDir, List.of("git", "add", "-A"), "git add -A");

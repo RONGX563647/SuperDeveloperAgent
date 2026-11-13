@@ -18,6 +18,7 @@ import top.rongx.agent.domain.gitissue.GitIssueComment;
 import top.rongx.agent.domain.gitissue.GitIssueIntegration;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
 import top.rongx.agent.domain.gitissue.GitIssueRepository;
+import top.rongx.agent.domain.bugfix.BugFixTrigger;
 import top.rongx.agent.domain.port.ProjectRepository;
 
 /**
@@ -37,6 +38,7 @@ public class GitIssueSyncService {
     private final GitIssueRepository issues;
     private final GitIssueIntegrationRepository integrations;
     private final GitIssueAgentWaker waker;
+    private final BugFixTrigger bugFixTrigger;
     private final ProjectRepository projects;
     private final ObjectMapper json = new ObjectMapper();
     private final ExecutorService executor;
@@ -44,10 +46,12 @@ public class GitIssueSyncService {
     public GitIssueSyncService(GitIssueRepository issues,
                                GitIssueIntegrationRepository integrations,
                                GitIssueAgentWaker waker,
+                               BugFixTrigger bugFixTrigger,
                                ProjectRepository projects) {
         this.issues = issues;
         this.integrations = integrations;
         this.waker = waker;
+        this.bugFixTrigger = bugFixTrigger;
         this.projects = projects;
         // 虚拟线程执行器：webhook 回调只入队，解析/落库异步执行
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -113,7 +117,10 @@ public class GitIssueSyncService {
                 "", now, now);
         log.info("Git Issue 已映射为平台任务：{} {}#{} → {}", event.provider(), event.repo(),
                 event.number(), issue.id());
-        return issues.save(issue);
+        GitIssue saved = issues.save(issue);
+        // 新建的 Bug 任务按策略触发自动修复（异步，不阻塞 webhook）
+        bugFixTrigger.onIssueCreated(saved);
+        return saved;
     }
 
     private void update(GitIssueIntegration config, GitIssue issue, ParsedEvent event) {
