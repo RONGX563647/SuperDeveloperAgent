@@ -9,6 +9,15 @@ export interface CapabilityOption {
   description: string
   /** 设置页里的默认启用状态 */
   enabled: boolean
+  /** Skill：文件数与更新时间（详情页展示） */
+  fileCount?: number
+  updatedAt?: number
+  /** MCP：传输方式与连接配置（详情页展示） */
+  transport?: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  url?: string
+  headerNames?: string[]
 }
 
 const STORAGE_PREFIX = 'agent.capabilities.'
@@ -69,12 +78,19 @@ export function useChatCapabilities(sessionId: Ref<string>) {
         label: s.name,
         description: s.description,
         enabled: s.enabled,
+        fileCount: s.fileCount,
+        updatedAt: s.updatedAt,
       }))
       mcpOptions.value = servers.map((s) => ({
         key: s.name,
         label: s.name,
         description: s.transport === 'http' ? (s.url ?? 'http') : [s.command, ...s.args].filter(Boolean).join(' '),
         enabled: s.enabled,
+        transport: s.transport,
+        command: s.command ?? undefined,
+        args: s.args,
+        url: s.url ?? undefined,
+        headerNames: s.headerNames,
       }))
     } finally {
       loading.value = false
