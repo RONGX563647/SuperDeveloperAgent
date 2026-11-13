@@ -1,0 +1,10 @@
+# 由平台脚手架生成：动作 → 命令（argv 形式，不经 shell）
+actions:
+  backend_build:
+    run:
+      - ["mvn", "-B", "-q", "-DskipTests", "package"]
+    timeout: 10m
+  image_package:
+    run:
+      - ["docker", "build", "-q", "-f", "Dockerfile", "-t", "${tag}", "."]
+    timeout: 20m

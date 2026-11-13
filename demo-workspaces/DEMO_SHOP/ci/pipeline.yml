@@ -1,0 +1,29 @@
+# 由平台脚手架生成，可直接修改。
+# 生效顺序：环境固化脚本 > 仓库 ci/pipeline.yml > 平台侧定义（本文件）> 自动生成
+name: release
+
+deploy:
+  target: docker
+  port: 8080
+  containerPort: 8080
+  healthPath: /
+
+stages:
+  - id: build
+    type: action
+    action: backend_build
+    runner: container
+  - id: image
+    type: action
+    action: image_package
+    runner: host
+  - id: deploy
+    type: deploy
+  - id: health
+    type: health
+    url: http://127.0.0.1:8080/
+    expected: 2xx
+
+on-failure:
+  - id: rollback
+    type: rollback
