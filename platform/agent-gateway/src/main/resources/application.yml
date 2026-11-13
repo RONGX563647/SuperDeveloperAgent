@@ -58,6 +58,15 @@ agent:
     client-id: ${GITEE_CLIENT_ID:}
     client-secret: ${GITEE_CLIENT_SECRET:}
     redirect-uri: ${GITEE_REDIRECT_URI:http://localhost:8090/api/v1/gitee/oauth/callback}
+  # GitHub / GitLab OAuth 应用授权：在各自平台创建 OAuth App，回调地址按下方默认值填写
+  github:
+    client-id: ${GITHUB_CLIENT_ID:}
+    client-secret: ${GITHUB_CLIENT_SECRET:}
+    redirect-uri: ${GITHUB_REDIRECT_URI:http://localhost:8090/api/v1/settings/git-hosts/oauth/github/callback}
+  gitlab:
+    client-id: ${GITLAB_CLIENT_ID:}
+    client-secret: ${GITLAB_CLIENT_SECRET:}
+    redirect-uri: ${GITLAB_REDIRECT_URI:http://localhost:8090/api/v1/settings/git-hosts/oauth/gitlab/callback}
   # 动作执行沙箱：auto=Docker 可用就用容器，否则退回宿主进程
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:auto}          # auto | docker | process

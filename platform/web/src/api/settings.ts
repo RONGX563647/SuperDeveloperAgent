@@ -801,6 +801,23 @@ export function testGitRepo(repoUrl: string, accountId?: string): Promise<TestRe
   })
 }
 
+/** GitHub / GitLab OAuth 应用授权：返回授权页 URL，前端 window.open 后等回调。 */
+export function gitOauthStart(provider: 'github' | 'gitlab'): Promise<{
+  authorizeUrl: string
+  state: string
+  provider: string
+}> {
+  return apiFetch(`/api/v1/settings/git-hosts/oauth/${provider}/start`)
+}
+
+/** 解绑某平台的全部应用授权（等价于删除该平台下的托管账号）。 */
+export function gitOauthUnbind(provider: 'github' | 'gitlab'): Promise<{
+  ok: boolean
+  removed: number
+}> {
+  return apiFetch(`/api/v1/settings/git-hosts/oauth/${provider}`, { method: 'DELETE' })
+}
+
 // ---------------------------------------------------------------- MCP
 
 export type McpTransport = 'stdio' | 'http'
@@ -865,8 +882,11 @@ export function testMcpDraft(input: McpServerInput): Promise<McpTestResult> {
 export interface SkillEntry {
   name: string
   description: string
+  /** 目录名（接口标识；对话勾选用它） */
+  dirName: string
   dir: string
   fileCount: number
+  enabled: boolean
   updatedAt: number
 }
 
@@ -900,4 +920,57 @@ export function importSkill(path: string): Promise<SkillEntry> {
 
 export function deleteSkill(name: string): Promise<void> {
   return apiFetch(`/api/v1/settings/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+}
+
+/** 启用/停用技能：对话未显式勾选时按这里的默认状态加载。 */
+export function setSkillEnabled(name: string, enabled: boolean): Promise<{
+  ok: boolean
+  name: string
+  enabled: boolean
+}> {
+  return apiFetch(`/api/v1/settings/skills/${encodeURIComponent(name)}/enabled`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled })
+  })
+}
+
+// ---------------------------------------------------------------- 能力市场（MCP / Skill）
+
+export interface CapabilityEntry {
+  id: string
+  kind: 'MCP' | 'SKILL'
+  /** 安装后的标识：MCP 服务名 / Skill 目录名 */
+  name: string
+  title: string
+  description: string
+  tags: string[]
+  source: string
+  transport?: McpTransport
+  command?: string | null
+  args?: string[]
+  url?: string | null
+  installed: boolean
+}
+
+export interface CapabilityInstallResult {
+  kind: string
+  name: string
+  installed: boolean
+  message: string
+}
+
+export function listCapabilityMarket(
+  kind?: 'MCP' | 'SKILL', q?: string
+): Promise<CapabilityEntry[]> {
+  const params = new URLSearchParams()
+  if (kind) params.set('kind', kind)
+  if (q && q.trim()) params.set('q', q.trim())
+  const suffix = params.toString() ? `?${params}` : ''
+  return apiFetch(`/api/v1/settings/capabilities/market${suffix}`)
+}
+
+export function installCapability(id: string): Promise<CapabilityInstallResult> {
+  return apiFetch(`/api/v1/settings/capabilities/market/${encodeURIComponent(id)}/install`, {
+    method: 'POST'
+  })
 }

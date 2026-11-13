@@ -1,6 +1,8 @@
 package top.rongx.agent.infra.settings;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -9,9 +11,12 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Properties;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -29,20 +34,27 @@ import org.springframework.stereotype.Component;
 public class SkillsStore {
 
     private static final String SKILL_FILE = "SKILL.md";
+    /** 启用状态文件：与技能目录同级，避免在技能目录里塞标记文件被当成资源。 */
+    private static final String STATE_FILE = "skills-enabled.properties";
 
     private final Path root;
+    private final Path stateFile;
+    /** 状态文件读写锁：设置页与对话侧可能并发读取。 */
+    private final Object stateLock = new Object();
 
     public SkillsStore(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.root = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("skills");
+        this.stateFile = this.root.getParent().resolve(STATE_FILE);
     }
 
     public Path root() {
         return root;
     }
 
-    /** 技能条目（列表视图）。 */
-    public record Skill(String name, String description, String dir, int fileCount, long updatedAt) {
+    /** 技能条目（列表视图）：dirName 是目录名（接口标识），name 是 frontmatter 里的展示名。 */
+    public record Skill(String name, String description, String dirName, String dir,
+                        int fileCount, boolean enabled, long updatedAt) {
     }
 
     public List<Skill> list() {
@@ -142,8 +154,8 @@ public class SkillsStore {
             content = "";
         }
         Frontmatter fm = parseFrontmatter(content);
-        String name = fm.name() == null || fm.name().isBlank()
-                ? dir.getFileName().toString() : fm.name();
+        String dirName = dir.getFileName().toString();
+        String name = fm.name() == null || fm.name().isBlank() ? dirName : fm.name();
         long updatedAt;
         try {
             updatedAt = Files.getLastModifiedTime(dir.resolve(SKILL_FILE)).toMillis();
@@ -151,7 +163,70 @@ public class SkillsStore {
             updatedAt = 0L;
         }
         return new Skill(name, fm.description() == null ? "" : fm.description(),
-                dir.toString(), countFiles(dir), updatedAt);
+                dirName, dir.toString(), countFiles(dir), isEnabled(dirName), updatedAt);
+    }
+
+    // ---------------------------------------------------------------- 启用开关
+
+    /** 技能是否启用；无记录时默认启用（保持老数据行为）。 */
+    public boolean isEnabled(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        synchronized (stateLock) {
+            Properties properties = loadState();
+            return !"false".equalsIgnoreCase(properties.getProperty(name.trim()));
+        }
+    }
+
+    /** 设置启用状态（只允许已存在的技能）。 */
+    public boolean setEnabled(String name, boolean enabled) {
+        String safe = requireName(name);
+        if (!Files.isRegularFile(root.resolve(safe).resolve(SKILL_FILE))) {
+            throw new IllegalArgumentException("技能不存在：" + safe);
+        }
+        synchronized (stateLock) {
+            Properties properties = loadState();
+            properties.setProperty(safe, String.valueOf(enabled));
+            storeState(properties);
+        }
+        return enabled;
+    }
+
+    /** 默认启用的技能目录名（对话未显式选择时使用）。 */
+    public Set<String> enabledNames() {
+        Set<String> out = new LinkedHashSet<>();
+        for (Skill skill : list()) {
+            if (skill.enabled()) {
+                out.add(skill.dirName());
+            }
+        }
+        return out;
+    }
+
+    private Properties loadState() {
+        Properties properties = new Properties();
+        if (!Files.isRegularFile(stateFile)) {
+            return properties;
+        }
+        try (InputStream in = Files.newInputStream(stateFile)) {
+            properties.load(in);
+        } catch (IOException e) {
+            // 状态文件损坏不应阻塞技能使用：按默认（启用）处理
+            return new Properties();
+        }
+        return properties;
+    }
+
+    private void storeState(Properties properties) {
+        try {
+            Files.createDirectories(stateFile.getParent());
+            try (OutputStream out = Files.newOutputStream(stateFile)) {
+                properties.store(out, "skill enabled state");
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("技能启用状态保存失败：" + e.getMessage(), e);
+        }
     }
 
     private static int countFiles(Path dir) {

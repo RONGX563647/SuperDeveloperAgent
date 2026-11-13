@@ -16,6 +16,8 @@ import { formatCost, formatTokens, sumCost } from '../utils/deepseekPricing'
 import { loadHistory, saveHistory } from '../state/sessionHistory'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import ChatTraceRail from '../components/chat/ChatTraceRail.vue'
+import ChatCapabilityBar from '../components/chat/ChatCapabilityBar.vue'
+import { useChatCapabilities } from '../composables/useChatCapabilities'
 import ChatTraceView from '../components/chat/ChatTraceView.vue'
 import ApprovalRequestCard from '../components/chat/ApprovalRequestCard.vue'
 import ChatStatusStrip from '../components/chat/ChatStatusStrip.vue'
@@ -38,6 +40,12 @@ const env = computed(() => appStore.env)
 const sessionId = computed(() => appStore.sessionId)
 
 const router = useRouter()
+
+/** 本会话可调用的 Skill / MCP：默认取设置页启用项，可在轨迹旁工具栏按会话调整。 */
+const {
+  skillOptions, mcpOptions, selectedSkills, selectedMcp,
+  ready: capsReady, loading: capsLoading, refresh: refreshCapabilities,
+} = useChatCapabilities(sessionId)
 
 /** 视图模式：对话（默认）或轨迹（执行过程 / 系统提示词）。底部输入区两者共用。 */
 const viewMode = ref<'chat' | 'trace'>('chat')
@@ -72,6 +80,9 @@ const {
     worktree: appStore.worktree,
     // 后端目前按变更单做门禁，这里带上策略为后续服务端约束留接口
     permission: permission.value,
+    // 本会话启用的能力；未加载完时传 undefined，让后端按设置页默认值处理
+    skills: capsReady.value ? selectedSkills.value : undefined,
+    mcpServers: capsReady.value ? selectedMcp.value : undefined,
   }),
   getHeaders: () => ({ Authorization: `Bearer ${getToken()}` }),
   guard: () => !composing.value,
@@ -563,7 +574,21 @@ onMounted(async () => {
         :streaming="streaming"
         @locate="scrollToTurn"
         @open-trace="viewMode = 'trace'"
-      />
+      >
+        <template #toolbar>
+          <ChatCapabilityBar
+            :skill-options="skillOptions"
+            :mcp-options="mcpOptions"
+            :skills="selectedSkills"
+            :mcp="selectedMcp"
+            :ready="capsReady"
+            :loading="capsLoading"
+            @update:skills="selectedSkills = $event"
+            @update:mcp="selectedMcp = $event"
+            @refresh="refreshCapabilities"
+          />
+        </template>
+      </ChatTraceRail>
     </div>
 
     <!-- 输入区：自然撑开在底部，不 fixed / 不 sticky -->

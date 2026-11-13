@@ -31,6 +31,8 @@ public class SaTokenConfig {
             "/actuator/health",
             // OAuth 回调是浏览器 302 跳转（无 Authorization 头）；安全性由 state 防 CSRF 保证
             "/api/v1/gitee/oauth/callback",
+            "/api/v1/settings/git-hosts/oauth/github/callback",
+            "/api/v1/settings/git-hosts/oauth/gitlab/callback",
             // 浏览器自动请求的图标：后端没有静态资源，放行让它正常 404，
             // 而不是给浏览器的控制台塞一条 401
             "/favicon.ico",

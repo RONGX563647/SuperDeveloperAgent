@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import {
-  deleteMcpServer, listMcpServers, saveMcpServer, testMcpDraft, testMcpServer,
-  type McpServer, type McpTransport
+  deleteMcpServer, installCapability, listCapabilityMarket, listMcpServers,
+  saveMcpServer, testMcpDraft, testMcpServer,
+  type CapabilityEntry, type McpServer, type McpTransport
 } from '../../api/settings'
 
 /**
@@ -21,6 +22,21 @@ const loading = ref(false)
 const saving = ref(false)
 const testing = ref('')
 const formOpen = ref(false)
+
+/** 页面分区：已接入 / MCP 市场。 */
+const tab = ref<'installed' | 'market'>('installed')
+const market = ref<CapabilityEntry[]>([])
+const marketLoading = ref(false)
+const marketQuery = ref('')
+const installing = ref('')
+
+// 目录很小，前端过滤即可，避免每次输入都打后端
+const marketFiltered = computed(() => {
+  const q = marketQuery.value.trim().toLowerCase()
+  if (!q) return market.value
+  return market.value.filter((m) =>
+    `${m.title} ${m.name} ${m.description} ${m.tags.join(' ')}`.toLowerCase().includes(q))
+})
 
 const form = reactive({
   id: '',
@@ -41,6 +57,57 @@ async function load(): Promise<void> {
     servers.value = []
   } finally {
     loading.value = false
+  }
+}
+
+async function loadMarket(): Promise<void> {
+  marketLoading.value = true
+  try {
+    market.value = await listCapabilityMarket('MCP')
+  } catch {
+    market.value = []
+  } finally {
+    marketLoading.value = false
+  }
+}
+
+function switchTab(next: 'installed' | 'market'): void {
+  tab.value = next
+  if (next === 'market' && !market.value.length) {
+    void loadMarket()
+  }
+}
+
+/** 一键接入市场里的 MCP 服务（装完默认启用）。 */
+async function install(entry: CapabilityEntry): Promise<void> {
+  installing.value = entry.id
+  try {
+    const r = await installCapability(entry.id)
+    ElMessage.success(r.message)
+    await Promise.all([load(), loadMarket()])
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '接入失败')
+  } finally {
+    installing.value = ''
+  }
+}
+
+/** 列表里直接启停：不用进编辑表单，headers 留空即沿用原值。 */
+async function toggleEnabled(server: McpServer, enabled: boolean): Promise<void> {
+  try {
+    await saveMcpServer({
+      id: server.id,
+      name: server.name,
+      transport: server.transport,
+      command: server.command ?? '',
+      args: server.args.join('\n'),
+      url: server.url ?? '',
+      enabled
+    })
+    server.enabled = enabled
+    ElMessage.success(enabled ? '已启用' : '已停用')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
   }
 }
 
@@ -166,6 +233,22 @@ defineExpose({ load })
       </el-button>
     </div>
 
+    <div class="panel-tabs">
+      <button
+        type="button" class="panel-tab" :class="{ active: tab === 'installed' }"
+        @click="switchTab('installed')"
+      >
+        已接入 <span class="tab-count mono">{{ servers.length }}</span>
+      </button>
+      <button
+        type="button" class="panel-tab" :class="{ active: tab === 'market' }"
+        @click="switchTab('market')"
+      >
+        MCP 市场
+      </button>
+    </div>
+
+    <template v-if="tab === 'installed'">
     <div v-if="loading" class="empty">加载中…</div>
     <div v-else-if="!servers.length" class="empty">
       还没有 MCP 服务。可以从「新增服务」开始，例如 npx -y @playwright/mcp@latest。
@@ -177,7 +260,12 @@ defineExpose({ load })
         {{ s.transport === 'stdio' ? [s.command, ...s.args].filter(Boolean).join(' ') : s.url }}
       </span>
       <span v-if="s.headerNames.length" class="mcp-meta">headers: {{ s.headerNames.join(', ') }}</span>
-      <el-tag v-if="!s.enabled" size="small" type="info" round>已停用</el-tag>
+      <el-switch
+        size="small"
+        :model-value="s.enabled"
+        :title="s.enabled ? '默认启用：对话未单独勾选时调用' : '已停用：对话里需手动勾选'"
+        @change="(v: string | number | boolean) => toggleEnabled(s, Boolean(v))"
+      />
       <span class="mcp-actions">
         <el-button size="small" text :loading="testing === s.id" @click="test(s)">测试</el-button>
         <el-button size="small" text @click="editForm(s)">编辑</el-button>
@@ -242,6 +330,42 @@ defineExpose({ load })
         <el-button size="default" type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
     </div>
+    </template>
+
+    <!-- 市场：内置目录，一键接入后可在这里启停 -->
+    <template v-else>
+      <div class="market-toolbar">
+        <el-input
+          v-model="marketQuery" size="default" clearable
+          placeholder="搜索 MCP，例如 browser / 文档 / 时间"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
+        <el-button size="default" :loading="marketLoading" @click="loadMarket">
+          <el-icon><Refresh /></el-icon>
+        </el-button>
+      </div>
+      <div v-if="marketLoading" class="empty">加载市场…</div>
+      <div v-else-if="!marketFiltered.length" class="empty">没有匹配的 MCP 服务。</div>
+      <div v-for="m in marketFiltered" :key="m.id" class="market-card">
+        <div class="market-main">
+          <div class="market-title">
+            {{ m.title }}
+            <span class="badge" :class="m.transport">{{ m.transport }}</span>
+          </div>
+          <div class="market-desc">{{ m.description }}</div>
+          <div class="market-meta mono">
+            {{ m.name }} · {{ m.tags.join(' / ') }} · {{ m.source }}
+          </div>
+        </div>
+        <el-button
+          size="small" :type="m.installed ? 'info' : 'primary'" :disabled="m.installed"
+          :loading="installing === m.id" @click="install(m)"
+        >
+          {{ m.installed ? '已接入' : '接入' }}
+        </el-button>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -349,5 +473,71 @@ defineExpose({ load })
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* 分区切换：轻量 tab，避免和设置页左侧 nav 抢层级 */
+.panel-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.panel-tab {
+  padding: 6px 2px 7px;
+  margin-right: 14px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+}
+.panel-tab:hover {
+  color: var(--ink);
+}
+.panel-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.tab-count {
+  margin-left: 3px;
+  color: var(--ink-faint);
+}
+.market-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.market-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.market-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.market-title {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.market-desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+.market-meta {
+  font-size: 10.5px;
+  color: var(--ink-faint);
 }
 </style>

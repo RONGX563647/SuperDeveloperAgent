@@ -7,7 +7,7 @@ import {
   type GiteeBinding, type GiteeRepo
 } from '../../api/project'
 import {
-  deleteGitHost, listGitHosts, saveGitHost, testGitHost, testGitRepo,
+  deleteGitHost, gitOauthStart, listGitHosts, saveGitHost, testGitHost, testGitRepo,
   type GitHostAccount, type GitHostProvider
 } from '../../api/settings'
 
@@ -62,6 +62,24 @@ const form = reactive({
 const probeUrl = ref('')
 const probeBusy = ref(false)
 const probe = ref<{ ok: boolean, message: string, branches?: string[] } | null>(null)
+const hostOauthBusy = ref('')
+
+/** GitHub / GitLab 应用授权：打开授权页，回调后 token 加密写入托管账号。 */
+async function bindOauth(provider: 'github' | 'gitlab'): Promise<void> {
+  hostOauthBusy.value = provider
+  try {
+    const r = await gitOauthStart(provider)
+    window.open(r.authorizeUrl, '_blank', 'noopener')
+    ElMessage.info(`已打开 ${providerLabel(provider.toUpperCase() as GitHostProvider)} 授权页；`
+      + '完成后回到本页点「刷新」')
+  } catch (e) {
+    const message = e instanceof Error ? e.message : '无法发起授权'
+    // 未配置 OAuth App 时后端返回 501 的可读提示，直接展示给用户
+    ElMessage.warning(message)
+  } finally {
+    hostOauthBusy.value = ''
+  }
+}
 
 async function loadHosts(): Promise<void> {
   hostsLoading.value = true
@@ -325,6 +343,19 @@ defineExpose({ load })
         </el-button>
       </div>
 
+      <div class="oauth-strip">
+        <span class="oauth-label">应用授权</span>
+        <el-button size="small" :loading="hostOauthBusy === 'github'" @click="bindOauth('github')">
+          GitHub 授权
+        </el-button>
+        <el-button size="small" :loading="hostOauthBusy === 'gitlab'" @click="bindOauth('gitlab')">
+          GitLab 授权
+        </el-button>
+        <span class="oauth-hint">
+          跳转平台授权页，回调自动绑定；也可用下方「新增接入」粘贴访问令牌
+        </span>
+      </div>
+
       <div v-if="hostsLoading" class="repos-empty">加载中…</div>
       <div v-else-if="!hosts.length" class="repos-empty">
         还没有接入 GitHub / GitLab；私有仓库需要访问令牌。
@@ -541,6 +572,28 @@ defineExpose({ load })
   padding: 14px 0;
   font-size: 11.5px;
   color: var(--ink-faint);
+}
+.oauth-strip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.oauth-label {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.oauth-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .repo-row {
   display: flex;

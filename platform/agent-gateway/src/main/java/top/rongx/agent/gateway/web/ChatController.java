@@ -79,7 +79,8 @@ public class ChatController {
                 request.projectId(), request.env(), userId, request.worktree());
         // 3. 建立 SSE 发射器，向业务层要事件流
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
-        Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message());
+        Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
+                "chat", request.skills(), request.mcpServers());
         // 4. 虚拟线程异步推送：逐事件映射为 DTO 并发送
         executor.submit(() -> {
             try {

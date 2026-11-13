@@ -59,6 +59,16 @@ public class SkillSettingsController {
         return skills.importFrom(str(body, "path"));
     }
 
+    /** 启用 / 停用：对话未显式勾选时，按这里的默认状态决定是否加载。 */
+    @PostMapping("/{name}/enabled")
+    public Map<String, Object> setEnabled(@PathVariable String name,
+                                          @RequestBody Map<String, Object> body) {
+        requireWrite();
+        boolean enabled = Boolean.parseBoolean(str(body, "enabled"));
+        skills.setEnabled(name, enabled);
+        return Map.of("ok", true, "name", name, "enabled", enabled);
+    }
+
     @DeleteMapping("/{name}")
     public Map<String, Object> delete(@PathVariable String name) {
         requireWrite();

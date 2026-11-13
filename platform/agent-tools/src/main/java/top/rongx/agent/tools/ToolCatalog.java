@@ -63,7 +63,8 @@ public class ToolCatalog {
                                 RuntimeTools runtimeTools,
                                 ConfigTools configTools,
                                 PatchTools patchTools,
-                                OpsAgentTools opsAgentTools) {
+                                OpsAgentTools opsAgentTools,
+                                CapabilityMarketTools capabilityMarketTools) {
         Toolkit toolkit = new Toolkit();
 
         // 只读工具
@@ -86,6 +87,8 @@ public class ToolCatalog {
         // 多 Agent 协作：对话 Agent 可把"把某环境真正跑通/固化"委派给发布 Agent。
         // 只进对话工具面；发布 Agent 的工具面没有它（防递归），生产会话的只读面也没有它。
         toolkit.registerTool(opsAgentTools);
+        // 能力市场：查找并接入公开的 MCP / Skill；只进对话工具面，生产只读面与发布 Agent 不提供
+        toolkit.registerTool(capabilityMarketTools);
 
         return toolkit;
     }

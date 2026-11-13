@@ -3,16 +3,30 @@ package top.rongx.agent.runtime;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionMode;
+import io.agentscope.core.skill.SkillFilter;
+import io.agentscope.core.skill.repository.FileSystemSkillRepository;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.tool.mcp.McpClientBuilder;
+import io.agentscope.core.tool.mcp.McpClientWrapper;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import top.rongx.agent.domain.policy.PolicyDecision;
 import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.settings.McpServer;
+import top.rongx.agent.domain.settings.McpServerRepository;
 import top.rongx.agent.domain.tool.ToolLevel;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.infra.settings.SkillsStore;
 import org.springframework.stereotype.Component;
 
 /**
@@ -50,6 +64,10 @@ public class AgentFactory {
      * 没有 {@code AGENT_SECURITY_MASTER_KEY} 也拿不到对话内容。
      */
     private final AgentStateStore stateStore;
+    private final McpServerRepository mcpServers;
+    private final SkillsStore skillsStore;
+
+    private static final Logger log = LoggerFactory.getLogger(AgentFactory.class);
 
     public AgentFactory(@Qualifier("agentToolkit") Toolkit fullToolkit,
                         @Qualifier("readOnlyToolkit") Toolkit readOnlyToolkit,
@@ -58,6 +76,8 @@ public class AgentFactory {
                         AgentProperties props,
                         PolicyPort policy,
                         SecretBox secretBox,
+                        McpServerRepository mcpServers,
+                        SkillsStore skillsStore,
                         @Value("${agent.state.root:}") String stateRoot,
                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.fullToolkit = fullToolkit;
@@ -66,8 +86,28 @@ public class AgentFactory {
         this.modelProvider = modelProvider;
         this.props = props;
         this.policy = policy;
+        this.mcpServers = mcpServers;
+        this.skillsStore = skillsStore;
         this.stateStore = new EncryptedAgentStateStore(
                 stateDirectory(stateRoot, workspaceRoot), secretBox);
+    }
+
+    /**
+     * 一次会话的 Agent 及其需要释放的资源（本轮新建的 MCP 客户端）。
+     *
+     * <p>MCP 客户端会拉起子进程或长连接，必须在事件流结束后关闭；用 record 把
+     * "agent + 可关闭资源"一起返回，避免调用方忘记释放。
+     */
+    public record AgentSession(ReActAgent agent, List<AutoCloseable> closeables) {
+        public void close() {
+            for (AutoCloseable closeable : closeables) {
+                try {
+                    closeable.close();
+                } catch (Exception e) {
+                    log.warn("关闭会话能力资源失败：{}", e.getMessage());
+                }
+            }
+        }
     }
 
     /** 会话状态目录：默认挂在平台工作区下，创建后收紧为属主 700。 */
@@ -87,8 +127,19 @@ public class AgentFactory {
         return dir;
     }
 
-    /** 为一个会话构造 Agent。Agent 无状态，可每次新建。 */
+    /** 为一个会话构造 Agent（不挂载额外能力；保留给只读调用方）。Agent 无状态，可每次新建。 */
     public ReActAgent create(ProjectContext ctx) {
+        return createChat(ctx, List.of(), List.of()).agent();
+    }
+
+    /**
+     * 为一个会话构造 Agent，并挂载本会话勾选的 Skill / MCP。
+     *
+     * @param requestedSkills 技能目录名；null = 设置页默认启用项，[] = 全部关闭
+     * @param requestedMcp    MCP 服务名；null = 设置页默认启用项，[] = 全部关闭
+     */
+    public AgentSession createChat(ProjectContext ctx, List<String> requestedSkills,
+                                   List<String> requestedMcp) {
         // 1. 权限模式按环境决定：生产 DEFAULT（写必 ASK），非生产 BYPASS
         //    非生产不能用 ACCEPT_EDITS：它只放行文件类编辑，readOnly=false 的工具仍走默认 ASK，
         //    而对话链路没有回传"用户已确认"的通道，request_confirmation / ci_run 会永远停在执行中。
@@ -99,18 +150,89 @@ public class AgentFactory {
         PermissionContextState permission = PermissionContextState.builder()
                 .mode(readOnly ? PermissionMode.DEFAULT : PermissionMode.BYPASS)
                 .build();
-        // 2. 工具面按环境策略 / 角色渐进式披露：只读面里根本没有写工具
-        Toolkit toolkit = readOnly ? readOnlyToolkit : fullToolkit;
+        // 2. 工具面按环境策略 / 角色渐进式披露：只读面里根本没有写工具。
+        //    这里 copy 一份，避免把本会话启用的 MCP 工具注册进共享单例 Toolkit（跨会话串味）。
+        Toolkit toolkit = (readOnly ? readOnlyToolkit : fullToolkit).copy();
+        List<AutoCloseable> closeables = new ArrayList<>();
+        attachMcp(toolkit, requestedMcp, closeables);
         // 3. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
-        return ReActAgent.builder()
+        ReActAgent.Builder builder = ReActAgent.builder()
                 .name("devops-agent")
                 .sysPrompt(systemPrompt(ctx))
                 .model(modelProvider.current())
                 .toolkit(toolkit)
                 .permissionContext(permission)
                 .maxIters(props.maxIters())
-                .stateStore(stateStore)
-                .build();
+                .stateStore(stateStore);
+        attachSkills(builder, requestedSkills);
+        return new AgentSession(builder.build(), closeables);
+    }
+
+    /**
+     * 挂载本会话启用的 Skill：技能目录来自平台 {@code _platform/skills}，
+     * 用 SkillFilter 只放行勾选项，未勾选的 SKILL.md 不会进入提示词与工具面。
+     */
+    private void attachSkills(ReActAgent.Builder builder, List<String> requested) {
+        Set<String> names = requested != null
+                ? new LinkedHashSet<>(requested) : skillsStore.enabledNames();
+        if (names.isEmpty()) {
+            return;
+        }
+        builder.skillRepository(new FileSystemSkillRepository(skillsStore.root()))
+                .skillFilter(SkillFilter.only(names.toArray(String[]::new)));
+    }
+
+    /**
+     * 挂载本会话启用的 MCP：为每个服务创建独立客户端并注册工具。
+     *
+     * <p>单个服务失败只降级（记日志），不能阻断对话——否则一个写错的 URL
+     * 会让整个会话不可用。
+     */
+    private void attachMcp(Toolkit toolkit, List<String> requested, List<AutoCloseable> closeables) {
+        List<McpServer> all = mcpServers.findAll();
+        Set<String> names;
+        if (requested != null) {
+            names = new LinkedHashSet<>(requested);
+        } else {
+            names = new LinkedHashSet<>();
+            for (McpServer server : all) {
+                if (server.enabled()) {
+                    names.add(server.name());
+                }
+            }
+        }
+        if (names.isEmpty()) {
+            return;
+        }
+        for (McpServer server : all) {
+            if (!names.contains(server.name())) {
+                continue;
+            }
+            McpClientWrapper client = null;
+            try {
+                McpClientBuilder mcp = McpClientBuilder.create(server.name())
+                        .timeout(Duration.ofSeconds(30))
+                        .initializationTimeout(Duration.ofSeconds(15));
+                if ("http".equalsIgnoreCase(server.transport())) {
+                    mcp.streamableHttpTransport(server.url());
+                    var headers = mcpServers.headersOf(server.id());
+                    if (headers != null && !headers.isEmpty()) {
+                        mcp.headers(headers);
+                    }
+                } else {
+                    mcp.stdioTransport(server.command(), server.args(), java.util.Map.of());
+                }
+                client = mcp.buildSync();
+                toolkit.registerMcpClient(client).block(Duration.ofSeconds(20));
+                closeables.add(client);
+                log.info("会话已挂载 MCP 服务 {}（{}）", server.name(), server.transport());
+            } catch (Exception e) {
+                if (client != null) {
+                    client.close();
+                }
+                log.warn("挂载 MCP 服务 {} 失败，本轮降级跳过：{}", server.name(), e.getMessage());
+            }
+        }
     }
 
     /**
