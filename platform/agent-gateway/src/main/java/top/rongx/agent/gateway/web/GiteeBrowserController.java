@@ -23,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+import top.rongx.agent.domain.settings.GitOauthApp;
+import top.rongx.agent.domain.settings.GitOauthAppRepository;
 import top.rongx.agent.gateway.gitee.GiteeAccountStore;
 import top.rongx.agent.gateway.security.PasswordVerifier;
 
@@ -53,6 +55,7 @@ public class GiteeBrowserController {
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10)).build();
     private final GiteeAccountStore accounts;
+    private final GitOauthAppRepository oauthApps;
     private final PasswordVerifier passwordVerifier;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
     private final String clientId;
@@ -62,6 +65,7 @@ public class GiteeBrowserController {
     private final String platformToken;
 
     public GiteeBrowserController(GiteeAccountStore accounts,
+                                  GitOauthAppRepository oauthApps,
                                   PasswordVerifier passwordVerifier,
                                   top.rongx.agent.gateway.auth.CurrentUser currentUser,
                                   @Value("${agent.gitee.client-id:}") String clientId,
@@ -69,6 +73,7 @@ public class GiteeBrowserController {
                                   @Value("${agent.gitee.redirect-uri:http://localhost:8090/api/v1/gitee/oauth/callback}") String redirectUri,
                                   @Value("${agent.intake.gitee-token:}") String platformToken) {
         this.accounts = accounts;
+        this.oauthApps = oauthApps;
         this.passwordVerifier = passwordVerifier;
         this.currentUser = currentUser;
         this.clientId = clientId;
@@ -91,14 +96,20 @@ public class GiteeBrowserController {
     @GetMapping("/oauth/start")
     public Map<String, Object> oauthStart() {
         String userId = currentUser.requireUserId();
-        if (clientId == null || clientId.isBlank()) {
+        OAuthConfig cfg = oauthConfig();
+        if (!cfg.enabled()) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                    "平台未配置 agent.gitee.client-id / client-secret，请使用私人令牌方式绑定");
+                    "Gitee 应用授权已停用，可在 设置 → 代码仓库 → Gitee → 应用授权 中开启");
+        }
+        if (cfg.clientId().isBlank() || cfg.clientSecret().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "尚未配置 Gitee OAuth 应用，请在 设置 → 代码仓库 → Gitee → 应用授权 "
+                            + "填写 Client ID / Client Secret（或使用私人令牌）");
         }
         String state = newUniqueId();
         OAUTH_STATES.put(state, userId);
-        String url = OAUTH_AUTHORIZE + "?client_id=" + clientId
-                + "&redirect_uri=" + URLEncoder.encode(redirectUri, StandardCharsets.UTF_8)
+        String url = OAUTH_AUTHORIZE + "?client_id=" + cfg.clientId()
+                + "&redirect_uri=" + URLEncoder.encode(cfg.redirectUri(), StandardCharsets.UTF_8)
                 + "&response_type=code&scope=" + URLEncoder.encode(OAUTH_SCOPES, StandardCharsets.UTF_8)
                 + "&state=" + state;
         return Map.of("authorizeUrl", url, "state", state);
@@ -113,11 +124,12 @@ public class GiteeBrowserController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "state 无效或已过期（可能不是你发起的授权）");
         }
+        OAuthConfig cfg = oauthConfig();
         String body = "grant_type=authorization_code"
                 + "&code=" + URLEncoder.encode(code, StandardCharsets.UTF_8)
-                + "&client_id=" + clientId
-                + "&client_secret=" + clientSecret
-                + "&redirect_uri=" + URLEncoder.encode(redirectUri, StandardCharsets.UTF_8);
+                + "&client_id=" + cfg.clientId()
+                + "&client_secret=" + cfg.clientSecret()
+                + "&redirect_uri=" + URLEncoder.encode(cfg.redirectUri(), StandardCharsets.UTF_8);
         JsonNode tokenResp = postForm(OAUTH_TOKEN, body);
         String accessToken = tokenResp.path("access_token").asText("");
         if (accessToken.isBlank()) {
@@ -227,6 +239,22 @@ public class GiteeBrowserController {
     }
 
     // ---------------------------------------------------------------- internals
+
+    /** OAuth 应用配置：设置页保存的优先，未配置时回退到环境变量。 */
+    private OAuthConfig oauthConfig() {
+        GitOauthApp saved = oauthApps.find("GITEE").orElse(null);
+        if (saved == null || saved.clientId() == null || saved.clientId().isBlank()) {
+            return new OAuthConfig(clientId, clientSecret, redirectUri, true);
+        }
+        String redirect = saved.redirectUri() == null || saved.redirectUri().isBlank()
+                ? redirectUri : saved.redirectUri();
+        return new OAuthConfig(saved.clientId(),
+                oauthApps.secretOf("GITEE").orElse(""), redirect, saved.enabled());
+    }
+
+    private record OAuthConfig(String clientId, String clientSecret,
+                               String redirectUri, boolean enabled) {
+    }
 
     /** OAuth 进行中的 state → userId（内存；量小无需持久化）。 */
     private static final java.util.Map<String, String> OAUTH_STATES = new java.util.concurrent.ConcurrentHashMap<>();

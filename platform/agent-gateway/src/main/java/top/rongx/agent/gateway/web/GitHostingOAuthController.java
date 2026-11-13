@@ -24,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.settings.GitHostingAccountRepository;
+import top.rongx.agent.domain.settings.GitOauthApp;
+import top.rongx.agent.domain.settings.GitOauthAppRepository;
 import top.rongx.agent.gateway.auth.CurrentUser;
 
 /**
@@ -61,6 +63,7 @@ public class GitHostingOAuthController {
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http = OutboundHttp.client(Duration.ofSeconds(10));
     private final GitHostingAccountRepository accounts;
+    private final GitOauthAppRepository oauthApps;
     private final CurrentUser currentUser;
 
     private final String githubClientId;
@@ -71,6 +74,7 @@ public class GitHostingOAuthController {
     private final String gitlabRedirectUri;
 
     public GitHostingOAuthController(GitHostingAccountRepository accounts,
+                                     GitOauthAppRepository oauthApps,
                                      CurrentUser currentUser,
                                      @Value("${agent.github.client-id:}") String githubClientId,
                                      @Value("${agent.github.client-secret:}") String githubClientSecret,
@@ -79,6 +83,7 @@ public class GitHostingOAuthController {
                                      @Value("${agent.gitlab.client-secret:}") String gitlabClientSecret,
                                      @Value("${agent.gitlab.redirect-uri:http://localhost:8090/api/v1/settings/git-hosts/oauth/gitlab/callback}") String gitlabRedirectUri) {
         this.accounts = accounts;
+        this.oauthApps = oauthApps;
         this.currentUser = currentUser;
         this.githubClientId = githubClientId;
         this.githubClientSecret = githubClientSecret;
@@ -93,7 +98,8 @@ public class GitHostingOAuthController {
 
     private record ProviderConfig(String provider, String host, String authorizeUrl,
                                   String tokenUrl, String userUrl, String scopes,
-                                  String clientId, String clientSecret, String redirectUri) {
+                                  String clientId, String clientSecret, String redirectUri,
+                                  boolean enabled) {
     }
 
     // ---------------------------------------------------------------- 授权
@@ -103,10 +109,16 @@ public class GitHostingOAuthController {
     public Map<String, Object> start(@PathVariable String provider) {
         String userId = currentUser.requireUserId();
         ProviderConfig cfg = config(provider);
+        if (!cfg.enabled()) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    cfg.provider() + " 应用授权已停用，可在 设置 → 代码仓库 → " + providerName(cfg)
+                            + " → 应用授权 中开启");
+        }
         if (blank(cfg.clientId()) || blank(cfg.clientSecret())) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                    "平台未配置 " + cfg.provider() + " OAuth 应用（client-id / client-secret），"
-                            + "请改用「新增接入」填写个人访问令牌");
+                    "尚未配置 " + cfg.provider() + " OAuth 应用，请在 设置 → 代码仓库 → "
+                            + providerName(cfg) + " → 应用授权 填写 Client ID / Client Secret"
+                            + "（或改用访问令牌）");
         }
         String state = UUID.randomUUID().toString().replace("-", "");
         STATES.put(state, new State(userId, cfg.provider()));
@@ -166,18 +178,37 @@ public class GitHostingOAuthController {
 
     // ---------------------------------------------------------------- internals
 
+    /**
+     * 平台配置：数据库（设置页保存）优先，未配置时回退到环境变量，
+     * 保证老部署升级后仍能直接使用。
+     */
     private ProviderConfig config(String provider) {
         String key = provider == null ? "" : provider.trim().toLowerCase(Locale.ROOT);
-        return switch (key) {
+        ProviderConfig base = switch (key) {
             case "github" -> new ProviderConfig("GITHUB", "github.com", GITHUB_AUTHORIZE,
                     GITHUB_TOKEN, GITHUB_USER, GITHUB_SCOPES,
-                    githubClientId, githubClientSecret, githubRedirectUri);
+                    githubClientId, githubClientSecret, githubRedirectUri, true);
             case "gitlab" -> new ProviderConfig("GITLAB", "gitlab.com", GITLAB_AUTHORIZE,
                     GITLAB_TOKEN, GITLAB_USER, GITLAB_SCOPES,
-                    gitlabClientId, gitlabClientSecret, gitlabRedirectUri);
+                    gitlabClientId, gitlabClientSecret, gitlabRedirectUri, true);
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "不支持的 OAuth 平台：" + provider + "（仅 github / gitlab）");
         };
+        GitOauthApp saved = oauthApps.find(base.provider()).orElse(null);
+        if (saved == null || blank(saved.clientId())) {
+            return base;
+        }
+        return new ProviderConfig(base.provider(), base.host(), base.authorizeUrl(),
+                base.tokenUrl(), base.userUrl(),
+                blank(saved.scopes()) ? base.scopes() : saved.scopes(),
+                saved.clientId(),
+                oauthApps.secretOf(base.provider()).orElse(""),
+                blank(saved.redirectUri()) ? base.redirectUri() : saved.redirectUri(),
+                saved.enabled());
+    }
+
+    private static String providerName(ProviderConfig cfg) {
+        return "GITHUB".equals(cfg.provider()) ? "GitHub" : "GitLab";
     }
 
     private String exchangeToken(ProviderConfig cfg, String code) {

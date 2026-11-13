@@ -801,6 +801,45 @@ export function testGitRepo(repoUrl: string, accountId?: string): Promise<TestRe
   })
 }
 
+// ---------------------------------------------------------------- Git 平台 OAuth 应用配置
+
+export type GitOauthProvider = 'GITEE' | 'GITHUB' | 'GITLAB'
+
+/**
+ * 平台级 OAuth 应用配置：client-secret 只写不读，接口只回掩码。
+ * 保存后「前往授权」立即生效，回调地址需与平台后台填写的完全一致。
+ */
+export interface GitOauthApp {
+  provider: GitOauthProvider
+  clientId: string
+  redirectUri: string
+  scopes: string
+  enabled: boolean
+  hasSecret: boolean
+  secretMasked: string | null
+  updatedAt: number
+}
+
+export function listGitOauthApps(): Promise<GitOauthApp[]> {
+  return apiFetch('/api/v1/settings/git-oauth-apps')
+}
+
+/** clientSecret 留空 = 沿用已保存的 secret。 */
+export function saveGitOauthApp(
+  provider: GitOauthProvider,
+  input: { clientId: string; clientSecret?: string; redirectUri: string; scopes: string; enabled: boolean }
+): Promise<GitOauthApp> {
+  return apiFetch(`/api/v1/settings/git-oauth-apps/${provider}`, {
+    method: 'PUT',
+    body: JSON.stringify(input)
+  })
+}
+
+/** 清除某平台配置，回到环境变量兜底。 */
+export function deleteGitOauthApp(provider: GitOauthProvider): Promise<void> {
+  return apiFetch(`/api/v1/settings/git-oauth-apps/${provider}`, { method: 'DELETE' })
+}
+
 /** GitHub / GitLab OAuth 应用授权：返回授权页 URL，前端 window.open 后等回调。 */
 export function gitOauthStart(provider: 'github' | 'gitlab'): Promise<{
   authorizeUrl: string
