@@ -6,6 +6,10 @@ import {
   deleteGitOauthApp, listGitOauthApps, saveGitOauthApp,
   type GitOauthApp, type GitOauthProvider
 } from '../../api/settings'
+import {
+  deleteGitIssueIntegration, listGitIssueIntegrations, saveGitIssueIntegration,
+  type GitIssueIntegrationView,
+} from '../../api/issues'
 
 /**
  * Git 应用授权（设置页 · 高级设置）。
@@ -55,6 +59,62 @@ const loading = ref(false)
 const saving = ref<GitOauthProvider | ''>('')
 const clearing = ref<GitOauthProvider | ''>('')
 
+// ---------------------------------------------------------------- Issue 双向同步
+
+interface IssueFormState {
+  enabled: boolean
+  repoWhitelist: string
+  autoCreateTask: boolean
+  syncDirection: string
+  conflictPolicy: string
+  webhookSecret: string
+}
+
+const issueConfigs = ref<Partial<Record<GitOauthProvider, GitIssueIntegrationView>>>({})
+const issueForms = reactive<Record<GitOauthProvider, IssueFormState>>({
+  GITEE: emptyIssueForm(),
+  GITHUB: emptyIssueForm(),
+  GITLAB: emptyIssueForm()
+})
+const issueOpen = reactive<Record<GitOauthProvider, boolean>>({
+  GITEE: false, GITHUB: false, GITLAB: false,
+})
+const issueSaving = ref<GitOauthProvider | ''>('')
+const issueClearing = ref<GitOauthProvider | ''>('')
+
+function emptyIssueForm(): IssueFormState {
+  return {
+    enabled: false,
+    repoWhitelist: '',
+    autoCreateTask: false,
+    syncDirection: 'BIDIRECTIONAL',
+    conflictPolicy: 'GIT_WINS',
+    webhookSecret: '',
+  }
+}
+
+function fillIssueForm(provider: GitOauthProvider, config: GitIssueIntegrationView | null): void {
+  const form = issueForms[provider]
+  form.enabled = config?.enabled ?? false
+  form.repoWhitelist = config?.repoWhitelist ?? ''
+  form.autoCreateTask = config?.autoCreateTask ?? false
+  form.syncDirection = config?.syncDirection ?? 'BIDIRECTIONAL'
+  form.conflictPolicy = config?.conflictPolicy ?? 'GIT_WINS'
+  form.webhookSecret = ''
+}
+
+function issueStateText(provider: GitOauthProvider): string {
+  const config = issueConfigs.value[provider]
+  if (!config) return '未配置'
+  return config.enabled ? '已启用' : '已停用'
+}
+
+function issueSecretPlaceholder(provider: GitOauthProvider): string {
+  const config = issueConfigs.value[provider]
+  if (!config?.hasWebhookSecret) return 'Webhook 签名密钥（只写不读）'
+  return `已保存 ${config.webhookSecretMasked ?? '***'}，留空不修改`
+}
+
 function emptyForm(): FormState {
   return { clientId: '', clientSecret: '', redirectUri: '', scopes: '', enabled: true }
 }
@@ -81,6 +141,21 @@ async function load(): Promise<void> {
     for (const p of PROVIDERS) fillForm(p.key, null)
   } finally {
     loading.value = false
+  }
+  await loadIssues()
+}
+
+/** Issue 同步配置与 OAuth 配置分开加载：任一失败不影响另一块。 */
+async function loadIssues(): Promise<void> {
+  try {
+    const list = await listGitIssueIntegrations()
+    const map: Partial<Record<GitOauthProvider, GitIssueIntegrationView>> = {}
+    for (const config of list) map[config.provider] = config
+    issueConfigs.value = map
+    for (const p of PROVIDERS) fillIssueForm(p.key, map[p.key] ?? null)
+  } catch {
+    issueConfigs.value = {}
+    for (const p of PROVIDERS) fillIssueForm(p.key, null)
   }
 }
 
@@ -152,6 +227,71 @@ async function clear(provider: GitOauthProvider): Promise<void> {
     ElMessage.error(e instanceof Error ? e.message : '清除失败')
   } finally {
     clearing.value = ''
+  }
+}
+
+// ---------------------------------------------------------------- Issue 同步操作
+
+function toggleIssue(provider: GitOauthProvider): void {
+  issueOpen[provider] = !issueOpen[provider]
+}
+
+async function copyWebhook(provider: GitOauthProvider): Promise<void> {
+  const url = issueConfigs.value[provider]?.webhookUrl
+  if (!url) return
+  try {
+    await navigator.clipboard.writeText(url)
+    ElMessage.success('Webhook 地址已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择地址')
+  }
+}
+
+async function saveIssue(provider: GitOauthProvider): Promise<void> {
+  const form = issueForms[provider]
+  const label = PROVIDERS.find((p) => p.key === provider)?.label ?? provider
+  if (form.enabled && !issueConfigs.value[provider]?.hasWebhookSecret
+    && !form.webhookSecret.trim()) {
+    ElMessage.warning('启用前请填写 Webhook Secret，用于校验 Git 回调')
+    return
+  }
+  issueSaving.value = provider
+  try {
+    const saved = await saveGitIssueIntegration(provider, {
+      enabled: form.enabled,
+      repoWhitelist: form.repoWhitelist.trim(),
+      autoCreateTask: form.autoCreateTask,
+      syncDirection: form.syncDirection,
+      conflictPolicy: form.conflictPolicy,
+      webhookSecret: form.webhookSecret.trim() || undefined,
+    })
+    issueConfigs.value = { ...issueConfigs.value, [provider]: saved }
+    form.webhookSecret = ''
+    ElMessage.success(`${label} Issue 同步配置已保存`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    issueSaving.value = ''
+  }
+}
+
+async function clearIssue(provider: GitOauthProvider): Promise<void> {
+  const label = PROVIDERS.find((p) => p.key === provider)?.label ?? provider
+  const ok = await ElMessageBox.confirm(
+    `清除 ${label} 的 Issue 同步配置后，webhook 将拒绝回调，已同步任务保留。确认清除？`,
+    '清除 Issue 同步',
+    { confirmButtonText: '清除', cancelButtonText: '取消', type: 'warning' }
+  ).then(() => true).catch(() => false)
+  if (!ok) return
+  issueClearing.value = provider
+  try {
+    await deleteGitIssueIntegration(provider)
+    await loadIssues()
+    ElMessage.success('已清除')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '清除失败')
+  } finally {
+    issueClearing.value = ''
   }
 }
 
@@ -242,6 +382,102 @@ defineExpose({ load })
             <span class="oauth-switch-text">
               {{ forms[p.key].enabled ? '启用：可发起应用授权' : '停用：仅保留配置' }}
             </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Issue 双向同步：与 OAuth 应用同卡，展开后配置 Webhook 与映射规则 -->
+      <div class="issue-sync">
+        <button type="button" class="issue-toggle" @click="toggleIssue(p.key)">
+          <span class="issue-title">Issue 双向同步</span>
+          <span
+            class="issue-state"
+            :class="{ ok: issueConfigs[p.key]?.enabled }"
+          >{{ issueStateText(p.key) }}</span>
+          <span class="issue-caret">{{ issueOpen[p.key] ? '收起' : '展开' }}</span>
+        </button>
+
+        <div v-if="issueOpen[p.key]" class="issue-body">
+          <p class="issue-hint">
+            在 {{ p.label }} 仓库的 Webhook 中填入下方地址，勾选 Issue / Issue Comment
+            （GitLab 为 Issue / Note）事件；平台验签、去重后异步映射为任务，回调不跑模型。
+          </p>
+          <div class="form-row">
+            <label class="form-label">回调地址</label>
+            <div class="oauth-uri">
+              <el-input
+                :model-value="issueConfigs[p.key]?.webhookUrl || '保存一次配置后生成'"
+                readonly size="default" class="form-control mono"
+              />
+              <el-button
+                size="default" :disabled="!issueConfigs[p.key]?.webhookUrl"
+                @click="copyWebhook(p.key)"
+              >
+                复制
+              </el-button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Secret</label>
+            <el-input
+              v-model="issueForms[p.key].webhookSecret" type="password" show-password
+              size="default" class="form-control mono"
+              :placeholder="issueSecretPlaceholder(p.key)"
+            />
+          </div>
+          <div class="form-row">
+            <label class="form-label">仓库白名单</label>
+            <el-input
+              v-model="issueForms[p.key].repoWhitelist" size="default" class="form-control mono"
+              placeholder="owner/repo，逗号分隔；* 表示全部"
+            />
+          </div>
+          <div class="form-row">
+            <label class="form-label">同步方向</label>
+            <el-select v-model="issueForms[p.key].syncDirection" size="default" class="form-control">
+              <el-option label="双向同步" value="BIDIRECTIONAL" />
+              <el-option label="仅平台 → Git" value="PUSH_ONLY" />
+              <el-option label="仅 Git → 平台" value="PULL_ONLY" />
+            </el-select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">冲突策略</label>
+            <el-select v-model="issueForms[p.key].conflictPolicy" size="default" class="form-control">
+              <el-option label="Git 优先" value="GIT_WINS" />
+              <el-option label="平台优先（冷却防回灌）" value="PLATFORM_WINS" />
+            </el-select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">启用同步</label>
+            <div class="issue-switch">
+              <el-switch v-model="issueForms[p.key].enabled" />
+              <span class="oauth-switch-text">
+                {{ issueForms[p.key].enabled ? '接收 webhook 并双向同步' : '停用：不再处理回调' }}
+              </span>
+            </div>
+          </div>
+          <div class="form-row">
+            <label class="form-label">自动建任务</label>
+            <div class="issue-switch">
+              <el-switch v-model="issueForms[p.key].autoCreateTask" />
+              <span class="oauth-switch-text">
+                {{ issueForms[p.key].autoCreateTask ? 'Git 新建 Issue 时自动生成平台任务' : '只同步已绑定任务' }}
+              </span>
+            </div>
+          </div>
+          <div class="issue-actions">
+            <el-button
+              v-if="issueConfigs[p.key]" size="small" text type="danger"
+              :loading="issueClearing === p.key" @click="clearIssue(p.key)"
+            >
+              清除同步配置
+            </el-button>
+            <el-button
+              size="small" type="primary" :loading="issueSaving === p.key"
+              @click="saveIssue(p.key)"
+            >
+              保存同步配置
+            </el-button>
           </div>
         </div>
       </div>
@@ -392,5 +628,69 @@ defineExpose({ load })
 .oauth-switch-text {
   font-size: 11px;
   color: var(--ink-muted);
+}
+
+/* Issue 双向同步（同一张平台卡片内） */
+.issue-sync {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-soft);
+}
+.issue-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 2px 0;
+  font-family: inherit;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.issue-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.issue-state {
+  padding: 1px 7px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+}
+.issue-state.ok {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.issue-caret {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.issue-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.issue-hint {
+  padding: 7px 10px;
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: 6px;
+}
+.issue-switch {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.issue-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  padding-top: 4px;
 }
 </style>

@@ -35,7 +35,8 @@ public class ToolCatalog {
                                    RepoQueryTools repoQueryTools,
                                    RuntimeTools runtimeTools,
                                    ConfigTools configTools,
-                                   EnvQueryTools envQueryTools) {
+                                   EnvQueryTools envQueryTools,
+                                   GitIssueQueryTools gitIssueQueryTools) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
@@ -45,6 +46,8 @@ public class ToolCatalog {
         toolkit.registerTool(configTools);
         // 生产也要能诊断"缺变量/指向错实例"：只读环境工具必须出现在只读面
         toolkit.registerTool(envQueryTools);
+        // 任务页只读：生产会话也能看到 Issue 任务
+        toolkit.registerTool(gitIssueQueryTools);
         return toolkit;
     }
 
@@ -64,7 +67,9 @@ public class ToolCatalog {
                                 ConfigTools configTools,
                                 PatchTools patchTools,
                                 OpsAgentTools opsAgentTools,
-                                CapabilityMarketTools capabilityMarketTools) {
+                                CapabilityMarketTools capabilityMarketTools,
+                                GitIssueQueryTools gitIssueQueryTools,
+                                GitIssueCommandTools gitIssueCommandTools) {
         Toolkit toolkit = new Toolkit();
 
         // 只读工具
@@ -89,6 +94,9 @@ public class ToolCatalog {
         toolkit.registerTool(opsAgentTools);
         // 能力市场：查找并接入公开的 MCP / Skill；只进对话工具面，生产只读面与发布 Agent 不提供
         toolkit.registerTool(capabilityMarketTools);
+        // 任务页：读取 + 新建/编辑/评论/关闭/重开/同步（与「任务」Tab 同一份数据）
+        toolkit.registerTool(gitIssueQueryTools);
+        toolkit.registerTool(gitIssueCommandTools);
 
         return toolkit;
     }

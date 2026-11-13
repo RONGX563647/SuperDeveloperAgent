@@ -1,0 +1,323 @@
+package top.rongx.agent.gateway.gitissue;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.settings.GitHostingAccount;
+import top.rongx.agent.domain.settings.GitHostingAccountRepository;
+import top.rongx.agent.gateway.gitee.GiteeAccountStore;
+
+/**
+ * Gitee / GitHub / GitLab Issue 开放接口的最小封装（零新增依赖，JDK HttpClient）。
+ *
+ * <p>凭据按用户解析：Gitee 取账号绑定，GitHub / GitLab 取代码托管账号；
+ * 未绑定账号时抛 {@link IllegalStateException}，由调用方降级为「本地任务 + 同步失败」。
+ */
+@Component
+public class GitIssueRemoteClient {
+
+    private static final Logger log = LoggerFactory.getLogger(GitIssueRemoteClient.class);
+    private static final Duration TIMEOUT = Duration.ofSeconds(20);
+
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(8))
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
+    private final ObjectMapper json = new ObjectMapper();
+    private final GiteeAccountStore gitee;
+    private final GitHostingAccountRepository hosts;
+
+    public GitIssueRemoteClient(GiteeAccountStore gitee, GitHostingAccountRepository hosts) {
+        this.gitee = gitee;
+        this.hosts = hosts;
+    }
+
+    /** 解析某用户对指定平台/仓库可用的凭据。 */
+    public Optional<Credentials> credentials(String userId, String provider, String repo) {
+        String p = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
+        String r = cleanRepo(repo);
+        if (p.isBlank() || r.isBlank()) {
+            return Optional.empty();
+        }
+        if ("GITEE".equals(p)) {
+            return gitee.tokenOf(userId).map(token -> new Credentials(p, r, "gitee.com", token));
+        }
+        List<GitHostingAccount> matches = hosts.findAll(userId).stream()
+                .filter(a -> p.equalsIgnoreCase(a.provider()))
+                .toList();
+        if (matches.isEmpty()) {
+            return Optional.empty();
+        }
+        GitHostingAccount account = matches.get(0);
+        return hosts.tokenOf(account.id(), userId)
+                .map(token -> new Credentials(p, r, account.host(), token));
+    }
+
+    /** 创建 Issue，返回远端编号/地址/状态。 */
+    public RemoteIssue create(Credentials c, String title, String body, String labels) {
+        return switch (c.provider()) {
+            case "GITEE" -> createGitee(c, title, body, labels);
+            case "GITHUB" -> createGithub(c, title, body, labels);
+            case "GITLAB" -> createGitlab(c, title, body, labels);
+            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+        };
+    }
+
+    /** 更新标题/描述/标签/状态。 */
+    public void update(Credentials c, String number, String title, String body, String state,
+                       String labels) {
+        switch (c.provider()) {
+            case "GITEE" -> updateGitee(c, number, title, body, state, labels);
+            case "GITHUB" -> updateGithub(c, number, title, body, state, labels);
+            case "GITLAB" -> updateGitlab(c, number, title, body, state, labels);
+            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+        }
+    }
+
+    /** 追加评论。 */
+    public void comment(Credentials c, String number, String body) {
+        switch (c.provider()) {
+            case "GITEE" -> send("POST",
+                    "https://gitee.com/api/v5/repos/" + c.repo() + "/issues/" + number
+                            + "/comments?access_token=" + enc(c.token()),
+                    headers(), jsonBody(Map.of("body", body)));
+            case "GITHUB" -> send("POST",
+                    "https://api.github.com/repos/" + c.repo() + "/issues/" + number + "/comments",
+                    githubHeaders(c.token()), jsonBody(Map.of("body", body)));
+            case "GITLAB" -> send("POST",
+                    gitlabBase(c) + "/projects/" + enc(c.repo()) + "/issues/" + number + "/notes",
+                    gitlabHeaders(c.token()), jsonBody(Map.of("body", body)));
+            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+        }
+    }
+
+    // ---------------------------------------------------------------- 各平台实现
+
+    private RemoteIssue createGitee(Credentials c, String title, String body, String labels) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", title);
+        payload.put("body", body);
+        if (labels != null && !labels.isBlank()) {
+            payload.put("labels", labels);
+        }
+        String resp = send("POST",
+                "https://gitee.com/api/v5/repos/" + c.repo() + "/issues?access_token="
+                        + enc(c.token()),
+                headers(), jsonBody(payload));
+        return parseIssue(resp);
+    }
+
+    private void updateGitee(Credentials c, String number, String title, String body, String state,
+                             String labels) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", title);
+        payload.put("body", body);
+        payload.put("state", "CLOSED".equalsIgnoreCase(state) ? "closed" : "open");
+        if (labels != null && !labels.isBlank()) {
+            payload.put("labels", labels);
+        }
+        send("PATCH", "https://gitee.com/api/v5/repos/" + c.repo() + "/issues/" + number
+                + "?access_token=" + enc(c.token()), headers(), jsonBody(payload));
+    }
+
+    private RemoteIssue createGithub(Credentials c, String title, String body, String labels) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", title);
+        payload.put("body", body);
+        List<String> list = splitLabels(labels);
+        if (!list.isEmpty()) {
+            payload.put("labels", list);
+        }
+        String resp = send("POST", "https://api.github.com/repos/" + c.repo() + "/issues",
+                githubHeaders(c.token()), jsonBody(payload));
+        return parseIssue(resp);
+    }
+
+    private void updateGithub(Credentials c, String number, String title, String body, String state,
+                              String labels) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", title);
+        payload.put("body", body);
+        payload.put("state", "CLOSED".equalsIgnoreCase(state) ? "closed" : "open");
+        List<String> list = splitLabels(labels);
+        if (!list.isEmpty()) {
+            payload.put("labels", list);
+        }
+        send("PATCH", "https://api.github.com/repos/" + c.repo() + "/issues/" + number,
+                githubHeaders(c.token()), jsonBody(payload));
+    }
+
+    private RemoteIssue createGitlab(Credentials c, String title, String body, String labels) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", title);
+        payload.put("description", body);
+        if (labels != null && !labels.isBlank()) {
+            payload.put("labels", labels);
+        }
+        String resp = send("POST", gitlabBase(c) + "/projects/" + enc(c.repo()) + "/issues",
+                gitlabHeaders(c.token()), jsonBody(payload));
+        return parseIssue(resp);
+    }
+
+    private void updateGitlab(Credentials c, String number, String title, String body, String state,
+                              String labels) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", title);
+        payload.put("description", body);
+        if ("CLOSED".equalsIgnoreCase(state)) {
+            payload.put("state_event", "close");
+        } else {
+            payload.put("state_event", "reopen");
+        }
+        if (labels != null && !labels.isBlank()) {
+            payload.put("labels", labels);
+        }
+        send("PUT", gitlabBase(c) + "/projects/" + enc(c.repo()) + "/issues/" + number,
+                gitlabHeaders(c.token()), jsonBody(payload));
+    }
+
+    // ---------------------------------------------------------------- HTTP
+
+    private String send(String method, String url, Map<String, String> headers, String body) {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).timeout(TIMEOUT);
+        headers.forEach(builder::header);
+        builder.method(method, body == null
+                ? HttpRequest.BodyPublishers.noBody()
+                : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        try {
+            HttpResponse<String> resp = http.send(builder.build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (resp.statusCode() / 100 != 2) {
+                throw new IllegalStateException("%s %s 返回 %d：%s"
+                        .formatted(method, safeUrl(url), resp.statusCode(), snippet(resp.body())));
+            }
+            return resp.body();
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("调用 Git 接口失败：" + e.getMessage(), e);
+        }
+    }
+
+    private Map<String, String> headers() {
+        return Map.of("Content-Type", "application/json; charset=utf-8");
+    }
+
+    private static Map<String, String> githubHeaders(String token) {
+        Map<String, String> h = new LinkedHashMap<>();
+        h.put("Content-Type", "application/json; charset=utf-8");
+        h.put("Accept", "application/vnd.github+json");
+        h.put("Authorization", "Bearer " + token);
+        h.put("X-GitHub-Api-Version", "2022-11-28");
+        h.put("User-Agent", "agent-platform");
+        return h;
+    }
+
+    private static Map<String, String> gitlabHeaders(String token) {
+        Map<String, String> h = new LinkedHashMap<>();
+        h.put("Content-Type", "application/json; charset=utf-8");
+        h.put("PRIVATE-TOKEN", token);
+        return h;
+    }
+
+    private String jsonBody(Map<String, Object> payload) {
+        try {
+            return json.writeValueAsString(payload);
+        } catch (Exception e) {
+            throw new IllegalStateException("请求体序列化失败：" + e.getMessage(), e);
+        }
+    }
+
+    private RemoteIssue parseIssue(String resp) {
+        try {
+            JsonNode node = json.readTree(resp);
+            String number = node.has("number") ? node.path("number").asText()
+                    : node.path("iid").asText();
+            String url = node.has("html_url") ? node.path("html_url").asText()
+                    : node.path("web_url").asText("");
+            String state = normalizeState(node.path("state").asText("open"));
+            return new RemoteIssue(number, url, state);
+        } catch (Exception e) {
+            throw new IllegalStateException("解析 Git 响应失败：" + e.getMessage(), e);
+        }
+    }
+
+    private static String gitlabBase(Credentials c) {
+        return "https://" + c.host() + "/api/v4";
+    }
+
+    private static String safeUrl(String url) {
+        int q = url.indexOf('?');
+        return q < 0 ? url : url.substring(0, q) + "?access_token=***";
+    }
+
+    private static String snippet(String body) {
+        if (body == null) {
+            return "";
+        }
+        String s = body.replaceAll("\\s+", " ").trim();
+        return s.length() <= 200 ? s : s.substring(0, 200) + "…";
+    }
+
+    private static String enc(String value) {
+        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
+    }
+
+    static List<String> splitLabels(String labels) {
+        if (labels == null || labels.isBlank()) {
+            return new ArrayList<>();
+        }
+        return java.util.Arrays.stream(labels.split("[,\\n]"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    static String normalizeState(String state) {
+        String s = state == null ? "" : state.trim().toLowerCase(Locale.ROOT);
+        return "closed".equals(s) ? "CLOSED" : "OPEN";
+    }
+
+    /** 规范化仓库标识：允许粘贴完整 URL 或 owner/repo.git。 */
+    public static String cleanRepo(String repo) {
+        if (repo == null) {
+            return "";
+        }
+        String r = repo.trim();
+        if (r.startsWith("http://") || r.startsWith("https://")) {
+            try {
+                r = URI.create(r).getPath();
+            } catch (RuntimeException ignored) {
+                // 非标准 URL 时按原样处理
+            }
+        }
+        while (r.startsWith("/")) {
+            r = r.substring(1);
+        }
+        if (r.endsWith(".git")) {
+            r = r.substring(0, r.length() - 4);
+        }
+        return r;
+    }
+
+    public record Credentials(String provider, String repo, String host, String token) {
+    }
+
+    public record RemoteIssue(String number, String url, String state) {
+    }
+}

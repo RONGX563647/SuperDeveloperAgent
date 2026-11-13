@@ -17,6 +17,7 @@ import { loadHistory, saveHistory } from '../state/sessionHistory'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import ChatTraceRail from '../components/chat/ChatTraceRail.vue'
 import ChatCapabilitiesView from '../components/chat/ChatCapabilitiesView.vue'
+import ChatIssuesView from '../components/chat/ChatIssuesView.vue'
 import { useChatCapabilities } from '../composables/useChatCapabilities'
 import ChatTraceView from '../components/chat/ChatTraceView.vue'
 import ApprovalRequestCard from '../components/chat/ApprovalRequestCard.vue'
@@ -47,8 +48,11 @@ const {
   ready: capsReady, loading: capsLoading, refresh: refreshCapabilities,
 } = useChatCapabilities(sessionId)
 
-/** 视图模式：对话 / 轨迹 / 能力，三个平级页面共用底部输入区。 */
-const viewMode = ref<'chat' | 'trace' | 'capabilities'>('chat')
+/** 视图模式：对话 / 轨迹 / 能力 / 任务，四个平级页面共用底部输入区。 */
+const viewMode = ref<'chat' | 'trace' | 'capabilities' | 'issues'>('chat')
+
+/** 任务 Tab 的待处理角标（由任务页加载后回传）。 */
+const issueCount = ref(0)
 
 /** 项目列表：只用于显示项目名与默认项目兜底（下拉已移除）。 */
 const projects = ref<ProjectRow[]>([])
@@ -501,6 +505,13 @@ onMounted(async () => {
             {{ selectedSkills.length + selectedMcp.length }}
           </span>
         </button>
+        <button
+          type="button" class="switch-tab" :class="{ on: viewMode === 'issues' }"
+          @click="viewMode = 'issues'"
+        >
+          任务
+          <span v-if="issueCount" class="tab-badge mono">{{ issueCount }}</span>
+        </button>
       </div>
       <EnvironmentStatusBar
         :project-id="projectId"
@@ -535,6 +546,12 @@ onMounted(async () => {
       @update:skills="selectedSkills = $event"
       @update:mcp="selectedMcp = $event"
       @refresh="refreshCapabilities"
+    />
+
+    <!-- 任务视图：平台与 Git 双向同步的 Issue 工单（Agent 工具同源） -->
+    <ChatIssuesView
+      v-if="viewMode === 'issues'"
+      @count="issueCount = $event"
     />
 
     <!-- 消息区 + 右侧轨迹：chat-body 提供定位参照，chat-list 仍是唯一滚动容器 -->
