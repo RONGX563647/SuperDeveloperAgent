@@ -7,7 +7,6 @@ const ChatView = () => import('./views/ChatView.vue')
 const PipelineView = () => import('./views/PipelineView.vue')
 const LoginView = () => import('./views/LoginView.vue')
 const ProjectIntakeView = () => import('./views/ProjectIntakeView.vue')
-const ProjectDetailView = () => import('./views/ProjectDetailView.vue')
 const ProjectListView = () => import('./views/ProjectListView.vue')
 const SettingsView = () => import('./views/SettingsView.vue')
 
@@ -21,8 +20,8 @@ const router = createRouter({
     { path: '/projects', name: 'project-list', component: ProjectListView },
     { path: '/settings', name: 'settings', component: SettingsView },
     { path: '/projects/intake', name: 'project-intake', component: ProjectIntakeView },
-    // 旧详情页保留为工作台内嵌跳转目标（树里未来可挂"在详情页打开"）
-    { path: '/projects/:id', name: 'project-detail', component: ProjectDetailView }
+    // 旧详情页已并入工作台「诊断」抽屉；保留旧链接跳转，避免书签失效
+    { path: '/projects/:id', redirect: '/projects' }
   ]
 })
 

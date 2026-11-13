@@ -18,7 +18,7 @@ import {
   type RunView, type StageView,
 } from '../api/pipeline'
 import { apiBlob } from '../api/http'
-import { gitCommits, listProjects, type GitCommit, type ProjectRow } from '../api/project'
+import { gitCommits, type GitCommit } from '../api/project'
 import { deployConfirm, deployEnvs, deployReplay, streamDeployAgent, type EnvStatus } from '../api/deploy'
 import { confirmEnvBinding, draftEnvBinding } from '../api/settings'
 import type { AgentEvent, AgentProjection } from '../types'
@@ -65,12 +65,6 @@ const ENV_STRATEGIES: EnvStrategy[] = [
   { key: 'test', pipeline: 'release', target: 'docker' },
   { key: 'prod', pipeline: 'release', target: 'server' },
 ]
-
-const projects = ref<ProjectRow[]>([])
-const projectChoices = computed<Array<{ id: string, name: string }>>(() =>
-  projects.value.length
-    ? projects.value.map((p) => ({ id: p.id, name: p.name }))
-    : [{ id: projectId.value, name: projectId.value }])
 
 const commits = ref<GitCommit[]>([])
 const commitsLoading = ref(false)
@@ -661,17 +655,6 @@ async function deployVersion(img: ImageVersionView): Promise<void> {
   }
 }
 
-async function loadProjects(): Promise<void> {
-  try {
-    projects.value = await listProjects()
-    if (!projects.value.some((p) => p.id === projectId.value) && projects.value.length) {
-      appStore.projectId = projects.value[0].id
-    }
-  } catch {
-    projects.value = []
-  }
-}
-
 async function loadCommits(): Promise<void> {
   commitsLoading.value = true
   try {
@@ -695,14 +678,7 @@ function applyEnv(key: string): void {
   choosePipeline()
 }
 
-function applyProject(id: string): void {
-  appStore.projectId = id
-  sha.value = ''
-  void router.replace({ query: { ...route.query, projectId: id } })
-}
-
 /* ---------------------------------------------------------------- 触发 */
-
 function attachRun(result: { runId: string, status: string },
                    meta: { env: string, pipelineId: string, sha: string }): void {
   const initial: RunView = {
@@ -1076,7 +1052,6 @@ onMounted(async () => {
   if (qTarget === 'host' || qTarget === 'docker' || qTarget === 'server') {
     deployTarget.value = qTarget
   }
-  await loadProjects()
   await Promise.all([
     loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
   ])
@@ -1143,7 +1118,7 @@ async function copyDigest(digest: string): Promise<void> {
 
 <template>
   <div class="pipeline-page">
-    <PageHeader title="流水线工作台" :subtitle="headerSubtitle">
+    <PageHeader title="流水线工作台" context :subtitle="headerSubtitle">
       <template #actions>
         <span v-if="running" class="run-chip busy">
           <span class="dot" /> 运行中 · {{ runDuration }}
@@ -1180,19 +1155,6 @@ async function copyDigest(digest: string): Promise<void> {
       <div class="wp-left" :style="{ width: `${leftPct}%` }">
         <div class="wp-left-inner">
           <div class="ctx-bar">
-            <label class="ctx-project">
-              <span class="ctx-label">项目</span>
-              <el-select
-                :model-value="projectId" size="default" class="ctx-select"
-                placeholder="选择项目" filterable
-                @update:model-value="applyProject"
-              >
-                <el-option
-                  v-for="p in projectChoices" :key="p.id"
-                  :label="`${p.name}（${p.id}）`" :value="p.id"
-                />
-              </el-select>
-            </label>
             <div class="ctx-env">
               <span class="ctx-label">
                 环境

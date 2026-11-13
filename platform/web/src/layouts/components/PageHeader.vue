@@ -12,8 +12,16 @@
  */
 import { Menu } from '@element-plus/icons-vue'
 import { openNav } from '../navDrawer'
+import ContextSwitcher from './ContextSwitcher.vue'
 
-defineProps<{ title: string; subtitle?: string }>()
+defineProps<{
+  title: string
+  subtitle?: string
+  /** 显示全局项目/环境切换（对话页、流水线页用，设置页不需要）。 */
+  context?: boolean
+  /** context=true 时是否同时显示环境切换。 */
+  contextEnv?: boolean
+}>()
 </script>
 
 <template>
@@ -33,6 +41,9 @@ defineProps<{ title: string; subtitle?: string }>()
         {{ title }}
       </h1>
       <span v-if="subtitle" class="head-subtitle">{{ subtitle }}</span>
+      <div v-if="context" class="head-ctx">
+        <ContextSwitcher :env="contextEnv !== false" />
+      </div>
     </div>
     <div class="head-right">
       <slot name="actions" />
@@ -86,6 +97,13 @@ defineProps<{ title: string; subtitle?: string }>()
   flex: none;
   align-items: center;
   gap: 8px;
+}
+/* 全局上下文（项目/环境）：标题后方一行，不另起一块区域 */
+.head-ctx {
+  display: flex;
+  flex: none;
+  align-self: center;
+  min-width: 0;
 }
 
 /* 窄屏导航按钮：默认隐藏，900px 以下才出现 */

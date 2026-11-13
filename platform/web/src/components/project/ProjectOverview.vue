@@ -4,8 +4,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import {
-  gitCommits, gitStatus, prepareProject, projectReadiness,
-  type GitCommit, type GitStatus, type ProjectRow,
+  gitCommits, gitStatus, gitSync, prepareProject, projectReadiness, removeWorktree,
+  type GitCommit, type GitStatus, type ProjectRow, type WorktreeRow,
 } from '../../api/project'
 import { triggerPipeline } from '../../api/pipeline'
 import ProjectReadiness from './ProjectReadiness.vue'
@@ -124,6 +124,39 @@ const storageModeText = computed(() =>
   status.value?.storageMode === 'DIRECT' ? '就地（仓库在你的目录）' : '平台托管（bare）'
 )
 
+/* ---------------------------------------------------------------- 诊断抽屉 */
+const diagOpen = ref(false)
+const syncing = ref(false)
+
+const ROLE_LABEL: Record<string, string> = {
+  BUILD: '构建',
+  VERIFY: '常驻（自检/检索）',
+  USER: '你的本地目录 · 平台只读',
+}
+
+async function doSync(): Promise<void> {
+  syncing.value = true
+  try {
+    await gitSync(props.project.id)
+    ElMessage.success('已从远端同步（fetch）')
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '同步失败')
+  } finally {
+    syncing.value = false
+  }
+}
+
+async function cleanupWorktree(wt: WorktreeRow): Promise<void> {
+  try {
+    await removeWorktree(props.project.id, wt.name)
+    ElMessage.success(`已清理 ${wt.name}`)
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '清理失败')
+  }
+}
+
 async function copyRepo(): Promise<void> {
   const url = remoteUrl.value
   if (!url) return
@@ -196,6 +229,9 @@ async function publishToTest(): Promise<void> {
       <div class="po-actions">
         <button type="button" class="po-btn" :disabled="loading" @click="load">
           <el-icon><RefreshRight /></el-icon> 刷新
+        </button>
+        <button type="button" class="po-btn" @click="diagOpen = true">
+          诊断
         </button>
         <button type="button" class="po-btn" @click="emit('runPipeline')">
           <el-icon><VideoPlay /></el-icon> 流水线
@@ -304,6 +340,63 @@ async function publishToTest(): Promise<void> {
       </p>
       <p v-else class="po-hint">接入后可查看提交历史</p>
     </section>
+
+    <!-- 诊断：git 细节 / 同步 / 工作树清理（原「项目详情」页并入这里） -->
+    <el-drawer
+      v-model="diagOpen" size="480px" append-to-body
+      title="诊断 · git 与工作树"
+    >
+      <div class="diag">
+        <template v-if="status?.initialized">
+          <div class="dg-line"><span class="dg-label">HEAD</span>
+            <code class="mono">{{ status.head.slice(0, 12) }}</code></div>
+          <div class="dg-line"><span class="dg-label">分支</span>
+            <code class="mono">{{ branchText }}</code></div>
+          <div class="dg-line"><span class="dg-label">远程</span>
+            <span class="dg-remotes">
+              <span v-for="r in status.remotes" :key="r.name" class="dg-chip mono">{{ r.name }}</span>
+              <span v-if="!status.remotes?.length" class="dg-muted">未配置（纯本地仓库）</span>
+            </span></div>
+          <div class="dg-line"><span class="dg-label">远程地址</span>
+            <code class="mono dg-url">{{ remoteUrl || '—' }}</code></div>
+          <div class="dg-line"><span class="dg-label">与远端</span>
+            <span v-if="status.upstream" class="dg-ab">
+              <span class="dg-ahead">↑ {{ status.ahead ?? 0 }} 待推送</span>
+              <span class="dg-behind">↓ {{ status.behind ?? 0 }} 待拉取</span>
+            </span>
+            <span v-else class="dg-muted">无 upstream</span></div>
+          <div class="dg-line"><span class="dg-label">未提交</span>
+            <span>{{ uncommittedCount }} 个文件</span></div>
+          <div class="dg-line"><span class="dg-label">存储模式</span>
+            <span>{{ storageModeText }}</span></div>
+          <div class="dg-line"><span class="dg-label">同步</span>
+            <button type="button" class="dg-btn" :disabled="syncing" @click="doSync">
+              {{ syncing ? '同步中…' : '从远端 fetch' }}
+            </button></div>
+
+          <h3 class="dg-title">工作树（{{ status.worktrees.length }}）</h3>
+          <p class="dg-sub">同一仓库的多份并行检出：构建互不污染，你的本地目录平台只读。</p>
+          <div v-if="status.worktrees.length" class="dg-wts">
+            <div v-for="wt in status.worktrees" :key="wt.path" class="dg-wt">
+              <span class="dg-wt-name mono">{{ wt.name }}</span>
+              <span class="dg-wt-role">{{ ROLE_LABEL[wt.role] ?? wt.role }}</span>
+              <code class="dg-wt-head mono">{{ wt.head?.slice(0, 8) }}</code>
+              <button
+                v-if="wt.role === 'BUILD'" type="button" class="dg-btn danger"
+                @click="cleanupWorktree(wt)"
+              >
+                清理
+              </button>
+            </div>
+          </div>
+          <p v-else class="dg-muted">暂无工作树</p>
+        </template>
+        <p v-else-if="loading" class="dg-muted">加载中…</p>
+        <div v-else class="dg-muted">
+          该项目尚未完成 git 接入，接入后才能查看诊断信息。
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -569,6 +662,116 @@ async function publishToTest(): Promise<void> {
   white-space: nowrap;
 }
 .po-commit-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+/* ---------------------------------------------------------------- 诊断抽屉 */
+.diag {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.dg-line {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.dg-label {
+  flex: none;
+  width: 76px;
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+.dg-remotes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dg-chip {
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: var(--radius-pill);
+}
+.dg-url {
+  max-width: 320px;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dg-muted {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.dg-ab {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+}
+.dg-ahead { color: var(--warn); }
+.dg-behind { color: var(--accent-ink); }
+.dg-btn {
+  height: 24px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.dg-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.dg-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.dg-btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.dg-title {
+  margin: 14px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.dg-sub {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+.dg-wts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dg-wt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.dg-wt-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dg-wt-role {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.dg-wt-head {
   flex: none;
   font-size: 11px;
   color: var(--ink-faint);

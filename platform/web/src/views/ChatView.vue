@@ -10,7 +10,7 @@ import type { TraceTurn } from '../types'
 import { useAgentChat } from '../composables/useAgentChat'
 import { useFollowScroll } from '../composables/useFollowScroll'
 import { getToken } from '../api/auth'
-import { listProjects, projectEnvs, type ProjectRow } from '../api/project'
+import { listProjects, type ProjectRow } from '../api/project'
 import { envLabel } from '../utils/pipelineLabels'
 import { formatCost, formatTokens, sumCost } from '../utils/deepseekPricing'
 import { loadHistory, saveHistory } from '../state/sessionHistory'
@@ -32,6 +32,7 @@ import PageHeader from '../layouts/components/PageHeader.vue'
  *
  * 本视图只负责：布局、输入区、IME 组合、粘底滚动、组件编排；不再直接 fetch/读流。
  */
+/** 项目切换由顶栏 ContextSwitcher 负责，这里只兜底选择合法项目。 */
 const projectId = computed(() => appStore.projectId)
 const env = computed(() => appStore.env)
 const sessionId = computed(() => appStore.sessionId)
@@ -45,36 +46,10 @@ const viewMode = ref<'chat' | 'trace'>('chat')
 const projects = ref<ProjectRow[]>([])
 
 /**
- * 环境下拉的可选项：来自项目真实配置（GET /projects/{id}/envs）。
- * 之前写死 dev/test/prod，选到项目未配置的 dev 会被服务端 400 拒绝。
+ * 项目/环境切换已统一到顶栏 ContextSwitcher（appStore 是唯一真相），
+ * 输入区只保留一句当前上下文提示，不再维护第二套下拉。
  */
-const projectEnvList = ref<string[]>([])
-const envOptions = computed(() =>
-  projectEnvList.value.length ? projectEnvList.value : ['dev', 'test', 'prod'])
-
-async function loadProjectEnvs(): Promise<void> {
-  if (!projectId.value) {
-    projectEnvList.value = []
-    return
-  }
-  try {
-    const rows = await projectEnvs(projectId.value)
-    projectEnvList.value = rows.map((r) => r.env).filter(Boolean)
-    if (projectEnvList.value.length && !projectEnvList.value.includes(appStore.env)) {
-      appStore.env = projectEnvList.value.includes('test')
-        ? 'test' : projectEnvList.value[0]
-    }
-  } catch (e) {
-    // 接口不可用时退回全量选项，不阻塞对话
-    console.warn('[chat] 项目环境加载失败:', e)
-    projectEnvList.value = []
-  }
-}
-
-const envModel = computed({
-  get: () => appStore.env,
-  set: (value: string) => { appStore.env = value },
-})
+const envText = computed(() => envLabel(env.value))
 
 const input = ref('')
 /** 执行策略提升到全局 store（本地持久化）；三种模式实际影响确认卡的展开行为。 */
@@ -309,7 +284,7 @@ function resizeInput(): void {
 
 watch(input, () => void nextTick(resizeInput))
 
-/** 项目名（Header 副标题用，比裸 projectId 可读）。 */
+/** 项目名（空状态文案用，比裸 projectId 可读）。 */
 const projectDisplayName = computed(() =>
   projects.value.find((p) => p.id === projectId.value)?.name ?? projectId.value)
 
@@ -433,16 +408,11 @@ watch(sessionId, () => {
 
 onMounted(async () => {
   await loadProjects()
-  await loadProjectEnvs()
   restoreSession()
   void nextTick(() => {
     resizeInput()
     scrollToLatest({ force: true })
   })
-})
-
-watch(projectId, (value, old) => {
-  if (value !== old) void loadProjectEnvs()
 })
 </script>
 
@@ -450,7 +420,8 @@ watch(projectId, (value, old) => {
   <div class="chat-page">
     <PageHeader
       title="通用对话"
-      :subtitle="`${projectDisplayName} · ${envLabel(env)}`"
+      context
+      context-env
     >
       <template #actions>
         <!-- 会话累计费用：本地按 usage 累加，悬浮看命中/未命中/输出明细 -->
@@ -614,14 +585,8 @@ watch(projectId, (value, old) => {
               <el-icon><Paperclip /></el-icon>
             </button>
             <span class="bar-scope mono" :title="projectDisplayName">
-              {{ projectDisplayName }}
+              {{ envText }}
             </span>
-            <el-select
-              v-model="envModel" size="small" class="scope-env"
-              aria-label="环境" @change="() => {}"
-            >
-              <el-option v-for="e in envOptions" :key="e" :label="envLabel(e)" :value="e" />
-            </el-select>
           </div>
           <div class="bar-right">
             <span v-if="streaming || elapsedMs" class="metric mono">
