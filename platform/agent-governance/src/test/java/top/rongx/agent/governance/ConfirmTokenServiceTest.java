@@ -96,4 +96,28 @@ class ConfirmTokenServiceTest {
     void blankUserRejected() {
         assertThrows(IllegalArgumentException.class, () -> service.issue(" ", "chg-1", "hash-a"));
     }
+
+    @Test
+    @DisplayName("令牌落库：重启（新实例）后仍可消费，且仍是一次性")
+    void tokenSurvivesRestart(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) {
+        java.nio.file.Path db = dir.resolve("governance.db");
+        ConfirmTokenService before = new ConfirmTokenService(clock, db);
+        ConfirmToken token = before.issue("u1", "chg-1", "hash-a");
+
+        // 模拟进程重启：新实例读同一个数据文件
+        ConfirmTokenService after = new ConfirmTokenService(clock, db);
+        assertEquals("u1", after.consume(token.token(), "chg-1", "hash-a").userId());
+        assertThrows(IllegalStateException.class,
+                () -> after.consume(token.token(), "chg-1", "hash-a"));
+    }
+
+    @Test
+    @DisplayName("过期令牌可被清理")
+    void purgeExpired(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) {
+        ConfirmTokenService persisted = new ConfirmTokenService(clock, dir.resolve("governance.db"));
+        persisted.issue("u1", "chg-1", "hash-a");
+        clock.advance(Duration.ofMinutes(6));
+        assertEquals(1, persisted.purgeExpired());
+        assertEquals(0, persisted.purgeExpired());
+    }
 }

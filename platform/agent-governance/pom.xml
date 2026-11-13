@@ -20,5 +20,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
+        <!-- 变更单 / 确认令牌落 SQLite（运行期驱动；编译期只用 JDBC 标准库） -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 </project>

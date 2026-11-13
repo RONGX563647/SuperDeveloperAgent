@@ -445,10 +445,15 @@ public class RepoQueryTools {
         if (ctx.worktree() == null) {
             return base;
         }
-        Path worktree = locator.worktreeRoot(ctx.projectId())
-                .map(root -> root.resolve(ctx.worktree()).normalize())
+        Path worktreeRoot = locator.worktreeRoot(ctx.projectId())
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "找不到工作树根：" + ctx.worktree()));
+                        "找不到工作树根：" + ctx.worktree()))
+                .toAbsolutePath().normalize();
+        Path worktree = worktreeRoot.resolve(ctx.worktree()).normalize();
+        // 兜底：即使上游校验被绕过，也不允许工作树路径跳出工作树根
+        if (!worktree.startsWith(worktreeRoot) || worktree.equals(worktreeRoot)) {
+            throw new IllegalArgumentException("工作树路径超出仓库范围：" + ctx.worktree());
+        }
         if (!Files.isDirectory(worktree)) {
             throw new IllegalArgumentException("工作树不存在：" + ctx.worktree());
         }

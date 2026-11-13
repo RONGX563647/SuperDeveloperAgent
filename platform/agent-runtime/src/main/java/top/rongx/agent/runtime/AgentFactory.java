@@ -8,6 +8,7 @@ import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.core.tool.Toolkit;
 import java.nio.file.Path;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import top.rongx.agent.domain.policy.PolicyDecision;
 import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -43,22 +44,46 @@ public class AgentFactory {
      *
      * <p>不配置时每轮都是全新上下文（同一会话的第二句话记不住第一句）；
      * 这里用本地 JSON 文件，保证重启后同会话仍能续聊，且不引入新中间件。
+     *
+     * <p><b>安全说明</b>：AgentScope 的 {@link JsonFileAgentStateStore} 只按 JSON 落盘，
+     * 平台无法在不重写整个存储格式的前提下做内容加密。因此这里把目录放到工作区
+     * {@code _platform/agent-state}（不随进程 CWD 漂移）并收紧为属主 700，避免同机其它用户读取；
+     * 若需要"落盘即密文"，应替换为数据库实现（见 README 的已知限制）。
      */
-    private final AgentStateStore stateStore =
-            new JsonFileAgentStateStore(Path.of("data", "agent-state"));
+    private final AgentStateStore stateStore;
 
     public AgentFactory(@Qualifier("agentToolkit") Toolkit fullToolkit,
                         @Qualifier("readOnlyToolkit") Toolkit readOnlyToolkit,
                         @Qualifier("deployToolkit") Toolkit deployToolkit,
                         DynamicModelProvider modelProvider,
                         AgentProperties props,
-                        PolicyPort policy) {
+                        PolicyPort policy,
+                        @Value("${agent.state.root:}") String stateRoot,
+                        @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.fullToolkit = fullToolkit;
         this.readOnlyToolkit = readOnlyToolkit;
         this.deployToolkit = deployToolkit;
         this.modelProvider = modelProvider;
         this.props = props;
         this.policy = policy;
+        this.stateStore = new JsonFileAgentStateStore(stateDirectory(stateRoot, workspaceRoot));
+    }
+
+    /** 会话状态目录：默认挂在平台工作区下，创建后收紧为属主 700。 */
+    private static Path stateDirectory(String stateRoot, String workspaceRoot) {
+        Path dir = stateRoot == null || stateRoot.isBlank()
+                ? Path.of(workspaceRoot).toAbsolutePath().normalize()
+                        .resolve("_platform").resolve("agent-state")
+                : Path.of(stateRoot).toAbsolutePath().normalize();
+        try {
+            java.nio.file.Files.createDirectories(dir);
+            java.nio.file.Files.setPosixFilePermissions(dir,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            org.slf4j.LoggerFactory.getLogger(AgentFactory.class)
+                    .warn("无法收紧会话状态目录权限（{}）：{}", dir, e.getMessage());
+        }
+        return dir;
     }
 
     /** 为一个会话构造 Agent。Agent 无状态，可每次新建。 */
@@ -68,11 +93,13 @@ public class AgentFactory {
         //    而对话链路没有回传"用户已确认"的通道，request_confirmation / ci_run 会永远停在执行中。
         //    真正的门禁在平台层：写工具本身拒绝生产、变更单要人工确认、部署要 binding_id。
         PolicyDecision l2 = policy.decide(ctx.env(), ToolLevel.L2_EXECUTE_ISOLATED);
+        // 只读用户（VIEWER）即使处在 dev/test 也只装配只读工具面：角色不能靠提示词约束
+        boolean readOnly = l2 == PolicyDecision.DENY || ctx.readOnly();
         PermissionContextState permission = PermissionContextState.builder()
-                .mode(l2 == PolicyDecision.DENY ? PermissionMode.DEFAULT : PermissionMode.BYPASS)
+                .mode(readOnly ? PermissionMode.DEFAULT : PermissionMode.BYPASS)
                 .build();
-        // 2. 工具面按环境策略渐进式披露：L2 被拒的环境只装配只读工具
-        Toolkit toolkit = l2 == PolicyDecision.DENY ? readOnlyToolkit : fullToolkit;
+        // 2. 工具面按环境策略 / 角色渐进式披露：只读面里根本没有写工具
+        Toolkit toolkit = readOnly ? readOnlyToolkit : fullToolkit;
         // 3. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
         return ReActAgent.builder()
                 .name("devops-agent")

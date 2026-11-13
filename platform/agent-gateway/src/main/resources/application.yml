@@ -28,8 +28,12 @@ sa-token:
   is-concurrent: true
   is-share: true
 
-# 模型：API Key 必须由环境变量注入，代码与配置库中不得出现（规约 §8）
+  # 模型：API Key 必须由环境变量注入，代码与配置库中不得出现（规约 §8）
 agent:
+  # 账号初始化：仅首次启动（users 表为空）使用；格式 admin=xxx,devops=yyy,viewer=zzz。
+  # 未提供的账号会生成随机密码并写入 <workspace>/_platform/seed-passwords.txt（600）。
+  auth:
+    seed-passwords: ${AGENT_SEED_PASSWORDS:}
   # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）
   workspace:
     root: ${AGENT_WORKSPACE_ROOT:./data/workspaces}

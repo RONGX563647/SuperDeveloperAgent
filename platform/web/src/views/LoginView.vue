@@ -21,19 +21,6 @@ const busy = ref(false)
 const errorText = ref('')
 const usernameInput = ref<{ focus: () => void } | null>(null)
 
-/** 种子账号：点一下直接填充，省去手抄示例密码。 */
-const seedAccounts = [
-  { role: '管理员', user: 'admin', pass: 'admin-2026' },
-  { role: '运维', user: 'devops', pass: 'devops-2026' },
-  { role: '只读', user: 'viewer', pass: 'viewer-2026' },
-]
-
-function useSeed(account: { user: string; pass: string }): void {
-  username.value = account.user
-  password.value = account.pass
-  errorText.value = ''
-}
-
 onMounted(() => usernameInput.value?.focus())
 
 async function doLogin() {
@@ -108,19 +95,6 @@ async function doLogin() {
           登 录
         </el-button>
       </el-form>
-
-      <div class="seed-hint">
-        <p class="seed-title">种子账号（首次部署用，正式环境请改密）</p>
-        <div class="seed-list">
-          <button
-            v-for="a in seedAccounts" :key="a.user" type="button" class="seed-chip"
-            :title="`使用 ${a.user} 登录`" @click="useSeed(a)"
-          >
-            <span class="seed-role">{{ a.role }}</span>
-            <span class="seed-user mono">{{ a.user }}</span>
-          </button>
-        </div>
-      </div>
     </main>
   </div>
 </template>
@@ -190,52 +164,6 @@ async function doLogin() {
   width: 100%;
   margin-top: 6px;
   letter-spacing: 0.04em;
-}
-.seed-hint {
-  padding-top: 16px;
-  margin-top: 20px;
-  border-top: 1px solid var(--line-soft);
-}
-.seed-title {
-  margin: 0 0 8px;
-  font-size: var(--text-2xs);
-  color: var(--ink-muted);
-}
-.seed-list {
-  display: flex;
-  gap: 6px;
-}
-.seed-chip {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-  align-items: flex-start;
-  min-width: 0;
-  padding: 6px 9px;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  background: var(--surface-sunken);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease;
-}
-.seed-chip:hover {
-  background: var(--panel);
-  border-color: var(--line);
-}
-.seed-role {
-  font-size: 10.5px;
-  color: var(--ink-muted);
-}
-.seed-user {
-  overflow: hidden;
-  max-width: 100%;
-  font-size: var(--text-xs);
-  color: var(--ink-soft);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 @media (max-width: 420px) {
   .login-card {

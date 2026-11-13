@@ -68,7 +68,8 @@ public class DeployAgentController {
      */
     @PostMapping(value = "/{projectId}/agent", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter run(@PathVariable String projectId, @RequestBody DeployAgentRequest request) {
-        // 1. 认证：操作人来自 Sa-Token 会话
+        // 1. 认证：操作人来自 Sa-Token 会话；自动部署属于写操作，只读角色不能触发
+        currentUser.checkPermission("action:run");
         String userId = currentUser.requireUserId();
         // 2. 参数校验：自动部署只面向非生产环境，生产必须走「测试证据 + 一次性确认」
         String env = request.env() == null || request.env().isBlank()

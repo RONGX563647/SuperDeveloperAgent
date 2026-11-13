@@ -60,7 +60,9 @@ npm run build      # vue-tsc strict + 产物
 
 > Vite 默认绑 `::1`，用 `127.0.0.1` 打不开属正常；需 IPv4 用 `npm run dev -- --host 127.0.0.1`。
 
-登录种子账号：`admin / admin-2026`（管理员）、`devops / devops-2026`（运维开发）、`viewer / viewer-2026`（只读）。
+种子账号：`admin`（管理员）、`devops`（运维开发）、`viewer`（只读）。密码不再写死在代码/前端：
+首次启动时按环境变量 `AGENT_SEED_PASSWORDS=admin=...,devops=...,viewer=...` 初始化；
+未提供的账号会生成随机密码并写入 `_platform/seed-passwords.txt`（600），登录后请尽快修改。
 
 ### 运行数据
 
@@ -74,7 +76,9 @@ npm run build      # vue-tsc strict + 产物
 | `_platform/projects.db` | 项目、环境模板/资源/变量、设置等 SQLite |
 | `_platform/deploy/<project>-<env>/` | HOST 部署状态：`releases/<sha>/`、`current`、`previous`、`app.pid`、`app.log` |
 | `_platform/local/` | dev 本机前后端进程日志（`app_logs` 读取） |
-| `data/agent-state/` | Agent 会话状态（按 userId + sessionId 续聊） |
+| `_platform/users.db` | 平台账号（BCrypt 密文）与项目成员关系 |
+| `_platform/governance.db` | 变更单与确认令牌（重启后仍可核验 / 消费） |
+| `_platform/agent-state/` | Agent 会话状态（按 userId + sessionId 续聊；目录权限 700） |
 
 ---
 
