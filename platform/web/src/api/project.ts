@@ -332,6 +332,42 @@ export function decommission(projectId: string): Promise<{ ok: boolean; note: st
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' })
 }
 
+// ---------------------------------------------------------------- 首次发布就绪
+
+export interface ReadinessFix {
+  /** route：跳转页面；scaffold：调用脚手架保存生成流水线定义。 */
+  kind: 'route' | 'scaffold' | string
+  target: string
+  label: string
+}
+
+export interface ReadinessStep {
+  key: string
+  label: string
+  ok: boolean
+  /** false = 结果项（如「首次发布」），不影响 ready 计算。 */
+  required: boolean
+  detail: string
+  fix: ReadinessFix | null
+}
+
+export interface Readiness {
+  projectId: string
+  env: string
+  /** 部署目标：docker / host / server；空 = 定义里没有 deploy 段。 */
+  target: string
+  ready: boolean
+  readyCount: number
+  totalCount: number
+  steps: ReadinessStep[]
+}
+
+/** 首次发布前置条件清单（只读，不触发构建）。 */
+export function projectReadiness(projectId: string, env = 'test'): Promise<Readiness> {
+  const q = new URLSearchParams({ env })
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/readiness?${q}`)
+}
+
 // ---------------------------------------------------------------- git
 
 export function gitStatus(projectId: string): Promise<GitStatus> {

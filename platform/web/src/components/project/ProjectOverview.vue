@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import { gitCommits, gitStatus, type GitCommit, type GitStatus, type ProjectRow } from '../../api/project'
+import ProjectReadiness from './ProjectReadiness.vue'
 
 /**
  * 项目概览（左侧树选中根节点时的右侧详情）：
@@ -146,6 +147,9 @@ async function copyRepo(): Promise<void> {
         </button>
       </div>
     </div>
+
+    <!-- 首次发布就绪检查：前置条件与修复入口集中在这里，避免到处找配置 -->
+    <ProjectReadiness :project-id="project.id" />
 
     <div class="po-grid">
       <section class="po-card">
