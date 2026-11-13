@@ -204,21 +204,21 @@ onMounted(load)
   flex-direction: column;
   gap: 6px;
   padding: 14px 16px;
-  background: #fdf6ec;
-  border: 1px solid #f5d3b8;
-  border-radius: 10px;
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+  border-radius: var(--radius-md);
 }
 .ni-title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
-  color: #9a4514;
+  color: var(--warn-ink);
 }
 .ni-sub {
   margin: 0 0 6px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #9a4514;
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--warn-ink);
 }
 .detail-page {
   display: flex;
@@ -246,17 +246,20 @@ onMounted(load)
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 .card-title {
   margin: 0 0 6px;
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 .card-sub {
   margin: 0 0 10px;
-  font-size: 12px;
-  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
 }
 .status-lines,
 .wt-list {
@@ -364,6 +367,13 @@ onMounted(load)
   background: none;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
+}
+.mini-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-hover);
+  border-color: var(--line);
 }
 .mini-btn:disabled {
   opacity: 0.5;
@@ -388,11 +398,18 @@ onMounted(load)
   padding: 0 16px;
   font-family: inherit;
   font-size: 13px;
+  font-weight: 500;
   color: #fff;
   cursor: pointer;
   background: var(--accent);
   border: 0;
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  transition: background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.primary-btn:hover {
+  background: var(--accent-hover);
+  box-shadow: 0 2px 10px rgb(77 130 247 / 28%);
 }
 .danger-zone {
   margin-top: 14px;
@@ -401,20 +418,21 @@ onMounted(load)
 }
 .dz-note {
   margin: 0;
-  font-size: 11.5px;
-  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
 }
 .hint {
-  font-size: 12px;
-  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
 }
 .mono {
   font-family: var(--font-mono);
   font-size: 12px;
 }
 .hdr-btn {
-  height: 26px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 12px;
   font-family: inherit;
   font-size: 12.5px;
   color: var(--ink-soft);
@@ -422,6 +440,13 @@ onMounted(load)
   background: none;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
+}
+.hdr-btn:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+  border-color: var(--line);
 }
 
 /* 手机：收紧留白，长路径 / URL 允许换行，避免把卡片撑出横向滚动 */

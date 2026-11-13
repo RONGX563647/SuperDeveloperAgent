@@ -182,14 +182,17 @@ defineExpose({ load })
   gap: 12px;
 }
 .panel-title {
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 .panel-desc {
-  margin-top: 3px;
-  font-size: 11.5px;
-  color: var(--ink-faint);
+  max-width: 46rem;
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
 }
 .panel-head .el-button {
   margin-left: auto;

@@ -132,36 +132,40 @@ async function refresh(): Promise<void> {
 .settings-body {
   flex: 1 1 0;
   min-height: 0;
-  padding: 8px 32px 32px;
+  padding: 8px clamp(16px, 2.4vw, 40px) 40px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .settings-shell {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
-  max-width: 1120px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 .settings-nav {
   display: flex;
+  position: sticky;
+  top: 0;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 .nav-card {
+  position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 11px;
   width: 100%;
-  padding: 14px 16px;
+  padding: 11px 13px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
 }
 .nav-card:hover {
   background: var(--surface-hover);
@@ -169,6 +173,18 @@ async function refresh(): Promise<void> {
 .nav-card.active {
   background: var(--panel);
   border-color: var(--line-soft);
+  box-shadow: var(--shadow-1);
+}
+/* 选中位：左侧 2px 蓝条，和侧栏会话选中保持同一种「定位线」语言 */
+.nav-card.active::before {
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  left: -1px;
+  width: 2px;
+  content: '';
+  background: var(--accent);
+  border-radius: var(--radius-pill);
 }
 .nav-icon {
   display: flex;
@@ -177,10 +193,15 @@ async function refresh(): Promise<void> {
   justify-content: center;
   width: 28px;
   height: 28px;
-  margin-top: 1px;
-  font-size: 15px;
-  color: var(--ink-soft);
+  margin-top: -1px;
+  font-size: 14px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
   border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+.nav-card:hover .nav-icon {
+  color: var(--ink-soft);
 }
 .nav-card.active .nav-icon {
   color: var(--accent-ink);
@@ -189,22 +210,31 @@ async function refresh(): Promise<void> {
 .nav-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 .nav-title {
-  font-size: 13.5px;
+  font-size: var(--text-sm);
   font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink-soft);
+  transition: color var(--dur-fast) ease;
+}
+.nav-card.active .nav-title {
   color: var(--ink);
 }
 .nav-desc {
-  font-size: 11.5px;
+  overflow: hidden;
+  font-size: var(--text-2xs);
+  line-height: 1.5;
   color: var(--ink-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .settings-card {
   min-width: 0;
-  padding: 22px 26px 26px;
+  padding: clamp(18px, 2vw, 26px) clamp(18px, 2.2vw, 30px) clamp(22px, 2.4vw, 32px);
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
@@ -240,17 +270,26 @@ async function refresh(): Promise<void> {
     align-items: center;
     gap: 6px;
     width: auto;
-    padding: 7px 12px;
+    padding: 6px 11px 6px 9px;
     white-space: nowrap;
     background: var(--panel);
     border-color: var(--line-soft);
     border-radius: var(--radius-pill);
   }
+  .nav-card.active {
+    background: var(--accent-soft);
+    border-color: transparent;
+    box-shadow: none;
+  }
+  .nav-card.active::before {
+    content: none;
+  }
   .nav-icon {
-    width: auto;
-    height: auto;
+    width: 20px;
+    height: 20px;
     margin-top: 0;
-    font-size: 14px;
+    font-size: 13px;
+    background: none;
   }
   .nav-card.active .nav-icon {
     background: none;

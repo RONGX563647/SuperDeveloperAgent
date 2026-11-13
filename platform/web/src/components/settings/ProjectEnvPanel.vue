@@ -618,9 +618,11 @@ defineExpose({ load })
     <header class="ep-head">
       <div class="ep-title-row">
         <h2 class="ep-title">项目环境</h2>
-        <el-button size="small" type="primary" :icon="Plus" @click="startCreate">添加覆盖</el-button>
-        <el-button size="small" :icon="Key" @click="openResolve">配置解析</el-button>
-        <el-button size="small" :icon="Refresh" :loading="detecting" @click="redetect">重新检测</el-button>
+        <div class="ep-actions">
+          <el-button size="small" :icon="Refresh" :loading="detecting" @click="redetect">重新检测</el-button>
+          <el-button size="small" :icon="Key" @click="openResolve">配置解析</el-button>
+          <el-button size="small" type="primary" :icon="Plus" @click="startCreate">添加覆盖</el-button>
+        </div>
       </div>
       <p class="ep-sub">
         下面的列表是部署时真正注入的变量（环境模板 + 中间件连接信息 + 项目覆盖 + 项目源码 .env）。
@@ -1029,20 +1031,32 @@ defineExpose({ load })
 .ep-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ep-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.ep-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 .ep-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 .ep-sub {
   margin: 0;
-  max-width: 780px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--ink-faint);
+  max-width: 46rem;
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
 }
 .ep-sub code {
   padding: 0 4px;
@@ -1071,13 +1085,13 @@ defineExpose({ load })
   border-radius: var(--radius-pill);
 }
 .ep-policy-chip.allow {
-  color: var(--success, #2f7d5a);
-  background: color-mix(in srgb, var(--success, #2f9e6e) 10%, transparent);
+  color: var(--ok-ink);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
   border-color: transparent;
 }
 .ep-policy-chip.confirm {
-  color: var(--warning-ink, #9a6a00);
-  background: color-mix(in srgb, #d9a300 12%, transparent);
+  color: var(--warn-ink);
+  background: var(--warn-soft);
   border-color: transparent;
 }
 .ep-policy-chip.deny {
@@ -1131,16 +1145,16 @@ defineExpose({ load })
   border-radius: var(--radius-pill);
 }
 .ep-chip.danger {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: var(--danger-soft);
 }
 .ep-chip.ok {
-  color: var(--success, #16a34a);
-  background: var(--success-soft, rgb(22 163 74 / 12%));
+  color: var(--ok-ink);
+  background: var(--ok-soft);
 }
 .ep-chip.warn {
-  color: var(--warning, #b45309);
-  background: var(--warning-soft, rgb(180 83 9 / 12%));
+  color: var(--warn-ink);
+  background: var(--warn-soft);
 }
 .ep-warn {
   flex: 1 1 100%;
@@ -1311,8 +1325,8 @@ a.ep-service-url:hover {
   background: var(--warn-soft);
 }
 .ep-source.source {
-  color: var(--success, #16a34a);
-  background: var(--success-soft, rgb(22 163 74 / 12%));
+  color: var(--ok);
+  background: var(--ok-soft);
 }
 .ep-source.missing {
   color: var(--danger);

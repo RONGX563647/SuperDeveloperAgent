@@ -1756,7 +1756,7 @@ async function copyDigest(digest: string): Promise<void> {
   cursor: pointer;
 }
 .ap-warn {
-  color: var(--warn-ink, #a15c00);
+  color: var(--warn-ink);
 }
 .ad-toggle {
   margin-left: 6px;
@@ -2034,16 +2034,16 @@ async function copyDigest(digest: string): Promise<void> {
 }
 .re-title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--ink-muted);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--ink-soft);
 }
 .re-sub {
   margin: 0;
-  max-width: 380px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--ink-faint);
+  max-width: 420px;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--ink-muted);
 }
 .re-btn {
   display: inline-flex;
@@ -2059,10 +2059,18 @@ async function copyDigest(digest: string): Promise<void> {
   background: var(--accent);
   border: 0;
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
+  transition: background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.re-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: 0 2px 10px rgb(77 130 247 / 28%);
 }
 .re-btn:disabled {
+  color: var(--ink-faint);
   cursor: not-allowed;
-  opacity: 0.5;
+  background: var(--surface-sunken);
+  box-shadow: none;
 }
 
 /* Header 状态 chip */

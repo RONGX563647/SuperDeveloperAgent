@@ -466,7 +466,6 @@ defineExpose({ load })
           敏感值加密保存，列表默认掩码，可点眼睛查看；容器未启动不算异常，部署时会自动启动项目引用的中间件。
         </p>
       </div>
-      <el-button size="small" :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
     </header>
 
     <div class="et-cards">
@@ -486,8 +485,8 @@ defineExpose({ load })
           形态 {{ MODE_LABEL[row.template.runtimeMode] || row.template.runtimeMode }} · 命名空间 {{ row.template.namespace }}
         </span>
         <span class="et-card-line">
-          端口 {{ row.template.defaultPort || '未配置' }} · 变量 {{ row.varCount }} 个
-          <template v-if="row.secretCount">（{{ row.secretCount }} 敏感）</template>
+          端口 {{ row.template.defaultPort || '未配置' }} · 变量 {{ row.varCount }}
+          <template v-if="row.secretCount"> · 敏感 {{ row.secretCount }}</template>
         </span>
         <span class="et-card-line">
           中间件 {{ row.resourceCount }} 个 · 运行 {{ row.runningCount }}
@@ -588,7 +587,7 @@ defineExpose({ load })
               <span
                 v-if="r.status === 'MISSING'" class="et-state danger"
                 :title="`缺少连接信息：${r.missingFields.join('、')}`"
-              >缺{{ r.missingFields.join('/') }}</span>
+              >缺 {{ r.missingFields.length }} 项</span>
               <span
                 v-else-if="r.status === 'RUNNING'" class="et-state ok"
                 :title="r.source === 'LOCAL_DOCKER' || r.source === 'REMOTE_DOCKER' ? `容器 ${r.name} 运行中` : '端口可连通'"
@@ -811,16 +810,17 @@ defineExpose({ load })
 }
 .et-title {
   margin: 0 0 4px;
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 .et-sub {
   margin: 0;
-  max-width: 720px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--ink-faint);
+  max-width: 46rem;
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
 }
 .et-cards {
   display: grid;
@@ -831,6 +831,7 @@ defineExpose({ load })
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 108px;
   padding: 12px 14px;
   font-family: inherit;
   text-align: left;
@@ -838,7 +839,8 @@ defineExpose({ load })
   background: var(--surface-sunken);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
 }
 .et-card:hover {
   background: var(--surface-hover);
@@ -846,33 +848,41 @@ defineExpose({ load })
 .et-card.active {
   background: var(--panel);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: var(--shadow-1);
 }
 .et-card.danger {
   box-shadow: inset 3px 0 0 var(--danger);
+}
+.et-card.danger.active {
+  box-shadow: inset 3px 0 0 var(--danger), var(--shadow-1);
 }
 .et-card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin-bottom: 2px;
   font-size: 13px;
   color: var(--ink);
 }
 .et-card-line {
+  overflow: hidden;
   font-size: 11px;
-  color: var(--ink-faint);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .et-badge {
   padding: 1px 7px;
-  font-size: 10px;
+  font-size: 10.5px;
   border-radius: var(--radius-pill);
 }
 .et-badge.ok {
-  color: var(--success, #16a34a);
-  background: var(--success-soft, rgb(22 163 74 / 12%));
+  color: var(--ok-ink);
+  background: var(--ok-soft);
 }
 .et-badge.danger {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: var(--danger-soft);
 }
 .et-detail {
@@ -1018,15 +1028,15 @@ defineExpose({ load })
   background: var(--surface-sunken);
 }
 .et-state.ok {
-  color: var(--success, #16a34a);
-  background: var(--success-soft, rgb(22 163 74 / 12%));
+  color: var(--ok-ink);
+  background: var(--ok-soft);
 }
 .et-state.warn {
-  color: var(--warn);
+  color: var(--warn-ink);
   background: var(--warn-soft);
 }
 .et-state.danger {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: var(--danger-soft);
 }
 .et-actions {

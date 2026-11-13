@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CaretRight, ChatDotRound, Paperclip, Promotion, Setting,
+  CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../stores/app'
 import type { TraceTurn } from '../types'
@@ -482,7 +482,8 @@ watch(projectId, (value, old) => {
             </div>
           </template>
           <span class="session-cost mono">
-            🧾 当前会话累计：{{ formatCost(sessionCost.total) }}
+            <el-icon class="cost-icon"><Coin /></el-icon>
+            累计 {{ formatCost(sessionCost.total) }}
           </span>
         </el-tooltip>
         <button
@@ -703,6 +704,7 @@ watch(projectId, (value, old) => {
 /* 会话累计费用 chip：等宽小字，贴着设置键 */
 .session-cost {
   display: inline-flex;
+  gap: 4px;
   align-items: center;
   height: 24px;
   padding: 0 8px;
@@ -713,6 +715,15 @@ watch(projectId, (value, old) => {
   background: var(--surface-sunken);
   border: 1px solid var(--line-soft);
   border-radius: 999px;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.session-cost:hover {
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+.cost-icon {
+  font-size: 12px;
+  color: var(--ink-faint);
 }
 
 /* ---- 工具区：左侧视图切换，右侧环境状态条 ---- */
@@ -731,9 +742,9 @@ watch(projectId, (value, old) => {
   gap: 16px;
 }
 .switch-tab {
-  padding: 7px 1px 8px;
+  padding: 9px 1px 10px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   color: var(--ink-faint);
   cursor: pointer;
   background: none;
@@ -886,8 +897,8 @@ watch(projectId, (value, old) => {
   transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 .composer:focus-within {
-  border-color: rgb(0 0 0 / 22%);
-  box-shadow: 0 8px 24px rgb(16 24 40 / 9%);
+  border-color: rgb(77 130 247 / 52%);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 24px rgb(16 24 40 / 9%);
 }
 /* 输入框：原生 textarea，高度由 resizeInput 按内容算，最多 30vh 后内部滚动 */
 .composer-input {

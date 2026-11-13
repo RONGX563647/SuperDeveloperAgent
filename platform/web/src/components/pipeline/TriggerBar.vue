@@ -621,7 +621,7 @@ const runLabel = computed(() =>
   padding: 8px 10px;
   background: var(--surface-sunken);
   border: 1px solid var(--line-soft);
-  border-left: 3px solid var(--success, #2f9e6e);
+  border-left: 3px solid var(--ok);
   border-radius: var(--radius-sm);
 }
 .dr-panel.bad {
@@ -652,7 +652,7 @@ const runLabel = computed(() =>
   color: var(--danger);
 }
 .dr-list.warn {
-  color: var(--warning-ink, #a06a00);
+  color: var(--warn-ink);
 }
 .dr-stages {
   display: flex;

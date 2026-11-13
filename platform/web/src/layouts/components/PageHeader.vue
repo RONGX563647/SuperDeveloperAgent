@@ -61,9 +61,9 @@ defineProps<{ title: string; subtitle?: string }>()
 .head-title {
   margin: 0;
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -71,7 +71,7 @@ defineProps<{ title: string; subtitle?: string }>()
 /* DSH 的会话标题后面紧跟一串轻量元信息，用竖点分隔而不是胶囊 */
 .head-subtitle {
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--ink-muted);
   white-space: nowrap;
   text-overflow: ellipsis;

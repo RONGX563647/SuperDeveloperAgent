@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, useTemplateRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheck, CircleClose, Plus, Star } from '@element-plus/icons-vue'
+import { CircleCheck, CircleClose, Cpu, Plus, Star } from '@element-plus/icons-vue'
 import {
   createModel, deleteModel, listModels, setDefaultModel, testModelDraft, updateModel,
   type ModelConnection, type ModelConnectionInput, type TestResult
@@ -250,10 +250,15 @@ defineExpose({ load })
     </section>
 
     <div v-loading="loading" class="list">
-      <div v-if="!models.length && !loading && !formOpen" class="empty">
-        <p class="empty-title">还没有模型连接</p>
-        <p class="empty-sub">不配置时使用环境变量里的模型；配置后以设置页为准</p>
-        <el-button size="small" @click="openCreate">添加第一个</el-button>
+      <div v-if="!models.length && !loading && !formOpen" class="empty-state">
+        <span class="empty-state-icon"><el-icon><Cpu /></el-icon></span>
+        <p class="empty-state-title">还没有模型连接</p>
+        <p class="empty-state-desc">
+          不配置时使用环境变量里的模型；配置后以设置页为准，保存即热切换，无需重启。
+        </p>
+        <div class="empty-state-actions">
+          <el-button size="small" type="primary" @click="openCreate">添加第一个</el-button>
+        </div>
       </div>
 
       <div v-for="m in models" :key="m.id" class="model-row">
@@ -302,14 +307,17 @@ defineExpose({ load })
   gap: 12px;
 }
 .panel-title {
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 .panel-desc {
-  margin-top: 3px;
-  font-size: 11.5px;
-  color: var(--ink-faint);
+  max-width: 46rem;
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
 }
 .panel-head .el-button {
   margin-left: auto;
@@ -385,22 +393,9 @@ defineExpose({ load })
   gap: 8px;
   min-height: 100px;
 }
-.empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 36px 0;
-}
-.empty-title {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ink-muted);
-}
-.empty-sub {
-  margin: 0;
-  font-size: 11.5px;
-  color: var(--ink-faint);
+.empty-state {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
 }
 .model-row {
   display: flex;
@@ -411,6 +406,11 @@ defineExpose({ load })
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.model-row:hover {
+  border-color: var(--line);
+  box-shadow: var(--shadow-1);
 }
 .row-main {
   flex: 1 1 320px;

@@ -168,9 +168,9 @@ function onRootClick(event: MouseEvent): void {
 .markdown-view a:hover {
   border-bottom-color: var(--accent-ink);
 }
-/* 内置高亮 token（utils/markdown.ts） */
-.markdown-view .tok-kw { color: #c678dd; }
-.markdown-view .tok-str { color: #98c379; }
-.markdown-view .tok-comment { color: #7f848e; font-style: italic; }
-.markdown-view .tok-num { color: #d19a66; }
+/* 内置高亮 token（utils/markdown.ts）：浅色底的深色语法色，保证 AA */
+.markdown-view .tok-kw { color: var(--code-kw); }
+.markdown-view .tok-str { color: var(--code-str); }
+.markdown-view .tok-comment { color: var(--code-comment); font-style: italic; }
+.markdown-view .tok-num { color: var(--code-num); }
 </style>

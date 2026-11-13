@@ -268,11 +268,11 @@ onMounted(() => void load())
 .bar-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 7px;
+  gap: 7px;
+  height: 26px;
+  padding: 0 8px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--ink-soft);
   white-space: nowrap;
   cursor: pointer;
@@ -319,7 +319,7 @@ onMounted(() => void load())
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--ink-muted);
   white-space: nowrap;
 }
@@ -371,8 +371,8 @@ onMounted(() => void load())
   top: calc(100% + 8px);
   right: 0;
   z-index: 40;
-  width: 300px;
-  padding: 12px 14px 12px;
+  width: 320px;
+  padding: 14px 16px;
   background: var(--surface-raised);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -382,22 +382,22 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-bottom: 8px;
-  font-size: 12px;
+  padding-bottom: 9px;
+  font-size: var(--text-sm);
   color: var(--ink);
 }
 .panel-head b {
   font-weight: 600;
 }
 .panel-health {
-  font-size: 10.5px;
+  font-size: var(--text-2xs);
   color: var(--ink-muted);
 }
 .panel-project {
   margin-left: auto;
   overflow: hidden;
   max-width: 120px;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--ink-faint);
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -407,8 +407,8 @@ onMounted(() => void load())
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 0;
-  font-size: 11px;
+  padding: 5px 0;
+  font-size: var(--text-xs);
   border-bottom: 1px solid var(--line-soft);
 }
 .kv:last-of-type {
@@ -489,8 +489,12 @@ onMounted(() => void load())
 }
 
 @media (max-width: 900px) {
-  .env-health,
-  .env-count {
+  /* 窄屏只保留「环境 + 健康度」，分隔点一并隐藏，避免出现连续的 "· ·" */
+  .env-health {
+    font-size: var(--text-2xs);
+  }
+  .env-count,
+  .bar-trigger .sep {
     display: none;
   }
   .bar-split {

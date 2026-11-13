@@ -49,10 +49,19 @@
   /* ---- 语义色 ---- */
   --ok: #2ea36b;
   --ok-soft: rgb(46 163 107 / 12%);
+  --ok-ink: #1b7a4f; /* 成功底色上的文字，对比 ≥ 4.5:1 */
   --warn: #b8821b;
   --warn-soft: rgb(217 164 65 / 14%);
+  --warn-ink: #8a5a12; /* 警示底色上的正文，对比 ≥ 4.5:1 */
   --danger: #e54d4d;
   --danger-soft: rgb(239 107 107 / 12%);
+  --danger-ink: #c0392b; /* 危险底色上的文字 */
+
+  /* ---- 代码高亮（浅色底，均过 AA） ---- */
+  --code-kw: #8250df;
+  --code-str: #12734a;
+  --code-comment: #6b7280;
+  --code-num: #a8500c;
 
   /* ---- 圆角 ---- */
   --radius-xs: 4px;
@@ -76,6 +85,20 @@
   /* ---- 字体 ---- */
   --font-sans: 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', Consolas, monospace;
+
+  /* ---- 字号层级：正文 14 / 小字 13 / 辅助 12 / 标注 11 ---- */
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+
+  /* ---- 行高 ---- */
+  --leading-tight: 1.35;
+  --leading-base: 1.55;
+  --leading-relaxed: 1.75;
 
   /* ---- 布局骨架：侧栏 260px（可折叠）/ Header 52px ---- */
   --sidebar-width-260: 260px;
@@ -163,6 +186,114 @@ body {
   background: rgb(77 130 247 / 30%);
 }
 
+/* 分组标题：设置面板 / 卡片内的统一层级（标题 15 + 说明 12 + 右侧操作） */
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.section-head-main {
+  min-width: 0;
+}
+.section-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.section-desc {
+  max-width: 46rem;
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
+}
+.section-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+  padding-top: 1px;
+}
+
+/* 空状态：图标 / 标题 / 说明 / 行动，纵向居中且克制 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 40px 20px;
+  text-align: center;
+}
+.empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 6px;
+  font-size: 19px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-lg);
+}
+.empty-state-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+.empty-state-desc {
+  max-width: 34rem;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--ink-muted);
+}
+.empty-state-actions {
+  margin-top: 10px;
+}
+
+/* 行内代码 / 引用写法：统一底色与字号 */
+.inline-code {
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius-xs);
+}
+
+/* 通用图标按钮（各页可复用，局部样式可覆盖） */
+.icon-btn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 14px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+.icon-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 /* Element Plus 细节校正 */
 .el-button {
   font-weight: 500;
@@ -170,6 +301,102 @@ body {
 
 .el-button.is-text {
   --el-button-hover-bg-color: var(--surface-hover);
+}
+
+/* 主按钮的按下反馈统一收一档，避免各页自己写 */
+.el-button--primary:not(.is-disabled):active {
+  transform: translateY(0.5px);
+}
+
+/* 禁用态主按钮：用中性灰而不是"褪色的蓝"，避免看起来像半加载 */
+.el-button--primary.is-disabled,
+.el-button--primary.is-disabled:hover,
+.el-button--primary.is-disabled:active {
+  --el-button-disabled-bg-color: var(--surface-sunken);
+  --el-button-disabled-border-color: var(--line-soft);
+  --el-button-disabled-text-color: var(--ink-faint);
+  box-shadow: none;
+  transform: none;
+}
+
+/* 表单：标签与帮助文字的字号 / 颜色统一 */
+.el-form-item__label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+.el-form-item__error {
+  font-size: var(--text-2xs);
+}
+
+/* 输入占位符统一弱化，避免各浏览器深浅不一 */
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: var(--ink-faint);
+}
+
+/* 提示 / 通知：圆角与内边距对齐卡片语言 */
+.el-alert {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+}
+.el-alert__title {
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+}
+
+.el-message-box {
+  padding: 20px 22px;
+  border-radius: var(--radius-lg);
+}
+.el-message-box__title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.el-message-box__message {
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+  color: var(--ink-soft);
+}
+.el-message-box__btns {
+  padding-top: 16px;
+}
+
+/* 浮层：统一圆角与阴影，避免 tooltip / 下拉各写一套 */
+.el-popper.is-light {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+.el-select-dropdown__item {
+  font-size: var(--text-sm);
+}
+
+/* 加载遮罩跟随卡片底色，避免白闪 */
+.el-loading-mask {
+  background-color: rgb(251 251 251 / 72%);
+}
+.el-loading-spinner .path {
+  stroke: var(--accent);
+}
+
+/* 标签：默认不用荧光底，透明度统一 */
+.el-tag {
+  font-size: var(--text-2xs);
+  border-radius: var(--radius-sm);
+}
+.el-tag.is-round {
+  border-radius: var(--radius-pill);
+}
+
+/* 复选框 / 单选：文字与正文次级色对齐 */
+.el-checkbox,
+.el-radio {
+  --el-checkbox-text-color: var(--ink-soft);
+  --el-radio-text-color: var(--ink-soft);
+}
+.el-checkbox__label,
+.el-radio__label {
+  font-size: var(--text-xs);
 }
 
 .el-button--primary {

@@ -100,23 +100,26 @@ function tone(row: EnvStatus): string {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
-  padding: 7px 10px;
+  padding: 8px 10px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
-  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
 }
 .env-pill:hover {
   background: var(--surface-hover);
+  border-color: var(--line);
 }
 .env-pill.active {
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: var(--shadow-1);
 }
 .env-pill:focus-visible {
   outline: 2px solid var(--accent);
@@ -132,14 +135,14 @@ function tone(row: EnvStatus): string {
 .env-dot.bad { background: var(--danger); }
 .env-dot.busy { background: var(--warn); }
 .env-name {
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
   color: var(--ink);
 }
 .env-state {
   overflow: hidden;
-  font-size: 10.5px;
-  color: var(--ink-faint);
+  font-size: var(--text-2xs);
+  color: var(--ink-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

@@ -407,9 +407,12 @@ const overviewProject = computed(() =>
   background: var(--accent);
   border: 0;
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  transition: background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 .we-btn:hover {
   background: var(--accent-hover);
+  box-shadow: 0 2px 10px rgb(77 130 247 / 28%);
 }
 
 .hdr-btn {
@@ -425,11 +428,24 @@ const overviewProject = computed(() =>
   background: none;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.hdr-btn:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+  border-color: var(--line);
 }
 .hdr-btn.primary {
   color: #fff;
   background: var(--accent);
   border-color: var(--accent);
+  box-shadow: var(--shadow-1);
+}
+.hdr-btn.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 2px 8px rgb(77 130 247 / 28%);
 }
 /* 顶栏按钮在手机上用短文案，给标题留出空间 */
 .hdr-short {

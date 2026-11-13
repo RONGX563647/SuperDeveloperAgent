@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Plus, Refresh, RefreshRight } from '@element-plus/icons-vue'
+import { Delete, Lock, Plus, RefreshRight } from '@element-plus/icons-vue'
 import { listProjects, type ProjectRow } from '../../api/project'
 import {
   deleteProjectSecret, listProjectSecrets, rotateProjectSecret, saveProjectSecret,
@@ -124,6 +124,16 @@ async function remove(item: ProjectSecret): Promise<void> {
   }
 }
 
+/** 复制引用写法：这是最常被粘贴到项目环境里的字符串。 */
+async function copyRef(name: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(`secret://${name}`)
+    ElMessage.success('已复制引用写法')
+  } catch {
+    ElMessage.error('复制失败（浏览器未授权剪贴板）')
+  }
+}
+
 function onProjectChange(id: string): void {
   if (id) appStore.projectId = id
 }
@@ -142,7 +152,6 @@ defineExpose({ load })
       <div class="sp-title-row">
         <h2 class="sp-title">密钥库</h2>
         <el-button size="small" type="primary" :icon="Plus" @click="startCreate">新建密钥</el-button>
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
       </div>
       <p class="sp-sub">
         密钥 AES-GCM 加密落库，接口只返回名称与版本。在「项目环境」里把变量值写成
@@ -181,7 +190,10 @@ defineExpose({ load })
       <div v-for="item in items" :key="item.name" class="sp-row">
         <code class="sp-key mono">{{ item.name }}</code>
         <span class="sp-version">v{{ item.version }}</span>
-        <code class="sp-ref mono">secret://{{ item.name }}</code>
+        <button
+          type="button" class="sp-ref mono" title="复制引用写法"
+          @click="copyRef(item.name)"
+        >secret://{{ item.name }}</button>
         <span class="sp-updated">{{ formatTime(item.updatedAt) }}</span>
         <span class="sp-actions">
           <button
@@ -198,9 +210,16 @@ defineExpose({ load })
           </button>
         </span>
       </div>
-      <p v-if="!items.length && !loading" class="sp-empty">
-        这个环境还没有密钥。新建后，把项目环境变量值写成 <code>secret://名称</code> 即可引用。
-      </p>
+      <div v-if="!items.length && !loading" class="empty-state">
+        <span class="empty-state-icon"><el-icon><Lock /></el-icon></span>
+        <p class="empty-state-title">这个环境还没有密钥</p>
+        <p class="empty-state-desc">
+          新建后，把项目环境变量的值写成 <code>secret://名称</code> 即可引用；部署时在服务端解析。
+        </p>
+        <div class="empty-state-actions">
+          <el-button size="small" type="primary" :icon="Plus" @click="startCreate">新建密钥</el-button>
+        </div>
+      </div>
     </div>
 
     <el-dialog
@@ -252,23 +271,25 @@ defineExpose({ load })
 .sp-title-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
 }
 .sp-title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 .sp-sub {
-  max-width: 720px;
+  max-width: 46rem;
   margin: 0;
-  font-size: 11.5px;
-  line-height: 1.6;
-  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--ink-muted);
 }
 .sp-sub code,
-.sp-empty code,
+.empty-state code,
 .sp-form-hint code {
   padding: 1px 4px;
   font-size: 11px;
@@ -309,6 +330,10 @@ defineExpose({ load })
   padding: 9px 12px;
   font-size: 12px;
   border-top: 1px solid var(--line-soft);
+  transition: background-color var(--dur-fast) ease;
+}
+.sp-row:not(.sp-row-head):hover {
+  background: var(--surface-hover);
 }
 .sp-row-head {
   font-size: 11px;
@@ -326,8 +351,22 @@ defineExpose({ load })
   color: var(--ink-muted);
 }
 .sp-ref {
+  justify-self: start;
+  padding: 2px 5px;
+  margin-left: -5px;
+  overflow: hidden;
   font-size: 11px;
   color: var(--accent-ink);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+}
+.sp-ref:hover {
+  background: var(--accent-soft);
 }
 .sp-updated {
   font-size: 11px;
@@ -361,14 +400,6 @@ defineExpose({ load })
 .sp-icon:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-.sp-empty {
-  padding: 18px 12px;
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.6;
-  color: var(--ink-faint);
-  border-top: 1px solid var(--line-soft);
 }
 .sp-form {
   display: flex;
