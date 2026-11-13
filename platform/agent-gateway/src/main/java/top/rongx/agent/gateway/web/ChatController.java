@@ -7,11 +7,12 @@ import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.change.ChangeWire;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.governance.ChangeRegistry;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.gateway.web.dto.ChatRequest;
 import org.slf4j.Logger;
@@ -38,9 +39,6 @@ public class ChatController {
     /** 单次会话最长 3 分钟。 */
     private static final long TIMEOUT_MS = 180_000L;
 
-    /** 工具结果里的变更单号：{@code changeId: chg-...}（ChangeTools 的固定输出格式）。 */
-    private static final Pattern CHANGE_ID = Pattern.compile("(?m)^\\s*changeId:\\s*(chg-[A-Za-z0-9-]+)");
-
     /** 变更相关工具：只有它们的返回会被翻译成确认卡事件（委派结果里也可能带 changeId）。 */
     private static final java.util.Set<String> CHANGE_TOOLS =
             java.util.Set.of("request_confirmation", "confirm", "run_ops_agent");
@@ -51,16 +49,19 @@ public class ChatController {
     private final ProjectContextResolver contextResolver;
     private final AgentEventMapper eventMapper;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
+    private final ChangeRegistry changes;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     public ChatController(ChatService chatService,
                           ProjectContextResolver contextResolver,
                           AgentEventMapper eventMapper,
-                          top.rongx.agent.gateway.auth.CurrentUser currentUser) {
+                          top.rongx.agent.gateway.auth.CurrentUser currentUser,
+                          ChangeRegistry changes) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
         this.currentUser = currentUser;
+        this.changes = changes;
     }
 
     /**
@@ -110,7 +111,7 @@ public class ChatController {
                                 ? end.getToolCallName() : toolNames.get(end.getToolCallId());
                         StringBuilder result = toolResults.remove(end.getToolCallId());
                         String changeId = toolName != null && CHANGE_TOOLS.contains(toolName)
-                                && result != null ? changeIdOf(result.toString()) : null;
+                                && result != null ? changeIdOf(result.toString(), ctx) : null;
                         if (changeId != null) {
                             emitter.send(SseEmitter.event()
                                     .id(String.valueOf(++seq))
@@ -140,10 +141,24 @@ public class ChatController {
         return emitter;
     }
 
-    /** 从工具返回文本里提取变更单号（只认固定的 {@code changeId:} 行）。 */
-    private static String changeIdOf(String text) {
-        Matcher matcher = CHANGE_ID.matcher(text);
-        return matcher.find() ? matcher.group(1) : null;
+    /**
+     * 从工具返回文本里提取变更单号，并用登记表核对。
+     *
+     * <p>格式由 {@link ChangeWire} 单点定义（生产者/消费者共用），不再各写一份正则；
+     * 另外要求单号在当前项目的变更登记里真实存在，避免把模型复述的、别的项目的单号
+     * 当成可确认的变更推给前端。
+     */
+    private String changeIdOf(String text, ProjectContext ctx) {
+        String changeId = ChangeWire.extract(text);
+        if (changeId == null) {
+            return null;
+        }
+        ChangePlan plan = changes.find(changeId).orElse(null);
+        if (plan == null || !plan.projectId().equals(ctx.projectId())) {
+            log.warn("忽略无法核对的变更单：{}（project={}）", changeId, ctx.projectId());
+            return null;
+        }
+        return changeId;
     }
 
     /** 对外只暴露简短、无内部细节的错误文案（规约 §3）。 */

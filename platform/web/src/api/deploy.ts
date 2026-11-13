@@ -1,4 +1,7 @@
 import { apiFetch } from './http'
+import { getToken } from './auth'
+import { streamChatOnce } from './sse'
+import type { AgentEvent } from '../types'
 
 /**
  * 环境级部署接口：每个环境跑通过什么、重放、脚本版本、上服务器前的确认。
@@ -65,6 +68,44 @@ export interface RecipeVersion {
 export function deployRecipes(projectId: string, env: string): Promise<RecipeVersion[]> {
   const q = new URLSearchParams({ env })
   return apiFetch(`/api/v1/deploy/${encodeURIComponent(projectId)}/recipes?${q}`)
+}
+
+export interface DeployAgentRequest {
+  env: string
+  sha: string
+  pipelineId?: string
+  /** 已人工确认的环境绑定；Agent 只在绑定范围内执行。 */
+  bindingId?: string
+  sessionId?: string
+}
+
+/**
+ * 发布 Agent：服务端按参数拼装任务，前端只消费事件流。
+ *
+ * <p>不传自由文本——任务内容是固定的「自检 → 构建 → 部署 → 验证」，
+ * 与通用对话共用一套事件格式（agent 帧）。
+ */
+export async function streamDeployAgent(
+  projectId: string,
+  req: DeployAgentRequest,
+  onEvent: (event: AgentEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const token = getToken()
+  await streamChatOnce(
+    `/api/v1/deploy/${encodeURIComponent(projectId)}/agent`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(req),
+    },
+    onEvent,
+    signal,
+  )
 }
 
 /** 把某个历史版本重新设为生效（只切脚本，不触发部署）。 */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close, CopyDocument, Download, Link, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
@@ -19,7 +19,10 @@ import {
 } from '../api/pipeline'
 import { apiBlob } from '../api/http'
 import { gitCommits, listProjects, type GitCommit, type ProjectRow } from '../api/project'
-import { deployConfirm, deployEnvs, deployReplay, type EnvStatus } from '../api/deploy'
+import { deployConfirm, deployEnvs, deployReplay, streamDeployAgent, type EnvStatus } from '../api/deploy'
+import { confirmEnvBinding, draftEnvBinding } from '../api/settings'
+import type { AgentEvent, AgentProjection } from '../types'
+import { emptyAgentProjection, reduceAgentEvent } from '../state/agentEventReducer'
 import { appStore } from '../stores/app'
 import { useRunTracker } from '../composables/useRunTracker'
 import { formatDuration, statusLabel, statusTone } from '../utils/status'
@@ -81,6 +84,118 @@ const pipelinesLoading = ref(false)
 /** 最近一次 dry-run 报告（只读预检）；代码/环境/提交变化后清空。 */
 const dryRun = ref<DryRunReportView | null>(null)
 const dryRunBusy = ref(false)
+
+// ---------------------------------------------------------------- 发布 Agent
+/** 发布 Agent 的事件投影：与对话共用同一份 reducer，视图只做渲染。 */
+const agentProjection = shallowRef<AgentProjection>(emptyAgentProjection())
+const agentOpen = ref(false)
+const agentRunning = ref(false)
+const agentError = ref('')
+let agentController: AbortController | null = null
+
+const agentTools = computed(() => Object.values(agentProjection.value.tools))
+const agentMessages = computed(() => {
+  const rows = agentProjection.value.messages.map((m) => ({
+    id: m.id, role: m.role, text: m.text,
+  }))
+  const turn = agentProjection.value.streamingTurn
+  if (turn) rows.push({ id: 'streaming', role: 'assistant', text: turn.text || '（思考中…）' })
+  return rows
+})
+/** 生产环境不允许自动部署：必须走「测试证据 + 一次性确认」；只读角色也不能触发。 */
+const canRunAgent = computed(() => {
+  const id = appStore.identity
+  return id.role === 'ADMIN' || id.permissions.includes('*')
+    || id.permissions.includes('action:run')
+})
+const agentDisabled = computed(() => env.value === 'prod' || !canRunAgent.value)
+const agentHint = computed(() => {
+  if (!canRunAgent.value) return '当前角色没有执行权限（需要 action:run）'
+  if (env.value === 'prod') return '生产环境必须走「发布到生产」（测试证据 + 一次性确认）'
+  return '由发布 Agent 自动执行：自检 → 构建 → 部署 → 验证'
+})
+
+/** 发布 Agent 主流程：人工确认环境绑定 → 消费事件流 → 刷新运行记录。 */
+async function runDeployAgent(): Promise<void> {
+  if (agentRunning.value || !canRun.value || !shaValid.value) return
+  if (agentDisabled.value) {
+    ElMessage.warning(agentHint.value)
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将由发布 Agent 自动部署提交 ${sha.value.slice(0, 8)} 到「${envLabel(env.value)}」。\n`
+      + '执行范围限定在人工确认过的环境绑定内，过程中可随时停止。',
+      '发布 Agent',
+      { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+
+  // 1. 环境绑定：草稿 → 人工确认 → 只在确认范围内执行
+  let bindingId = ''
+  try {
+    const draft = await draftEnvBinding(projectId.value, env.value)
+    await ElMessageBox.confirm(
+      `环境绑定\nhash: ${draft.mappingHash.slice(0, 12)}\n`
+      + `生效至: ${new Date(draft.expiresAt).toLocaleString()}\n\n`
+      + '确认后 Agent 才能读取该环境的实际配置。',
+      '确认环境绑定',
+      { confirmButtonText: '确认绑定', cancelButtonText: '取消' },
+    )
+    const confirmed = await confirmEnvBinding(projectId.value, draft.id)
+    bindingId = confirmed.id
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error(e instanceof Error ? e.message : '环境绑定失败')
+    }
+    return
+  }
+
+  // 2. 事件流
+  agentOpen.value = true
+  agentRunning.value = true
+  agentError.value = ''
+  agentProjection.value = emptyAgentProjection()
+  agentController = new AbortController()
+  try {
+    await streamDeployAgent(
+      projectId.value,
+      {
+        env: env.value,
+        sha: sha.value,
+        pipelineId: pipelineId.value || undefined,
+        bindingId,
+        sessionId: `deploy-${Date.now()}`,
+      },
+      (event: AgentEvent) => {
+        agentProjection.value = reduceAgentEvent(agentProjection.value, event)
+        if (event.type === 'error') {
+          agentError.value = typeof event.payload?.message === 'string'
+            ? event.payload.message
+            : '发布 Agent 执行异常'
+        }
+      },
+      agentController.signal,
+    )
+  } catch (e) {
+    if (agentController && !agentController.signal.aborted) {
+      agentError.value = e instanceof Error ? e.message : String(e)
+    }
+  } finally {
+    agentRunning.value = false
+    agentController = null
+    void loadHistory()
+    void loadEnvs()
+  }
+}
+
+function stopAgent(): void {
+  agentController?.abort()
+  agentController = null
+  agentRunning.value = false
+}
 
 const deployTarget = ref(defaultTarget(appStore.env))
 
@@ -974,6 +1089,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (tickTimer !== null) clearInterval(tickTimer)
   if (historyTimer !== null) clearInterval(historyTimer)
+  agentController?.abort()
 })
 
 /* ---------------------------------------------------------------- 小工具 */
@@ -1095,11 +1211,53 @@ async function copyDigest(digest: string): Promise<void> {
             :can-run="canRun"
             :dry-run="dryRun"
             :dry-run-busy="dryRunBusy"
+            :agent-busy="agentRunning"
+            :agent-disabled="agentDisabled"
+            :agent-hint="agentHint"
             @run="doAction"
             @dryrun="preflight"
+            @agent="runDeployAgent"
             @refresh-commits="loadCommits"
             @stop-local="stopLocalServices"
           />
+
+          <el-dialog
+            v-model="agentOpen" title="发布 Agent" width="760px" append-to-body
+            :close-on-click-modal="false" :close-on-press-escape="!agentRunning"
+            :show-close="!agentRunning"
+          >
+            <div class="agent-meta">
+              <span class="mono">{{ envShort(env) }} · {{ sha.slice(0, 8) }}</span>
+              <span v-if="agentRunning" class="agent-live">执行中…</span>
+              <span v-else-if="agentError" class="agent-bad">{{ agentError }}</span>
+              <span v-else class="agent-done">已结束</span>
+            </div>
+
+            <ol v-if="agentTools.length" class="agent-tools">
+              <li
+                v-for="t in agentTools" :key="t.toolCallId"
+                class="agent-tool" :class="t.status.toLowerCase()"
+              >
+                <span class="at-name mono">{{ t.toolName }}</span>
+                <span class="at-status">{{ t.status }}</span>
+                <p v-if="t.resultText" class="at-result mono">{{ t.resultText }}</p>
+              </li>
+            </ol>
+            <p v-else class="agent-empty">
+              {{ agentRunning ? '正在启动…' : '没有工具调用记录' }}
+            </p>
+
+            <div v-if="agentMessages.length" class="agent-msgs">
+              <p v-for="m in agentMessages" :key="m.id" class="agent-msg" :class="m.role">
+                {{ m.text }}
+              </p>
+            </div>
+
+            <template #footer>
+              <el-button v-if="agentRunning" @click="stopAgent">停止</el-button>
+              <el-button :disabled="agentRunning" @click="agentOpen = false">关闭</el-button>
+            </template>
+          </el-dialog>
 
           <HistoryList
             class="fill"
@@ -2193,5 +2351,84 @@ async function copyDigest(digest: string): Promise<void> {
   .iv-size {
     display: none;
   }
+}
+
+/* 发布 Agent：实时工具轨迹与正文 */
+.agent-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.agent-live {
+  color: var(--accent-ink);
+}
+.agent-bad {
+  color: var(--danger);
+}
+.agent-done {
+  color: var(--ink-faint);
+}
+.agent-tools {
+  padding: 0;
+  margin: 0 0 10px;
+  list-style: none;
+}
+.agent-tool {
+  padding: 6px 9px;
+  margin-bottom: 6px;
+  background: var(--surface-sunken);
+  border-left: 2px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+}
+.agent-tool.running {
+  border-left-color: var(--accent);
+}
+.agent-tool.completed {
+  border-left-color: var(--ok);
+}
+.agent-tool.failed {
+  border-left-color: var(--danger);
+}
+.at-name {
+  font-size: 11.5px;
+  color: var(--ink);
+}
+.at-status {
+  margin-left: 8px;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.at-result {
+  max-height: 120px;
+  padding: 0;
+  margin: 4px 0 0;
+  overflow: auto;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.agent-empty {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.agent-msgs {
+  max-height: 240px;
+  overflow: auto;
+}
+.agent-msg {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+}
+.agent-msg.assistant {
+  color: var(--ink);
 }
 </style>

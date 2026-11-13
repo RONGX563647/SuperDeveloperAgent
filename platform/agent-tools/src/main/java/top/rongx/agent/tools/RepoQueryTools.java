@@ -231,6 +231,11 @@ public class RepoQueryTools {
     private void scanFile(Path file, Path root, Pattern pattern, int limit,
                           List<String> matches, int[] scanned, ProjectContext ctx) {
         try {
+            // 符号链接一律不扫描：walkFileTree 不会跟随目录链接，但 visitFile 会拿到文件链接，
+            // 读取时会跟随到仓库外（link -> /etc/passwd），这里直接跳过。
+            if (Files.isSymbolicLink(file)) {
+                return;
+            }
             if (!Files.isRegularFile(file) || Files.size(file) > MAX_SCAN_FILE_BYTES) {
                 return;
             }
@@ -438,12 +443,12 @@ public class RepoQueryTools {
         }
     }
 
-    /** 仓库根：会话指定了工作树则用工作树，否则用主仓库。 */
+    /** 仓库根：会话指定了工作树则用工作树，否则用主仓库；返回真实路径（解析符号链接后的根）。 */
     private Path repoRoot(ProjectContext ctx) {
         Path base = locator.repoDir(ctx.projectId()).orElseThrow(() ->
                 new IllegalArgumentException("项目尚未接入 git 仓库，无法浏览文件：" + ctx.projectId()));
         if (ctx.worktree() == null) {
-            return base;
+            return realDirectory(base, "仓库目录");
         }
         Path worktreeRoot = locator.worktreeRoot(ctx.projectId())
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -457,15 +462,61 @@ public class RepoQueryTools {
         if (!Files.isDirectory(worktree)) {
             throw new IllegalArgumentException("工作树不存在：" + ctx.worktree());
         }
-        return worktree;
+        return realDirectory(worktree, "工作树");
     }
 
-    /** 解析相对路径并保证不逃逸出仓库根。 */
+    /** 取真实目录路径：根自身若是符号链接，后续所有比较都必须基于真实路径。 */
+    private static Path realDirectory(Path dir, String label) {
+        try {
+            return dir.toRealPath();
+        } catch (IOException e) {
+            throw new IllegalArgumentException(label + "不可读：" + dir + "（" + e.getMessage() + "）");
+        }
+    }
+
+    /**
+     * 解析相对路径并保证不逃逸出仓库根。
+     *
+     * <p>光靠 {@code normalize()} 只能挡住 {@code ../}，挡不住符号链接：仓库里一个
+     * {@code link -> /etc} 会让 {@code read_file("link/passwd")} 读到仓库外。
+     * 因此这里额外校验「已存在的最近祖先」的真实路径必须仍在 root 内；
+     * 目标不存在时校验其父目录，防止先写后读式的绕过。
+     */
     private static Path resolveInside(Path root, String path) {
         String relative = path == null ? "" : path.trim();
-        Path resolved = (relative.isEmpty() ? root : root.resolve(relative)).normalize();
+        if (relative.isEmpty()) {
+            return root;
+        }
+        Path candidate;
+        try {
+            candidate = Path.of(relative);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("路径非法：" + path);
+        }
+        // 绝对路径会直接丢弃 root，必须显式拒绝
+        if (candidate.isAbsolute()) {
+            throw new IllegalArgumentException("路径超出仓库范围：" + path);
+        }
+        Path resolved = root.resolve(candidate).normalize();
         if (!resolved.startsWith(root)) {
             throw new IllegalArgumentException("路径超出仓库范围：" + path);
+        }
+        // 找到最近一个存在的祖先（目标可能尚不存在），用真实路径做范围校验
+        Path existing = resolved;
+        while (existing != null && !Files.exists(existing)) {
+            existing = existing.getParent();
+        }
+        if (existing == null) {
+            throw new IllegalArgumentException("路径超出仓库范围：" + path);
+        }
+        Path real;
+        try {
+            real = existing.toRealPath();
+        } catch (IOException e) {
+            throw new IllegalArgumentException("路径不可读：" + path);
+        }
+        if (!real.startsWith(root)) {
+            throw new IllegalArgumentException("路径经符号链接超出仓库范围：" + path);
         }
         return resolved;
     }

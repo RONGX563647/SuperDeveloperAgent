@@ -77,8 +77,8 @@ npm run build      # vue-tsc strict + 产物
 | `_platform/deploy/<project>-<env>/` | HOST 部署状态：`releases/<sha>/`、`current`、`previous`、`app.pid`、`app.log` |
 | `_platform/local/` | dev 本机前后端进程日志（`app_logs` 读取） |
 | `_platform/users.db` | 平台账号（BCrypt 密文）与项目成员关系 |
-| `_platform/governance.db` | 变更单与确认令牌（重启后仍可核验 / 消费） |
-| `_platform/agent-state/` | Agent 会话状态（按 userId + sessionId 续聊；目录权限 700） |
+| `_platform/governance.db` | 变更单与确认令牌（重启后仍可核验 / 消费；令牌过期即删，变更单保留 24h） |
+| `_platform/agent-state/` | Agent 会话状态（AES-256-GCM 密文落盘，目录 700 / 文件 600） |
 
 ---
 
@@ -123,12 +123,12 @@ npm run build      # vue-tsc strict + 产物
 
 ## 已知边界（不是遗漏）
 
-1. **没有 `confirm` 工具**——确认只能由人在 HTTP 接口完成（规约 §4.10 第一道守卫）；
-2. **变更单 / 待确认补丁为内存版**——重启后未应用的提案丢失，生产需落库；
-3. **用户体系为内存版**（3 个种子账号），未接数据库；多租户未做；
+1. **`confirm` 工具不签发令牌**——它只把变更单标成待确认，令牌只能由人在 HTTP 接口签发（规约 §4.10 第一道守卫）；
+2. **变更单 / 令牌为单机 SQLite**——重启不丢，但多副本部署仍需外部数据库（当前按单实例设计）；
+3. **用户体系为单机 SQLite**（3 个种子账号 + 项目成员列表），没有成员管理接口；多租户未做；
 4. **`GET /api/v1/fs/read` 未实现**——前端文件预览调用该端点，后端只有 ls/probe/roots；
 5. **事件映射用反射**——正式版应把 AgentScope 事件映射成稳定枚举；
-6. **`changeId` 由前端正则提取**——应由后端发专用 SSE `change` 事件；
+6. **`changeId` 仍走工具文本**——AgentScope 的工具事件没有结构化 payload；格式已收敛到 `ChangeWire` 并由登记表核对，但无法完全避免文本通道；
 7. **沙箱不注入私服凭据**——需要时挂只读 `settings.xml`；
 8. **窄控制器 8 步滚动发布未做**——当前 deploy 由平台部署器 / 仓库配方提供。
 

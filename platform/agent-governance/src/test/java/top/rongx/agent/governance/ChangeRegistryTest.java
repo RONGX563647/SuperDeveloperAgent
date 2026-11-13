@@ -41,4 +41,18 @@ class ChangeRegistryTest {
         assertEquals("hash-from-recipe", loaded.planHash());
         assertTrue(loaded.highRisk());
     }
+
+    @Test
+    @DisplayName("按时间清理：早于保留期的变更单被删除，近期保留")
+    void purgeBeforeRemovesOnlyStale(@TempDir Path dir) {
+        ChangeRegistry registry = new ChangeRegistry(dir.toString());
+        ChangePlan plan = registry.request("RY", "test", "stack_deploy", "发布 test",
+                null, null, false);
+
+        assertEquals(0, registry.purgeBefore(java.time.Instant.now().minusSeconds(60)));
+        assertTrue(registry.find(plan.changeId()).isPresent());
+
+        assertEquals(1, registry.purgeBefore(java.time.Instant.now().plusSeconds(60)));
+        assertTrue(registry.find(plan.changeId()).isEmpty());
+    }
 }

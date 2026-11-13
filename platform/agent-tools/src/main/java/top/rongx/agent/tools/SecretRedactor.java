@@ -45,6 +45,22 @@ public class SecretRedactor {
     private static final Pattern URL_USERINFO = Pattern.compile(
             "([a-z][a-z0-9+.-]*://)[^/\\s:@]+:[^/\\s@]+@", Pattern.CASE_INSENSITIVE);
 
+    /** Authorization 头：{@code Bearer xxx} 里真正敏感的是后面的 token，单独处理否则只抹掉 "Bearer"。 */
+    private static final Pattern BEARER = Pattern.compile(
+            "(?i)\\b(bearer|basic)\\s+([A-Za-z0-9._~+/=-]{8,})");
+
+    /** Cookie 头：会话票据通常直接挂在整行里，整行值抹掉。 */
+    private static final Pattern COOKIE = Pattern.compile(
+            "(?i)\\b(cookie|set-cookie)\\s*:\\s*[^\\r\\n]+");
+
+    /** 常见平台的固定前缀令牌（GitHub / GitLab / Slack / OpenAI / AWS），不依赖键名也能命中。 */
+    private static final Pattern TOKEN_PREFIX = Pattern.compile(
+            "(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}"
+                    + "|glpat-[A-Za-z0-9_-]{16,}"
+                    + "|xox[baprs]-[A-Za-z0-9-]{10,}"
+                    + "|sk-[A-Za-z0-9]{20,}"
+                    + "|AKIA[0-9A-Z]{16})");
+
     private static final String REDACTED = "[REDACTED]";
 
     private final EnvironmentStore envStore;
@@ -79,6 +95,8 @@ public class SecretRedactor {
         return name.equals("id_rsa") || name.equals("id_dsa") || name.equals("id_ecdsa")
                 || name.equals("id_ed25519")
                 || name.equals("credentials") || name.equals("credentials.json")
+                || name.equals(".pgpass") || name.equals(".netrc") || name.equals(".npmrc")
+                || name.equals(".pypirc") || name.equals(".htpasswd")
                 || name.equals("secret.yml") || name.equals("secret.yaml")
                 || name.equals("secrets.yml") || name.equals("secrets.yaml");
     }
@@ -88,15 +106,29 @@ public class SecretRedactor {
         if (text == null || text.isEmpty()) {
             return text;
         }
+        String out = replaceKnownValues(text, ctx);
+        out = PRIVATE_KEY_BLOCK.matcher(out).replaceAll(REDACTED + " PRIVATE KEY");
+        return applyPatterns(out);
+    }
+
+    /** 形态级规则：与上下文无关，纯文本匹配。 */
+    private static String applyPatterns(String text) {
+        String out = BEARER.matcher(text).replaceAll("$1 " + REDACTED);
+        out = COOKIE.matcher(out).replaceAll("$1: " + REDACTED);
+        out = TOKEN_PREFIX.matcher(out).replaceAll(REDACTED);
+        out = SECRET_ASSIGN.matcher(out).replaceAll("$1$2" + REDACTED);
+        out = URL_USERINFO.matcher(out).replaceAll("$1***:***@");
+        return out;
+    }
+
+    /** 值级：把当前环境里的真实密钥值直接抹掉（内存内比较，不记录日志）。 */
+    private String replaceKnownValues(String text, ProjectContext ctx) {
         String out = text;
         for (String value : secretValues(ctx)) {
             if (value != null && value.length() >= 4) {
                 out = out.replace(value, REDACTED);
             }
         }
-        out = PRIVATE_KEY_BLOCK.matcher(out).replaceAll(REDACTED + " PRIVATE KEY");
-        out = SECRET_ASSIGN.matcher(out).replaceAll("$1$2" + REDACTED);
-        out = URL_USERINFO.matcher(out).replaceAll("$1***:***@");
         return out;
     }
 
@@ -126,14 +158,7 @@ public class SecretRedactor {
         if (line == null || line.isEmpty()) {
             return line;
         }
-        String out = SECRET_ASSIGN.matcher(line).replaceAll("$1$2" + REDACTED);
-        out = URL_USERINFO.matcher(out).replaceAll("$1***:***@");
-        for (String value : secretValues(ctx)) {
-            if (value.length() >= 4 && out.contains(value)) {
-                out = out.replace(value, REDACTED);
-            }
-        }
-        return out;
+        return applyPatterns(replaceKnownValues(line, ctx));
     }
 
     /** 供测试/诊断：返回命中敏感文件规则的路径列表（不涉及内容）。 */

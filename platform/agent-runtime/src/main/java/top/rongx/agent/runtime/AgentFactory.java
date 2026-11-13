@@ -4,7 +4,6 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionMode;
 import io.agentscope.core.state.AgentStateStore;
-import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.core.tool.Toolkit;
 import java.nio.file.Path;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -13,6 +12,7 @@ import top.rongx.agent.domain.policy.PolicyDecision;
 import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.tool.ToolLevel;
+import top.rongx.agent.infra.security.SecretBox;
 import org.springframework.stereotype.Component;
 
 /**
@@ -43,12 +43,11 @@ public class AgentFactory {
      * 会话状态存储：按 (userId, sessionId) 落盘对话上下文。
      *
      * <p>不配置时每轮都是全新上下文（同一会话的第二句话记不住第一句）；
-     * 这里用本地 JSON 文件，保证重启后同会话仍能续聊，且不引入新中间件。
+     * 这里用本地文件，保证重启后同会话仍能续聊，且不引入新中间件。
      *
-     * <p><b>安全说明</b>：AgentScope 的 {@link JsonFileAgentStateStore} 只按 JSON 落盘，
-     * 平台无法在不重写整个存储格式的前提下做内容加密。因此这里把目录放到工作区
-     * {@code _platform/agent-state}（不随进程 CWD 漂移）并收紧为属主 700，避免同机其它用户读取；
-     * 若需要"落盘即密文"，应替换为数据库实现（见 README 的已知限制）。
+     * <p><b>安全说明</b>：内容用平台主密钥 AES-256-GCM 加密后再落盘
+     * （{@link EncryptedAgentStateStore}），目录 700、文件 600；即使磁盘被读走，
+     * 没有 {@code AGENT_SECURITY_MASTER_KEY} 也拿不到对话内容。
      */
     private final AgentStateStore stateStore;
 
@@ -58,6 +57,7 @@ public class AgentFactory {
                         DynamicModelProvider modelProvider,
                         AgentProperties props,
                         PolicyPort policy,
+                        SecretBox secretBox,
                         @Value("${agent.state.root:}") String stateRoot,
                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.fullToolkit = fullToolkit;
@@ -66,7 +66,8 @@ public class AgentFactory {
         this.modelProvider = modelProvider;
         this.props = props;
         this.policy = policy;
-        this.stateStore = new JsonFileAgentStateStore(stateDirectory(stateRoot, workspaceRoot));
+        this.stateStore = new EncryptedAgentStateStore(
+                stateDirectory(stateRoot, workspaceRoot), secretBox);
     }
 
     /** 会话状态目录：默认挂在平台工作区下，创建后收紧为属主 700。 */

@@ -142,4 +142,16 @@ public class ChangeRegistry implements ChangeStore {
             throw new IllegalStateException("变更单查询失败：" + e.getMessage(), e);
         }
     }
+
+    /** 清理早于 cutoff 的变更单（确认卡片只关心近期数据）。返回删除行数。 */
+    public int purgeBefore(Instant cutoff) {
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "DELETE FROM change_plans WHERE created_at < ?")) {
+            st.setLong(1, cutoff.toEpochMilli());
+            return st.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("变更单清理失败：" + e.getMessage(), e);
+        }
+    }
 }

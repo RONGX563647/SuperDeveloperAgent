@@ -41,6 +41,11 @@ interface Props {
   /** 最近一次 dry-run 报告：展示阻塞项 / 警告，不产生任何变更。 */
   dryRun?: DryRunReportView | null
   dryRunBusy?: boolean
+  /** 发布 Agent：正在执行（按钮转圈）。 */
+  agentBusy?: boolean
+  /** 发布 Agent：不可用原因（如生产环境、只读角色）。 */
+  agentDisabled?: boolean
+  agentHint?: string
 }
 
 const props = defineProps<Props>()
@@ -53,6 +58,7 @@ const emit = defineEmits<{
   (e: 'dryrun'): void
   (e: 'refreshCommits'): void
   (e: 'stopLocal'): void
+  (e: 'agent'): void
 }>()
 
 const SHA_PREFIX = /^([0-9a-f]{7,40})\b/i
@@ -298,6 +304,13 @@ const runLabel = computed(() =>
         @click="emit('dryrun')"
       >
         预检
+      </el-button>
+      <el-button
+        size="large" :loading="agentBusy" :disabled="!canRun || agentDisabled"
+        :title="agentHint || '由发布 Agent 自动执行：自检 → 构建 → 部署 → 验证；执行过程实时展示'"
+        @click="emit('agent')"
+      >
+        发布 Agent
       </el-button>
       <button
         v-if="lastGoodSha"

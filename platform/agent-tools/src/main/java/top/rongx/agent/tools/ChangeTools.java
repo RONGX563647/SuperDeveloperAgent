@@ -3,6 +3,7 @@ package top.rongx.agent.tools;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.change.ChangeWire;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.port.ChangeStore;
 import org.springframework.stereotype.Component;
@@ -89,7 +90,7 @@ public class ChangeTools {
                 ? "不支持（该动作在 dev/test 可自动放行，登记仅用于留痕；确认卡不会执行它）"
                 : "确认后在变更卡片上执行";
         return """
-                changeId: %s
+                %s
                 planHash: %s
                 kind: %s
                 env: %s
@@ -97,7 +98,7 @@ public class ChangeTools {
                 highRisk: %s
                 next: 请在平台的确认卡片上确认（确认令牌 5 分钟内有效）；确认前不会执行任何操作。
                 evidence: change:%s
-                """.formatted(plan.changeId(), plan.planHash(), wire, plan.env(), apply,
+                """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), wire, plan.env(), apply,
                 highRisk, plan.changeId());
     }
 
@@ -145,7 +146,7 @@ public class ChangeTools {
                 : plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN";
         return """
                 status: PENDING_USER_CONFIRMATION
-                changeId: %s
+                %s
                 planHash: %s
                 kind: %s
                 env: %s
@@ -155,7 +156,7 @@ public class ChangeTools {
                 next: 确认卡片已在对话中展开，请操作人本人确认（%s）。
                 note: 本工具不签发令牌、不执行动作；令牌只由已登录用户调用
                       POST /api/v1/changes/%s/confirm 签发。
-                """.formatted(plan.changeId(), plan.planHash(), plan.kind(), plan.env(),
+                """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(), plan.env(),
                 plan.highRisk(), gate, plan.summary(),
                 plan.highRisk() ? "高危变更需二次密码" : "一次性令牌 5 分钟有效",
                 plan.changeId());

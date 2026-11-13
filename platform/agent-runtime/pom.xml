@@ -24,6 +24,11 @@
             <groupId>top.rongx</groupId>
             <artifactId>agent-tools</artifactId>
         </dependency>
+        <!-- 会话状态加密复用平台主密钥（SecretBox），只依赖其加解密能力 -->
+        <dependency>
+            <groupId>top.rongx</groupId>
+            <artifactId>agent-infra</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>io.agentscope</groupId>
