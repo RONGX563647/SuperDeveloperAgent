@@ -113,12 +113,25 @@ public class DeployTools {
         }
         // 绑定无效 / 触发被拒都是真失败：抛出让 Agent 与前端都看到失败态（而不是一段普通文本）
         EnvBinding binding = bindings.requireForRun(effectiveBindingId.trim(), ctx.projectId(), target);
+        // 触发前必须做 dry-run：预检不通过就不要创建运行（否则只会留下一条失败历史）。
+        // reportHash 一并传给引擎做二次校验，避免"预检后配方/提交又变了"。
+        PipelineEngine.DryRunReport dryRun;
+        try {
+            dryRun = engine.dryRun(ctx.projectId(), pipelineId, target, sha);
+        } catch (RuntimeException e) {
+            return "err: dry-run 执行失败：" + e.getMessage();
+        }
+        if (!dryRun.ok()) {
+            return "err: E-708 dry-run 未通过：" + String.join("；", dryRun.blockers());
+        }
         Map<String, String> params = new LinkedHashMap<>();
         params.put("gitSha", sha);
         params.put("env", target);
         params.put("actor", "agent");
         params.put("bindingId", binding.id());
         params.put("confirmedBy", binding.confirmedBy() == null ? "" : binding.confirmedBy());
+        params.put("dryRunHash", dryRun.reportHash());
+        params.put("dryRunFingerprint", dryRun.fingerprint());
         String runId = engine.trigger(ctx.projectId(), pipelineId, params);
         return "runId: " + runId + "\nenv: " + target + "\nstatus: " + engine.status(runId);
     }

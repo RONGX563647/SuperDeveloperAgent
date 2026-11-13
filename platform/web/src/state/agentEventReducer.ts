@@ -82,6 +82,8 @@ const toolDisplayNames: Record<string, string> = {
   plan_action: '规划动作',
   run_action: '执行动作',
   request_confirmation: '发起变更确认',
+  confirm: '提交变更确认',
+  run_ops_agent: '委派发布工程师',
   propose_patch: '提交代码补丁',
 }
 

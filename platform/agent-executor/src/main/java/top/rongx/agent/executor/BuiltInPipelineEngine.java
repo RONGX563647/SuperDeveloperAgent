@@ -971,6 +971,20 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             throw new IllegalArgumentException("gitSha 非法（需 7-40 位小写十六进制）");
         }
         String env = normalizeEnv(params.get("env"));
+        // 带 dryRunHash 的触发必须自证"预检仍然有效"：哈希由配方/提交/环境/密钥版本共同决定。
+        // 控制器与 Agent 工具都会先 dry-run 再传哈希；这里再算一次，防止"预检后配方被改"。
+        String requestedHash = params.get("dryRunHash");
+        if (requestedHash != null && !requestedHash.isBlank()) {
+            PipelineEngine.DryRunReport report = dryRun(projectId, pipelineId, env, sha);
+            if (!report.ok()) {
+                throw new IllegalArgumentException("E-708 dry-run 未通过："
+                        + String.join("；", report.blockers()));
+            }
+            if (!requestedHash.equals(report.reportHash())) {
+                throw new IllegalArgumentException(
+                        "E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+            }
+        }
         String deployTarget = params.get("deployTarget");
         // 服务器操作的前置：必须已有"测试机成功案例"（测试环境跑通并固化的脚本 + 证据运行成功）
         String problem = promotionProblem(projectId, env, sha);

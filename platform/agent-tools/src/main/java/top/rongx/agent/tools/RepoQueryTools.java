@@ -57,10 +57,12 @@ public class RepoQueryTools {
 
     private final RepoInspector repo;
     private final ProjectRepoLocator locator;
+    private final SecretRedactor redactor;
 
-    public RepoQueryTools(RepoInspector repo, ProjectRepoLocator locator) {
+    public RepoQueryTools(RepoInspector repo, ProjectRepoLocator locator, SecretRedactor redactor) {
         this.repo = repo;
         this.locator = locator;
+        this.redactor = redactor;
     }
 
     @Tool(name = "git_status",
@@ -168,7 +170,7 @@ public class RepoQueryTools {
         StringBuilder truncated = new StringBuilder();
         try {
             if (Files.isRegularFile(target)) {
-                scanFile(target, root, compiled, limit, matches, scanned);
+                scanFile(target, root, compiled, limit, matches, scanned, ctx);
             } else {
                 Files.walkFileTree(target, new SimpleFileVisitor<>() {
                     @Override
@@ -190,7 +192,7 @@ public class RepoQueryTools {
                         if (matches.size() >= limit || scanned[0] >= MAX_SCAN_FILES) {
                             return FileVisitResult.TERMINATE;
                         }
-                        scanFile(file, root, compiled, limit, matches, scanned);
+                        scanFile(file, root, compiled, limit, matches, scanned, ctx);
                         return FileVisitResult.CONTINUE;
                     }
 
@@ -226,10 +228,15 @@ public class RepoQueryTools {
                 ctx.projectId());
     }
 
-    private static void scanFile(Path file, Path root, Pattern pattern, int limit,
-                                 List<String> matches, int[] scanned) {
+    private void scanFile(Path file, Path root, Pattern pattern, int limit,
+                          List<String> matches, int[] scanned, ProjectContext ctx) {
         try {
             if (!Files.isRegularFile(file) || Files.size(file) > MAX_SCAN_FILE_BYTES) {
+                return;
+            }
+            String rel = root.relativize(file).toString().replace('\\', '/');
+            // 凭据文件不参与检索：结果里出现 .env / 私钥的任何一行都等于泄漏
+            if (redactor.isSensitiveFile(rel)) {
                 return;
             }
             byte[] head;
@@ -243,7 +250,6 @@ public class RepoQueryTools {
             }
             scanned[0]++;
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-            String rel = root.relativize(file).toString().replace('\\', '/');
             for (int i = 0; i < lines.size() && matches.size() < limit; i++) {
                 Matcher m = pattern.matcher(lines.get(i));
                 if (m.find()) {
@@ -251,7 +257,7 @@ public class RepoQueryTools {
                     if (text.length() > 240) {
                         text = text.substring(0, 240) + "…";
                     }
-                    matches.add(rel + ":" + (i + 1) + ": " + text);
+                    matches.add(rel + ":" + (i + 1) + ": " + redactor.redactLine(text, ctx));
                 }
             }
         } catch (IOException ignored) {
@@ -387,7 +393,9 @@ public class RepoQueryTools {
     @Tool(name = "read_file",
             description = """
                     读取项目仓库内的一个文本文件（相对路径，最多约 8000 字符）。
-                    只读。用于回答"这段配置/代码是怎么写的"；二进制文件与仓库外路径会被拒绝。""",
+                    只读。用于回答"这段配置/代码是怎么写的"；二进制文件与仓库外路径会被拒绝。
+                    .env、私钥与凭据文件不提供原文（请用 env_summary / env_var_probe 查看变量指向），
+                    其它文本中的密钥值会被替换为 [REDACTED]。""",
             readOnly = true, concurrencySafe = true)
     public String readFile(ProjectContext ctx,
                            @ToolParam(name = "path", description = "相对仓库根的文件路径")
@@ -396,6 +404,12 @@ public class RepoQueryTools {
         Path target = resolveInside(root, path);
         if (!Files.isRegularFile(target)) {
             throw new IllegalArgumentException("文件不存在：" + path);
+        }
+        String relative = root.relativize(target).toString().replace('\\', '/');
+        if (redactor.isSensitiveFile(relative)) {
+            throw new IllegalArgumentException(
+                    "该文件可能包含凭据（.env / 私钥 / 凭据文件），平台不返回原文：" + relative
+                            + "；请用 env_summary / env_var_probe 查看变量数量与指向");
         }
         try {
             byte[] head = new byte[BINARY_PROBE_BYTES];
@@ -408,7 +422,7 @@ public class RepoQueryTools {
                     throw new IllegalArgumentException("这是二进制文件，无法按文本读取：" + path);
                 }
             }
-            String text = Files.readString(target, StandardCharsets.UTF_8);
+            String text = redactor.redact(Files.readString(target, StandardCharsets.UTF_8), ctx);
             boolean truncated = text.length() > MAX_FILE_CHARS;
             String body = truncated
                     ? text.substring(0, MAX_FILE_CHARS) + "\n…（已截断，原文件 " + text.length() + " 字符）"
@@ -418,8 +432,7 @@ public class RepoQueryTools {
                     ---
                     %s
                     ---
-                    evidence: project:%s""".formatted(
-                    root.relativize(target).toString().replace('\\', '/'), body, ctx.projectId());
+                    evidence: project:%s""".formatted(relative, body, ctx.projectId());
         } catch (IOException e) {
             throw new IllegalArgumentException("无法读取文件：" + e.getMessage());
         }

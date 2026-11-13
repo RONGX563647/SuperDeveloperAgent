@@ -32,7 +32,7 @@ import top.rongx.agent.domain.runtime.RuntimeInspector;
 /**
  * 应用运行时工具：只回答"应用有没有在跑、日志里报了什么"，不启停任何东西。
  *
- * <p>与 {@link EnvTools} 的分工：{@code env_summary} 说的是"部署时会注入什么 +
+ * <p>与 {@link EnvQueryTools} 的分工：{@code env_summary} 说的是"部署时会注入什么 +
  * 中间件健康"；这里说的是"应用容器/进程本身的运行时事实"。两者不能互相替代——
  * 中间件全绿但应用容器已经退出，是部署后最常见的一种失败。
  *
@@ -52,15 +52,17 @@ public class RuntimeTools {
     private final EnvironmentStore envStore;
     private final ServiceRuntime services;
     private final RuntimeInspector inspector;
+    private final SecretRedactor redactor;
     /** HOST 部署状态根：{@code <workspace>/_platform/deploy/<project>-<env>/app.log}。 */
     private final Path hostDeployRoot;
 
     public RuntimeTools(EnvironmentStore envStore, ServiceRuntime services,
-                        RuntimeInspector inspector,
+                        RuntimeInspector inspector, SecretRedactor redactor,
                         @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.envStore = envStore;
         this.services = services;
         this.inspector = inspector;
+        this.redactor = redactor;
         this.hostDeployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("deploy");
     }
@@ -239,7 +241,8 @@ public class RuntimeTools {
                     .append("，或平台尚未启动它）\n");
         }
         sb.append("evidence: project:").append(ctx.projectId()).append("/env:").append(target);
-        return sb.toString();
+        // 日志是外部数据：注入的密钥值、password=/token= 形态统一抹掉后再交给模型
+        return redactor.redact(sb.toString(), ctx);
     }
 
     @Tool(name = "port_check",

@@ -34,7 +34,8 @@ public class ToolCatalog {
                                    ActionQueryTools actionQueryTools,
                                    RepoQueryTools repoQueryTools,
                                    RuntimeTools runtimeTools,
-                                   ConfigTools configTools) {
+                                   ConfigTools configTools,
+                                   EnvQueryTools envQueryTools) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
@@ -42,6 +43,8 @@ public class ToolCatalog {
         toolkit.registerTool(repoQueryTools);
         toolkit.registerTool(runtimeTools);
         toolkit.registerTool(configTools);
+        // 生产也要能诊断"缺变量/指向错实例"：只读环境工具必须出现在只读面
+        toolkit.registerTool(envQueryTools);
         return toolkit;
     }
 
@@ -54,18 +57,21 @@ public class ToolCatalog {
                                 ActionQueryTools actionQueryTools,
                                 ActionCommandTools actionCommandTools,
                                 DeployTools deployTools,
-                                EnvTools envTools,
+                                EnvQueryTools envQueryTools,
+                                EnvCommandTools envCommandTools,
                                 RepoQueryTools repoQueryTools,
                                 RuntimeTools runtimeTools,
                                 ConfigTools configTools,
-                                PatchTools patchTools) {
+                                PatchTools patchTools,
+                                OpsAgentTools opsAgentTools) {
         Toolkit toolkit = new Toolkit();
 
         // 只读工具
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
-        toolkit.registerTool(envTools);
+        toolkit.registerTool(envQueryTools);
+        toolkit.registerTool(envCommandTools);
         toolkit.registerTool(deployTools);
         toolkit.registerTool(repoQueryTools);
         toolkit.registerTool(runtimeTools);
@@ -77,6 +83,9 @@ public class ToolCatalog {
         toolkit.registerTool(actionCommandTools);
         // 受限写：只能改 ci/、构建配置与测试代码，仍需人工确认后应用
         toolkit.registerTool(patchTools);
+        // 多 Agent 协作：对话 Agent 可把"把某环境真正跑通/固化"委派给发布 Agent。
+        // 只进对话工具面；发布 Agent 的工具面没有它（防递归），生产会话的只读面也没有它。
+        toolkit.registerTool(opsAgentTools);
 
         return toolkit;
     }
@@ -99,7 +108,8 @@ public class ToolCatalog {
                                  ActionQueryTools actionQueryTools,
                                  RepoQueryTools repoQueryTools,
                                  DeployTools deployTools,
-                                 EnvTools envTools,
+                                 EnvQueryTools envQueryTools,
+                                 EnvCommandTools envCommandTools,
                                  RuntimeTools runtimeTools,
                                  ConfigTools configTools,
                                  ChangeTools changeTools,
@@ -110,7 +120,8 @@ public class ToolCatalog {
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
         toolkit.registerTool(repoQueryTools);
-        toolkit.registerTool(envTools);
+        toolkit.registerTool(envQueryTools);
+        toolkit.registerTool(envCommandTools);
         toolkit.registerTool(deployTools);
         toolkit.registerTool(runtimeTools);
         toolkit.registerTool(configTools);

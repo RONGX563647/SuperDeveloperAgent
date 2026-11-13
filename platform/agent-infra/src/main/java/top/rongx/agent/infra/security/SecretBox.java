@@ -46,6 +46,8 @@ public class SecretBox {
                 return new SecretKeySpec(Base64.getDecoder().decode(masterKeyB64.trim()), "AES");
             }
             if (Files.isRegularFile(keyFile)) {
+                // 已存在的密钥文件也收紧权限：历史版本可能是 644（同机其它用户可读）
+                restrictToOwner(keyFile);
                 return new SecretKeySpec(
                         Base64.getDecoder().decode(Files.readString(keyFile).trim()), "AES");
             }
@@ -54,10 +56,21 @@ public class SecretBox {
             byte[] raw = gen.generateKey().getEncoded();
             Files.createDirectories(keyFile.getParent());
             Files.writeString(keyFile, Base64.getEncoder().encodeToString(raw));
+            restrictToOwner(keyFile);
             log.info("已生成平台主密钥 {}（请妥善备份；丢失后已加密的凭据将无法解密）", keyFile);
             return new SecretKeySpec(raw, "AES");
         } catch (Exception e) {
             throw new IllegalStateException("主密钥初始化失败：" + e.getMessage(), e);
+        }
+    }
+
+    /** 主密钥只允许属主读写（600）；非 POSIX 文件系统上退化为尽力而为。 */
+    private static void restrictToOwner(Path keyFile) {
+        try {
+            Files.setPosixFilePermissions(keyFile,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            log.warn("无法收紧主密钥文件权限（{}）：{}", keyFile, e.getMessage());
         }
     }
 

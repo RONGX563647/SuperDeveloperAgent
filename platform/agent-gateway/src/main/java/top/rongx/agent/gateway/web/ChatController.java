@@ -1,8 +1,14 @@
 package top.rongx.agent.gateway.web;
 
 import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.ToolCallStartEvent;
+import io.agentscope.core.event.ToolResultEndEvent;
+import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -31,6 +37,13 @@ public class ChatController {
 
     /** 单次会话最长 3 分钟。 */
     private static final long TIMEOUT_MS = 180_000L;
+
+    /** 工具结果里的变更单号：{@code changeId: chg-...}（ChangeTools 的固定输出格式）。 */
+    private static final Pattern CHANGE_ID = Pattern.compile("(?m)^\\s*changeId:\\s*(chg-[A-Za-z0-9-]+)");
+
+    /** 变更相关工具：只有它们的返回会被翻译成确认卡事件（委派结果里也可能带 changeId）。 */
+    private static final java.util.Set<String> CHANGE_TOOLS =
+            java.util.Set.of("request_confirmation", "confirm", "run_ops_agent");
 
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
@@ -70,12 +83,43 @@ public class ChatController {
         executor.submit(() -> {
             try {
                 long seq = 0;
+                // 工具结果是流式增量：按 toolCallId 累积，结束事件时判断是否含变更单号
+                Map<String, String> toolNames = new HashMap<>();
+                Map<String, StringBuilder> toolResults = new HashMap<>();
                 for (AgentEvent event : events.toIterable()) {
+                    if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
+                        toolNames.put(call.getToolCallId(), call.getToolCallName());
+                    } else if (event instanceof ToolResultTextDeltaEvent delta
+                            && delta.getToolCallId() != null && delta.getDelta() != null) {
+                        StringBuilder buf = toolResults.computeIfAbsent(
+                                delta.getToolCallId(), k -> new StringBuilder());
+                        // 单次工具结果不可能无限长；限制累积量，避免异常输出撑爆内存
+                        if (buf.length() < 64_000) {
+                            buf.append(delta.getDelta());
+                        }
+                    }
                     Map<String, Object> dto = eventMapper.toDto(event);
                     emitter.send(SseEmitter.event()
                             .id(String.valueOf(++seq))
                             .name("agent")
                             .data(dto, MediaType.APPLICATION_JSON));
+                    // 变更单是"给人确认"的对象：在工具结果后补一条 change.created，
+                    // 前端据此展开确认卡片（原先只在正文里写单号，卡片永远不弹）
+                    if (event instanceof ToolResultEndEvent end) {
+                        String toolName = end.getToolCallName() != null
+                                ? end.getToolCallName() : toolNames.get(end.getToolCallId());
+                        StringBuilder result = toolResults.remove(end.getToolCallId());
+                        String changeId = toolName != null && CHANGE_TOOLS.contains(toolName)
+                                && result != null ? changeIdOf(result.toString()) : null;
+                        if (changeId != null) {
+                            emitter.send(SseEmitter.event()
+                                    .id(String.valueOf(++seq))
+                                    .name("agent")
+                                    .data(Map.of("type", "change.created",
+                                            "payload", Map.of("changeId", changeId)),
+                                            MediaType.APPLICATION_JSON));
+                        }
+                    }
                 }
                 emitter.complete();
             } catch (IOException clientGone) {
@@ -94,6 +138,12 @@ public class ChatController {
             }
         });
         return emitter;
+    }
+
+    /** 从工具返回文本里提取变更单号（只认固定的 {@code changeId:} 行）。 */
+    private static String changeIdOf(String text) {
+        Matcher matcher = CHANGE_ID.matcher(text);
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     /** 对外只暴露简短、无内部细节的错误文案（规约 §3）。 */

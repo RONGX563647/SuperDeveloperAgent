@@ -33,13 +33,15 @@ public class CiQueryTools {
     private final RepoInspector repo;
     private final RecipeStore recipes;
     private final RuntimeInspector inspector;
+    private final SecretRedactor redactor;
 
     public CiQueryTools(PipelineEngine engine, RepoInspector repo, RecipeStore recipes,
-                        RuntimeInspector inspector) {
+                        RuntimeInspector inspector, SecretRedactor redactor) {
         this.engine = engine;
         this.repo = repo;
         this.recipes = recipes;
         this.inspector = inspector;
+        this.redactor = redactor;
     }
 
     @Tool(name = "ci_list_pipelines",
@@ -91,7 +93,8 @@ public class CiQueryTools {
                     读取一次构建的日志尾部（只读）。用于在 ci_status 显示 FAILED 后定位具体错误。
                     run_id 取 ci_run / deploy_run 的返回值；返回最后约 6000 字符，已脱敏。""",
             readOnly = true, concurrencySafe = true)
-    public String readRunLog(@ToolParam(name = "run_id", description = "ci_run / deploy_run 返回的 runId")
+    public String readRunLog(ProjectContext ctx,
+                             @ToolParam(name = "run_id", description = "ci_run / deploy_run 返回的 runId")
                              String runId) {
         if (runId == null || runId.isBlank()) {
             throw new IllegalArgumentException("run_id 不能为空");
@@ -103,6 +106,8 @@ public class CiQueryTools {
         if (log == null || log.isBlank()) {
             return "runId: " + runId + "\n(log 为空：运行尚未产出日志，稍后再试)\nevidence: run:" + runId;
         }
+        // 构建日志可能包含 docker login / 环境变量打印：先做值级 + 形态级脱敏，再截断
+        log = redactor.redact(log, ctx);
         int max = 6000;
         String tail = log.length() > max ? "…（已截断前 " + (log.length() - max) + " 字符）\n"
                 + log.substring(log.length() - max) : log;

@@ -160,13 +160,22 @@ class ToolChainTest {
     void toolkitsWired() {
         // 写工具必须直接可见：放进工具组会被会话状态覆盖成"未激活"，模型看不到 request_confirmation
         assertTrue(agentToolkit.getToolNames().contains("request_confirmation"));
+        assertTrue(agentToolkit.getToolNames().contains("confirm"));
         assertTrue(agentToolkit.getToolNames().contains("ci_run"));
         assertTrue(agentToolkit.getToolNames().contains("run_action"));
         assertTrue(agentToolkit.getToolNames().contains("propose_patch"));
-        // 生产只读面：写工具根本不存在
+        // 多 Agent 协作只出现在对话工具面
+        assertTrue(agentToolkit.getToolNames().contains("run_ops_agent"));
+        // 生产只读面：写工具根本不存在；但只读环境工具必须补齐
         assertFalse(readOnlyToolkit.getToolNames().contains("request_confirmation"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("confirm"));
         assertFalse(readOnlyToolkit.getToolNames().contains("ci_run"));
         assertFalse(readOnlyToolkit.getToolNames().contains("propose_patch"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("run_ops_agent"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("env_ensure"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("env_mapping_draft"));
+        assertTrue(readOnlyToolkit.getToolNames().contains("env_summary"));
+        assertTrue(readOnlyToolkit.getToolNames().contains("env_var_probe"));
         assertTrue(readOnlyToolkit.getToolNames().contains("git_status"));
     }
 
@@ -177,8 +186,34 @@ class ToolChainTest {
         assertTrue(deployToolkit.getToolNames().contains("read_run_log"));
         assertTrue(deployToolkit.getToolNames().contains("grep"));
         assertTrue(deployToolkit.getToolNames().contains("request_confirmation"));
+        assertTrue(deployToolkit.getToolNames().contains("confirm"));
         assertTrue(deployToolkit.getToolNames().contains("run_action"));
         assertTrue(deployToolkit.getToolNames().contains("propose_patch"));
+        // 防递归：发布 Agent 不能再委派自己
+        assertFalse(deployToolkit.getToolNames().contains("run_ops_agent"));
+    }
+
+    @Test
+    @DisplayName("T12 confirm：只返回待人工确认，绝不签发令牌；跨环境/未知单号被拒")
+    void confirmIsNotSelfApproval() {
+        String created = changeTools.requestConfirmation("stack_deploy",
+                "发布 test 环境", null, false, ctx("test"));
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("changeId:\\s*(chg-[A-Za-z0-9-]+)").matcher(created);
+        assertTrue(matcher.find(), created);
+        String changeId = matcher.group(1);
+
+        String pending = changeTools.confirm(changeId, ctx("test"));
+        assertTrue(pending.contains("PENDING_USER_CONFIRMATION"), pending);
+        assertTrue(pending.contains(changeId), pending);
+        // 工具不得返回任何令牌字段
+        assertFalse(pending.toLowerCase().contains("confirmtoken"), pending);
+
+        String wrongEnv = changeTools.confirm(changeId, ctx("prod"));
+        assertTrue(wrongEnv.startsWith("err:"), wrongEnv);
+
+        String unknown = changeTools.confirm("chg-not-exists", ctx("test"));
+        assertTrue(unknown.startsWith("err:"), unknown);
     }
 
     @Test
