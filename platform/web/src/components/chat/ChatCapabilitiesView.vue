@@ -258,15 +258,12 @@ function formatTime(ts?: number): string {
                 </div>
               </div>
               <div class="hero-switch">
-                <button
-                  type="button" class="cap-toggle" :class="{ on: isOn(active) }"
-                  role="switch" :aria-checked="isOn(active)"
-                  :title="isOn(active) ? '本次对话会调用它' : '本次对话不会调用它'"
-                  @click="toggleActive(!isOn(active))"
-                >
-                  <span class="track"><span class="thumb" /></span>
-                  <span class="cap-toggle-text">{{ isOn(active) ? '已启用' : '未启用' }}</span>
-                </button>
+                <el-switch
+                  :model-value="isOn(active)" class="cap-switch"
+                  :aria-label="`本次对话启用 ${active.label}`"
+                  @change="(v: string | number | boolean) => toggleActive(Boolean(v))"
+                />
+                <span class="switch-text">{{ isOn(active) ? '已启用' : '未启用' }}</span>
               </div>
             </div>
 
@@ -695,64 +692,21 @@ function formatTime(ts?: number): string {
 .hero-switch {
   display: flex;
   flex: none;
-  align-items: flex-start;
+  gap: 9px;
+  align-items: center;
   padding-top: 2px;
 }
-/* 开关：胶囊按钮内嵌轨道 + 滑块，状态一眼可辨 */
-.cap-toggle {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  height: 30px;
-  padding: 0 12px 0 7px;
-  font-family: inherit;
+/* 滑动开关：沿用 Element 开关，状态文字固定宽度避免行内跳动 */
+.cap-switch {
+  flex: none;
+  --el-switch-on-color: var(--accent);
+  --el-switch-off-color: var(--line-strong);
+}
+.switch-text {
+  min-width: 3em;
   font-size: 12px;
-  font-weight: 500;
   color: var(--ink-muted);
   white-space: nowrap;
-  cursor: pointer;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  transition: color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-.cap-toggle:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
-}
-.cap-toggle .track {
-  position: relative;
-  display: block;
-  flex: none;
-  width: 32px;
-  height: 18px;
-  background: var(--line-strong);
-  border-radius: 999px;
-  transition: background-color var(--dur-fast) var(--ease-out);
-}
-.cap-toggle .thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  background: #fff;
-  border-radius: 50%;
-  box-shadow: 0 1px 2px rgb(15 23 42 / 24%);
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-.cap-toggle.on {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-color: transparent;
-}
-.cap-toggle.on .track {
-  background: var(--accent);
-}
-.cap-toggle.on .thumb {
-  transform: translateX(14px);
 }
 
 /* SKILL.md / 连接方式 */

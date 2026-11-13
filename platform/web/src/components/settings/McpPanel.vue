@@ -260,17 +260,14 @@ defineExpose({ load })
         {{ s.transport === 'stdio' ? [s.command, ...s.args].filter(Boolean).join(' ') : s.url }}
       </span>
       <span v-if="s.headerNames.length" class="mcp-meta">headers: {{ s.headerNames.join(', ') }}</span>
-      <button
-        type="button"
-        class="toggle-btn"
-        :class="{ on: s.enabled }"
-        role="switch" :aria-checked="s.enabled"
-        :title="s.enabled ? '默认启用：对话未单独勾选时调用' : '已停用：对话里需手动勾选'"
-        @click="toggleEnabled(s, !s.enabled)"
-      >
-        <span class="track"><span class="thumb" /></span>
-        <span>{{ s.enabled ? '已启用' : '已停用' }}</span>
-      </button>
+      <span class="switch-cell">
+        <el-switch
+          :model-value="s.enabled" size="small"
+          :aria-label="`默认启用 ${s.name}`"
+          @change="(v: string | number | boolean) => toggleEnabled(s, Boolean(v))"
+        />
+        <span class="switch-text">{{ s.enabled ? '已启用' : '已停用' }}</span>
+      </span>
       <span class="mcp-actions">
         <el-button size="small" text :loading="testing === s.id" @click="test(s)">测试</el-button>
         <el-button size="small" text @click="editForm(s)">编辑</el-button>
@@ -420,60 +417,21 @@ defineExpose({ load })
 .mcp-row:hover {
   border-color: var(--line);
 }
-.toggle-btn {
+.switch-cell {
   display: inline-flex;
   flex: none;
   gap: 7px;
   align-items: center;
-  height: 26px;
-  padding: 0 10px 0 6px;
-  font-family: inherit;
+}
+.switch-cell .el-switch {
+  --el-switch-on-color: var(--accent);
+  --el-switch-off-color: var(--line-strong);
+}
+.switch-text {
+  min-width: 2.8em;
   font-size: 11px;
   color: var(--ink-muted);
   white-space: nowrap;
-  cursor: pointer;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  transition: color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-.toggle-btn:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
-}
-.toggle-btn .track {
-  position: relative;
-  display: block;
-  flex: none;
-  width: 28px;
-  height: 16px;
-  background: var(--line-strong);
-  border-radius: 999px;
-  transition: background-color var(--dur-fast) var(--ease-out);
-}
-.toggle-btn .thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  background: #fff;
-  border-radius: 50%;
-  box-shadow: 0 1px 2px rgb(15 23 42 / 24%);
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-.toggle-btn.on {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-color: transparent;
-}
-.toggle-btn.on .track {
-  background: var(--accent);
-}
-.toggle-btn.on .thumb {
-  transform: translateX(12px);
 }
 .mcp-name {
   flex: none;
