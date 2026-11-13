@@ -5,7 +5,7 @@ import { ArrowLeft, Delete, Document, DocumentCopy, Hide, Plus, Refresh, Search,
 import { ApiError } from '../../api/http'
 import {
   applyEnvDocument, checkEnvResource, deleteEnvResource, deleteEnvTemplateVar, discoverEnvResources,
-  getEnvDetail, getEnvDocument, importEnvResources, importScenario, listEnvTemplates, listScenarios,
+  getEnvDetail, importEnvResources, importScenario, listEnvTemplates, listScenarios,
   listServers, revealEnvVar, saveEnvResource, saveEnvTemplate, saveEnvTemplateVar,
   startEnvResource, stopEnvResource,
   type DeployServer, type EnvResourceView, type EnvTemplate, type EnvTemplateRow,
@@ -14,7 +14,6 @@ import {
 import { appStore } from '../../stores/app'
 import { formatTime } from '../../utils/status'
 import { envLabel } from '../../utils/pipelineLabels'
-import MarkdownView from '../chat/MarkdownView.vue'
 
 /**
  * 环境模板（dev / test / prod）：
@@ -458,91 +457,267 @@ function scenarioKeyConfigured(key: string): boolean {
   return vars.value.some((v) => v.key === key)
 }
 
-// ---------------------------------------------------------------- 文档视图
+// ---------------------------------------------------------------- 全环境配置表（Excel 风格）
 
 /**
- * 一份 Markdown 同时承载：模板参数、中间件镜像、模板变量、场景词条。
- * 页面内大面板展示：左侧源码、右侧实时渲染；改动点「同步到平台」才写回，
- * 敏感值显示为 ****，保留即为不修改。
+ * 三个环境（开发 / 测试 / 生产）放在一张工作簿里在线编辑：
+ * 概览按「参数 × 环境」，中间件与变量用「环境」列区分，场景词条按「词条 × 环境」矩阵。
+ * 保存时把每个环境导出成平台文档格式再走同一套写回逻辑，
+ * 因此「**** 保留原值、删行即删条目」的规则与后端保持一致。
  */
-const docOpen = ref(false)
-const docMode = ref<'split' | 'edit' | 'preview'>('split')
-const docLoading = ref(false)
-const docSaving = ref(false)
-const docText = ref('')
-const docSaved = ref('')
-const docDirty = computed(() => docText.value !== docSaved.value)
+type BookSheet = 'overview' | 'resources' | 'vars' | 'scenarios'
 
-async function openDoc(): Promise<void> {
-  docOpen.value = true
-  await loadDoc()
+interface BookResource {
+  env: string
+  name: string
+  image: string
+  host: string
+  port: number
+  databaseName: string
+  username: string
+  password: string
+  network: string
 }
 
-/** 返回模板页；有未同步修改时先确认，避免白改。 */
-async function closeDoc(): Promise<void> {
-  if (docDirty.value) {
-    const ok = await ElMessageBox.confirm('文档有未同步的修改，返回后这些修改会丢失。仍要返回？', '未同步修改',
+interface BookVar {
+  env: string
+  key: string
+  value: string
+  secret: boolean
+}
+
+const SHEETS: Array<{ id: BookSheet; label: string }> = [
+  { id: 'overview', label: '概览' },
+  { id: 'resources', label: '中间件镜像' },
+  { id: 'vars', label: '模板变量' },
+  { id: 'scenarios', label: '场景词条' },
+]
+
+const OVERVIEW_FIELDS: Array<{ key: string; label: string; kind: 'text' | 'number' | 'mode' | 'target' | 'server' }> = [
+  { key: 'runtimeMode', label: '运行形态', kind: 'mode' },
+  { key: 'namespace', label: '命名空间', kind: 'text' },
+  { key: 'network', label: '部署网络', kind: 'text' },
+  { key: 'defaultTarget', label: '默认部署目标', kind: 'target' },
+  { key: 'defaultPort', label: '默认端口', kind: 'number' },
+  { key: 'healthPath', label: '健康路径', kind: 'text' },
+  { key: 'serverId', label: '绑定服务器', kind: 'server' },
+]
+const TARGET_OPTIONS = [
+  { value: 'docker', label: '本机 Docker' },
+  { value: 'host', label: '本机直接运行' },
+  { value: 'server', label: '远程服务器' },
+]
+
+const bookOpen = ref(false)
+const bookSheet = ref<BookSheet>('overview')
+const bookLoading = ref(false)
+const bookSaving = ref(false)
+const bookTemplates = ref<EnvTemplate[]>([])
+const bookResources = ref<BookResource[]>([])
+const bookVars = ref<BookVar[]>([])
+const bookScenarios = ref<ScenarioView[]>([])
+const bookSnapshot = ref('')
+const bookSel = ref<{ sheet: BookSheet; index: number } | null>(null)
+
+const bookPayload = computed(() => JSON.stringify({
+  t: bookTemplates.value, r: bookResources.value, v: bookVars.value,
+}))
+const bookDirty = computed(() => bookSnapshot.value !== '' && bookPayload.value !== bookSnapshot.value)
+
+function sheetTotal(id: BookSheet): number {
+  if (id === 'resources') return bookResources.value.length
+  if (id === 'vars') return bookVars.value.length
+  if (id === 'overview') return OVERVIEW_FIELDS.length
+  return bookScenarios.value.reduce((n, s) => n + s.keys.length, 0)
+}
+
+const bookSheetLabel = computed(() => SHEETS.find((s) => s.id === bookSheet.value)?.label ?? '')
+
+function columnLetter(index: number): string {
+  return String.fromCharCode(65 + index)
+}
+
+async function openBook(): Promise<void> {
+  bookOpen.value = true
+  await loadBook()
+}
+
+/** 返回模板页；有未保存修改时先确认。 */
+async function closeBook(): Promise<void> {
+  if (bookDirty.value) {
+    const ok = await ElMessageBox.confirm('表格里有未保存的修改，返回后这些修改会丢失。仍要返回？', '未保存修改',
       { confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning' }).then(() => true).catch(() => false)
     if (!ok) return
   }
-  docOpen.value = false
+  bookOpen.value = false
+  bookSel.value = null
 }
 
-async function loadDoc(): Promise<void> {
-  docLoading.value = true
+async function loadBook(): Promise<void> {
+  bookLoading.value = true
   try {
-    const view = await getEnvDocument(env.value)
-    docText.value = view.markdown
-    docSaved.value = view.markdown
+    const [details, catalog] = await Promise.all([
+      Promise.all(ENVS.map((e) => getEnvDetail(e))),
+      listScenarios(env.value),
+    ])
+    bookTemplates.value = details.map((d) => ({ ...d.template }))
+    bookResources.value = details.flatMap((d) => d.resources.map((r) => ({
+      env: d.template.env,
+      name: r.name,
+      image: r.image ?? d.imageDefaults[r.kind] ?? '',
+      host: r.host,
+      port: r.port,
+      databaseName: r.databaseName ?? '',
+      username: r.username ?? '',
+      password: r.passwordMasked ?? '',
+      network: r.network ?? '',
+    })))
+    bookVars.value = details.flatMap((d) => d.vars.map((v) => ({
+      env: d.template.env, key: v.key, value: v.value, secret: v.secret,
+    })))
+    bookScenarios.value = catalog
+    bookSnapshot.value = bookPayload.value
+    bookSel.value = null
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载文档失败')
+    ElMessage.error(e instanceof Error ? e.message : '加载全部环境失败')
   } finally {
-    docLoading.value = false
+    bookLoading.value = false
   }
 }
 
-async function copyDoc(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(docText.value)
-    ElMessage.success('文档已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动全选复制')
-  }
+function switchSheet(id: BookSheet): void {
+  bookSheet.value = id
+  bookSel.value = null
 }
 
-async function saveDoc(): Promise<void> {
-  if (!docDirty.value) {
-    ElMessage.info('文档没有修改，无需同步')
+function selectRow(index: number): void {
+  bookSel.value = { sheet: bookSheet.value, index }
+}
+
+function isRowSelected(index: number): boolean {
+  return bookSel.value?.sheet === bookSheet.value && bookSel.value.index === index
+}
+
+function addRow(): void {
+  if (bookSheet.value === 'resources') {
+    bookResources.value.push({
+      env: env.value, name: '', image: '', host: '127.0.0.1', port: 0,
+      databaseName: '', username: '', password: '', network: '',
+    })
+    selectRow(bookResources.value.length - 1)
+    return
+  }
+  if (bookSheet.value === 'vars') {
+    bookVars.value.push({ env: env.value, key: '', value: '', secret: false })
+    selectRow(bookVars.value.length - 1)
+    return
+  }
+  ElMessage.info('这张表按固定结构展示，不能新增行')
+}
+
+async function deleteRow(): Promise<void> {
+  const sel = bookSel.value
+  if (!sel || (sel.sheet !== 'resources' && sel.sheet !== 'vars')) return
+  const name = sel.sheet === 'resources'
+    ? bookResources.value[sel.index]?.name || '这一行'
+    : bookVars.value[sel.index]?.key || '这一行'
+  const ok = await ElMessageBox.confirm(`删除「${name}」？保存后会同时从平台删除。`, '删除行',
+    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }).then(() => true).catch(() => false)
+  if (!ok) return
+  if (sel.sheet === 'resources') bookResources.value.splice(sel.index, 1)
+  else bookVars.value.splice(sel.index, 1)
+  bookSel.value = null
+}
+
+function templateValue(t: EnvTemplate, key: string): string {
+  const v = (t as unknown as Record<string, unknown>)[key]
+  return v === null || v === undefined ? '' : String(v)
+}
+
+function onTemplateInput(t: EnvTemplate, key: string, event: Event): void {
+  const raw = (event.target as HTMLInputElement | HTMLSelectElement).value
+  const target = t as unknown as Record<string, unknown>
+  target[key] = key === 'defaultPort' ? Number(raw) || 0 : raw
+}
+
+function varValue(envName: string, key: string): string {
+  return bookVars.value.find((v) => v.env === envName && v.key === key)?.value ?? ''
+}
+
+/** 场景词条矩阵里改值 = 直接改对应环境模板变量；清空即删除该键。 */
+function setScenarioValue(envName: string, key: string, secret: boolean, event: Event): void {
+  const value = (event.target as HTMLInputElement).value
+  const existing = bookVars.value.find((v) => v.env === envName && v.key === key)
+  if (existing) {
+    if (value === '') bookVars.value = bookVars.value.filter((v) => v !== existing)
+    else existing.value = value
+    return
+  }
+  if (value !== '') bookVars.value.push({ env: envName, key, value, secret })
+}
+
+function cellText(value: string | number | null | undefined): string {
+  return String(value ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ')
+}
+
+/** 把某个环境的表格导出成平台文档格式（保存时走同一套解析）。 */
+function markdownFor(envName: string): string {
+  const t = bookTemplates.value.find((x) => x.env === envName)
+  const resources = bookResources.value.filter((r) => r.env === envName)
+  const vars = bookVars.value.filter((v) => v.env === envName)
+  return [
+    `# 环境模板 · ${envLabel(envName)}（${envName}）`, '',
+    '## 概览', '',
+    `- 运行形态: ${t?.runtimeMode ?? ''}`,
+    `- 命名空间: ${t?.namespace ?? ''}`,
+    `- 部署网络: ${t?.network ?? ''}`,
+    `- 默认部署目标: ${t?.defaultTarget ?? ''}`,
+    `- 默认端口: ${t?.defaultPort ?? 0}`,
+    `- 健康路径: ${t?.healthPath ?? ''}`,
+    `- 绑定服务器: ${t?.serverId ?? ''}`,
+    '', '## 中间件镜像', '',
+    '| 名称 | 镜像 | 主机 | 端口 | 库名 | 用户名 | 密码 | 网络 |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...resources.map((r) => `| ${cellText(r.name)} | ${cellText(r.image)} | ${cellText(r.host)} | ${r.port || ''} | ${cellText(r.databaseName)} | ${cellText(r.username)} | ${cellText(r.password)} | ${cellText(r.network)} |`),
+    '', '## 模板变量', '',
+    '| 变量名 | 值 | 敏感 | 来源 |',
+    '| --- | --- | --- | --- |',
+    ...vars.map((v) => `| ${cellText(v.key)} | ${cellText(v.value)} | ${v.secret ? '是' : '否'} |  |`),
+    '',
+  ].join('\n')
+}
+
+async function saveBook(): Promise<void> {
+  if (!bookDirty.value) {
+    ElMessage.info('没有修改，无需保存')
     return
   }
   const ok = await ElMessageBox.confirm(
-    `将按文档覆盖${envLabel(env.value)}模板：概览参数、中间件镜像、模板变量都会被文档内容替换；`
-    + '删除表格行会删除对应条目。确定同步？',
-    '同步文档到平台',
-    { confirmButtonText: '同步', cancelButtonText: '取消', type: 'warning' },
+    '将按表格写回 开发 / 测试 / 生产：概览参数、中间件镜像、模板变量都以当前表格为准，删除的行会同步删除。确定保存？',
+    '保存全部环境',
+    { confirmButtonText: '保存', cancelButtonText: '取消', type: 'warning' },
   ).then(() => true).catch(() => false)
   if (!ok) return
-  docSaving.value = true
+  bookSaving.value = true
   try {
-    const result = await applyEnvDocument(env.value, docText.value)
     const parts: string[] = []
-    if (result.templateChanged) parts.push('概览已更新')
-    const res = result.resources
-    if (res.created || res.updated || res.deleted) {
-      parts.push(`镜像 +${res.created} ~${res.updated} -${res.deleted}`)
+    for (const e of ENVS) {
+      const result = await applyEnvDocument(e, markdownFor(e))
+      const bits: string[] = []
+      if (result.templateChanged) bits.push('概览')
+      const res = result.resources
+      if (res.created || res.updated || res.deleted) bits.push(`镜像 +${res.created} ~${res.updated} -${res.deleted}`)
+      const v = result.vars
+      if (v.created || v.updated || v.deleted) bits.push(`变量 +${v.created} ~${v.updated} -${v.deleted}`)
+      if (bits.length) parts.push(`${envLabel(e)}：${bits.join('，')}`)
     }
-    const v = result.vars
-    if (v.created || v.updated || v.deleted) {
-      parts.push(`变量 +${v.created} ~${v.updated} -${v.deleted}`)
-    }
-    if (result.scenarioFilled) parts.push(`词条补值 ${result.scenarioFilled}`)
-    ElMessage.success(parts.length ? `已同步：${parts.join('，')}` : '已同步（无变化）')
+    ElMessage.success(parts.length ? `已保存 ${parts.join('；')}` : '已保存（无变化）')
+    await loadBook()
     await load()
-    await loadDoc()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '同步失败')
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
-    docSaving.value = false
+    bookSaving.value = false
   }
 }
 
@@ -616,54 +791,229 @@ defineExpose({ load })
 
 <template>
   <section class="env-template-panel" aria-label="环境模板">
-    <!-- 文档视图：原页面整体替换为大面板（不用弹窗），左侧源码、右侧实时渲染 -->
-    <section v-if="docOpen" class="et-doc-page" aria-label="环境模板文档">
-      <header class="et-doc-head">
-        <div class="et-doc-heading">
-          <el-button text :icon="ArrowLeft" class="et-doc-back" @click="closeDoc">返回模板</el-button>
-          <h2 class="et-title">环境模板文档</h2>
-          <el-tag size="small" effect="plain">{{ envLabel(env) }}</el-tag>
-          <el-tag v-if="docDirty" size="small" type="warning" effect="light">有未同步修改</el-tag>
+    <!-- 全环境配置表：Excel 风格，概览 / 镜像 / 变量 / 场景词条 四张工作表 -->
+    <section v-if="bookOpen" class="xl-page" aria-label="全部环境配置表">
+      <header class="xl-head">
+        <div class="xl-heading">
+          <el-button text :icon="ArrowLeft" class="xl-back" @click="closeBook">返回模板</el-button>
+          <h2 class="et-title">全部环境配置</h2>
+          <el-tag size="small" effect="plain">开发 / 测试 / 生产</el-tag>
+          <el-tag v-if="bookDirty" size="small" type="warning" effect="light">有未保存修改</el-tag>
         </div>
-        <div class="et-doc-actions">
-          <el-radio-group v-model="docMode" size="small" class="et-doc-mode">
-            <el-radio-button label="split">分屏</el-radio-button>
-            <el-radio-button label="edit">编辑</el-radio-button>
-            <el-radio-button label="preview">预览</el-radio-button>
-          </el-radio-group>
-          <el-button size="small" :icon="Refresh" :loading="docLoading" @click="loadDoc">重新生成</el-button>
-          <el-button size="small" :icon="DocumentCopy" @click="copyDoc">复制</el-button>
+        <div class="xl-actions">
           <el-button
-            size="small" type="primary" :loading="docSaving" :disabled="!docDirty || docLoading"
-            @click="saveDoc"
-          >同步到平台</el-button>
+            size="small" :icon="Plus"
+            :disabled="bookSheet !== 'resources' && bookSheet !== 'vars'" @click="addRow"
+          >新增行</el-button>
+          <el-button
+            size="small" :icon="Delete"
+            :disabled="!bookSel || (bookSel.sheet !== 'resources' && bookSel.sheet !== 'vars')"
+            @click="deleteRow"
+          >删除行</el-button>
+          <el-button size="small" :icon="Refresh" :loading="bookLoading" @click="loadBook">重新加载</el-button>
+          <el-button
+            size="small" type="primary" :loading="bookSaving" :disabled="!bookDirty || bookLoading"
+            @click="saveBook"
+          >保存到平台</el-button>
         </div>
       </header>
-      <p class="et-doc-tip">
-        直接改左侧 Markdown，右侧实时渲染；点「同步到平台」写回概览参数、中间件镜像与模板变量。
-        <code>****</code> 表示保留原值；删除表格行 = 删除对应条目；场景词条区同名键以「模板变量」表为准。
+      <p class="xl-tip">
+        像 Excel 一样直接改单元格：概览按「参数 × 环境」，镜像与变量用「环境」列区分，场景词条按「词条 × 环境」；
+        点行号选中后可删除整行。敏感值显示 <code>****</code>，不改即保留原值。
       </p>
-      <div class="et-doc-body" :class="`mode-${docMode}`">
-        <div v-show="docMode !== 'preview'" class="et-doc-pane">
-          <div class="et-pane-head">
-            <span>Markdown 源码</span>
-            <span class="et-pane-meta">{{ docText.length }} 字符</span>
-          </div>
-          <textarea
-            v-model="docText" class="et-doc-source" spellcheck="false" :disabled="docLoading"
-            placeholder="正在生成环境模板文档…"
-          />
+      <div class="xl-book">
+        <div class="xl-tabbar">
+          <button
+            v-for="s in SHEETS" :key="s.id" type="button" class="xl-tab"
+            :class="{ active: bookSheet === s.id }" @click="switchSheet(s.id)"
+          >
+            {{ s.label }}<span class="xl-tab-count">{{ sheetTotal(s.id) }}</span>
+          </button>
         </div>
-        <div v-show="docMode !== 'edit'" class="et-doc-pane">
-          <div class="et-pane-head">
-            <span>渲染预览</span>
-            <span class="et-pane-meta">只读</span>
-          </div>
-          <div class="et-doc-preview">
-            <MarkdownView v-if="docText" :content="docText" />
-            <p v-else class="et-empty">暂无内容</p>
-          </div>
+
+        <div v-loading="bookLoading" class="xl-scroll">
+          <!-- 概览：参数 × 环境 -->
+          <table v-if="bookSheet === 'overview'" class="xl-table">
+            <colgroup>
+              <col style="width: 44px"><col style="width: 150px">
+              <col v-for="e in ENVS" :key="e" style="width: 260px">
+            </colgroup>
+            <thead>
+              <tr class="xl-colhead">
+                <th /><th>A</th>
+                <th v-for="(e, i) in ENVS" :key="e">{{ columnLetter(i + 1) }}</th>
+              </tr>
+              <tr>
+                <th class="xl-gutter">#</th><th class="xl-field">参数</th>
+                <th v-for="e in ENVS" :key="e">{{ envLabel(e) }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(f, ri) in OVERVIEW_FIELDS" :key="f.key" :class="{ selected: isRowSelected(ri) }">
+                <td class="xl-rowno" @click="selectRow(ri)">{{ ri + 1 }}</td>
+                <td class="xl-field">{{ f.label }}</td>
+                <td v-for="t in bookTemplates" :key="t.env">
+                  <select
+                    v-if="f.kind === 'mode'" class="xl-input"
+                    :value="templateValue(t, f.key)" @change="onTemplateInput(t, f.key, $event)"
+                  >
+                    <option value="LOCAL_DEV">开发 · 本机进程 + 容器</option>
+                    <option value="LOCAL_TEST">测试 · 本机容器</option>
+                    <option value="SERVER">生产 · 服务器容器</option>
+                  </select>
+                  <select
+                    v-else-if="f.kind === 'target'" class="xl-input"
+                    :value="templateValue(t, f.key)" @change="onTemplateInput(t, f.key, $event)"
+                  >
+                    <option v-for="o in TARGET_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                  <select
+                    v-else-if="f.kind === 'server'" class="xl-input"
+                    :value="templateValue(t, f.key)" @change="onTemplateInput(t, f.key, $event)"
+                  >
+                    <option value="">未绑定</option>
+                    <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name || s.host }}</option>
+                  </select>
+                  <input
+                    v-else class="xl-input" :type="f.kind === 'number' ? 'number' : 'text'"
+                    :value="templateValue(t, f.key)" @input="onTemplateInput(t, f.key, $event)"
+                  >
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 中间件镜像：全部环境 -->
+          <table v-else-if="bookSheet === 'resources'" class="xl-table">
+            <colgroup>
+              <col style="width: 44px"><col style="width: 96px"><col style="width: 150px">
+              <col style="width: 160px"><col style="width: 130px"><col style="width: 80px">
+              <col style="width: 120px"><col style="width: 130px"><col style="width: 150px">
+              <col style="width: 140px">
+            </colgroup>
+            <thead>
+              <tr class="xl-colhead">
+                <th /><th v-for="(label, i) in ['环境', '名称', '镜像', '主机', '端口', '库名', '用户名', '密码', '网络']" :key="i">
+                  {{ columnLetter(i + 1) }}
+                </th>
+              </tr>
+              <tr>
+                <th class="xl-gutter">#</th>
+                <th>环境</th><th>名称</th><th>镜像</th><th>主机</th><th>端口</th>
+                <th>库名</th><th>用户名</th><th>密码</th><th>网络</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(r, ri) in bookResources" :key="`${r.env}-${ri}`"
+                :class="{ selected: isRowSelected(ri) }"
+              >
+                <td class="xl-rowno" @click="selectRow(ri)">{{ ri + 1 }}</td>
+                <td>
+                  <select v-model="r.env" class="xl-input">
+                    <option v-for="e in ENVS" :key="e" :value="e">{{ envLabel(e) }}</option>
+                  </select>
+                </td>
+                <td><input v-model="r.name" class="xl-input mono" placeholder="mysql-main" @focus="selectRow(ri)"></td>
+                <td><input v-model="r.image" class="xl-input mono" placeholder="mysql:8.0" @focus="selectRow(ri)"></td>
+                <td><input v-model="r.host" class="xl-input mono" @focus="selectRow(ri)"></td>
+                <td><input v-model.number="r.port" class="xl-input" type="number" @focus="selectRow(ri)"></td>
+                <td><input v-model="r.databaseName" class="xl-input mono" @focus="selectRow(ri)"></td>
+                <td><input v-model="r.username" class="xl-input mono" @focus="selectRow(ri)"></td>
+                <td><input v-model="r.password" class="xl-input mono" @focus="selectRow(ri)"></td>
+                <td><input v-model="r.network" class="xl-input mono" @focus="selectRow(ri)"></td>
+              </tr>
+              <tr v-if="!bookResources.length">
+                <td class="xl-empty" colspan="10">还没有中间件；点「新增行」填 名称 / 镜像 / 主机 / 端口 即可。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 模板变量：全部环境 -->
+          <table v-else-if="bookSheet === 'vars'" class="xl-table">
+            <colgroup>
+              <col style="width: 44px"><col style="width: 96px"><col style="width: 240px">
+              <col style="width: 320px"><col style="width: 90px">
+            </colgroup>
+            <thead>
+              <tr class="xl-colhead">
+                <th /><th v-for="(label, i) in ['环境', '变量名', '值', '敏感']" :key="i">{{ columnLetter(i + 1) }}</th>
+              </tr>
+              <tr>
+                <th class="xl-gutter">#</th><th>环境</th><th>变量名</th><th>值</th><th>敏感</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(v, ri) in bookVars" :key="`${v.env}-${ri}`" :class="{ selected: isRowSelected(ri) }">
+                <td class="xl-rowno" @click="selectRow(ri)">{{ ri + 1 }}</td>
+                <td>
+                  <select v-model="v.env" class="xl-input">
+                    <option v-for="e in ENVS" :key="e" :value="e">{{ envLabel(e) }}</option>
+                  </select>
+                </td>
+                <td><input v-model="v.key" class="xl-input mono" placeholder="DB_HOST" @focus="selectRow(ri)"></td>
+                <td><input v-model="v.value" class="xl-input mono" @focus="selectRow(ri)"></td>
+                <td class="xl-center">
+                  <input v-model="v.secret" type="checkbox" @focus="selectRow(ri)">
+                </td>
+              </tr>
+              <tr v-if="!bookVars.length">
+                <td class="xl-empty" colspan="5">还没有模板变量；点「新增行」添加，或到「场景词条」表里填。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 场景词条：按场景分组，词条 × 环境 -->
+          <table v-else class="xl-table">
+            <colgroup>
+              <col style="width: 44px"><col style="width: 300px">
+              <col v-for="e in ENVS" :key="e">
+            </colgroup>
+            <thead>
+              <tr class="xl-colhead">
+                <th /><th v-for="(label, i) in ['场景 / 变量', ...ENVS.map((e) => envLabel(e))]" :key="i">
+                  {{ columnLetter(i + 1) }}
+                </th>
+              </tr>
+              <tr>
+                <th class="xl-gutter">#</th><th>场景 / 变量</th>
+                <th v-for="e in ENVS" :key="e">{{ envLabel(e) }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="s in bookScenarios" :key="s.id">
+                <tr class="xl-band">
+                  <td class="xl-rowno" />
+                  <td class="xl-band-cell" :colspan="1 + ENVS.length">
+                    {{ s.name }}<span class="xl-band-summary">{{ s.summary }}</span>
+                  </td>
+                </tr>
+                <tr v-for="k in s.keys" :key="k.key">
+                  <td class="xl-rowno" />
+                  <td class="xl-keycell" :title="k.description">
+                    <div class="xl-keyinner">
+                      <span class="mono">{{ k.key }}</span>
+                      <span v-if="k.required" class="xl-flag">必填</span>
+                      <span v-if="k.secret" class="xl-flag">敏感</span>
+                    </div>
+                  </td>
+                  <td v-for="e in ENVS" :key="e">
+                    <input
+                      class="xl-input mono"
+                      :value="varValue(e, k.key)" :placeholder="k.example || '未配置'"
+                      @input="setScenarioValue(e, k.key, k.secret, $event)"
+                    >
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
         </div>
+
+        <footer class="xl-status">
+          <span>{{ bookSheetLabel }} · {{ sheetTotal(bookSheet) }} 行</span>
+          <span>{{ bookDirty ? '有未保存修改' : '已与平台一致' }} · 密码与敏感值显示 ****，保留即不改</span>
+        </footer>
       </div>
     </section>
 
@@ -678,8 +1028,8 @@ defineExpose({ load })
         </p>
       </div>
       <div class="et-head-actions">
-        <el-button size="small" type="primary" plain :icon="Document" @click="openDoc">
-          文档视图
+        <el-button size="small" type="primary" plain :icon="Document" @click="openBook">
+          全部环境表格
         </el-button>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
       </div>
@@ -1544,64 +1894,53 @@ defineExpose({ load })
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   box-shadow: 0 2px 10px rgb(0 0 0 / 5%);
 }
-.et-doc-page {
+.xl-page {
   display: flex;
   flex-direction: column;
   gap: 8px;
   height: calc(100vh - 136px);
   min-height: 520px;
 }
-.et-doc-head {
+.xl-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
-.et-doc-heading {
+.xl-heading {
   display: flex;
   gap: 8px;
   align-items: center;
   min-width: 0;
 }
-.et-doc-heading .et-title {
+.xl-heading .et-title {
   margin: 0;
 }
-.et-doc-back {
+.xl-back {
   margin-right: 2px;
   font-size: 12px;
 }
-.et-doc-actions {
+.xl-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
 }
-.et-doc-tip {
-  max-width: 1180px;
+.xl-tip {
   margin: 0;
   font-size: 11.5px;
   line-height: 1.7;
   color: var(--ink-faint);
 }
-.et-doc-tip code {
+.xl-tip code {
   padding: 0 3px;
   background: var(--surface-sunken);
   border-radius: 3px;
 }
-.et-doc-body {
-  display: grid;
-  flex: 1;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-  min-height: 0;
-}
-.et-doc-body.mode-edit,
-.et-doc-body.mode-preview {
-  grid-template-columns: minmax(0, 1fr);
-}
-.et-doc-pane {
+.xl-book {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
@@ -1609,52 +1948,200 @@ defineExpose({ load })
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
 }
-.et-pane-head {
+.xl-tabbar {
   display: flex;
-  justify-content: space-between;
-  padding: 6px 10px;
-  font-size: 11px;
-  color: var(--ink-faint);
+  gap: 2px;
+  padding: 6px 8px 0;
   background: var(--surface-sunken);
   border-bottom: 1px solid var(--line-soft);
 }
-.et-doc-source {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  padding: 12px 14px;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-  font-size: 12.5px;
-  line-height: 1.75;
+.xl-tab {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+}
+.xl-tab:hover {
   color: var(--ink);
-  tab-size: 2;
-  resize: none;
+}
+.xl-tab.active {
+  margin-bottom: -1px;
+  color: var(--ink);
+  background: var(--panel);
+  border-color: var(--line-soft);
+}
+.xl-tab-count {
+  min-width: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  color: var(--ink-faint);
+  background: var(--surface-hover);
+  border-radius: 8px;
+}
+.xl-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.xl-table {
+  width: 100%;
+  table-layout: fixed;
+  font-size: 12px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.xl-table th,
+.xl-table td {
+  padding: 0;
+  border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+.xl-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 24px;
+  padding: 0 8px;
+  font-weight: 500;
+  color: var(--ink-faint);
+  text-align: left;
+  background: var(--surface-sunken);
+}
+.xl-table thead tr:nth-child(2) th {
+  top: 24px;
+  color: var(--ink);
+}
+.xl-table .xl-colhead th {
+  font-size: 10px;
+  text-align: center;
+  letter-spacing: 0.5px;
+}
+.xl-table .xl-gutter,
+.xl-table .xl-rowno {
+  width: 44px;
+  text-align: center;
+  color: var(--ink-faint);
+  user-select: none;
+  background: var(--surface-sunken);
+}
+.xl-table .xl-rowno {
+  cursor: pointer;
+}
+.xl-table .xl-field {
+  padding: 0 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--surface-sunken);
+}
+.xl-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.xl-table tbody tr.selected td {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.xl-table td.mono {
+  padding: 0 10px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.xl-table td.xl-center {
+  padding: 0 6px;
+  text-align: center;
+}
+.xl-table td.xl-muted {
+  padding: 0 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.xl-table td.xl-desc {
+  max-width: 260px;
+  padding: 0 10px;
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xl-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
   background: transparent;
   border: 0;
   outline: none;
 }
-.et-doc-preview {
-  flex: 1;
-  min-height: 0;
-  padding: 4px 18px 18px;
-  overflow: auto;
+.xl-input:focus {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-/* 预览里的表格：单元格不按字折行，宽表在表格容器内横向滚动 */
-.et-doc-preview :deep(.markdown-view th),
-.et-doc-preview :deep(.markdown-view td) {
+.xl-input.mono {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11.5px;
+}
+.xl-empty {
+  padding: 14px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+.xl-band-cell {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+.xl-band-summary {
+  margin-left: 8px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.xl-keyinner {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
   white-space: nowrap;
 }
+.xl-keyinner .mono {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11.5px;
+}
+.xl-flag {
+  padding: 0 3px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+}
+.xl-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-top: 1px solid var(--line-soft);
+}
 @media (max-width: 1000px) {
-  .et-doc-page {
+  .xl-page {
     height: auto;
   }
-  .et-doc-body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .et-doc-source {
-    min-height: 340px;
-  }
-  .et-doc-preview {
+  .xl-scroll {
     max-height: 60vh;
   }
 }
