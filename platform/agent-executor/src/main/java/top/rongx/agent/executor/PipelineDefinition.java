@@ -102,6 +102,20 @@ public record PipelineDefinition(String name, List<StageDef> stages,
                 List.of(), null);
     }
 
+    /**
+     * 「按版本部署」用的切片：只留 deploy 与 health，复用同一份 deploy 声明。
+     *
+     * <p>用于把历史版本（已存在的镜像 tag）重新部署到某个环境：不构建、不打包，
+     * 因此也不会执行 on-failure（回滚到旧版本失败时再回滚没有意义）。
+     */
+    public PipelineDefinition forDeployOnly() {
+        return new PipelineDefinition(name,
+                stages.stream()
+                        .filter(s -> "deploy".equals(s.type()) || "health".equals(s.type()))
+                        .toList(),
+                List.of(), deploy);
+    }
+
     /** 从仓库根读 {@code ci/pipeline.yml}。 */
     public static PipelineDefinition load(Path repoRoot) {
         Path file = repoRoot.resolve("ci/pipeline.yml");

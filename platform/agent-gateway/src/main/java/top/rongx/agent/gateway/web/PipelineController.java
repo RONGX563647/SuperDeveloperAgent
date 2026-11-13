@@ -143,17 +143,36 @@ public class PipelineController {
         // 环境：缺省 test（绝不让"没传环境"落到生产）
         String env = params.get("env");
         String normalizedEnv = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
-        // 阶段门控：先 dry-run（只读预检），不通过不允许 apply；指定的报告哈希必须与当前一致。
-        PipelineEngine.DryRunReport dryRun = engine.dryRun(projectId, pipelineId,
-                normalizedEnv, sha);
-        if (!dryRun.ok()) {
-            throw new IllegalArgumentException("E-708 dry-run 未通过："
-                    + String.join("；", dryRun.blockers()));
+        // 按版本部署：复用已存在的镜像 tag，跳过构建/打包，只跑 deploy + health。
+        String deployImage = params.get("deployImage");
+        boolean imageOnly = deployImage != null && !deployImage.isBlank();
+        if (imageOnly) {
+            deployImage = deployImage.trim();
+            if (!deployImage.matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")) {
+                throw new IllegalArgumentException("镜像 tag 非法：" + deployImage);
+            }
+            // 只允许部署本项目/本环境登记过的版本，防止借接口启动任意本机镜像
+            String imageSha = shaForImage(projectId, normalizedEnv, deployImage);
+            if (imageSha == null) {
+                throw new IllegalArgumentException("镜像版本不存在或不属于 " + projectId
+                        + " / " + normalizedEnv + "：" + deployImage);
+            }
+            sha = imageSha;
         }
-        String requestedHash = params.get("dryRunHash");
-        if (requestedHash != null && !requestedHash.isBlank()
-                && !requestedHash.equals(dryRun.reportHash())) {
-            throw new IllegalArgumentException("E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+        // 阶段门控：先 dry-run（只读预检），不通过不允许 apply；指定的报告哈希必须与当前一致。
+        // 按版本部署没有待执行的构建脚本，门控换成上一步的"版本归属"校验。
+        PipelineEngine.DryRunReport dryRun = null;
+        if (!imageOnly) {
+            dryRun = engine.dryRun(projectId, pipelineId, normalizedEnv, sha);
+            if (!dryRun.ok()) {
+                throw new IllegalArgumentException("E-708 dry-run 未通过："
+                        + String.join("；", dryRun.blockers()));
+            }
+            String requestedHash = params.get("dryRunHash");
+            if (requestedHash != null && !requestedHash.isBlank()
+                    && !requestedHash.equals(dryRun.reportHash())) {
+                throw new IllegalArgumentException("E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+            }
         }
         // 服务器（prod）操作：测试证据 + 一次性人工确认令牌，两个入口（这里 / deploy/replay）共用同一校验
         deployGate.requireIfNeeded(projectId, normalizedEnv, sha, params.get("confirmToken"));
@@ -167,8 +186,13 @@ public class PipelineController {
         Map<String, String> triggerParams = new LinkedHashMap<>();
         triggerParams.put("gitSha", sha);
         triggerParams.put("env", normalizedEnv);
-        triggerParams.put("dryRunHash", dryRun.reportHash());
-        triggerParams.put("dryRunFingerprint", dryRun.fingerprint());
+        if (dryRun != null) {
+            triggerParams.put("dryRunHash", dryRun.reportHash());
+            triggerParams.put("dryRunFingerprint", dryRun.fingerprint());
+        }
+        if (imageOnly) {
+            triggerParams.put("deployImage", deployImage);
+        }
         triggerParams.put("actor", bindingId == null || bindingId.isBlank() ? "ui:" + actor : "agent");
         if (bindingId != null && !bindingId.isBlank()) {
             triggerParams.put("bindingId", bindingId);
@@ -181,6 +205,27 @@ public class PipelineController {
         }
         String runId = engine.trigger(projectId, pipelineId, triggerParams);
         return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId));
+    }
+
+    /**
+     * 镜像 tag → 该版本对应的提交。
+     *
+     * <p>只认本项目 + 本环境<b>成功运行</b>登记过的镜像：按版本部署是"把已验证过的版本
+     * 重新发出去"，不是"随便启动一个本机镜像"。
+     */
+    private String shaForImage(String projectId, String env, String tag) {
+        for (PipelineEngine.RunSummary h : engine.history()) {
+            if (!projectId.equals(h.projectId()) || !env.equalsIgnoreCase(h.env())
+                    || h.status() != StageStatus.SUCCEEDED) {
+                continue;
+            }
+            for (ArtifactRef a : engine.artifacts(h.runId())) {
+                if ("image".equals(a.kind()) && tag.equals(a.ref())) {
+                    return h.gitSha();
+                }
+            }
+        }
+        return null;
     }
 
     /**

@@ -985,6 +985,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         state.actor = params.get("actor");
         state.verifyImage = "true".equalsIgnoreCase(params.get("verifyImage"));
+        String deployImage = params.get("deployImage");
+        state.deployImage = deployImage == null || deployImage.isBlank() ? null : deployImage.trim();
         state.bindingId = params.get("bindingId");
         state.confirmedBy = params.get("confirmedBy");
         if (state.bindingId != null && !state.bindingId.isBlank()) {
@@ -1369,17 +1371,35 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     .append(resolved.note()).append('\n');
             state.log.append("[env] ").append(state.env)
                     .append(" · 提交 ").append(shortSha(state.gitSha)).append('\n');
-            if ("verify".equals(state.pipelineId)) {
+            if (state.deployImage != null) {
+                // 按版本部署：复用历史镜像 tag，只跑 deploy + health（不构建、不打包）。
+                // 定义仍按该版本的提交解析，deploy 段与该版本一起受审。
+                definition = definition.forDeployOnly();
+                if (definition.stages().isEmpty()) {
+                    state.log.append("[deploy] 流水线没有 deploy 阶段，无法按版本部署\n");
+                    state.stages.add(StageResult.failed("deploy", 1, "E-506",
+                            "流水线没有 deploy 阶段，无法按版本部署", 0));
+                    state.status = StageStatus.FAILED;
+                    return;
+                }
+                state.artifacts.add(new ArtifactRef("image", state.deployImage, "", 0,
+                        Map.of("version", state.deployImage, "reused", "true")));
+                state.log.append("[deploy] 按版本部署：复用镜像 ").append(state.deployImage)
+                        .append("（跳过构建与打包）\n");
+            } else if ("verify".equals(state.pipelineId)) {
                 // verify = 只做构建与测试（相当于 Jenkins 的 PR 检查），不部署、不打镜像。
                 // 裁剪逻辑与预览共用 PipelineDefinition.forVerify；镜像默认跳过（最贵且对"能不能编过"无价值），
                 // 需要验证 Dockerfile 时用触发参数 verifyImage=true 显式保留。
                 definition = definition.forVerify(state.verifyImage);
             }
 
-            String tag = imagePrefix + "-" + state.env + "-v" + state.seq
-                    + "-" + state.gitSha.substring(0, 7);
-            state.log.append("[image] 镜像版本 ").append(versionOf(state))
-                    .append(" · 本地镜像 ").append(tag).append('\n');
+            String tag = state.deployImage != null ? state.deployImage
+                    : imagePrefix + "-" + state.env + "-v" + state.seq
+                            + "-" + state.gitSha.substring(0, 7);
+            if (state.deployImage == null) {
+                state.log.append("[image] 镜像版本 ").append(versionOf(state))
+                        .append(" · 本地镜像 ").append(tag).append('\n');
+            }
             Map<String, String> vars = Map.of(
                     "gitSha", state.gitSha,
                     "gitSha7", state.gitSha.substring(0, 7),
@@ -1463,7 +1483,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             if (imageTag != null) {
                 lastGood.put(anchorKey(state.projectId, state.env), imageTag);
             }
-            freezeRecipe(state, runDir);
+            // 按版本部署只切运行态：脚本仍是该版本验证过的那份，不重新固化（避免用旧提交覆盖环境脚本）
+            if (state.deployImage == null) {
+                freezeRecipe(state, runDir);
+            }
             pruneOldImages(state);
         } else {
             state.log.append("[recipe] 本次是检查构建（未部署），不固化环境脚本、不更新回滚锚点\n");
@@ -3374,6 +3397,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile String deployEndpoint;
         /** 检查构建是否保留镜像打包（触发参数 verifyImage，默认 false：最贵的一步且与"能不能编过"无关）。 */
         volatile boolean verifyImage;
+        /**
+         * 按版本部署：复用已存在的镜像 tag，跳过构建/打包只跑 deploy + health。
+         * 空 = 正常构建发布。
+         */
+        volatile String deployImage;
         /** 端口租约分配出的宿主端口（0 = 尚未分配，health 用 pipeline 里的端口）。 */
         volatile int deployHostPort;
         /** 本次运行加载的流水线定义（deploy 段从这里读）。 */

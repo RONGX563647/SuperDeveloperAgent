@@ -42,6 +42,28 @@ class PipelineDefinitionTest {
     }
 
     @Test
+    @DisplayName("forDeployOnly：只留 deploy + health，复用 deploy 段且不带 on-failure")
+    void forDeployOnlyKeepsDeployAndHealth() {
+        PipelineDefinition.DeploySpec spec = new PipelineDefinition.DeploySpec(
+                "docker", 8080, 8080, "/healthz", null, null, List.of());
+        PipelineDefinition def = new PipelineDefinition("release",
+                List.of(
+                        new PipelineDefinition.StageDef("build", "action", "backend_build", "container", null, null, null, 0),
+                        new PipelineDefinition.StageDef("image", "action", "image_package", "container", null, null, null, 0),
+                        new PipelineDefinition.StageDef("deploy", "deploy", null, "container", null, null, null, 0),
+                        new PipelineDefinition.StageDef("health", "health", null, "container", null, null, null, 0)),
+                List.of(new PipelineDefinition.StageDef(
+                        "rollback", "rollback", null, "container", null, null, null, 0)),
+                spec);
+
+        PipelineDefinition only = def.forDeployOnly();
+
+        assertEquals(List.of("deploy", "health"), only.stages().stream().map(PipelineDefinition.StageDef::id).toList());
+        assertEquals(spec, only.deploy(), "部署声明必须原样复用");
+        assertTrue(only.onFailure().isEmpty(), "按版本部署失败不再触发回滚");
+    }
+
+    @Test
     @DisplayName("deploy 段：target/port/containerPort/healthPath/artifact 全部解析")
     void parsesDeploySection(@TempDir Path repo) throws Exception {
         Files.createDirectories(repo.resolve("ci"));

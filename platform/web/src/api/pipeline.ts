@@ -173,6 +173,20 @@ export function stopLocalDeploy(projectId: string, env = 'dev'): Promise<StopLoc
   return apiFetch<StopLocalView>(`/api/v1/ci/deploy/host/stop?${q}`, { method: 'POST' })
 }
 
+/** 按版本部署：复用历史镜像 tag，跳过构建/打包，只跑 deploy + health。 */
+export function deployImageVersion(
+  pipelineId: string,
+  projectId: string,
+  env: string,
+  tag: string,
+  gitSha: string
+): Promise<TriggerRunView> {
+  return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
+    method: 'POST',
+    body: JSON.stringify({ projectId, gitSha, env, deployImage: tag })
+  })
+}
+
 /** 一条构建历史摘要（按触发时间倒序）。 */
 export interface HistoryItem {
   runId: string

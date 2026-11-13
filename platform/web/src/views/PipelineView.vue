@@ -12,7 +12,7 @@ import HistoryList from '../components/pipeline/HistoryList.vue'
 import StageTimeline from '../components/pipeline/StageTimeline.vue'
 import RunLog from '../components/pipeline/RunLog.vue'
 import {
-  artifactFilePath, deleteHistory, deployImages, dryRunPipeline, getHistory, getRun, isTerminalStatus,
+  artifactFilePath, deleteHistory, deployImageVersion, deployImages, dryRunPipeline, getHistory, getRun, isTerminalStatus,
   listPipelines, previewPipeline, retryStage, stopLocalDeploy, triggerPipeline,
   type ArtifactView, type DryRunReportView, type HistoryItem, type ImageVersionView, type PreviewStage,
   type RunView, type StageView,
@@ -480,6 +480,29 @@ async function loadImages(): Promise<void> {
     imageVersions.value = res.images
   } catch {
     imageVersions.value = []
+  }
+}
+
+/**
+ * 按版本部署：把某个历史镜像重新发到当前环境。
+ * 镜像已存在，后端只跑 deploy + health（不重新构建），因此秒级完成。
+ */
+async function deployVersion(img: ImageVersionView): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `将 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）重新部署到 ${env.value} 环境？`,
+      '按版本部署',
+      { type: 'warning', confirmButtonText: '部署', cancelButtonText: '取消' })
+  } catch {
+    return
+  }
+  try {
+    const result = await deployImageVersion(pipelineId.value, projectId.value, env.value,
+      img.tag, img.gitSha)
+    attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: img.gitSha })
+    ElMessage.success('已触发按版本部署')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '按版本部署失败')
   }
 }
 
@@ -1227,13 +1250,18 @@ async function copyDigest(digest: string): Promise<void> {
             <section v-if="imageVersions.length" class="artifact-panel">
               <h3 class="ap-title">
                 镜像版本 <span class="ap-count">{{ imageVersions.length }}</span>
-                <span class="ap-hint">按 (项目, 环境) 独立记账，回滚以上一版为目标</span>
+                <span class="ap-hint">按 (项目, 环境) 独立记账；任意版本可「部署」重新发布，不重新构建</span>
               </h3>
               <div v-for="img in imageVersions.slice(0, 6)" :key="img.tag" class="image-row">
                 <span class="iv-badge" :class="imageBadgeClass(img)">{{ imageBadge(img) }}</span>
                 <code class="art-ref mono" :title="img.tag" @click="copyText(img.tag, '镜像 tag')">{{ img.tag }}</code>
                 <span class="iv-sha mono">{{ (img.gitSha || '').slice(0, 7) }}</span>
                 <span class="iv-time mono">{{ formatClock(img.createdAt) }}</span>
+                <button
+                  type="button" class="iv-act"
+                  title="复用该镜像重新部署：跳过构建与打包，只跑部署 + 健康检查"
+                  @click="deployVersion(img)"
+                >部署</button>
               </div>
             </section>
 
@@ -1573,12 +1601,27 @@ async function copyDigest(digest: string): Promise<void> {
 /* 镜像版本谱系：当前 / 上一版 / 历史 */
 .image-row {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) 70px 92px;
+  grid-template-columns: 52px minmax(0, 1fr) 70px 92px 48px;
   gap: 10px;
   align-items: center;
   padding: 5px 0;
   font-size: 11.5px;
   border-top: 1px solid var(--line-soft);
+}
+.iv-act {
+  height: 22px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+}
+.iv-act:hover {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .iv-badge {
   padding: 1px 6px;
@@ -2007,6 +2050,13 @@ async function copyDigest(digest: string): Promise<void> {
     gap: 8px;
   }
   .art-digest {
+    display: none;
+  }
+  .image-row {
+    grid-template-columns: 46px minmax(0, 1fr) 54px 46px;
+    gap: 8px;
+  }
+  .iv-sha {
     display: none;
   }
 }
