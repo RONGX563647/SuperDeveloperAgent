@@ -757,7 +757,7 @@ onMounted(async () => {
 .switch-tab.on {
   font-weight: 600;
   color: var(--ink);
-  border-bottom-color: var(--ink);
+  border-bottom-color: var(--accent);
 }
 .tab-badge {
   display: inline-block;

@@ -153,8 +153,8 @@ function formatTime(ts?: number): string {
         </div>
         <div class="cap-head-side">
           <span class="cap-stat">
-            <b class="mono">{{ ready ? count : '…' }}</b>
-            <span>项已启用</span>
+            <span class="stat-dot" />
+            已启用 <b class="mono">{{ ready ? count : '…' }}</b>
           </span>
           <el-button size="small" :loading="loading" @click="emit('refresh')">
             <el-icon><Refresh /></el-icon> 刷新
@@ -166,7 +166,7 @@ function formatTime(ts?: number): string {
         <!-- 左栏：搜索 + 分组列表 -->
         <aside class="cap-list">
           <div class="cap-search">
-            <el-input v-model="keyword" size="small" clearable placeholder="搜索 Skill / MCP">
+            <el-input v-model="keyword" size="default" clearable placeholder="搜索 Skill / MCP">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
           </div>
@@ -189,11 +189,12 @@ function formatTime(ts?: number): string {
                 class="cap-item" :class="{ active: activeKey === `skill:${o.key}` }"
                 @click="activeKey = `skill:${o.key}`"
               >
+                <span class="item-icon skill"><el-icon><MagicStick /></el-icon></span>
                 <span class="item-main">
                   <span class="item-name">{{ o.label }}</span>
                   <span class="item-desc">{{ o.description || '（无描述）' }}</span>
                 </span>
-                <span v-if="skills.includes(o.key)" class="item-on" title="本会话已启用" />
+                <span class="item-on" :class="{ on: skills.includes(o.key) }" />
               </button>
             </section>
 
@@ -214,11 +215,12 @@ function formatTime(ts?: number): string {
                 class="cap-item" :class="{ active: activeKey === `mcp:${o.key}` }"
                 @click="activeKey = `mcp:${o.key}`"
               >
+                <span class="item-icon mcp"><el-icon><Connection /></el-icon></span>
                 <span class="item-main">
                   <span class="item-name">{{ o.label }}</span>
                   <span class="item-desc">{{ o.description || '（未配置地址）' }}</span>
                 </span>
-                <span v-if="mcp.includes(o.key)" class="item-on" title="本会话已启用" />
+                <span class="item-on" :class="{ on: mcp.includes(o.key) }" />
               </button>
             </section>
           </div>
@@ -237,7 +239,11 @@ function formatTime(ts?: number): string {
                   <span class="hero-key mono">{{ active.key }}</span>
                 </div>
                 <h2 class="hero-title">{{ active.label }}</h2>
-                <p class="hero-desc">{{ active.description || '暂无描述' }}</p>
+                <p class="hero-desc">
+                  {{ active.kind === 'mcp'
+                    ? (active.transport === 'http' ? '远程 HTTP MCP 服务，按需连接' : '本地 stdio MCP 进程，由平台按需启动')
+                    : (active.description || '暂无描述') }}
+                </p>
                 <div class="chips">
                   <span v-if="active.kind === 'skill'" class="chip">{{ active.fileCount ?? 0 }} 个文件</span>
                   <span v-if="active.kind === 'skill' && active.updatedAt" class="chip">
@@ -253,7 +259,7 @@ function formatTime(ts?: number): string {
               </div>
               <div class="hero-switch">
                 <el-switch
-                  :model-value="isOn(active)" size="large"
+                  :model-value="isOn(active)"
                   @change="(v: string | number | boolean) => toggleActive(Boolean(v))"
                 />
                 <span class="switch-label" :class="{ on: isOn(active) }">
@@ -300,10 +306,20 @@ function formatTime(ts?: number): string {
               </div>
             </div>
 
-            <p class="detail-note">
-              {{ active.kind === 'mcp'
-                ? '每轮对话开始时初始化 MCP；连接失败会自动降级跳过，不影响其他工具。'
-                : '勾选后按 SKILL.md 的指令注入本轮系统提示；未勾选的技能不会加载。' }}
+            <div v-if="active.kind === 'mcp'" class="facts">
+              <div class="fact">
+                <span>作用范围</span><b>仅当前会话</b>
+              </div>
+              <div class="fact">
+                <span>初始化时机</span><b>每轮对话开始时连接</b>
+              </div>
+              <div class="fact">
+                <span>失败策略</span><b>自动跳过，不影响其他工具</b>
+              </div>
+            </div>
+
+            <p v-else class="detail-note">
+              勾选后按 SKILL.md 的指令注入本轮系统提示；未勾选的技能不会加载。
             </p>
           </template>
 
@@ -322,15 +338,15 @@ function formatTime(ts?: number): string {
   display: flex;
   flex: 1 1 0;
   min-height: 0;
-  padding: 20px 24px 24px;
+  padding: 22px 26px 26px;
 }
 .cap-shell {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   width: 100%;
-  max-width: 1120px;
+  max-width: 1160px;
   min-height: 0;
   margin: 0 auto;
 }
@@ -350,14 +366,14 @@ function formatTime(ts?: number): string {
 }
 .cap-title {
   margin: 0;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--ink);
 }
 .cap-desc {
-  margin: 4px 0 0;
-  font-size: 11.5px;
+  margin: 5px 0 0;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--ink-muted);
 }
@@ -369,47 +385,58 @@ function formatTime(ts?: number): string {
 }
 .cap-stat {
   display: flex;
-  gap: 4px;
-  align-items: baseline;
-  color: var(--ink-faint);
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
 }
 .cap-stat b {
-  font-size: 18px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--ink);
 }
-.cap-stat span {
-  font-size: 10.5px;
+.stat-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--ok);
+  border-radius: 50%;
 }
 
-/* 左右两栏 */
+/* 左右两栏：一整块白面，内部只用发丝线分隔 */
 .cap-body {
   display: grid;
   flex: 1;
-  grid-template-columns: 286px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 304px minmax(0, 1fr);
   min-height: 0;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 .cap-list {
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: var(--bg);
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
+  background: var(--sidebar-background-color);
+  border-right: 1px solid var(--line-soft);
 }
 .cap-search {
   flex: none;
-  padding: 9px 10px;
+  padding: 11px 10px;
   border-bottom: 1px solid var(--line-soft);
 }
 .cap-scroll {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 12px;
-  padding: 8px 8px 10px;
+  gap: 14px;
+  padding: 10px 8px 12px;
   overflow-y: auto;
 }
 .cap-group {
@@ -421,14 +448,14 @@ function formatTime(ts?: number): string {
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 5px 4px 6px;
+  padding: 4px 6px 7px;
 }
 .group-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   font-size: 10px;
   border-radius: 5px;
 }
@@ -441,9 +468,11 @@ function formatTime(ts?: number): string {
   background: var(--surface-sunken);
 }
 .group-title {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--ink);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
 }
 .group-count {
   flex: 1;
@@ -452,56 +481,76 @@ function formatTime(ts?: number): string {
 }
 .group-actions {
   display: flex;
-  gap: 7px;
+  gap: 8px;
 }
 .link {
   padding: 0;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--ink-faint);
   cursor: pointer;
   background: none;
   border: 0;
 }
 .link:hover {
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .group-empty {
-  padding: 7px 6px;
-  font-size: 10.5px;
+  padding: 8px 7px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 .cap-item {
   position: relative;
   display: flex;
-  gap: 8px;
+  gap: 9px;
   align-items: center;
   width: 100%;
-  padding: 7px 8px 7px 10px;
+  padding: 7px 9px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: none;
-  border: 0;
-  border-radius: 7px;
-  transition: background-color 0.12s ease, box-shadow 0.12s ease;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .cap-item:hover {
-  background: var(--surface-hover);
+  background: var(--surface-raised);
 }
 .cap-item.active {
+  background: var(--surface-raised);
+  border-color: var(--line);
+  box-shadow: var(--shadow-1), inset 2px 0 var(--accent);
+}
+.item-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+  border-radius: 7px;
+}
+.item-icon.skill {
+  color: var(--accent-ink);
   background: var(--accent-soft);
-  box-shadow: inset 2px 0 var(--accent);
+}
+.item-icon.mcp {
+  color: var(--ink-soft);
+  background: var(--surface-sunken);
 }
 .item-main {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-width: 0;
-  gap: 1px;
+  gap: 2px;
 }
 .item-name {
   overflow: hidden;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -511,52 +560,70 @@ function formatTime(ts?: number): string {
 }
 .item-desc {
   overflow: hidden;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 启用态用空心圆 → 实心对勾，比小圆点更明确 */
 .item-on {
+  position: relative;
   flex: none;
-  width: 6px;
-  height: 6px;
-  background: var(--accent);
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--line-strong);
   border-radius: 50%;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.item-on.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.item-on.on::after {
+  position: absolute;
+  top: 1px;
+  left: 4.5px;
+  width: 4px;
+  height: 8px;
+  content: '';
+  border: solid var(--brand-mark-ink);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
 }
 
 /* 右栏详情 */
 .cap-detail {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   min-width: 0;
   min-height: 0;
-  padding: 18px 20px;
+  padding: 22px 24px;
   overflow-y: auto;
-  background: linear-gradient(180deg, var(--surface-raised), var(--bg) 160px);
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
 }
 .hero {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: flex-start;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line-soft);
 }
 .hero-icon {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
-  font-size: 19px;
+  width: 46px;
+  height: 46px;
+  font-size: 20px;
   color: var(--accent-ink);
   background: var(--accent-soft);
   border-radius: 12px;
 }
 .hero-icon.mcp {
-  color: var(--ink-soft);
-  background: var(--surface-sunken);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
 }
 .hero-main {
   flex: 1;
@@ -564,21 +631,18 @@ function formatTime(ts?: number): string {
 }
 .hero-eyebrow {
   display: flex;
-  gap: 7px;
+  gap: 8px;
   align-items: center;
 }
 .type-pill {
-  padding: 1px 7px;
   font-size: 9.5px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.09em;
   color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-radius: var(--radius-pill);
+  text-transform: uppercase;
 }
 .type-pill.mcp {
-  color: var(--ink-soft);
-  background: var(--surface-sunken);
+  color: var(--ink-muted);
 }
 .hero-key {
   overflow: hidden;
@@ -590,7 +654,7 @@ function formatTime(ts?: number): string {
 .hero-title {
   margin: 3px 0 0;
   overflow: hidden;
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 650;
   letter-spacing: -0.015em;
   color: var(--ink);
@@ -599,7 +663,7 @@ function formatTime(ts?: number): string {
 }
 .hero-desc {
   margin: 4px 0 0;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.6;
   color: var(--ink-muted);
 }
@@ -610,25 +674,27 @@ function formatTime(ts?: number): string {
   margin-top: 9px;
 }
 .chip {
-  padding: 2px 8px;
-  font-size: 10px;
+  padding: 2px 9px;
+  font-size: 10.5px;
   color: var(--ink-muted);
-  background: var(--surface-sunken);
+  background: transparent;
+  border: 1px solid var(--line);
   border-radius: var(--radius-pill);
 }
 .chip.on {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
+  color: var(--ok-ink);
+  background: var(--ok-soft);
+  border-color: transparent;
 }
 .hero-switch {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   align-items: flex-end;
 }
 .switch-label {
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--ink-faint);
 }
 .switch-label.on {
@@ -638,13 +704,13 @@ function formatTime(ts?: number): string {
 /* SKILL.md / 连接方式 */
 .detail-block {
   display: flex;
-  flex: 1;
+  flex: 0 0 auto;
   flex-direction: column;
   min-height: 140px;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: 10px;
 }
 /* MCP 连接信息通常只有一行，不再撑满整栏 */
 .detail-block.compact {
@@ -656,18 +722,18 @@ function formatTime(ts?: number): string {
   flex: none;
   gap: 8px;
   align-items: baseline;
-  padding: 9px 13px;
-  background: var(--surface-sunken);
+  padding: 10px 14px;
+  background: var(--code-bg);
   border-bottom: 1px solid var(--line-soft);
 }
 .block-title {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--ink);
 }
 .block-sub {
   overflow: hidden;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -682,9 +748,8 @@ function formatTime(ts?: number): string {
 }
 .skill-content {
   flex: 1;
-  max-height: 46vh;
-  padding: 14px 16px;
-  overflow-y: auto;
+  padding: 16px 18px;
+  overflow: visible;
 }
 .skill-content :deep(.markdown-view) {
   font-size: 12.5px;
@@ -703,15 +768,17 @@ function formatTime(ts?: number): string {
   font-size: 11.5px;
 }
 .conn {
-  flex: 1;
-  padding: 14px 16px;
-  margin: 0;
+  padding: 12px 14px;
+  margin: 12px 14px;
   overflow: auto;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.7;
   color: var(--ink-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
 }
 .meta-grid {
   display: grid;
@@ -721,10 +788,11 @@ function formatTime(ts?: number): string {
 .meta-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 7px 10px;
-  background: var(--surface-sunken);
-  border-radius: 7px;
+  gap: 3px;
+  padding: 9px 11px;
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
 }
 .meta-item span {
   font-size: 10px;
@@ -732,7 +800,7 @@ function formatTime(ts?: number): string {
 }
 .meta-item b {
   overflow: hidden;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--ink);
   text-overflow: ellipsis;
@@ -740,30 +808,53 @@ function formatTime(ts?: number): string {
 }
 .detail-note {
   margin: 0;
-  font-size: 10.5px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.65;
   color: var(--ink-faint);
+}
+.facts {
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+.fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  font-size: 11.5px;
+}
+.fact + .fact {
+  border-top: 1px solid var(--line-soft);
+}
+.fact span {
+  color: var(--ink-faint);
+}
+.fact b {
+  font-weight: 500;
+  color: var(--ink-soft);
 }
 .detail-empty {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
   justify-content: center;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--ink-faint);
 }
 .empty-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  font-size: 17px;
-  color: var(--ink-faint);
-  background: var(--surface-sunken);
-  border-radius: 12px;
+  width: 46px;
+  height: 46px;
+  font-size: 19px;
+  color: var(--ink-muted);
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 13px;
 }
 
 /* 窄屏：列表在上，详情在下 */
@@ -773,7 +864,9 @@ function formatTime(ts?: number): string {
     overflow-y: auto;
   }
   .cap-list {
-    max-height: 300px;
+    max-height: 280px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
   }
   .cap-detail {
     overflow: visible;
