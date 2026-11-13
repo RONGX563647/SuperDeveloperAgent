@@ -238,7 +238,7 @@ public class GitIssueServiceImpl implements GitIssueService {
         try {
             GitIssueRemoteClient.Credentials credentials = credentials(userId, issue);
             GitIssueRemoteClient.RemoteIssue remoteIssue = remote.create(credentials,
-                    issue.title(), issue.body(), labelsForGit(issue));
+                    issue.title(), issue.body(), labelsForGit(issue), issue.kind());
             return copy(issue, remoteIssue.number(), remoteIssue.url(), remoteIssue.state(),
                     "SYNCED", "", "PLATFORM");
         } catch (RuntimeException e) {
@@ -252,7 +252,7 @@ public class GitIssueServiceImpl implements GitIssueService {
         try {
             GitIssueRemoteClient.Credentials credentials = credentials(userId, issue);
             remote.update(credentials, issue.number(), issue.title(), issue.body(),
-                    issue.state(), labelsForGit(issue));
+                    issue.state(), labelsForGit(issue), issue.kind());
             return copy(issue, issue.number(), issue.url(), issue.state(), "SYNCED", "",
                     "PLATFORM");
         } catch (RuntimeException e) {

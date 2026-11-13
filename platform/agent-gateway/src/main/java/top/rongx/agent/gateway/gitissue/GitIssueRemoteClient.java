@@ -69,10 +69,11 @@ public class GitIssueRemoteClient {
     }
 
     /** 创建 Issue，返回远端编号/地址/状态。 */
-    public RemoteIssue create(Credentials c, String title, String body, String labels) {
+    public RemoteIssue create(Credentials c, String title, String body, String labels,
+                              String kind) {
         return switch (c.provider()) {
-            case "GITEE" -> createGitee(c, title, body, labels);
-            case "GITHUB" -> createGithub(c, title, body, labels);
+            case "GITEE" -> createGitee(c, title, body, labels, kind);
+            case "GITHUB" -> createGithub(c, title, body, labels, kind);
             case "GITLAB" -> createGitlab(c, title, body, labels);
             default -> throw new IllegalStateException("不支持的平台：" + c.provider());
         };
@@ -80,10 +81,10 @@ public class GitIssueRemoteClient {
 
     /** 更新标题/描述/标签/状态。 */
     public void update(Credentials c, String number, String title, String body, String state,
-                       String labels) {
+                       String labels, String kind) {
         switch (c.provider()) {
-            case "GITEE" -> updateGitee(c, number, title, body, state, labels);
-            case "GITHUB" -> updateGithub(c, number, title, body, state, labels);
+            case "GITEE" -> updateGitee(c, number, title, body, state, labels, kind);
+            case "GITHUB" -> updateGithub(c, number, title, body, state, labels, kind);
             case "GITLAB" -> updateGitlab(c, number, title, body, state, labels);
             default -> throw new IllegalStateException("不支持的平台：" + c.provider());
         }
@@ -108,22 +109,32 @@ public class GitIssueRemoteClient {
 
     // ---------------------------------------------------------------- 各平台实现
 
-    private RemoteIssue createGitee(Credentials c, String title, String body, String labels) {
+    private RemoteIssue createGitee(Credentials c, String title, String body, String labels,
+                                    String kind) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", title);
         payload.put("body", body);
         if (labels != null && !labels.isBlank()) {
             payload.put("labels", labels);
         }
-        String resp = send("POST",
-                "https://gitee.com/api/v5/repos/" + c.repo() + "/issues?access_token="
-                        + enc(c.token()),
-                headers(), jsonBody(payload));
-        return parseIssue(resp);
+        // 企业版可用「缺陷 / 需求」原生类型；个人仓库不支持时去掉重试
+        payload.put("issue_type", giteeType(kind));
+        String url = "https://gitee.com/api/v5/repos/" + c.repo() + "/issues?access_token="
+                + enc(c.token());
+        try {
+            return parseIssue(send("POST", url, headers(), jsonBody(payload)));
+        } catch (IllegalStateException e) {
+            if (!typeUnsupported(e)) {
+                throw e;
+            }
+            log.info("Gitee 仓库不支持自定义任务类型，改用标签区分（{}）", c.repo());
+            payload.remove("issue_type");
+            return parseIssue(send("POST", url, headers(), jsonBody(payload)));
+        }
     }
 
     private void updateGitee(Credentials c, String number, String title, String body, String state,
-                             String labels) {
+                             String labels, String kind) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", title);
         payload.put("body", body);
@@ -131,11 +142,23 @@ public class GitIssueRemoteClient {
         if (labels != null && !labels.isBlank()) {
             payload.put("labels", labels);
         }
-        send("PATCH", "https://gitee.com/api/v5/repos/" + c.repo() + "/issues/" + number
-                + "?access_token=" + enc(c.token()), headers(), jsonBody(payload));
+        payload.put("issue_type", giteeType(kind));
+        String url = "https://gitee.com/api/v5/repos/" + c.repo() + "/issues/" + number
+                + "?access_token=" + enc(c.token());
+        try {
+            send("PATCH", url, headers(), jsonBody(payload));
+        } catch (IllegalStateException e) {
+            if (!typeUnsupported(e)) {
+                throw e;
+            }
+            log.info("Gitee 仓库不支持自定义任务类型，改用标签区分（{}）", c.repo());
+            payload.remove("issue_type");
+            send("PATCH", url, headers(), jsonBody(payload));
+        }
     }
 
-    private RemoteIssue createGithub(Credentials c, String title, String body, String labels) {
+    private RemoteIssue createGithub(Credentials c, String title, String body, String labels,
+                                     String kind) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", title);
         payload.put("body", body);
@@ -143,13 +166,23 @@ public class GitIssueRemoteClient {
         if (!list.isEmpty()) {
             payload.put("labels", list);
         }
-        String resp = send("POST", "https://api.github.com/repos/" + c.repo() + "/issues",
-                githubHeaders(c.token()), jsonBody(payload));
-        return parseIssue(resp);
+        payload.put("type", githubType(kind));
+        String url = "https://api.github.com/repos/" + c.repo() + "/issues";
+        try {
+            return parseIssue(send("POST", url, githubHeaders(c.token()), jsonBody(payload)));
+        } catch (IllegalStateException e) {
+            if (!typeUnsupported(e)) {
+                throw e;
+            }
+            // 个人仓库 / 未配置 Issue 类型：去掉 type 重试，labels 仍能区分
+            log.info("GitHub 未启用 Issue 类型，改用标签区分（{}）", c.repo());
+            payload.remove("type");
+            return parseIssue(send("POST", url, githubHeaders(c.token()), jsonBody(payload)));
+        }
     }
 
     private void updateGithub(Credentials c, String number, String title, String body, String state,
-                              String labels) {
+                              String labels, String kind) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", title);
         payload.put("body", body);
@@ -158,8 +191,18 @@ public class GitIssueRemoteClient {
         if (!list.isEmpty()) {
             payload.put("labels", list);
         }
-        send("PATCH", "https://api.github.com/repos/" + c.repo() + "/issues/" + number,
-                githubHeaders(c.token()), jsonBody(payload));
+        payload.put("type", githubType(kind));
+        String url = "https://api.github.com/repos/" + c.repo() + "/issues/" + number;
+        try {
+            send("PATCH", url, githubHeaders(c.token()), jsonBody(payload));
+        } catch (IllegalStateException e) {
+            if (!typeUnsupported(e)) {
+                throw e;
+            }
+            log.info("GitHub 未启用 Issue 类型，改用标签区分（{}）", c.repo());
+            payload.remove("type");
+            send("PATCH", url, githubHeaders(c.token()), jsonBody(payload));
+        }
     }
 
     private RemoteIssue createGitlab(Credentials c, String title, String body, String labels) {
@@ -291,6 +334,22 @@ public class GitIssueRemoteClient {
     static String normalizeState(String state) {
         String s = state == null ? "" : state.trim().toLowerCase(Locale.ROOT);
         return "closed".equals(s) ? "CLOSED" : "OPEN";
+    }
+
+    /** 平台分类 → GitHub Issue 原生类型（GitHub 默认类型为 Bug / Feature / Task）。 */
+    static String githubType(String kind) {
+        return "FEAT".equalsIgnoreCase(kind) ? "Feature" : "Bug";
+    }
+
+    /** 平台分类 → Gitee 企业版任务类型（个人仓库仅支持默认「任务」，失败会自动降级）。 */
+    static String giteeType(String kind) {
+        return "FEAT".equalsIgnoreCase(kind) ? "需求" : "缺陷";
+    }
+
+    /** GitHub 个人仓库或未配置 Issue 类型时返回 400/422，可去掉 type 重试。 */
+    private static boolean typeUnsupported(IllegalStateException e) {
+        String message = e.getMessage() == null ? "" : e.getMessage();
+        return message.contains("返回 400") || message.contains("返回 422");
     }
 
     /** 规范化仓库标识：允许粘贴完整 URL 或 owner/repo.git。 */

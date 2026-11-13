@@ -104,10 +104,12 @@ public class GitIssueSyncService {
     private GitIssue create(GitIssueIntegration config, ParsedEvent event) {
         long now = System.currentTimeMillis();
         String owner = config.ownerUserId().isBlank() ? FALLBACK_USER : config.ownerUserId();
+        String kind = event.kind().isBlank()
+                ? GitIssue.kindOfLabels(event.labels()) : event.kind();
         GitIssue issue = new GitIssue("task-" + randomHex(), owner, matchingProject(event.repo()),
                 event.provider(), event.repo(), event.number(),
                 event.title().isBlank() ? "Git Issue " + event.number() : event.title(),
-                event.body(), event.state(), event.labels(), event.url(), "GIT", "SYNCED", "",
+                event.body(), event.state(), kind, event.labels(), event.url(), "GIT", "SYNCED", "",
                 "", now, now);
         log.info("Git Issue 已映射为平台任务：{} {}#{} → {}", event.provider(), event.repo(),
                 event.number(), issue.id());
@@ -125,12 +127,14 @@ public class GitIssueSyncService {
             // 冷却窗口内忽略状态回灌；评论仍会追加
             return;
         }
+        String kind = !event.kind().isBlank() ? event.kind()
+                : event.labels().isBlank() ? issue.kind() : GitIssue.kindOfLabels(event.labels());
         GitIssue updated = new GitIssue(issue.id(), issue.userId(), issue.projectId(),
                 issue.provider(), issue.repo(), issue.number(),
                 event.title().isBlank() ? issue.title() : event.title(),
                 event.body().isBlank() ? issue.body() : event.body(),
                 event.state().isBlank() ? issue.state() : event.state(),
-                event.labels().isBlank() ? issue.kind() : GitIssue.kindOfLabels(event.labels()),
+                kind,
                 event.labels().isBlank() ? issue.labels() : event.labels(),
                 event.url().isBlank() ? issue.url() : event.url(),
                 "GIT", "SYNCED", "", issue.assignee(), issue.createdAt(),
@@ -192,7 +196,8 @@ public class GitIssueSyncService {
             return new ParsedEvent("GITHUB", text(root.path("repository"), "full_name"),
                     text(issue, "number"), text(issue, "title"), text(issue, "body"),
                     normalizeState(text(issue, "state")), labels(issue.path("labels")),
-                    text(issue, "html_url"), text(root, "action"), comment);
+                    text(issue, "html_url"), text(root, "action"),
+                    kindOfType(issue.path("type")), comment);
         } catch (Exception e) {
             log.warn("GitHub webhook 解析失败：{}", e.getMessage());
             return null;
@@ -220,10 +225,15 @@ public class GitIssueSyncService {
             if (number.isBlank()) {
                 number = text(issue, "id");
             }
+            // Gitee webhook 用 type_name 返回任务类型（缺陷 / 需求 / 任务）
+            String remoteKind = kindOfType(issue.path("type_name"));
+            if (remoteKind.isBlank()) {
+                remoteKind = kindOfType(issue.path("issue_type"));
+            }
             return new ParsedEvent("GITEE", repo, number, text(issue, "title"),
                     text(issue, "body"), normalizeState(text(issue, "state")),
                     labels(issue.path("labels")), text(issue, "html_url"),
-                    text(root, "action"), comment);
+                    text(root, "action"), remoteKind, comment);
         } catch (Exception e) {
             log.warn("Gitee webhook 解析失败：{}", e.getMessage());
             return null;
@@ -256,7 +266,7 @@ public class GitIssueSyncService {
             return new ParsedEvent("GITLAB", repo, number, text(issue, "title"),
                     text(issue, "description"), normalizeState(state),
                     labels(issue.path("labels")), text(issue, "url"),
-                    text(root, "action"), comment);
+                    text(root, "action"), kindOfType(issue.path("issue_type")), comment);
         } catch (Exception e) {
             log.warn("GitLab webhook 解析失败：{}", e.getMessage());
             return null;
@@ -281,6 +291,22 @@ public class GitIssueSyncService {
             }
         }
         return String.join(",", names);
+    }
+
+    /** 远端原生 Issue 类型 → 平台分类；无法识别时返回空串，交给标签推导。 */
+    private static String kindOfType(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return "";
+        }
+        String name = node.isTextual() ? node.asText() : node.path("name").asText("");
+        String text = name.toLowerCase(Locale.ROOT);
+        if (text.contains("feature") || text.contains("enhancement") || text.contains("需求")) {
+            return "FEAT";
+        }
+        if (text.contains("bug") || text.contains("defect") || text.contains("缺陷")) {
+            return "BUG";
+        }
+        return "";
     }
 
     private static String normalizeState(String state) {
@@ -314,6 +340,6 @@ public class GitIssueSyncService {
 
     record ParsedEvent(String provider, String repo, String number, String title, String body,
                        String state, String labels, String url, String action,
-                       RemoteComment comment) {
+                       String kind, RemoteComment comment) {
     }
 }
