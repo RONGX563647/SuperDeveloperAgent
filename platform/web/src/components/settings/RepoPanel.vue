@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Connection, Link, Plus, UserFilled } from '@element-plus/icons-vue'
+import { Connection, Link, Plus, UserFilled } from '@element-plus/icons-vue'
 import {
   giteeBind, giteeBindStatus, giteeOauthStart, giteeRepos, giteeUnbind,
   type GiteeBinding, type GiteeRepo
 } from '../../api/project'
 import {
-  deleteGitHost, deleteGitOauthApp, gitOauthStart, listGitHosts, listGitOauthApps, saveGitHost,
-  saveGitOauthApp, testGitHost, testGitRepo,
-  type GitHostAccount, type GitHostProvider, type GitOauthApp, type GitOauthProvider
+  deleteGitHost, gitOauthStart, listGitHosts, saveGitHost, testGitHost, testGitRepo,
+  type GitHostAccount, type GitHostProvider
 } from '../../api/settings'
 
 /**
@@ -37,7 +36,6 @@ async function load(): Promise<void> {
     repos.value = []
   }
   void loadHosts()
-  void loadOauthApps()
 }
 
 // ---------------------------------------------------------------- GitHub / GitLab / 自定义
@@ -99,134 +97,11 @@ function platformCount(platform: Platform): number {
 
 function switchPlatform(platform: Platform): void {
   activePlatform.value = platform
-  oauthOpen.value = false
   formOpen.value = false
   hostPatToken.value = ''
   if (platform === 'CUSTOM') {
     openForm()
     formOpen.value = true
-  }
-}
-
-// ---------------------------------------------------------------- OAuth 应用配置
-
-/** 各平台创建 OAuth 应用的位置，避免用户去猜。 */
-const OAUTH_HINT: Record<GitOauthProvider, string> = {
-  GITEE: 'Gitee → 设置 → 第三方应用 → 创建应用；回调地址填下方「回调地址」，权限勾选 projects。',
-  GITHUB: 'GitHub → Settings → Developer settings → OAuth Apps → New OAuth App；Authorization callback URL 填下方「回调地址」。',
-  GITLAB: 'GitLab → Preferences → Applications → New application；Redirect URI 填下方「回调地址」，scopes 勾选 read_user / api。'
-}
-
-const oauthApps = ref<Partial<Record<GitOauthProvider, GitOauthApp>>>({})
-const oauthOpen = ref(false)
-const oauthSaving = ref(false)
-const oauthForm = reactive({
-  clientId: '',
-  clientSecret: '',
-  redirectUri: '',
-  scopes: '',
-  enabled: true
-})
-
-const activeOauthApp = computed<GitOauthApp | null>(() => {
-  const platform = activePlatform.value
-  if (platform === 'CUSTOM') return null
-  return oauthApps.value[platform] ?? null
-})
-const oauthHint = computed(() => {
-  const platform = activePlatform.value
-  return platform === 'CUSTOM' ? '' : OAUTH_HINT[platform]
-})
-const secretPlaceholder = computed(() => activeOauthApp.value?.hasSecret
-  ? `已保存 ${activeOauthApp.value.secretMasked ?? '***'}，留空不修改`
-  : '粘贴应用密钥（只写不读）')
-
-async function loadOauthApps(): Promise<void> {
-  try {
-    const list = await listGitOauthApps()
-    const map: Partial<Record<GitOauthProvider, GitOauthApp>> = {}
-    for (const app of list) map[app.provider] = app
-    oauthApps.value = map
-  } catch {
-    oauthApps.value = {}
-  }
-}
-
-function toggleOauthConfig(): void {
-  if (oauthOpen.value) {
-    oauthOpen.value = false
-    return
-  }
-  const app = activeOauthApp.value
-  oauthForm.clientId = app?.clientId ?? ''
-  oauthForm.clientSecret = ''
-  oauthForm.redirectUri = app?.redirectUri ?? ''
-  oauthForm.scopes = app?.scopes ?? ''
-  oauthForm.enabled = app?.hasSecret ? app.enabled : true
-  oauthOpen.value = true
-}
-
-async function saveOauthConfig(): Promise<void> {
-  if (activePlatform.value === 'CUSTOM') return
-  if (!oauthForm.clientId.trim()) {
-    ElMessage.warning('请填写应用 Client ID')
-    return
-  }
-  if (!oauthForm.redirectUri.trim().startsWith('http')) {
-    ElMessage.warning('回调地址必须是完整的 http(s) 地址')
-    return
-  }
-  if (!activeOauthApp.value?.hasSecret && !oauthForm.clientSecret.trim()) {
-    ElMessage.warning('首次配置必须填写 Client Secret')
-    return
-  }
-  const provider = activePlatform.value
-  oauthSaving.value = true
-  try {
-    const saved = await saveGitOauthApp(provider, {
-      clientId: oauthForm.clientId.trim(),
-      clientSecret: oauthForm.clientSecret.trim() || undefined,
-      redirectUri: oauthForm.redirectUri.trim(),
-      scopes: oauthForm.scopes.trim(),
-      enabled: oauthForm.enabled
-    })
-    oauthApps.value = { ...oauthApps.value, [provider]: saved }
-    ElMessage.success(`${activeMeta.value.label} 应用配置已保存，可直接前往授权`)
-    oauthOpen.value = false
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败')
-  } finally {
-    oauthSaving.value = false
-  }
-}
-
-async function copyCallback(): Promise<void> {
-  const url = oauthForm.redirectUri.trim()
-  if (!url) return
-  try {
-    await navigator.clipboard.writeText(url)
-    ElMessage.success('回调地址已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择地址')
-  }
-}
-
-async function clearOauthConfig(): Promise<void> {
-  const platform = activePlatform.value
-  if (platform === 'CUSTOM') return
-  const ok = await ElMessageBox.confirm(
-    `清除 ${activeMeta.value.label} 的应用配置后，将回退到环境变量（通常为空）。确认清除？`,
-    '清除应用配置',
-    { confirmButtonText: '清除', cancelButtonText: '取消', type: 'warning' }
-  ).then(() => true).catch(() => false)
-  if (!ok) return
-  try {
-    await deleteGitOauthApp(platform)
-    await loadOauthApps()
-    oauthOpen.value = false
-    ElMessage.success('已清除')
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '清除失败')
   }
 }
 
@@ -441,7 +316,8 @@ defineExpose({ load })
       <div>
         <div class="panel-title">代码仓库</div>
         <div class="panel-desc">
-          按平台切换授权方式：Gitee 网页授权，GitHub / GitLab OAuth 或访问令牌，也支持自建服务
+          按平台切换授权方式：Gitee 网页授权，GitHub / GitLab OAuth 或访问令牌，也支持自建服务；
+          OAuth 应用凭据在「高级设置 → Git 应用授权」配置
         </div>
       </div>
       <el-button
@@ -463,82 +339,6 @@ defineExpose({ load })
         <span v-if="platformCount(p)" class="tab-count mono">{{ platformCount(p) }}</span>
       </button>
     </div>
-
-    <!-- 应用授权配置：三个平台共用一套表单，保存后「前往授权」立即生效 -->
-    <section v-if="activePlatform !== 'CUSTOM'" class="oauth-app">
-      <div class="oauth-app-head">
-        <span class="oauth-app-title">应用授权配置</span>
-        <span class="oauth-app-state" :class="{ ok: activeOauthApp?.hasSecret }">
-          {{ activeOauthApp?.hasSecret ? '已配置' : '未配置' }}
-        </span>
-        <span class="oauth-app-sub mono">
-          {{ activeOauthApp?.clientId || 'Client ID / Secret / 回调地址' }}
-        </span>
-        <span v-if="activeOauthApp?.hasSecret && !activeOauthApp.enabled" class="oauth-app-off">已停用</span>
-        <button type="button" class="oauth-app-toggle" @click="toggleOauthConfig">
-          {{ oauthOpen ? '收起' : '配置' }}
-          <el-icon class="chev" :class="{ open: oauthOpen }"><ArrowDown /></el-icon>
-        </button>
-      </div>
-
-      <div v-if="oauthOpen" class="oauth-app-body">
-        <p class="oauth-app-hint">{{ oauthHint }}</p>
-        <div class="form-row">
-          <label class="form-label">Client ID</label>
-          <el-input
-            v-model="oauthForm.clientId" size="default" class="form-control mono"
-            placeholder="OAuth 应用的 Client ID"
-          />
-        </div>
-        <div class="form-row">
-          <label class="form-label">Client Secret</label>
-          <el-input
-            v-model="oauthForm.clientSecret" type="password" show-password size="default"
-            class="form-control mono" :placeholder="secretPlaceholder"
-          />
-        </div>
-        <div class="form-row">
-          <label class="form-label">回调地址</label>
-          <div class="oauth-uri">
-            <el-input
-              v-model="oauthForm.redirectUri" size="default" class="form-control mono"
-              placeholder="https://your-host/api/v1/..."
-            />
-            <el-button size="default" :disabled="!oauthForm.redirectUri" @click="copyCallback">
-              复制
-            </el-button>
-          </div>
-        </div>
-        <div class="form-row">
-          <label class="form-label">授权范围</label>
-          <el-input
-            v-model="oauthForm.scopes" size="default" class="form-control mono"
-            placeholder="空格分隔，留空使用默认值"
-          />
-        </div>
-        <div class="form-row">
-          <label class="form-label">网页授权</label>
-          <div class="oauth-switch">
-            <el-switch v-model="oauthForm.enabled" />
-            <span class="oauth-switch-text">
-              {{ oauthForm.enabled ? '启用：可发起应用授权' : '停用：仅保留配置' }}
-            </span>
-          </div>
-        </div>
-        <div class="form-actions">
-          <el-button
-            v-if="activeOauthApp?.hasSecret" size="default" text type="danger"
-            class="danger-clear" @click="clearOauthConfig"
-          >
-            清除配置
-          </el-button>
-          <el-button size="default" @click="oauthOpen = false">取消</el-button>
-          <el-button size="default" type="primary" :loading="oauthSaving" @click="saveOauthConfig">
-            保存配置
-          </el-button>
-        </div>
-      </div>
-    </section>
 
     <template v-if="activePlatform === 'GITEE'">
     <!-- 已绑定 -->
@@ -988,109 +788,6 @@ defineExpose({ load })
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-.form-actions .danger-clear {
-  margin-right: auto;
-}
-.oauth-app {
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-md);
-}
-.oauth-app-head {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 10px 14px;
-}
-.oauth-app-title {
-  flex: none;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.oauth-app-state {
-  flex: none;
-  padding: 1px 7px;
-  font-size: 10px;
-  color: var(--ink-faint);
-  background: var(--surface-sunken);
-  border-radius: var(--radius-pill);
-}
-.oauth-app-state.ok {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-.oauth-app-sub {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.oauth-app-off {
-  flex: none;
-  font-size: 10px;
-  color: var(--ink-faint);
-}
-.oauth-app-toggle {
-  display: inline-flex;
-  flex: none;
-  gap: 3px;
-  align-items: center;
-  margin-left: auto;
-  padding: 4px 8px;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: none;
-  border-radius: 6px;
-}
-.oauth-app-toggle:hover {
-  color: var(--ink);
-  background: var(--surface-sunken);
-}
-.oauth-app-toggle .chev {
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-.oauth-app-toggle .chev.open {
-  transform: rotate(180deg);
-}
-.oauth-app-body {
-  display: grid;
-  gap: 10px;
-  padding: 12px 14px 14px;
-  border-top: 1px solid var(--line-soft);
-}
-.oauth-app-hint {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: 6px;
-}
-.oauth-uri {
-  display: flex;
-  gap: 8px;
-}
-.oauth-uri .form-control {
-  flex: 1;
-  min-width: 0;
-}
-.oauth-switch {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.oauth-switch-text {
-  font-size: 11px;
-  color: var(--ink-muted);
 }
 .probe {
   display: flex;

@@ -99,11 +99,11 @@ public class GiteeBrowserController {
         OAuthConfig cfg = oauthConfig();
         if (!cfg.enabled()) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                    "Gitee 应用授权已停用，可在 设置 → 代码仓库 → Gitee → 应用授权 中开启");
+                    "Gitee 应用授权已停用，可在 设置 → 高级设置 → Git 应用授权 中开启");
         }
         if (cfg.clientId().isBlank() || cfg.clientSecret().isBlank()) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                    "尚未配置 Gitee OAuth 应用，请在 设置 → 代码仓库 → Gitee → 应用授权 "
+                    "尚未配置 Gitee OAuth 应用，请在 设置 → 高级设置 → Git 应用授权 "
                             + "填写 Client ID / Client Secret（或使用私人令牌）");
         }
         String state = newUniqueId();

@@ -111,13 +111,12 @@ public class GitHostingOAuthController {
         ProviderConfig cfg = config(provider);
         if (!cfg.enabled()) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                    cfg.provider() + " 应用授权已停用，可在 设置 → 代码仓库 → " + providerName(cfg)
-                            + " → 应用授权 中开启");
+                    cfg.provider() + " 应用授权已停用，可在 设置 → 高级设置 → Git 应用授权 中开启");
         }
         if (blank(cfg.clientId()) || blank(cfg.clientSecret())) {
             throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
-                    "尚未配置 " + cfg.provider() + " OAuth 应用，请在 设置 → 代码仓库 → "
-                            + providerName(cfg) + " → 应用授权 填写 Client ID / Client Secret"
+                    "尚未配置 " + cfg.provider() + " OAuth 应用，请在 设置 → 高级设置 → "
+                            + "Git 应用授权 填写 Client ID / Client Secret"
                             + "（或改用访问令牌）");
         }
         String state = UUID.randomUUID().toString().replace("-", "");
