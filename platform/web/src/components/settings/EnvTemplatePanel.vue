@@ -533,6 +533,16 @@ function sheetTotal(id: BookSheet): number {
 
 const bookSheetLabel = computed(() => SHEETS.find((s) => s.id === bookSheet.value)?.label ?? '')
 
+/** 场景词条跨场景连续编号，和 Excel 行号一致 */
+const scenarioRowNumbers = computed(() => {
+  const map = new Map<string, number>()
+  let n = 0
+  for (const s of bookScenarios.value) {
+    for (const k of s.keys) map.set(`${s.id}:${k.key}`, ++n)
+  }
+  return map
+})
+
 function columnLetter(index: number): string {
   return String.fromCharCode(65 + index)
 }
@@ -810,6 +820,7 @@ defineExpose({ load })
             :disabled="!bookSel || (bookSel.sheet !== 'resources' && bookSel.sheet !== 'vars')"
             @click="deleteRow"
           >删除行</el-button>
+          <span class="xl-sep" />
           <el-button size="small" :icon="Refresh" :loading="bookLoading" @click="loadBook">重新加载</el-button>
           <el-button
             size="small" type="primary" :loading="bookSaving" :disabled="!bookDirty || bookLoading"
@@ -818,8 +829,7 @@ defineExpose({ load })
         </div>
       </header>
       <p class="xl-tip">
-        像 Excel 一样直接改单元格：概览按「参数 × 环境」，镜像与变量用「环境」列区分，场景词条按「词条 × 环境」；
-        点行号选中后可删除整行。敏感值显示 <code>****</code>，不改即保留原值。
+        直接改单元格即可；点行号选中整行，敏感值显示 <code>****</code> 不改即保留原值。
       </p>
       <div class="xl-book">
         <div class="xl-tabbar">
@@ -836,7 +846,7 @@ defineExpose({ load })
           <table v-if="bookSheet === 'overview'" class="xl-table">
             <colgroup>
               <col style="width: 44px"><col style="width: 150px">
-              <col v-for="e in ENVS" :key="e" style="width: 260px">
+              <col v-for="e in ENVS" :key="e">
             </colgroup>
             <thead>
               <tr class="xl-colhead">
@@ -989,7 +999,7 @@ defineExpose({ load })
                   </td>
                 </tr>
                 <tr v-for="k in s.keys" :key="k.key">
-                  <td class="xl-rowno" />
+                  <td class="xl-rowno">{{ scenarioRowNumbers.get(`${s.id}:${k.key}`) }}</td>
                   <td class="xl-keycell" :title="k.description">
                     <div class="xl-keyinner">
                       <span class="mono">{{ k.key }}</span>
@@ -1011,8 +1021,11 @@ defineExpose({ load })
         </div>
 
         <footer class="xl-status">
-          <span>{{ bookSheetLabel }} · {{ sheetTotal(bookSheet) }} 行</span>
-          <span>{{ bookDirty ? '有未保存修改' : '已与平台一致' }} · 密码与敏感值显示 ****，保留即不改</span>
+          <span class="xl-status-left">
+            <span class="xl-dot" :class="{ dirty: bookDirty }" />
+            {{ bookSheetLabel }} · {{ sheetTotal(bookSheet) }} 行
+          </span>
+          <span class="xl-status-hint">{{ bookDirty ? '有未保存修改' : '已与平台一致' }} · 密码与敏感值显示 ****，保留即不改</span>
         </footer>
       </div>
     </section>
@@ -1897,7 +1910,7 @@ defineExpose({ load })
 .xl-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   height: calc(100vh - 136px);
   min-height: 520px;
 }
@@ -1927,8 +1940,14 @@ defineExpose({ load })
   gap: 6px;
   align-items: center;
 }
+.xl-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--line-soft);
+}
 .xl-tip {
-  margin: 0;
+  margin: -2px 0 0;
   font-size: 11.5px;
   line-height: 1.7;
   color: var(--ink-faint);
@@ -1947,11 +1966,12 @@ defineExpose({ load })
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
 }
 .xl-tabbar {
   display: flex;
-  gap: 2px;
-  padding: 6px 8px 0;
+  gap: 4px;
+  padding: 8px 10px 0;
   background: var(--surface-sunken);
   border-bottom: 1px solid var(--line-soft);
 }
@@ -1959,34 +1979,44 @@ defineExpose({ load })
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 6px 12px;
+  height: 30px;
+  padding: 0 14px;
   font-family: inherit;
-  font-size: 12px;
-  color: var(--ink-faint);
+  font-size: 12.5px;
+  color: var(--ink-soft, var(--ink-faint));
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
+  border-top: 2px solid transparent;
   border-bottom: 0;
   border-radius: 6px 6px 0 0;
+  transition: color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 .xl-tab:hover {
   color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
 }
 .xl-tab.active {
   margin-bottom: -1px;
+  font-weight: 500;
   color: var(--ink);
   background: var(--panel);
   border-color: var(--line-soft);
+  border-top-color: var(--accent);
 }
 .xl-tab-count {
-  min-width: 16px;
+  min-width: 18px;
   padding: 0 5px;
   font-size: 10px;
-  line-height: 15px;
+  line-height: 16px;
   text-align: center;
   color: var(--ink-faint);
   background: var(--surface-hover);
   border-radius: 8px;
+}
+.xl-tab.active .xl-tab-count {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .xl-scroll {
   flex: 1;
@@ -2010,7 +2040,7 @@ defineExpose({ load })
   position: sticky;
   top: 0;
   z-index: 2;
-  height: 24px;
+  height: 26px;
   padding: 0 8px;
   font-weight: 500;
   color: var(--ink-faint);
@@ -2018,13 +2048,20 @@ defineExpose({ load })
   background: var(--surface-sunken);
 }
 .xl-table thead tr:nth-child(2) th {
-  top: 24px;
+  top: 26px;
+  font-size: 11.5px;
   color: var(--ink);
 }
 .xl-table .xl-colhead th {
   font-size: 10px;
   text-align: center;
   letter-spacing: 0.5px;
+}
+.xl-table thead .xl-colhead th:first-child,
+.xl-table thead .xl-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 3;
 }
 .xl-table .xl-gutter,
 .xl-table .xl-rowno {
@@ -2035,7 +2072,16 @@ defineExpose({ load })
   background: var(--surface-sunken);
 }
 .xl-table .xl-rowno {
+  position: sticky;
+  left: 0;
+  z-index: 1;
   cursor: pointer;
+}
+.xl-table tbody td {
+  height: 30px;
+}
+.xl-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-sunken) 45%, transparent);
 }
 .xl-table .xl-field {
   padding: 0 10px;
@@ -2047,7 +2093,11 @@ defineExpose({ load })
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 .xl-table tbody tr.selected td {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.xl-table tbody tr.selected .xl-rowno {
+  font-weight: 600;
+  color: var(--accent);
 }
 .xl-table td.mono {
   padding: 0 10px;
@@ -2083,6 +2133,11 @@ defineExpose({ load })
   border: 0;
   outline: none;
 }
+select.xl-input {
+  padding-right: 4px;
+  cursor: pointer;
+  appearance: auto;
+}
 .xl-input:focus {
   background: var(--panel);
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
@@ -2092,7 +2147,7 @@ defineExpose({ load })
   font-size: 11.5px;
 }
 .xl-empty {
-  padding: 14px;
+  padding: 28px 14px;
   color: var(--ink-faint);
   text-align: center;
 }
@@ -2101,7 +2156,8 @@ defineExpose({ load })
   font-size: 11.5px;
   font-weight: 600;
   color: var(--ink);
-  background: var(--surface-sunken);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-sunken));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 14%, var(--line-soft));
 }
 .xl-band-summary {
   margin-left: 8px;
@@ -2129,6 +2185,7 @@ defineExpose({ load })
 }
 .xl-status {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 5px 10px;
@@ -2136,6 +2193,26 @@ defineExpose({ load })
   color: var(--ink-faint);
   background: var(--surface-sunken);
   border-top: 1px solid var(--line-soft);
+}
+.xl-status-left {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+.xl-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--success, #16a34a);
+  border-radius: 50%;
+}
+.xl-dot.dirty {
+  background: var(--warn);
+}
+.xl-status-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @media (max-width: 1000px) {
   .xl-page {
