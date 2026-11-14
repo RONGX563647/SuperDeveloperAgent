@@ -59,8 +59,8 @@ public class VerifyStage implements BugFixStageHandler {
                 "testEnv", AnalyzeStage.safe(policy.testEnv()),
                 "fixSha", AnalyzeStage.safe(run.fixSha()),
                 "issueTitle", AnalyzeStage.safe(run.issueTitle()),
-                "analysis", AnalyzeStage.clip(run.analysis(), 6000),
-                "fixSummary", AnalyzeStage.clip(run.fixSummary(), 4000),
+                "analysis", FixStage.untrusted(AnalyzeStage.clip(run.analysis(), 6000)),
+                "fixSummary", FixStage.untrusted(AnalyzeStage.clip(run.fixSummary(), 4000)),
                 "smoke", AnalyzeStage.safe(smoke.summary())));
         VerifyOutput output;
         try {

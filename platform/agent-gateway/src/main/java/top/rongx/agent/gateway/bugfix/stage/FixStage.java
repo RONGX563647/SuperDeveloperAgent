@@ -60,10 +60,10 @@ public class FixStage implements BugFixStageHandler {
     public BugFixStageResult execute(BugFixRun run, BugFixPolicy policy) {
         String prompt = prompts.render("fix", Map.of(
                 "issueTitle", AnalyzeStage.safe(run.issueTitle()),
-                "issueBody", AnalyzeStage.clip(run.issueBody(), 6000),
+                "issueBody", untrusted(AnalyzeStage.clip(run.issueBody(), 6000)),
                 "baseSha", AnalyzeStage.safe(run.baseSha()),
                 "branch", AnalyzeStage.safe(run.branch()),
-                "analysis", AnalyzeStage.clip(analysisForPrompt(run), 8000)));
+                "analysis", untrusted(AnalyzeStage.clip(analysisForPrompt(run), 8000))));
         FixOutput output;
         try {
             output = agent.runStructured(run, prompt, FixOutput.class);
@@ -86,6 +86,21 @@ public class FixStage implements BugFixStageHandler {
             return BugFixStageResult.blocked("单次修复改动文件过多（超过 " + MAX_CHANGED_FILES
                     + " 个），请拆分为更聚焦的修复");
         }
+        // 闸门 2（前置）：提交前先校验补丁路径是否落在分析确认的目标文件内。
+        // 原来先 commit 再校验，越界改动会在分支上留下一个提交，重试还会叠加上去。
+        List<String> targets = targetFiles(run);
+        if (!targets.isEmpty()) {
+            List<String> unexpected = edits.stream()
+                    .map(BugFixEdit::path)
+                    .filter(path -> targets.stream().noneMatch(target -> sameFile(target, path)))
+                    .distinct()
+                    .toList();
+            if (!unexpected.isEmpty()) {
+                return BugFixStageResult.blocked("修复改动了分析未确认的文件，已拒绝提交："
+                        + String.join(", ", unexpected)
+                        + "；如确属必要，请在分析结论中补充 targetFiles 后重试");
+            }
+        }
         String sha;
         try {
             String title = AnalyzeStage.safe(run.issueTitle()).replaceAll("\\s+", " ").trim();
@@ -96,8 +111,7 @@ public class FixStage implements BugFixStageHandler {
         } catch (RuntimeException e) {
             return BugFixStageResult.failed("提交修复失败：" + AnalyzeStage.message(e));
         }
-        // 闸门 2：实际改动范围必须与分析结论一致
-        List<String> targets = targetFiles(run);
+        // 闸门 2（提交后复核）：实际改动范围必须与分析结论一致
         if (!targets.isEmpty()) {
             List<String> changed;
             try {
@@ -141,6 +155,11 @@ public class FixStage implements BugFixStageHandler {
         }
         return "结构化分析（JSON）：\n" + AnalyzeStage.clip(structured, 6000)
                 + "\n\n完整分析：\n" + AnalyzeStage.clip(raw, 4000);
+    }
+
+    /** 把不可信文本（Issue 正文、日志、上一阶段结论）包进数据边界，提示模型只当资料。 */
+    public static String untrusted(String text) {
+        return "<untrusted-data>\n" + (text == null ? "" : text) + "\n</untrusted-data>";
     }
 
     /** 分析阶段确认的目标文件；缺失/无法解析时返回空列表（不阻断修复）。 */

@@ -12,10 +12,13 @@ import top.rongx.agent.domain.port.ActionRunner;
  *
  * <p>{@code agent.sandbox.mode}：
  * <ul>
- *   <li>{@code auto}（默认）—— Docker 守护进程可用就进容器，否则退回宿主进程并告警；</li>
- *   <li>{@code docker} —— 强制容器；不可用则**启动失败**（不让"以为隔离了其实没隔离"发生）；</li>
- *   <li>{@code process} —— 强制宿主（仅开发）。</li>
+ *   <li>{@code docker}（默认）—— 强制容器；不可用则**启动失败**
+ *       （不让"以为隔离了其实没隔离"发生）；</li>
+ *   <li>{@code process} —— 强制宿主（仅开发，必须显式开启）。</li>
  * </ul>
+ *
+ * <p>历史配置 {@code auto} 仍然接受，但语义改为 fail-closed：Docker 不可用时启动失败，
+ * 不再静默退回宿主进程。
  */
 @Configuration
 public class SandboxConfig {
@@ -39,8 +42,8 @@ public class SandboxConfig {
     @Bean
     @org.springframework.context.annotation.Primary
     public ActionRunner actionRunner(DockerSandbox sandbox,
-                                     @Value("${agent.sandbox.mode:auto}") String mode) {
-        String normalized = mode == null ? "auto" : mode.trim().toLowerCase();
+                                     @Value("${agent.sandbox.mode:docker}") String mode) {
+        String normalized = mode == null ? "docker" : mode.trim().toLowerCase();
         switch (normalized) {
             case "process" -> {
                 log.warn("动作执行模式：宿主进程（无隔离，仅用于开发）");
@@ -60,8 +63,11 @@ public class SandboxConfig {
                     log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
                     return new DockerActionRunner(sandbox);
                 }
-                log.warn("Docker 不可用，回退为宿主进程执行（无隔离）。生产部署请启用 Docker。");
-                return new ProcessActionRunner();
+                // fail-closed：绝不因为 Docker 没起来就悄悄降级为无隔离的宿主执行
+                throw new IllegalStateException(
+                        "Docker 不可用，拒绝以宿主进程执行（无隔离）。"
+                                + "请启动 Docker，或仅限本地开发显式设置 "
+                                + "agent.sandbox.mode=process");
             }
         }
     }

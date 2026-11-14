@@ -14,15 +14,11 @@ import org.springframework.stereotype.Component;
  * <p>规约 §1.1 A2 的落地：{@code projectId} 由<b>服务端</b>解析并校验后才进入会话；
  * 模型无法提供或修改它。会话建立后若要换项目，必须新建会话。
  *
- * <p>除「项目/环境存在」外，本类还校验<b>当前用户是否有权访问该项目</b>：
- * 只有 ADMIN（或显式授予 {@code *}）才能访问全部项目，其余用户按成员的 projectId 列表放行。
- * 只读角色（VIEWER）的上下文会带上 {@code readOnly=true}，由运行层据此装配只读工具面。
+ * <p>项目访问不做成员级 RBAC：已登录用户可以选择任一已接入项目，权限由角色（动作/设置）
+ * 控制。只读角色（VIEWER）的上下文会带上 {@code readOnly=true}，由运行层据此装配只读工具面。
  */
 @Component
 public class ProjectContextResolver {
-
-    /** 项目成员列表里的通配符：表示可访问全部项目。 */
-    private static final String ALL_PROJECTS = "*";
 
     private final ProjectRepository projects;
     private final UserStore users;
@@ -62,10 +58,7 @@ public class ProjectContextResolver {
         // 2. 项目必须存在（服务端校验，模型不可伪造）
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + projectId));
-        // 3. 项目级授权：非 ADMIN 必须是该项目的成员（防止越权读他人项目）
-        if (!canAccess(user, project.id())) {
-            throw new IllegalArgumentException("无权访问该项目：" + project.id());
-        }
+        // 3. 不做项目级 RBAC：已登录用户可访问任一项目（动作/设置权限仍由角色控制）
         // 4. 环境缺省为 test
         String targetEnv = (env == null || env.isBlank()) ? "test" : env;
         // 5. 环境必须属于该项目（防止越权访问他人环境）
@@ -80,11 +73,4 @@ public class ProjectContextResolver {
                 user.role() == Role.VIEWER);
     }
 
-    /** 用户是否可访问该项目：ADMIN 全量，其余看成员列表（支持 {@code *} 通配）。 */
-    private static boolean canAccess(UserStore.User user, String projectId) {
-        if (user.role() == Role.ADMIN) {
-            return true;
-        }
-        return user.projects().contains(ALL_PROJECTS) || user.projects().contains(projectId);
-    }
 }

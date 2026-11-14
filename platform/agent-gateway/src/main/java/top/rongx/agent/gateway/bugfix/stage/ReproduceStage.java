@@ -44,7 +44,7 @@ public class ReproduceStage implements BugFixStageHandler {
                 "testEnv", AnalyzeStage.safe(policy.testEnv()),
                 "baseSha", AnalyzeStage.safe(run.baseSha()),
                 "issueTitle", AnalyzeStage.safe(run.issueTitle()),
-                "analysis", AnalyzeStage.clip(run.analysis(), 6000)));
+                "analysis", FixStage.untrusted(AnalyzeStage.clip(run.analysis(), 6000))));
         ReproduceOutput output;
         try {
             output = agent.runStructured(run, prompt, ReproduceOutput.class);

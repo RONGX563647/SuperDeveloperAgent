@@ -218,11 +218,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
     }
 
     private Connection open() throws SQLException {
-        Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
-        try (Statement st = conn.createStatement()) {
-            st.execute("PRAGMA busy_timeout=5000");
-        }
-        return conn;
+        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
     }
 
     // ---------------------------------------------------------------- 运行

@@ -25,6 +25,15 @@
             <groupId>top.rongx</groupId>
             <artifactId>agent-executor</artifactId>
         </dependency>
+        <!-- 工具实现与治理服务由网关（组装根）显式引入，不再经 runtime 传递依赖 -->
+        <dependency>
+            <groupId>top.rongx</groupId>
+            <artifactId>agent-tools</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>top.rongx</groupId>
+            <artifactId>agent-governance</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc</artifactId>

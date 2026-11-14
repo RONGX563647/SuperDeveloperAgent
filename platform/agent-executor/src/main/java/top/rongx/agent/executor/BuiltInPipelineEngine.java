@@ -2470,6 +2470,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      */
     private ActionRunner selectRunner(PipelineDefinition.StageDef stage) {
         if ("host".equals(stage.runner())) {
+            // 仓库里的 ci/pipeline.yml 可以写 runner: host。容器模式下若照做，
+            // 等于给仓库内容一条跳出沙箱的通道，所以这里只在显式 process 模式生效。
+            if (sandboxed instanceof DockerActionRunner) {
+                return sandboxed;
+            }
             return host;
         }
         if (stage.image() == null || stage.image().isBlank()) {

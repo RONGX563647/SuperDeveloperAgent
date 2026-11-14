@@ -70,8 +70,9 @@ const envModel = computed({
 
 function onProject(id: string): void {
   if (id === appStore.projectId) return
-  appStore.projectId = id
-  appStore.worktree = ''
+  // 必须走 switchProject：它会换到该项目最近的会话（没有则新建），
+  // 直接改 projectId 会让同一个 sessionId 带着 A 项目的上下文进入 B 项目。
+  appStore.switchProject(id)
 }
 </script>
 

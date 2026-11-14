@@ -16,19 +16,7 @@
             <groupId>top.rongx</groupId>
             <artifactId>agent-domain</artifactId>
         </dependency>
-        <dependency>
-            <groupId>top.rongx</groupId>
-            <artifactId>agent-governance</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>top.rongx</groupId>
-            <artifactId>agent-tools</artifactId>
-        </dependency>
-        <!-- 会话状态加密复用平台主密钥（SecretBox），只依赖其加解密能力 -->
-        <dependency>
-            <groupId>top.rongx</groupId>
-            <artifactId>agent-infra</artifactId>
-        </dependency>
+        <!-- 运行层只依赖领域端口；状态存储、主密钥、技能目录的实现都在 infra -->
 
         <dependency>
             <groupId>io.agentscope</groupId>

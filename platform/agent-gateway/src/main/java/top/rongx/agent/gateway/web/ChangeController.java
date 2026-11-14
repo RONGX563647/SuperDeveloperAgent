@@ -103,6 +103,8 @@ public class ChangeController {
     /** 确认卡片数据：展示字段而非自然语言摘要（规约 §4.10 第四道守卫）。 */
     @GetMapping("/{changeId}")
     public ChangeView view(@PathVariable String changeId) {
+        // 变更单正文/哈希不对外匿名暴露；项目级 RBAC 不启用，至少要求登录
+        currentUser.requireUserId();
         ChangePlan plan = registry.find(changeId)
                 .orElseThrow(() -> new IllegalArgumentException("变更不存在: " + changeId));
         return new ChangeView(plan.changeId(), plan.projectId(), plan.env(), plan.kind(),

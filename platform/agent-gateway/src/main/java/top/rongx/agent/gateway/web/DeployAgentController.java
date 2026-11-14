@@ -5,8 +5,9 @@ import io.agentscope.core.event.AgentEvent;
 import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.auth.CurrentUser;
@@ -47,16 +49,21 @@ public class DeployAgentController {
     private final ProjectContextResolver contextResolver;
     private final AgentEventMapper eventMapper;
     private final CurrentUser currentUser;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final AgentStreamLimiter limiter;
+    private final AgentMetrics metrics;
 
     public DeployAgentController(ChatService chatService,
                                  ProjectContextResolver contextResolver,
                                  AgentEventMapper eventMapper,
-                                 CurrentUser currentUser) {
+                                 CurrentUser currentUser,
+                                 AgentStreamLimiter limiter,
+                                 AgentMetrics metrics) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
         this.currentUser = currentUser;
+        this.limiter = limiter;
+        this.metrics = metrics;
     }
 
     /**
@@ -95,34 +102,90 @@ public class DeployAgentController {
                 ? "deploy-" + UUID.randomUUID() : request.sessionId();
         log.info("启动发布 Agent：project={} env={} sha={} pipeline={} binding={} user={}",
                 ctx.projectId(), ctx.env(), sha, pipelineId, bindingId, userId);
-        // 5. SSE 推送（与对话入口同一套事件映射）
+        // 5. 并发闸门：部署比对话更重，同样受进程内并发上限约束
+        limiter.acquireOrThrow();
+
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
-        Flux<AgentEvent> events = chatService.stream(ctx, sessionId, task, "deploy");
-        executor.submit(() -> {
-            try {
-                long seq = 0;
-                for (AgentEvent event : events.toIterable()) {
-                    Map<String, Object> dto = eventMapper.toDto(event);
-                    emitter.send(SseEmitter.event()
-                            .id(String.valueOf(++seq))
-                            .name("agent")
-                            .data(dto, MediaType.APPLICATION_JSON));
+        AtomicReference<Disposable> subscription = new AtomicReference<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        AtomicLong seq = new AtomicLong();
+        AtomicBoolean failed = new AtomicBoolean();
+        long started = System.nanoTime();
+        io.micrometer.core.instrument.Timer.Sample sample = metrics.start();
+        Runnable cancel = () -> {
+            if (closed.compareAndSet(false, true)) {
+                Disposable current = subscription.get();
+                if (current != null) {
+                    current.dispose();
                 }
-                emitter.complete();
-            } catch (IOException clientGone) {
-                emitter.complete();
-            } catch (RuntimeException error) {
-                log.error("发布 Agent 执行异常 project={} env={}", ctx.projectId(), ctx.env(), error);
-                try {
-                    emitter.send(SseEmitter.event().name("error")
-                            .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
-                } catch (IOException ignored) {
-                    // 客户端已断开，无需再写
-                }
-                emitter.complete();
+                limiter.release();
+                metrics.stop(sample, "deploy", failed.get() ? "error" : "closed");
+                log.info("发布 Agent 结束 project={} env={} run={} events={} cost={}ms",
+                        ctx.projectId(), ctx.env(), sessionId, seq.get(),
+                        (System.nanoTime() - started) / 1_000_000);
             }
+        };
+        emitter.onTimeout(() -> {
+            log.warn("发布 Agent 超时，已取消 project={} session={}", ctx.projectId(), sessionId);
+            cancel.run();
+            emitter.complete();
         });
+        emitter.onCompletion(cancel);
+        emitter.onError(error -> cancel.run());
+
+        try {
+            Flux<AgentEvent> events = chatService.stream(ctx, sessionId, task, "deploy");
+            Disposable disposable = events.subscribe(
+                    event -> {
+                        try {
+                            Map<String, Object> dto = eventMapper.toDto(event);
+                            emitter.send(SseEmitter.event()
+                                    .id(String.valueOf(seq.incrementAndGet()))
+                                    .name("agent")
+                                    .data(dto, MediaType.APPLICATION_JSON));
+                        } catch (IOException clientGone) {
+                            cancel.run();
+                            emitter.complete();
+                        } catch (RuntimeException error) {
+                            log.error("发布 Agent 事件推送失败 project={} env={}",
+                                    ctx.projectId(), ctx.env(), error);
+                            sendError(emitter, error);
+                            cancel.run();
+                            emitter.complete();
+                        }
+                    },
+                    error -> {
+                        failed.set(true);
+                        log.error("发布 Agent 执行异常 project={} env={}", ctx.projectId(), ctx.env(), error);
+                        sendError(emitter, error);
+                        cancel.run();
+                        emitter.complete();
+                    },
+                    () -> {
+                        emitter.complete();
+                        cancel.run();
+                    });
+            subscription.set(disposable);
+            if (closed.get()) {
+                disposable.dispose();
+            }
+        } catch (RuntimeException error) {
+            failed.set(true);
+            log.error("发布 Agent 启动失败 project={} env={}", ctx.projectId(), ctx.env(), error);
+            sendError(emitter, error);
+            cancel.run();
+            emitter.complete();
+        }
         return emitter;
+    }
+
+    private void sendError(SseEmitter emitter, Throwable error) {
+        try {
+            emitter.send(SseEmitter.event().name("error")
+                    .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
+        } catch (IOException | IllegalStateException ignored) {
+            // 客户端已断开，无需再写
+        }
     }
 
     /** 自动部署任务：把"人工确认过的绑定"与目标上下文固化进提示，Agent 不再追问。 */
@@ -146,7 +209,7 @@ public class DeployAgentController {
                 """.formatted(ctx.projectId(), ctx.env(), sha, pipelineId, bindingId, ctx.userId());
     }
 
-    private static String safeMessage(RuntimeException error) {
+    private static String safeMessage(Throwable error) {
         String raw = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
         raw = raw.replaceAll("\\s+", " ").trim();
         return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;

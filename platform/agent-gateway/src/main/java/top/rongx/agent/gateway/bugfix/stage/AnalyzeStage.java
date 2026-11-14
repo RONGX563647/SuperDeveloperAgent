@@ -70,7 +70,7 @@ public class AnalyzeStage implements BugFixStageHandler {
                 "projectId", safe(run.projectId()),
                 "issueNumber", safe(run.issueNumber()),
                 "issueTitle", safe(run.issueTitle()),
-                "issueBody", clip(run.issueBody(), 8000),
+                "issueBody", FixStage.untrusted(clip(run.issueBody(), 8000)),
                 "baseSha", safe(baseSha)));
         AnalyzeOutput output;
         try {

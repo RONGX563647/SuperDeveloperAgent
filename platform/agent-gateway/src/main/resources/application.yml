@@ -67,9 +67,9 @@ agent:
     client-id: ${GITLAB_CLIENT_ID:}
     client-secret: ${GITLAB_CLIENT_SECRET:}
     redirect-uri: ${GITLAB_REDIRECT_URI:http://localhost:8090/api/v1/settings/git-hosts/oauth/gitlab/callback}
-  # 动作执行沙箱：auto=Docker 可用就用容器，否则退回宿主进程
+  # 动作执行沙箱：默认 fail-closed（Docker 不可用则启动失败）；仅本地开发显式设为 process
   sandbox:
-    mode: ${AGENT_SANDBOX_MODE:auto}          # auto | docker | process
+    mode: ${AGENT_SANDBOX_MODE:docker}        # docker | process
     image: ${AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
     # 网络策略：bridge=能拉依赖（默认）；build-net=专用网络（生产建议，见文档）；
     #          none=完全断网，仅用于"缓存已预热"的发布构建或构建不可信代码

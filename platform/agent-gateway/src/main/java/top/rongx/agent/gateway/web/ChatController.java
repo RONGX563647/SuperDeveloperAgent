@@ -7,30 +7,34 @@ import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import top.rongx.agent.domain.change.ChangePlan;
-import top.rongx.agent.domain.change.ChangeWire;
-import top.rongx.agent.domain.project.ProjectContext;
-import top.rongx.agent.governance.ChangeRegistry;
-import top.rongx.agent.runtime.ChatService;
-import top.rongx.agent.gateway.web.dto.ChatRequest;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.change.ChangeWire;
+import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.gateway.web.dto.ChatRequest;
+import top.rongx.agent.governance.ChangeRegistry;
+import top.rongx.agent.runtime.ChatService;
 
 /**
  * 对话入口（SSE）。
  *
- * <p>线程模型：用虚拟线程承载一次会话；工具上下文经 RuntimeContext 显式传递，
- * 不依赖 ThreadLocal，因此可以安全地跨线程执行。
+ * <p>线程模型：事件流由 Reactor 驱动，SSE 发送在订阅回调里完成；工具上下文经
+ * RuntimeContext 显式传递，不依赖 ThreadLocal。
+ *
+ * <p>连接生命周期：客户端断开 / 超时 / 服务端异常都会取消上游订阅，
+ * 从而触发 ChatService 的 doFinally 关闭本会话的 MCP 客户端，避免进程泄漏。
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -50,18 +54,23 @@ public class ChatController {
     private final AgentEventMapper eventMapper;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
     private final ChangeRegistry changes;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final AgentStreamLimiter limiter;
+    private final AgentMetrics metrics;
 
     public ChatController(ChatService chatService,
                           ProjectContextResolver contextResolver,
                           AgentEventMapper eventMapper,
                           top.rongx.agent.gateway.auth.CurrentUser currentUser,
-                          ChangeRegistry changes) {
+                          ChangeRegistry changes,
+                          AgentStreamLimiter limiter,
+                          AgentMetrics metrics) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
         this.currentUser = currentUser;
         this.changes = changes;
+        this.limiter = limiter;
+        this.metrics = metrics;
     }
 
     /**
@@ -77,69 +86,130 @@ public class ChatController {
         // 2. 服务端解析并校验项目上下文（模型不可篡改）
         ProjectContext ctx = contextResolver.resolve(
                 request.projectId(), request.env(), userId, request.worktree());
-        // 3. 建立 SSE 发射器，向业务层要事件流
+        // 3. 并发闸门：拿不到许可直接 429，不构建 Agent、不拉起 MCP
+        limiter.acquireOrThrow();
+
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
-        Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
-                "chat", request.skills(), request.mcpServers());
-        // 4. 虚拟线程异步推送：逐事件映射为 DTO 并发送
-        executor.submit(() -> {
-            try {
-                long seq = 0;
-                // 工具结果是流式增量：按 toolCallId 累积，结束事件时判断是否含变更单号
-                Map<String, String> toolNames = new HashMap<>();
-                Map<String, StringBuilder> toolResults = new HashMap<>();
-                for (AgentEvent event : events.toIterable()) {
-                    if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
-                        toolNames.put(call.getToolCallId(), call.getToolCallName());
-                    } else if (event instanceof ToolResultTextDeltaEvent delta
-                            && delta.getToolCallId() != null && delta.getDelta() != null) {
-                        StringBuilder buf = toolResults.computeIfAbsent(
-                                delta.getToolCallId(), k -> new StringBuilder());
-                        // 单次工具结果不可能无限长；限制累积量，避免异常输出撑爆内存
-                        if (buf.length() < 64_000) {
-                            buf.append(delta.getDelta());
-                        }
-                    }
-                    Map<String, Object> dto = eventMapper.toDto(event);
-                    emitter.send(SseEmitter.event()
-                            .id(String.valueOf(++seq))
-                            .name("agent")
-                            .data(dto, MediaType.APPLICATION_JSON));
-                    // 变更单是"给人确认"的对象：在工具结果后补一条 change.created，
-                    // 前端据此展开确认卡片（原先只在正文里写单号，卡片永远不弹）
-                    if (event instanceof ToolResultEndEvent end) {
-                        String toolName = end.getToolCallName() != null
-                                ? end.getToolCallName() : toolNames.get(end.getToolCallId());
-                        StringBuilder result = toolResults.remove(end.getToolCallId());
-                        String changeId = toolName != null && CHANGE_TOOLS.contains(toolName)
-                                && result != null ? changeIdOf(result.toString(), ctx) : null;
-                        if (changeId != null) {
-                            emitter.send(SseEmitter.event()
-                                    .id(String.valueOf(++seq))
-                                    .name("agent")
-                                    .data(Map.of("type", "change.created",
-                                            "payload", Map.of("changeId", changeId)),
-                                            MediaType.APPLICATION_JSON));
-                        }
-                    }
+        AtomicReference<Disposable> subscription = new AtomicReference<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        AtomicLong seq = new AtomicLong();
+        AtomicBoolean failed = new AtomicBoolean();
+        long started = System.nanoTime();
+        io.micrometer.core.instrument.Timer.Sample sample = metrics.start();
+        Runnable cancel = () -> {
+            if (closed.compareAndSet(false, true)) {
+                Disposable current = subscription.get();
+                if (current != null) {
+                    current.dispose();
                 }
-                emitter.complete();
-            } catch (IOException clientGone) {
-                // 客户端主动断开：不能再用 completeWithError（会触发错误页派发并失败）
-                emitter.complete();
-            } catch (RuntimeException error) {
-                // 已经建立流之后再抛 500 是无效的：改为发一条 error 事件，然后正常结束
-                log.error("对话流异常 project={} env={}", ctx.projectId(), ctx.env(), error);
-                try {
-                    emitter.send(SseEmitter.event().name("error")
-                            .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
-                } catch (IOException ignored) {
-                    // 客户端已断开，无需再写
-                }
-                emitter.complete();
+                limiter.release();
+                metrics.stop(sample, "chat", failed.get() ? "error" : "closed");
+                log.info("对话流结束 project={} env={} session={} events={} cost={}ms",
+                        ctx.projectId(), ctx.env(), request.sessionId(), seq.get(),
+                        (System.nanoTime() - started) / 1_000_000);
             }
+        };
+        // 客户端断开 / 超时 / 派发错误都要取消上游，否则 Agent 与 MCP 会继续跑
+        emitter.onTimeout(() -> {
+            log.warn("对话流超时，已取消 project={} session={}", ctx.projectId(), request.sessionId());
+            cancel.run();
+            emitter.complete();
         });
+        emitter.onCompletion(cancel);
+        emitter.onError(error -> cancel.run());
+
+        try {
+            Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
+                    "chat", request.skills(), request.mcpServers());
+            // 工具结果是流式增量：按 toolCallId 累积，结束事件时判断是否含变更单号
+            Map<String, String> toolNames = new HashMap<>();
+            Map<String, StringBuilder> toolResults = new HashMap<>();
+            Disposable disposable = events.subscribe(
+                    event -> onEvent(event, emitter, ctx, toolNames, toolResults, seq, cancel),
+                    error -> {
+                        failed.set(true);
+                        log.error("对话流异常 project={} env={}", ctx.projectId(), ctx.env(), error);
+                        sendError(emitter, error);
+                        cancel.run();
+                        emitter.complete();
+                    },
+                    () -> {
+                        emitter.complete();
+                        cancel.run();
+                    });
+            subscription.set(disposable);
+            // 竞态兜底：订阅可能在 set 之前就已结束（空流/同步错误）
+            if (closed.get()) {
+                disposable.dispose();
+            }
+        } catch (RuntimeException error) {
+            failed.set(true);
+            log.error("对话启动失败 project={} env={}", ctx.projectId(), ctx.env(), error);
+            sendError(emitter, error);
+            cancel.run();
+            emitter.complete();
+        }
         return emitter;
+    }
+
+    private void onEvent(AgentEvent event, SseEmitter emitter, ProjectContext ctx,
+                         Map<String, String> toolNames, Map<String, StringBuilder> toolResults,
+                         AtomicLong seq, Runnable cancel) {
+        try {
+            if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
+                toolNames.put(call.getToolCallId(), call.getToolCallName());
+                metrics.toolCall(call.getToolCallName(), "invoked");
+            } else if (event instanceof ToolResultTextDeltaEvent delta
+                    && delta.getToolCallId() != null && delta.getDelta() != null) {
+                StringBuilder buf = toolResults.computeIfAbsent(
+                        delta.getToolCallId(), k -> new StringBuilder());
+                // 单次工具结果不可能无限长；限制累积量，避免异常输出撑爆内存
+                if (buf.length() < 64_000) {
+                    buf.append(delta.getDelta());
+                }
+            }
+            Map<String, Object> dto = eventMapper.toDto(event);
+            emitter.send(SseEmitter.event()
+                    .id(String.valueOf(seq.incrementAndGet()))
+                    .name("agent")
+                    .data(dto, MediaType.APPLICATION_JSON));
+            // 变更单是"给人确认"的对象：在工具结果后补一条 change.created，
+            // 前端据此展开确认卡片（原先只在正文里写单号，卡片永远不弹）
+            if (event instanceof ToolResultEndEvent end) {
+                String toolName = end.getToolCallName() != null
+                        ? end.getToolCallName() : toolNames.get(end.getToolCallId());
+                metrics.toolCall(toolName, "completed");
+                StringBuilder result = toolResults.remove(end.getToolCallId());
+                String changeId = toolName != null && CHANGE_TOOLS.contains(toolName)
+                        && result != null ? changeIdOf(result.toString(), ctx) : null;
+                if (changeId != null) {
+                    emitter.send(SseEmitter.event()
+                            .id(String.valueOf(seq.incrementAndGet()))
+                            .name("agent")
+                            .data(Map.of("type", "change.created",
+                                    "payload", Map.of("changeId", changeId)),
+                                    MediaType.APPLICATION_JSON));
+                }
+            }
+        } catch (IOException clientGone) {
+            // 客户端主动断开：直接取消上游，不再 completeWithError
+            cancel.run();
+            emitter.complete();
+        } catch (RuntimeException error) {
+            log.error("对话事件推送失败 project={} env={}", ctx.projectId(), ctx.env(), error);
+            sendError(emitter, error);
+            cancel.run();
+            emitter.complete();
+        }
+    }
+
+    private void sendError(SseEmitter emitter, Throwable error) {
+        try {
+            emitter.send(SseEmitter.event().name("error")
+                    .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
+        } catch (IOException | IllegalStateException ignored) {
+            // 客户端已断开，无需再写
+        }
     }
 
     /**
@@ -163,7 +233,7 @@ public class ChatController {
     }
 
     /** 对外只暴露简短、无内部细节的错误文案（规约 §3）。 */
-    private String safeMessage(RuntimeException error) {
+    private String safeMessage(Throwable error) {
         String raw = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
         raw = raw.replaceAll("\\s+", " ").trim();
         return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;

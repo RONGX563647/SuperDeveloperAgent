@@ -44,6 +44,15 @@ public class GlobalExceptionHandler {
         return body(HttpStatus.CONFLICT, e.getMessage());
     }
 
+    /** Agent 执行失败 → 500（模型/工具依赖问题，不是客户端可以重试的 409 冲突）。 */
+    @ExceptionHandler(AgentExecutionException.class)
+    public ResponseEntity<Map<String, Object>> agentFailed(AgentExecutionException e) {
+        String traceId = UUID.randomUUID().toString();
+        log.error("Agent 执行失败 traceId={} reason={}", traceId, e.getMessage(), e);
+        return body(HttpStatus.INTERNAL_SERVER_ERROR,
+                "Agent 执行失败，请稍后重试并提供 traceId", traceId);
+    }
+
     /** 明确带 HTTP 状态的异常（如 webhook 401）→ 按原状态返回，不落到 500。 */
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> responseStatus(ResponseStatusException e) {

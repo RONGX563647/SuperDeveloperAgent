@@ -21,9 +21,11 @@ import reactor.core.publisher.Mono;
 public class ChatService {
 
     private final AgentFactory agentFactory;
+    private final ChatSessionRegistry sessions;
 
-    public ChatService(AgentFactory agentFactory) {
+    public ChatService(AgentFactory agentFactory, ChatSessionRegistry sessions) {
         this.agentFactory = agentFactory;
+        this.sessions = sessions;
     }
 
     /**
@@ -59,8 +61,9 @@ public class ChatService {
         if (text == null || text.isBlank()) {
             return Flux.error(new IllegalArgumentException("消息不能为空"));
         }
-        // 2. 规范化会话 ID（缺失则生成）
+        // 2. 规范化会话 ID（缺失则生成），并校验它没有被绑定到别的项目/环境
         String sid = (sessionId == null || sessionId.isBlank()) ? UUID.randomUUID().toString() : sessionId;
+        sessions.bindOrVerify(sid, ctx);
         // 3. 按项目上下文构造 Agent（角色决定工具面与系统提示；能力按本会话选择挂载）
         AgentFactory.AgentSession session = "deploy".equalsIgnoreCase(role)
                 ? new AgentFactory.AgentSession(agentFactory.createDeploy(ctx), List.of())
@@ -98,6 +101,7 @@ public class ChatService {
         }
         String sid = (sessionId == null || sessionId.isBlank())
                 ? UUID.randomUUID().toString() : sessionId;
+        sessions.bindOrVerify(sid, ctx);
         AgentFactory.AgentSession session = agentFactory.createChat(ctx, null, null);
         RuntimeContext runtime = RuntimeContext.builder()
                 .userId(ctx.userId())

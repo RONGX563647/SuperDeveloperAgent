@@ -31,7 +31,7 @@ import org.springframework.stereotype.Component;
  * <p>根目录：{@code <workspace>/_platform/skills}（平台侧，不污染用户仓库）。
  */
 @Component
-public class SkillsStore {
+public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog {
 
     private static final String SKILL_FILE = "SKILL.md";
     /** 启用状态文件：与技能目录同级，避免在技能目录里塞标记文件被当成资源。 */
@@ -48,6 +48,7 @@ public class SkillsStore {
         this.stateFile = this.root.getParent().resolve(STATE_FILE);
     }
 
+    @Override
     public Path root() {
         return root;
     }
@@ -194,6 +195,7 @@ public class SkillsStore {
     }
 
     /** 默认启用的技能目录名（对话未显式选择时使用）。 */
+    @Override
     public Set<String> enabledNames() {
         Set<String> out = new LinkedHashSet<>();
         for (Skill skill : list()) {

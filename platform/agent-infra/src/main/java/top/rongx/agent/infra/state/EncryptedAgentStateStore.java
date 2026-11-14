@@ -1,4 +1,4 @@
-package top.rongx.agent.runtime;
+package top.rongx.agent.infra.state;
 
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.State;
@@ -48,6 +48,12 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     private final Path root;
     private final SecretBox cipher;
     private final JsonCodec codec = JsonUtils.getJsonCodec();
+    /**
+     * 会话级互斥：同一 sessionId 并发两轮对话时，不能出现"读-改-写"互相覆盖。
+     * 锁按 (user, session) 分片，不同会话之间不互相阻塞。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>
+            sessionLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
     public EncryptedAgentStateStore(Path root, SecretBox cipher) {
         this.root = root.toAbsolutePath().normalize();
@@ -59,59 +65,65 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         if (state == null) {
             return;
         }
-        write(file(userId, sessionId, key, VALUE_SUFFIX),
-                encrypt(codec.toJson(state)) + System.lineSeparator());
+        withSessionLock(userId, sessionId, () -> write(file(userId, sessionId, key, VALUE_SUFFIX),
+                encrypt(codec.toJson(state)) + System.lineSeparator()));
     }
 
     @Override
     public void save(String userId, String sessionId, String key, List<? extends State> states) {
-        StringBuilder body = new StringBuilder();
-        if (states != null) {
-            for (State state : states) {
-                if (state != null) {
-                    body.append(encrypt(codec.toJson(state))).append(System.lineSeparator());
+        withSessionLock(userId, sessionId, () -> {
+            StringBuilder body = new StringBuilder();
+            if (states != null) {
+                for (State state : states) {
+                    if (state != null) {
+                        body.append(encrypt(codec.toJson(state))).append(System.lineSeparator());
+                    }
                 }
             }
-        }
-        write(file(userId, sessionId, key, LIST_SUFFIX), body.toString());
+            write(file(userId, sessionId, key, LIST_SUFFIX), body.toString());
+        });
     }
 
     @Override
     public <T extends State> Optional<T> get(String userId, String sessionId, String key,
                                              Class<T> type) {
-        String token = readToken(file(userId, sessionId, key, VALUE_SUFFIX));
-        if (token == null) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(codec.fromJson(decrypt(token), type));
-        } catch (RuntimeException e) {
-            // 旧版明文 / 主密钥轮换后的历史数据：当成没有，别让整轮对话失败
-            log.warn("会话状态无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
-            return Optional.empty();
-        }
+        return withSessionLock(userId, sessionId, () -> {
+            String token = readToken(file(userId, sessionId, key, VALUE_SUFFIX));
+            if (token == null) {
+                return Optional.empty();
+            }
+            try {
+                return Optional.of(codec.fromJson(decrypt(token), type));
+            } catch (RuntimeException e) {
+                // 旧版明文 / 主密钥轮换后的历史数据：当成没有，别让整轮对话失败
+                log.warn("会话状态无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
+                return Optional.empty();
+            }
+        });
     }
 
     @Override
     public <T extends State> List<T> getList(String userId, String sessionId, String key,
                                              Class<T> type) {
-        Path file = file(userId, sessionId, key, LIST_SUFFIX);
-        if (!Files.isRegularFile(file)) {
-            return List.of();
-        }
-        List<T> result = new ArrayList<>();
-        try {
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                if (line.isBlank()) {
-                    continue;
-                }
-                result.add(codec.fromJson(decrypt(line.trim()), type));
+        return withSessionLock(userId, sessionId, () -> {
+            Path file = file(userId, sessionId, key, LIST_SUFFIX);
+            if (!Files.isRegularFile(file)) {
+                return List.of();
             }
-        } catch (IOException | RuntimeException e) {
-            log.warn("会话状态列表无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
-            return List.of();
-        }
-        return result;
+            List<T> result = new ArrayList<>();
+            try {
+                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    result.add(codec.fromJson(decrypt(line.trim()), type));
+                }
+            } catch (IOException | RuntimeException e) {
+                log.warn("会话状态列表无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
+                return List.of();
+            }
+            return result;
+        });
     }
 
     @Override
@@ -121,13 +133,16 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     @Override
     public void delete(String userId, String sessionId) {
-        deleteRecursively(sessionDirectory(userId, sessionId));
+        withSessionLock(userId, sessionId,
+                () -> deleteRecursively(sessionDirectory(userId, sessionId)));
     }
 
     @Override
     public void delete(String userId, String sessionId, String key) {
-        deleteIfExists(file(userId, sessionId, key, VALUE_SUFFIX));
-        deleteIfExists(file(userId, sessionId, key, LIST_SUFFIX));
+        withSessionLock(userId, sessionId, () -> {
+            deleteIfExists(file(userId, sessionId, key, VALUE_SUFFIX));
+            deleteIfExists(file(userId, sessionId, key, LIST_SUFFIX));
+        });
     }
 
     @Override
@@ -169,6 +184,27 @@ public class EncryptedAgentStateStore implements AgentStateStore {
             throw new IllegalArgumentException(label + " 非法：" + raw);
         }
         return name.length() > 120 ? name.substring(0, 120) : name;
+    }
+
+    /** 同一会话内的状态读写串行化，避免并发轮次 last-write-wins。 */
+    private <T> T withSessionLock(String userId, String sessionId,
+                                  java.util.function.Supplier<T> action) {
+        String key = userId + "/" + sessionId;
+        java.util.concurrent.locks.ReentrantLock lock = sessionLocks.computeIfAbsent(
+                key, ignored -> new java.util.concurrent.locks.ReentrantLock());
+        lock.lock();
+        try {
+            return action.get();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void withSessionLock(String userId, String sessionId, Runnable action) {
+        withSessionLock(userId, sessionId, () -> {
+            action.run();
+            return null;
+        });
     }
 
     private String encrypt(String plaintext) {

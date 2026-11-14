@@ -62,7 +62,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
     }
 
     private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
+        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
     }
 
     @Override

@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 项目上下文解析：项目级授权（成员关系）、只读角色标记、工作树逃逸拒绝。
+ * 项目上下文解析：不做项目级 RBAC、只读角色标记、工作树逃逸拒绝。
  *
  * <p>用真实的 SQLite UserStore（临时目录）+ 内存项目仓库，验证的是接线而不是 mock 行为。
  */
@@ -48,15 +48,14 @@ class ProjectContextResolverTest {
     }
 
     @Test
-    @DisplayName("非成员访问未授权项目被拒绝")
-    void nonMemberRejected() {
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> resolver.resolve("NEW", "dev", "devops"));
-        assertTrue(ex.getMessage().contains("无权访问"), ex.getMessage());
+    @DisplayName("不做项目级 RBAC：已登录用户可访问任一已接入项目")
+    void nonMemberCanAccessAnyProject() {
+        ProjectContext ctx = resolver.resolve("NEW", "dev", "devops");
+        assertEquals("NEW", ctx.projectId());
     }
 
     @Test
-    @DisplayName("成员可访问授权项目；VIEWER 上下文标记只读")
+    @DisplayName("已登录用户可访问项目；VIEWER 上下文标记只读")
     void memberAccessAndViewerReadOnly() {
         assertFalse(resolver.resolve("RY", "test", "devops").readOnly());
 

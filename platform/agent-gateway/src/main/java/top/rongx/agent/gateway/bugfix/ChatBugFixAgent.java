@@ -74,14 +74,15 @@ public class ChatBugFixAgent implements BugFixAgentPort {
                     () -> collect(run.id(), ctx, sessionId, prompt, agentRole));
             return future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            throw new IllegalStateException("Agent 在 " + TIMEOUT_SECONDS + " 秒内未完成（"
-                    + role.name() + "）");
+            throw new top.rongx.agent.gateway.web.AgentExecutionException(
+                    "Agent 在 " + TIMEOUT_SECONDS + " 秒内未完成（" + role.name() + "）");
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
-            throw new IllegalStateException("Agent 执行失败：" + safe(cause));
+            throw new top.rongx.agent.gateway.web.AgentExecutionException(
+                    "Agent 执行失败：" + safe(cause), cause);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Agent 执行被中断");
+            throw new top.rongx.agent.gateway.web.AgentExecutionException("Agent 执行被中断", e);
         } finally {
             // 不等待任务自然结束：超时后必须立即释放，避免卡死编排器
             executor.shutdownNow();
@@ -102,11 +103,13 @@ public class ChatBugFixAgent implements BugFixAgentPort {
         Mono<T> call = chatService.structured(ctx, sessionId, prompt, type)
                 .map(msg -> {
                     if (!msg.hasStructuredData()) {
-                        throw new IllegalStateException("模型未按 schema 返回结构化结果");
+                        throw new top.rongx.agent.gateway.web.AgentExecutionException(
+                                "模型未按 schema 返回结构化结果");
                     }
                     T data = msg.getStructuredData(type);
                     if (data == null) {
-                        throw new IllegalStateException("结构化结果为空：" + type.getSimpleName());
+                        throw new top.rongx.agent.gateway.web.AgentExecutionException(
+                                "结构化结果为空：" + type.getSimpleName());
                     }
                     return data;
                 });
@@ -116,13 +119,18 @@ public class ChatBugFixAgent implements BugFixAgentPort {
                     .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
                     .block();
             if (result == null) {
-                throw new IllegalStateException("模型未返回结构化结果：" + type.getSimpleName());
+                throw new top.rongx.agent.gateway.web.AgentExecutionException(
+                        "模型未返回结构化结果：" + type.getSimpleName());
             }
             return result;
+        } catch (top.rongx.agent.gateway.web.AgentExecutionException e) {
+            throw e;
         } catch (IllegalStateException e) {
+            // 取消信号是业务状态冲突，保持 409 语义
             throw e;
         } catch (RuntimeException e) {
-            throw new IllegalStateException("结构化 Agent 执行失败：" + safe(e));
+            throw new top.rongx.agent.gateway.web.AgentExecutionException(
+                    "结构化 Agent 执行失败：" + safe(e), e);
         }
     }
 
