@@ -27,6 +27,8 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.yaml.snakeyaml.Yaml;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSource;
@@ -90,6 +92,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final ActionRunner host;
     private final Path workspaceRoot;
 
+    private static final Logger log = LoggerFactory.getLogger(BuiltInPipelineEngine.class);
+
     private final Map<String, RunState> runs = new ConcurrentHashMap<>();
     /** 镜像版本账本（按 (项目, 环境) 持久化；回滚锚点与按版本部署都以它为准）。 */
     private final ImageVersionStore imageVersions;
@@ -125,6 +129,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor;
     /** 多服务部署（test 前后端分离）直接使用 docker 实现。 */
     private final DockerDeployer dockerDeployer = new DockerDeployer();
+
+    /**
+     * 统一运行账本（与对话/工作区/修复共用一张表）：让流水线运行也进入统一视图与启动恢复。
+     * 为 null 时不记账；写入失败只记日志，绝不影响流水线本身。
+     */
+    private final top.rongx.agent.domain.run.RunLedgerRepository ledger;
 
     /** 应用关闭时停掉执行线程：不再接新任务，正在跑的构建被中断（避免悬挂进程）。 */
     @Override
@@ -313,6 +323,30 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                  top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
                                  top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor,
                                  LocalDevHostDeployer localDevHost) {
+        this(recipes, sandboxed, host, workspaceRoot, history, imagePrefix, repoLocator, deployers,
+                resolver, recipeStore, envVars, envStore, envRuntime, envProvisioner,
+                recoveryAdvisor, localDevHost, null);
+    }
+
+    /**
+     * 最完整构造：再注入统一运行账本（跨编排运行视图 + 重启恢复）。
+     *
+     * <p>账本为空时行为不变；账本写入在 {@code finally} 中兜底，失败只记日志。
+     */
+    public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
+                                 ActionRunner host, Path workspaceRoot, RunHistoryStore history,
+                                 String imagePrefix,
+                                 top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
+                                 top.rongx.agent.domain.port.Deployer deployers,
+                                 PipelineDefinitionResolver resolver,
+                                 top.rongx.agent.domain.port.RecipeStore recipeStore,
+                                 top.rongx.agent.domain.settings.ProjectEnvVarRepository envVars,
+                                 top.rongx.agent.domain.env.EnvironmentStore envStore,
+                                 top.rongx.agent.domain.env.EnvRuntime envRuntime,
+                                 top.rongx.agent.domain.env.EnvProvisioner envProvisioner,
+                                 top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor,
+                                 LocalDevHostDeployer localDevHost,
+                                 top.rongx.agent.domain.run.RunLedgerRepository ledger) {
         this.recipes = recipes;
         this.sandboxed = sandboxed;
         this.host = host;
@@ -329,6 +363,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         this.envProvisioner = envProvisioner;
         this.recoveryAdvisor = recoveryAdvisor;
         this.localDevHost = localDevHost;
+        this.ledger = ledger;
         this.imageVersions = workspaceRoot == null
                 ? ImageVersionStore.disabled() : ImageVersionStore.file(workspaceRoot);
         restoreHistory();
@@ -1025,6 +1060,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         runs.put(runId, state);
         history.save(state.snapshot());
+        recordLedger(state);
         scheduler.submit(projectId, env, () -> workers.submit(() -> execute(state)));
         return runId;
     }
@@ -1387,8 +1423,61 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         } finally {
             // 每次运行结束（含异常）都落盘，保证重启后可查询历史
             history.save(state.snapshot());
+            recordLedger(state);
             scheduler.complete(state.projectId, state.env);
         }
+    }
+
+    /**
+     * 把当前运行状态同步到统一账本（跨编排视图 + 重启恢复）。
+     *
+     * <p>只写扁平生命周期，不复制阶段细节；写入失败只记日志，流水线照常结束。
+     */
+    private void recordLedger(RunState state) {
+        if (ledger == null) {
+            return;
+        }
+        try {
+            top.rongx.agent.domain.run.RunState mapped = switch (state.status) {
+                case PENDING -> top.rongx.agent.domain.run.RunState.QUEUED;
+                case RUNNING -> top.rongx.agent.domain.run.RunState.RUNNING;
+                case SUCCEEDED -> top.rongx.agent.domain.run.RunState.SUCCEEDED;
+                case TIMEOUT -> top.rongx.agent.domain.run.RunState.FAILED;
+                case FAILED -> top.rongx.agent.domain.run.RunState.FAILED;
+                case CANCELLED -> top.rongx.agent.domain.run.RunState.CANCELLED;
+            };
+            String error = "";
+            if (state.status == StageStatus.FAILED || state.status == StageStatus.TIMEOUT) {
+                error = state.stages.stream()
+                        .filter(stage -> stage.status() == StageStatus.FAILED
+                                || stage.status() == StageStatus.TIMEOUT)
+                        .reduce((first, second) -> second)
+                        .map(stage -> stage.errorSummary() == null
+                                ? String.valueOf(stage.errorCode()) : stage.errorSummary())
+                        .orElse("运行失败");
+            }
+            ledger.save(new top.rongx.agent.domain.run.RunRecord(
+                    state.runId, top.rongx.agent.domain.run.RunKind.PIPELINE, state.projectId,
+                    state.pipelineId,
+                    state.actor == null || state.actor.isBlank() ? "system" : state.actor,
+                    mapped, stageLabel(state), error, state.createdAt, System.currentTimeMillis()));
+        } catch (RuntimeException e) {
+            log.warn("运行账本写入失败 run={}：{}", state.runId, e.getMessage());
+        }
+    }
+
+    private static String stageLabel(RunState state) {
+        if (state.status == StageStatus.PENDING) {
+            return "已排队";
+        }
+        if (state.status == StageStatus.RUNNING) {
+            return "执行中";
+        }
+        if (state.stages.isEmpty()) {
+            return "已结束";
+        }
+        StageResult last = state.stages.get(state.stages.size() - 1);
+        return "最近阶段 " + last.stageId() + " / " + last.status();
     }
 
     /**
