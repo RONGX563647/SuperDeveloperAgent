@@ -105,8 +105,8 @@ npm run build      # vue-tsc strict + 产物
 ## HTTP API 与工具
 
 - 完整接口清单见 [Code Wiki §6](../docs/Code-Wiki.md#6-http-api-一览)；前缀 `/api/v1`，错误统一 `{code, message, traceId}`。
-- 主要入口：`/chat`（SSE）、`/actions`、`/changes`、`/ci/*`、`/deploy/*`、`/projects/*`、`/settings/*`、`/gitee/*`、`/webhooks/gitee/*`。
-- 模型工具：33 个 `@Tool` 方法 / 12 个工具类，分 L0 只读、L1 计划、L2 隔离执行、L3 生产四级；新增只读工具 `config_resolve`（配置解析/主动询问）与 `ci_dry_run`（部署预检）；**没有 `confirm` 工具**，确认只能由人经 HTTP 完成。
+- 主要入口：`/chat`（SSE）、`/workspaces/*`（工作区 / 调度 Agent / 聚合事件流）、`/run-ledger`、`/actions`、`/changes`、`/ci/*`、`/deploy/*`、`/projects/*`、`/settings/*`、`/gitee/*`、`/webhooks/gitee/*`。
+- 模型工具：61 个 `@Tool` 方法 / 18 个工具类，分 L0 只读、L1 计划、L2 隔离执行、L3 生产四级；含只读 `config_resolve`（配置解析/主动询问）与 `ci_dry_run`（部署预检），以及工作区调度 Agent 的会话/任务编排工具；`confirm` 工具只把变更单推给当前操作人，**不签发令牌、不执行**，确认只能由人经 HTTP 完成。
 
 ## 规约检查（已接入构建）
 

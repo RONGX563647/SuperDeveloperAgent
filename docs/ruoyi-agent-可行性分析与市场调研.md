@@ -4,6 +4,8 @@
 > 版本：v1.0 ｜ 日期：2026-11-07 ｜ 分析对象：`RuoYi 4.8.3`（本地 `RuoYi/`）+ `AgentScope Java 2.x`（本地 `agentscope-java/`）
 >
 > ⚠️ **已有 v2**：若项目改用 **RuoYi-Vue-Plus 6.1.0**（Sa-Token / JDK21 / 自带 Spring AI + MCP），请看 [`ruoyi-vue-plus-agent-可行性分析-v2.md`](ruoyi-vue-plus-agent-可行性分析-v2.md)。本文件保留作为 4.8.3 基线的对照；其中「生成器写盘」「无 AI 能力」等结论**不适用于 6.1.0**。
+>
+> 📌 **链接说明**：文中 `../RuoYi/`、`../agentscope-java/` 指向分析时本地检出的参考仓库，不随本项目提交；未检出时这些证据链接不可打开，结论本身不受影响。
 
 ---
 

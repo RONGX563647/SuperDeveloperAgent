@@ -255,7 +255,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `AppRuntimeInspector` | `RuntimeInspector` 实现（2026-11 新增）：按环境运行时分流——test/prod 用 `docker inspect` 读实例事实（状态/重启数/镜像 digest/端口映射/健康），dev 读平台进程日志尾部；只回答事实，不判失败原因 |
 | `JschSsh` / `SshExec` | 纯 Java SSH 实现（JSch）：连通性探测、远程命令、文件上传；`SshExec` 实现 domain 的 `SshAccess` 端口（探测 docker 版本用 `{{.Server.Version}}` 模板并兜底 `docker info`） |
 
-### 4.5 agent-tools —— 工具层（15 类）
+### 4.5 agent-tools —— 工具层（22 类，18 个 @Tool 类）
 
 | 类 | 职责 |
 |---|---|
@@ -266,14 +266,19 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `CiCommandTools` | 流水线写（L2）：`ci_run`（内部先 `dryRun`，未通过 E-708）、`ci_cancel`；预检 `ci_dry_run`（L0 只读） |
 | `RepoQueryTools` | 仓库只读取证（L0，2026-11 新增，经 `RepoInspector` 端口）：`git_status`、`grep`（正则检索，跳过构建目录/二进制）、`git_commits`、`git_diff`（from..to 提交+stat）、`list_files`、`read_file`（限仓库内文本，约 8000 字符截断） |
 | `RuntimeTools` | 运行时取证（L0，2026-11 新增，经 `RuntimeInspector` 端口）：`env_runtime_status`（应用容器/进程事实：状态/重启数/镜像 digest/端口/网络）、`app_logs`（test/prod 读 `docker logs` 时间窗；HOST 部署读状态目录持久化的 `app.log`；dev 读平台托管进程日志尾部，均已脱敏）、`port_check`（宿主端口占用与归属） |
-| `ChangeTools` | `request_confirmation`（L1）：只产出 changeId+planHash，**模型不能自己确认** |
+| `ChangeTools` | `request_confirmation`（L1，登记变更返回 changeId+planHash）与 `confirm`（L1，只把变更单推给当前操作人，返回 PENDING_USER_CONFIRMATION，**不签发令牌、不执行**）；真正的确认/令牌只由已登录用户的 HTTP 请求完成 |
 | `PatchTools` | `propose_patch`（L1，2026-11 新增）：受限补丁——路径白名单（`ci/**`/Jenkinsfile/pom.xml/build.gradle/测试代码）、禁敏感文件、只登记变更单返回 changeId，**永不写仓库/产令牌**；应用须人经 `/changes/{id}/confirm → apply` |
 | `DeployTools` | 部署 agent 专用：`deploy_env_status`、`deploy_run`、`deploy_save_recipe`——「把某个环境跑通并固化」；`deploy_run` 必须携带人工确认过的 `binding_id`（由 `env_mapping_draft` 生成，经 `EnvBindingPort.requireForRun` 校验，E-703） |
-| `EnvTools` | 环境工具：`env_summary`（L0 只读：变量数/网络/端口/中间件健康，**不返回值**）、`env_var_probe`（L0 只读：变量指向的 host:port 属于本项目中间件/共享实例/外部地址，**不返回变量值**）、`env_mapping_draft`（L2 写：生成 DRAFT 绑定草案，prod 拒绝，须人工确认后才能 `deploy_run`）、`env_ensure`（L2 写：确保当前环境中间件容器存在并运行，缺失按需创建并写回覆盖变量，经 `EnvProvisioner`，E-702） |
+| `EnvQueryTools` | 环境只读：`env_summary`（变量数/网络/端口/中间件健康，**不返回值**）、`env_var_probe`（变量指向的 host:port 属于本项目中间件/共享实例/外部地址，**不返回变量值**） |
+| `EnvCommandTools` | 环境写（L2）：`env_mapping_draft`（生成 DRAFT 绑定草案，prod 拒绝，须人工确认后才能 `deploy_run`）、`env_ensure`（确保中间件容器存在并运行，缺失按需创建并写回覆盖变量，经 `EnvProvisioner`，E-702） |
+| `WorkspaceSupervisorTools` | 工作区调度 Agent 专用（16 个）：`workspace_snapshot`、`conversation_list/search/create/rename/archive/pin/send/status/wait/cancel/summarize`、`task_create/update/complete/list`；**只能编排会话与任务，没有任何文件/命令写能力** |
+| `CapabilityMarketTools` | 能力市场（仅对话工具面）：`search_capabilities`、`install_capability`——查找并接入公开 MCP / Skill |
+| `OpsAgentTools` | `run_ops_agent`（L2）：把「把某环境真正跑通」委派给发布 Agent；发布 Agent 自身不注册（防递归） |
+| `GitIssueQueryTools` / `GitIssueCommandTools` | 任务页：`list_git_issues`/`get_git_issue` 只读；`create/update/comment/close/reopen/sync_git_issue` 写（与「任务」Tab 同一份数据） |
 | `ProjectTools` | 项目只读（L0）：`project_info`、`list_envs` |
 | `ConfigTools` | 配置解析（L0，2026-11 新增）：`config_resolve`——项目环境优先，其次仓库 `.env` 声明，最后全量扫描 README/docs/compose/application；缺失或候选冲突返回 `NEED_USER_INPUT` 摘要，**要求 Agent 停止执行并等待用户回答**；密钥类声明值一律 `****` |
 | `ConfigResolver` | 配置解析服务（非 @Tool）：优先级与全量扫描的唯一实现，工具与 `GET /projects/{id}/config/resolve` 共用；扫描候选带 `path:line` 与 envHint，不自动写环境 |
-| `ToolCatalog` | 工具装配：三套无状态 `Toolkit` 按环境二选一（避免运行时改共享 Toolkit 激活集——会话状态 `activatedGroups` 会覆盖激活集，新会话写工具会整体消失）——`readOnlyToolkit`（生产会话：ProjectTools/CiQueryTools/ActionQueryTools/RepoQueryTools/RuntimeTools/ConfigTools，**不含 EnvTools 写能力**）、`agentToolkit`（@Primary，非生产：只读组+环境组全量含写，含 PatchTools）、`deployToolkit`（发布 Agent：ProjectTools/CiQueryTools/ActionQueryTools/RepoQueryTools/EnvTools/DeployTools/RuntimeTools/ChangeTools/ActionCommandTools/PatchTools/ConfigTools） |
+| `ToolCatalog` | 工具装配：四套无状态 `Toolkit`（避免运行时改共享 Toolkit 激活集——会话状态 `activatedGroups` 会覆盖激活集，新会话写工具会整体消失）——`readOnlyToolkit`（生产会话：只读类，**不含任何写能力**）、`agentToolkit`（@Primary，非生产：只读 + 全部写工具，含 PatchTools/能力市场/任务写）、`deployToolkit`（发布 Agent：只读 + 环境/部署/变更/动作/补丁，不含任务写与能力市场）、`supervisorToolkit`（调度 Agent：`WorkspaceSupervisorTools` + 全部只读工具，无文件写/命令/补丁/部署） |
 
 ### 4.6 agent-runtime —— Agent 装配与对话（7 类）
 
@@ -349,7 +354,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 人（浏览器）POST /changes/{id}/confirm ──► ConfirmTokenService.issue（绑 userId+changeId+planHash，5min，高危需二级密码）
 人 POST /changes/{id}/apply（带 X-Confirm-Token）──► consume 六重校验 ──► ActionService.apply 执行
 ```
-关键约束：**没有 confirm 工具**——确认只能由人在 HTTP 接口完成；展示字段而非自然语言摘要。
+关键约束：**工具不能自我批准**——`confirm` 工具只把变更单推给当前操作人（返回 PENDING_USER_CONFIRMATION），不签发令牌、不执行；令牌只能由已登录用户在 HTTP 接口上确认后签发，展示字段而非自然语言摘要。
 
 ### 5.4 沙箱与 fail-closed
 - `DockerSandbox.wrap`：非 root、cap-drop ALL、no-new-privileges、资源限额、网络三档；
@@ -504,9 +509,9 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 
 ---
 
-## 7. 模型工具（@Tool）一览 —— 33 个方法 / 12 个工具类
+## 7. 模型工具（@Tool）一览 —— 61 个方法 / 18 个工具类
 
-AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 模块共 15 类，其中 12 个是 @Tool 类，另含 `ToolCatalog`、`ActionService` 与 `ConfigResolver`）：
+AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 22 个类，其中 18 个是 @Tool 类（合计 61 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver` 等非工具类）：
 
 > `supervisorToolkit` = `WorkspaceSupervisorTools`（会话/运行/任务管理）+ 全部只读工具；**不含**任何文件写、命令、补丁、部署工具，保证调度 Agent 只能编排与只读取证。
 
@@ -527,12 +532,20 @@ AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readO
 | `config_resolve` | L0 只读 | ConfigTools | **配置解析：项目环境优先 + 全量扫描候选；`NEED_USER_INPUT` 必须停止并等待用户回答** |
 | `deploy_env_status` / `deploy_save_recipe` | L2 | DeployTools | 环境跑通与固化 |
 | `deploy_run` | L2 | DeployTools | 触发运行（仅 dev/test；**必须带人工确认过的 `binding_id`**） |
-| `env_summary` | L0 只读 | EnvTools | 环境摘要：变量数/网络/端口/中间件健康（**不返回变量值**） |
-| `env_var_probe` | L0 只读 | EnvTools | 变量指向的 host:port 属于本项目中间件/共享实例/外部地址（**不返回值**） |
-| `env_mapping_draft` | L2 | EnvTools | 生成环境映射草案（DRAFT，不含值；须人确认后 `deploy_run` 才能用） |
-| `env_ensure` | L2 | EnvTools | 确保当前环境中间件容器存在并运行（缺失按需创建并写回覆盖变量；密钥缺失拒绝编造，E-702） |
+| `env_summary` | L0 只读 | EnvQueryTools | 环境摘要：变量数/网络/端口/中间件健康（**不返回变量值**） |
+| `env_var_probe` | L0 只读 | EnvQueryTools | 变量指向的 host:port 属于本项目中间件/共享实例/外部地址（**不返回值**） |
+| `env_mapping_draft` | L2 | EnvCommandTools | 生成环境映射草案（DRAFT，不含值；须人确认后 `deploy_run` 才能用） |
+| `env_ensure` | L2 | EnvCommandTools | 确保当前环境中间件容器存在并运行（缺失按需创建并写回覆盖变量；密钥缺失拒绝编造，E-702） |
 | `propose_patch` | L1 | PatchTools | 受限补丁提案：白名单路径（`ci/**`/Jenkinsfile/构建配置/测试代码）、生成变更单返回 changeId，**永不写仓库/产令牌** |
-| `request_confirmation` | L1 | ChangeTools | 登记变更（**无 confirm 工具**，确认只能走 HTTP） |
+| `request_confirmation` | L1 | ChangeTools | 登记变更（返回 changeId 与计划摘要） |
+| `confirm` | L1 | ChangeTools | **只把变更单推给当前操作人**：返回 PENDING_USER_CONFIRMATION，不调用令牌服务、不执行；令牌只由已登录用户的 `POST /changes/{id}/confirm` 签发 |
+| `run_ops_agent` | L2 | OpsAgentTools | 把「把某环境真正跑通」委派给发布 Agent（仅对话工具面，发布 Agent 自身没有，防递归） |
+| `search_capabilities` / `install_capability` | L1/L2 | CapabilityMarketTools | 能力市场：查找并接入公开 MCP / Skill（仅对话工具面） |
+| `list_git_issues` / `get_git_issue` | L0 只读 | GitIssueQueryTools | 任务页只读（Issue 列表/详情） |
+| `create_git_issue` / `update_git_issue` / `comment_git_issue` / `close_git_issue` / `reopen_git_issue` / `sync_git_issue` | L2 | GitIssueCommandTools | 任务页写操作（与「任务」Tab 同一份数据） |
+| `workspace_snapshot` / `conversation_list` / `conversation_search` / `conversation_status` / `conversation_wait` / `conversation_summarize` | L0 只读 | WorkspaceSupervisorTools | 调度 Agent 的工作区视图：快照、会话检索、运行状态/等待、会话摘要 |
+| `conversation_create` / `conversation_rename` / `conversation_archive` / `conversation_pin` / `conversation_send` / `conversation_cancel` | L2 | WorkspaceSupervisorTools | 调度 Agent 的编排动作：建/改/归档/置顶会话，派发消息（建运行）与取消（仍无任何文件/命令写能力） |
+| `task_create` / `task_update` / `task_complete` / `task_list` | L2 | WorkspaceSupervisorTools | 工作区任务管理 |
 
 ---
 
@@ -550,7 +563,7 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 | `/pipeline` | `PipelineView.vue` | 流水线工作台（触发、**命令级预览、单步重试、产物下载**、历史（可删除/耗时）、stage 时间线、日志） |
 | `/projects` | `ProjectListView.vue` | 项目列表 |
 | `/projects/intake` | `ProjectIntakeView.vue` | 项目接入向导（本地目录/Gitee 仓库选择） |
-| `/projects/:id` | `ProjectDetailView.vue` | 项目详情（文件树 + 预览） |
+| `/projects/:id` | —（重定向 `/projects`） | 旧项目详情页已并入工作台「诊断」抽屉，仅保留书签兼容跳转 |
 | `/settings` | `SettingsView.vue` | 设置（服务器/模型/环境模板/项目环境/**密钥库**/Gitee 仓库分区；支持 `?section=` 深链） |
 
 路由守卫：无 token → `/login`；有 token 未加载身份 → 调 `/auth/me` 校验（失效清 token）；任意接口返回 401 经 `setUnauthorizedHandler` 统一收口（清身份 + 跳登录并带 redirect）。

@@ -3,6 +3,8 @@
 
 > 日期：2026-11-07 ｜ 底座：`RuoYi-Vue-Plus 6.1.0`（本地克隆 `RuoYi-Vue-Plus/`，commit `835246e`）
 > 上一版：基于 `RuoYi 4.8.3`（Thymeleaf + Shiro）的 [`ruoyi-agent-可行性分析与市场调研.md`](ruoyi-agent-可行性分析与市场调研.md)
+>
+> 📌 **链接说明**：文中 `../RuoYi-Vue-Plus/`、`../agentscope-java/` 指向分析时本地检出的参考仓库，不随本项目提交；未检出时这些证据链接不可打开，结论本身不受影响。
 
 ---
 

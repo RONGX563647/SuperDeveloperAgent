@@ -10,38 +10,50 @@
 ## 目录
 
 ```
-docs/          设计与规约（27 份 Markdown + 2 份汇报稿，含 Code Wiki）
+docs/          设计与规约（24 份 Markdown + 1 份汇报稿，含 Code Wiki）
 specs/         功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 platform/      后端 8 个 Maven 模块 + Vue3 前端
 _research/     市场调研与源码能力盘点（含采集脚本）
 .workflow/     Gitee Go CI（本质：cd platform && mvn -B verify）
 ```
 
-## 阅读顺序（推荐）
+## 文档阅读顺序
+
+### 核心必读（先看这四篇）
 
 | # | 文档 | 作用 |
 |---|---|---|
 | 1 | [PRD v1.6](docs/PRD-DevOps-Agent平台-v1.0.md) | 做什么、不做什么、验收标准 |
 | 2 | [项目规约 v1.0](docs/项目规约-v1.0.md) | 代码与流程的强制约束（MUST / MUST NOT） |
 | 3 | [规约自动化检查](docs/规约自动化检查-v1.0.md) | 规约如何落到 `mvn verify` |
-| 4 | [流水线设计 · Java+Vue 双栈](docs/流水线设计-Java与Vue双栈.md) | 构建与静态发布 |
-| 5 | [规约：流水线执行器](docs/规约-流水线执行器-v1.0.md) | stage 执行器契约 |
-| 6 | [窄控制器](docs/窄控制器设计-单机滚动部署器.md) | 单机 compose 滚动发布 |
-| 7 | [执行面设计（K8s/Jenkins/Flyway）](docs/devops-agent-执行面设计-k8s-jenkins-flyway.md) | 「拥有类似能力」的三条路线 |
-| 8 | [多项目托管 v4](docs/多项目托管设计-v4.md) | 项目作为作用域边界 |
-| 9 | [Jenkins 能力复刻与复用 · 规划](docs/Jenkins能力复刻与复用-规划-v1.md) | CI 引擎该复刻什么、复用什么、明确不做什么 |
-| 10 | [开源 CI 集成复用 · 调研](docs/开源CI集成复用-调研-v1.md) | 有没有现成开源 CI 能直接用（结论：SCM 绑死 Gitee） |
-| 11 | [CI/CD 方案替代与自创 · 决策](docs/CICD方案替代与自创-决策-v1.md) | 不造 DSL，改用「5 个动作 + 仓库内配方」 |
-| 12 | [自研流水线能否替代 Jenkins · 验收报告](docs/CICD验收报告-v1.md) | 真实 git→构建→镜像→部署→健康→回滚，4/4 通过 |
-| 13 | [流水线工作台 · 使用指南](docs/流水线工作台-使用指南-v1.md) | 接入项目、写配方、触发/重跑/回滚、看懂错误码 |
-| 14 | [环境模板与中间件自动注入 v2](docs/环境变量与环境模板设计-v2.md) | 环境变量 / 中间件 / 部署注入的现行决策 |
-| 15 | [发布编排 + 平台部署器 v1](docs/发布编排与平台部署器-v1.md) | HOST / DOCKER / SERVER 三种部署语义 |
-| 16 | [设置：服务器与模型连接 v1](docs/设置-服务器与模型连接-v1.md) | 设置页数据模型、密钥加密与连通性探测 |
-| 17 | [项目接入设计 v2](docs/项目接入设计-v2.md) | DIRECT 本地引用 / MANAGED bare + worktree |
-| 18 | [环境配置事实层与分环境门控 · 方案 v1](docs/环境配置事实层与分环境门控-方案-v1.md) | 配置解析优先级、`secret://` 引用、分环境策略与 dry-run 门控（已落地） |
-| 19 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
+| 4 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
 
-**背景与推演**（按时间顺序，记录结论如何演化）：
+### 设计与实现（现行方案）
+
+| # | 文档 | 作用 |
+|---|---|---|
+| 5 | [流水线设计 · Java+Vue 双栈](docs/流水线设计-Java与Vue双栈.md) | 构建与静态发布 |
+| 6 | [规约：流水线执行器](docs/规约-流水线执行器-v1.0.md) | stage 执行器契约 |
+| 7 | [发布编排 + 平台部署器 v1](docs/发布编排与平台部署器-v1.md) | HOST / DOCKER / SERVER 三种部署语义 |
+| 8 | [项目接入设计 v2](docs/项目接入设计-v2.md) | DIRECT 本地引用 / MANAGED bare + worktree |
+| 9 | [环境模板与中间件自动注入 v2](docs/环境变量与环境模板设计-v2.md) | 环境变量 / 中间件 / 部署注入的现行决策 |
+| 10 | [环境配置事实层与分环境门控 · 方案 v1](docs/环境配置事实层与分环境门控-方案-v1.md) | 配置解析优先级、`secret://` 引用、分环境策略与 dry-run 门控（已落地） |
+| 11 | [设置：服务器与模型连接 v1](docs/设置-服务器与模型连接-v1.md) | 设置页数据模型、密钥加密与连通性探测 |
+| 12 | [多项目托管 v4](docs/多项目托管设计-v4.md) | 项目作为作用域边界 |
+| 13 | [流水线工作台 · 使用指南](docs/流水线工作台-使用指南-v1.md) | 接入项目、写配方、触发/重跑/回滚、看懂错误码 |
+
+### 评估与决策（结论已定，代码可能只实现部分）
+
+| # | 文档 | 作用 |
+|---|---|---|
+| 14 | [CI/CD 方案替代与自创 · 决策](docs/CICD方案替代与自创-决策-v1.md) | 不造 DSL，改用「5 个动作 + 仓库内配方」 |
+| 15 | [自研流水线能否替代 Jenkins · 验收报告](docs/CICD验收报告-v1.md) | 真实 git→构建→镜像→部署→健康→回滚，4/4 通过 |
+| 16 | [Jenkins 能力复刻与复用 · 规划](docs/Jenkins能力复刻与复用-规划-v1.md) | CI 引擎该复刻什么、复用什么、明确不做什么 |
+| 17 | [开源 CI 集成复用 · 调研](docs/开源CI集成复用-调研-v1.md) | 有没有现成开源 CI 能直接用（结论：SCM 绑死 Gitee） |
+| 18 | [执行面设计（K8s/Jenkins/Flyway）](docs/devops-agent-执行面设计-k8s-jenkins-flyway.md) | 「拥有类似能力」的三条备选路线 |
+| 19 | [窄控制器](docs/窄控制器设计-单机滚动部署器.md) | 单机 compose 滚动发布（**设计稿，未实施**） |
+
+### 背景与推演（记录结论如何演化）
 
 [v1 若依 4.8.3](docs/ruoyi-agent-可行性分析与市场调研.md) → [v2 Vue-Plus 重评](docs/ruoyi-vue-plus-agent-可行性分析-v2.md) → [v3 独立平台](docs/devops-agent-独立平台-可行性分析-v3.md) → [v4 多项目](docs/多项目托管设计-v4.md)；
 另有 [ruoyi-ai 编程助手拆解](docs/ruoyi-ai-编程助手拆解.md) 与 [架构分析](docs/架构分析-agentscope-ruoyi-platform-v1.md)。
@@ -111,7 +123,7 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | ✅ `docs/` 27 份 Markdown + 2 份汇报稿；`specs/` 3 份规格与任务清单 |
+| 设计文档 | ✅ `docs/` 24 份 Markdown + 1 份汇报稿；`specs/` 3 份规格与任务清单 |
 | 后端 | ✅ 8 个 Maven 模块（7 个运行时模块 + `spec-checks`），`mvn -B verify` 全绿 |
 | 前端 | ✅ Vue3 + Vite + Element Plus；7 个页面；`npm run build`（vue-tsc strict）通过 |
 | 认证与授权 | ✅ Sa-Token 会话、3 个种子账号、角色权限码；高危操作需二级密码 |
@@ -121,5 +133,7 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 | 环境子系统 | ✅ 模板 / 中间件资源 / 项目覆盖 / 有效视图；发现、按需供给、健康检查；部署前 E-509 / E-701 / E-702 预检与端口租约 |
 | 安全门禁 | ✅ L2/L3 动作门禁、一次性确认令牌（绑定 planHash）；补丁只提交到 `patch/<projectId>` 分支；明文回显单独授权并写审计 |
 | 取证与恢复 | ✅ `env_runtime_status` / `app_logs` / `port_check`；失败恢复建议；一键自动部署 Agent（仅 dev/test） |
+| 统一运行账本 | ✅ 对话/修复/流水线/发布四类运行落 `_platform/run_ledger.db`；重启标记孤儿 RUNNING，终态保留 30 天 |
+| 并发与频率 | ✅ 单实例信号量或 SQLite 租约（`agent.chat.limiter=jdbc`）；破坏性 L2 强制人工确认，同动作 10 分钟最多 3 次 |
 | 回归脚本 | ✅ `platform/web/scripts/*.mjs`（布局 / 登录 / 外壳隔离 / 交互 / 流水线 / 项目 ID），需本地起前端 dev server |
-| 未做 | ⬜ 多租户、用户管理界面、`GET /api/v1/fs/read`、AgentScope 事件稳定枚举、补丁/变更单落库 |
+| 未做 | ⬜ 多租户与用户管理界面、`GET /api/v1/fs/read`、AgentScope 事件稳定枚举、跨引擎统一取消/重试 |
