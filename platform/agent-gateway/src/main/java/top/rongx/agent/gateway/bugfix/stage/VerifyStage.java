@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.bugfix.BugFixAgentPort;
@@ -8,9 +9,10 @@ import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStageResult;
-import top.rongx.agent.gateway.bugfix.BugFixJson;
+import top.rongx.agent.gateway.bugfix.BugFixOutputValidation;
 import top.rongx.agent.gateway.bugfix.BugFixPromptTemplates;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
+import top.rongx.agent.gateway.bugfix.structured.VerifyOutput;
 
 /**
  * 验证阶段：确定性冒烟检查 + 运维 Agent 重新执行复现步骤，双重确认是否真的修好。
@@ -29,14 +31,12 @@ public class VerifyStage implements BugFixStageHandler {
     static final double MIN_CONFIDENCE = 0.6;
 
     private final BugFixAgentPort agent;
-    private final BugFixJson json;
     private final BugFixCheckPort checks;
     private final BugFixPromptTemplates prompts;
 
-    public VerifyStage(BugFixAgentPort agent, BugFixJson json, BugFixCheckPort checks,
+    public VerifyStage(BugFixAgentPort agent, BugFixCheckPort checks,
                        BugFixPromptTemplates prompts) {
         this.agent = agent;
-        this.json = json;
         this.checks = checks;
         this.prompts = prompts;
     }
@@ -62,32 +62,39 @@ public class VerifyStage implements BugFixStageHandler {
                 "analysis", AnalyzeStage.clip(run.analysis(), 6000),
                 "fixSummary", AnalyzeStage.clip(run.fixSummary(), 4000),
                 "smoke", AnalyzeStage.safe(smoke.summary())));
-        String text;
+        VerifyOutput output;
         try {
-            text = agent.run(run, BugFixAgentPort.Role.VERIFY, prompt);
+            output = agent.runStructured(run, prompt, VerifyOutput.class);
         } catch (RuntimeException e) {
             return BugFixStageResult.blocked("验证 Agent 不可用：" + AnalyzeStage.message(e));
         }
-        var node = json.extract(text);
-        if (node.isEmpty()) {
-            return BugFixStageResult.blocked("无法解析验证结论，请人工确认");
+        if (output == null) {
+            return BugFixStageResult.blocked("验证 Agent 未返回结构化结论，请人工确认");
         }
-        boolean fixed = json.bool(node.get(), "fixed", false);
-        String evidence = json.text(node.get(), "evidence").strip();
-        if (!fixed) {
+        String evidence = BugFixOutputValidation.text(output.evidence());
+        if (!Boolean.TRUE.equals(output.fixed())) {
             return BugFixStageResult.failed("验证未通过：Bug 仍然存在"
                     + (evidence.isBlank() ? "" : "（" + AnalyzeStage.clip(evidence, 300) + "）"));
         }
         if (evidence.isBlank()) {
             return BugFixStageResult.blocked("验证结论缺少证据，已停在 PR 创建前");
         }
-        double confidence = json.confidence(node.get(), "confidence");
+        double confidence = BugFixOutputValidation.confidence(output.confidence());
         if (confidence < MIN_CONFIDENCE) {
             return BugFixStageResult.blocked("验证结论置信度不足（"
                     + ReproduceStage.percent(confidence) + "），请人工确认后再提 PR");
         }
+        String risk = BugFixOutputValidation.text(output.remainingRisk());
+        List<String> steps = output.steps() == null ? List.of() : output.steps();
+        StringBuilder detail = new StringBuilder("确定性冒烟：").append(smoke.summary());
+        if (!steps.isEmpty()) {
+            detail.append("\n\n验证步骤：\n").append(AnalyzeStage.bullets(steps));
+        }
+        detail.append("\n\n证据：\n").append(evidence);
+        if (!risk.isBlank()) {
+            detail.append("\n\n剩余风险：\n").append(risk);
+        }
         return BugFixStageResult.ok("验证通过，Bug 已解决（置信度 "
-                        + ReproduceStage.percent(confidence) + "）",
-                "确定性冒烟：" + smoke.summary() + "\n\n" + text);
+                + ReproduceStage.percent(confidence) + "）", detail.toString());
     }
 }

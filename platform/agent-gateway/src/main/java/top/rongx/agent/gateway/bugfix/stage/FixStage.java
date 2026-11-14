@@ -1,9 +1,8 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.bugfix.BugFixAgentPort;
 import top.rongx.agent.domain.bugfix.BugFixCheckPort;
@@ -14,8 +13,11 @@ import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStageResult;
 import top.rongx.agent.gateway.bugfix.BugFixJson;
+import top.rongx.agent.gateway.bugfix.BugFixOutputValidation;
 import top.rongx.agent.gateway.bugfix.BugFixPromptTemplates;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
+import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
+import top.rongx.agent.gateway.bugfix.structured.FixOutput;
 
 /**
  * 修复阶段：修复 Agent 输出受限补丁，平台在基线提交上应用并提交到独立分支。
@@ -62,19 +64,18 @@ public class FixStage implements BugFixStageHandler {
                 "baseSha", AnalyzeStage.safe(run.baseSha()),
                 "branch", AnalyzeStage.safe(run.branch()),
                 "analysis", AnalyzeStage.clip(analysisForPrompt(run), 8000)));
-        String text;
+        FixOutput output;
         try {
-            text = agent.run(run, BugFixAgentPort.Role.FIX, prompt);
+            output = agent.runStructured(run, prompt, FixOutput.class);
         } catch (RuntimeException e) {
             return BugFixStageResult.blocked("修复 Agent 不可用：" + AnalyzeStage.message(e));
         }
-        var node = json.extract(text);
-        if (node.isEmpty()) {
-            return BugFixStageResult.blocked("修复 Agent 未输出可解析的补丁");
+        if (output == null) {
+            return BugFixStageResult.blocked("修复 Agent 未返回结构化补丁");
         }
         List<BugFixEdit> edits;
         try {
-            edits = json.edits(node.get());
+            edits = BugFixOutputValidation.edits(output);
         } catch (IllegalArgumentException e) {
             return BugFixStageResult.blocked("补丁格式不合法：" + e.getMessage());
         }
@@ -121,14 +122,15 @@ public class FixStage implements BugFixStageHandler {
                     + (check.detail() == null || check.detail().isBlank() ? ""
                     : "\n" + AnalyzeStage.clip(check.detail(), 2000)));
         }
-        String summary = json.text(node.get(), "summary").strip();
+        String summary = BugFixOutputValidation.text(output.summary());
         String evidence = (summary.isBlank() ? "修复已提交到 " + run.branch()
                 : summary + "\n\n修复已提交到 " + run.branch())
                 + (check.skipped() ? "" : "\n\n确定性检查：" + check.summary());
         return BugFixStageResult.ok("修复已提交到 " + run.branch() + "（" + AnalyzeStage.shortSha(sha)
                         + "）", evidence)
                 .withFixSha(sha)
-                .withFixSummary(summary.isBlank() ? AnalyzeStage.clip(text, 4000) : summary);
+                .withFixSummary(summary.isBlank()
+                        ? "改动 " + edits.size() + " 处：" + changedPaths(edits) : summary);
     }
 
     private static String analysisForPrompt(BugFixRun run) {
@@ -143,19 +145,20 @@ public class FixStage implements BugFixStageHandler {
 
     /** 分析阶段确认的目标文件；缺失/无法解析时返回空列表（不阻断修复）。 */
     List<String> targetFiles(BugFixRun run) {
-        List<String> files = new ArrayList<>();
-        json.extract(run.analysisJson()).ifPresent(node -> {
-            JsonNode array = node.get("targetFiles");
-            if (array != null && array.isArray()) {
-                for (JsonNode item : array) {
-                    String path = item.asText("").trim();
-                    if (!path.isBlank()) {
-                        files.add(path);
-                    }
-                }
-            }
-        });
-        return files;
+        Optional<AnalyzeOutput> parsed = json.read(run.analysisJson(), AnalyzeOutput.class);
+        if (parsed.isEmpty()) {
+            return List.of();
+        }
+        try {
+            return BugFixOutputValidation.paths(parsed.get().targetFiles());
+        } catch (IllegalArgumentException e) {
+            return List.of();
+        }
+    }
+
+    private static String changedPaths(List<BugFixEdit> edits) {
+        return edits.stream().map(BugFixEdit::path).distinct()
+                .reduce((left, right) -> left + ", " + right).orElse("");
     }
 
     private static boolean sameFile(String target, String changed) {

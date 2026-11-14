@@ -2,6 +2,7 @@ package top.rongx.agent.gateway.bugfix;
 
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
@@ -13,6 +14,8 @@ import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import top.rongx.agent.domain.bugfix.BugFixAgentPort;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixPolicyStore;
@@ -83,6 +86,52 @@ public class ChatBugFixAgent implements BugFixAgentPort {
             // 不等待任务自然结束：超时后必须立即释放，避免卡死编排器
             executor.shutdownNow();
         }
+    }
+
+    /**
+     * 结构化阶段：把结果类型交给 AgentScope 生成 JSON Schema，由模型侧强制约束输出，
+     * 不再依赖提示词里的“请输出 JSON”与上层正则提取。
+     *
+     * <p>仍然保留协作取消与超时：取消信号会取消 Reactor 订阅，从而中断底层 Agent。
+     */
+    @Override
+    public <T> T runStructured(BugFixRun run, String prompt, Class<T> type) {
+        ProjectContext ctx = context(run, Role.ANALYZE);
+        String sessionId = "bugfix-" + run.id() + "-" + run.stage().name().toLowerCase(Locale.ROOT)
+                + "-structured-" + run.attempt();
+        Mono<T> call = chatService.structured(ctx, sessionId, prompt, type)
+                .map(msg -> {
+                    if (!msg.hasStructuredData()) {
+                        throw new IllegalStateException("模型未按 schema 返回结构化结果");
+                    }
+                    T data = msg.getStructuredData(type);
+                    if (data == null) {
+                        throw new IllegalStateException("结构化结果为空：" + type.getSimpleName());
+                    }
+                    return data;
+                });
+        try {
+            T result = call
+                    .takeUntilOther(cancelSignal(run.id()))
+                    .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+                    .block();
+            if (result == null) {
+                throw new IllegalStateException("模型未返回结构化结果：" + type.getSimpleName());
+            }
+            return result;
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("结构化 Agent 执行失败：" + safe(e));
+        }
+    }
+
+    /** 每 500ms 检查一次协作取消；取消时用 error 终止上游调用。 */
+    private Mono<Long> cancelSignal(String runId) {
+        return Flux.interval(Duration.ofMillis(500))
+                .filter(tick -> cancellations.cancelled(runId))
+                .next()
+                .flatMap(tick -> Mono.error(new IllegalStateException("自动修复已取消")));
     }
 
     /**

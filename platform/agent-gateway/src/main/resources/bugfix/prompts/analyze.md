@@ -15,8 +15,10 @@
 3. 给出可执行的复现步骤；
 4. 列出最可能需要修改的文件（相对路径）。
 
-最后必须输出一个 JSON 代码块，格式：
-```json
-{"version":"影响版本","commitRange":"提交范围","rootCause":"根因",
- "reproSteps":["步骤1","步骤2"],"targetFiles":["src/..."],"confidence":0.8}
-```
+最后按结构化输出提交结论（字段由平台 schema 约束，不需要在正文里手写 JSON）：
+- version：Bug 影响的版本或版本范围；
+- commitRange：相关提交范围，尽量给出起止 commit；
+- rootCause：最可能的根因，必须结合具体代码路径；
+- reproSteps：可执行的复现步骤，按顺序；
+- targetFiles：最可能需要修改的文件，使用仓库相对路径；
+- confidence：0 到 1 之间的小数，没把握就写低值。

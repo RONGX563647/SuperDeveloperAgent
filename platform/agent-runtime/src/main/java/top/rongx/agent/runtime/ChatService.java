@@ -3,11 +3,13 @@ package top.rongx.agent.runtime;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.message.Msg;
 import java.util.List;
 import java.util.UUID;
 import top.rongx.agent.domain.project.ProjectContext;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 对话服务：把一次用户输入变成事件流。
@@ -71,6 +73,38 @@ public class ChatService {
                 .build();
         // 5. 返回事件流；结束后关闭本会话创建的 MCP 客户端，避免进程/连接泄漏
         return session.agent().streamEvents(text, runtime)
+                .doFinally(signal -> session.close());
+    }
+
+    /**
+     * 带 JSON Schema 约束的一次调用：模型必须按 {@code structuredType} 的 schema 产出结果。
+     *
+     * <p>与提示词里写「请输出 JSON」不同，结构化输出由 AgentScope 生成 schema（并在模型支持时
+     * 走原生 response_format / tool calling），解析失败由框架直接报错，而不是靠正则猜 JSON。
+     * 返回的 {@link Msg} 里取 {@code getStructuredData(structuredType)} 即为强类型结果。
+     *
+     * @param ctx            服务端绑定的项目上下文
+     * @param sessionId      会话标识；为空时生成
+     * @param text           用户输入
+     * @param structuredType 结构化结果类型（record/POJO 均可）
+     */
+    public <T> Mono<Msg> structured(ProjectContext ctx, String sessionId, String text,
+                                    Class<T> structuredType) {
+        if (text == null || text.isBlank()) {
+            return Mono.error(new IllegalArgumentException("消息不能为空"));
+        }
+        if (structuredType == null) {
+            return Mono.error(new IllegalArgumentException("结构化输出类型不能为空"));
+        }
+        String sid = (sessionId == null || sessionId.isBlank())
+                ? UUID.randomUUID().toString() : sessionId;
+        AgentFactory.AgentSession session = agentFactory.createChat(ctx, null, null);
+        RuntimeContext runtime = RuntimeContext.builder()
+                .userId(ctx.userId())
+                .sessionId(sid)
+                .put(ProjectContext.class, ctx)
+                .build();
+        return session.agent().call(text, structuredType, runtime)
                 .doFinally(signal -> session.close());
     }
 }

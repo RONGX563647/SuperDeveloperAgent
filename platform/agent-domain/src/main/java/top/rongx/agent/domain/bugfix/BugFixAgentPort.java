@@ -8,8 +8,16 @@ import top.rongx.agent.domain.bugfix.BugFixAgentPort.Role;
  */
 public interface BugFixAgentPort {
 
-    /** 运行一次非交互 Agent，返回最终正文（含结构化 JSON 时由阶段自行解析）。 */
+    /** 运行一次非交互 Agent，返回最终正文（仅用于部署等自由文本阶段）。 */
     String run(BugFixRun run, Role role, String prompt);
+
+    /**
+     * 运行一次带 JSON Schema 约束的只读 Agent，直接返回强类型结果。
+     *
+     * <p>实现必须把 {@code type} 交给模型的结构化输出通道（response_format / tool schema），
+     * 而不是在提示词里要求模型“输出 JSON”再由上层正则提取；返回 null 视为失败。
+     */
+    <T> T runStructured(BugFixRun run, String prompt, Class<T> type);
 
     /** 阶段使用的 Agent 角色。 */
     enum Role {

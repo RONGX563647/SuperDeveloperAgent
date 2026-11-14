@@ -33,6 +33,10 @@ import top.rongx.agent.gateway.bugfix.stage.PullRequestStage;
 import top.rongx.agent.gateway.bugfix.stage.ReproduceStage;
 import top.rongx.agent.gateway.bugfix.stage.VerifyDeployStage;
 import top.rongx.agent.gateway.bugfix.stage.VerifyStage;
+import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
+import top.rongx.agent.gateway.bugfix.structured.FixOutput;
+import top.rongx.agent.gateway.bugfix.structured.ReproduceOutput;
+import top.rongx.agent.gateway.bugfix.structured.VerifyOutput;
 import top.rongx.agent.infra.bugfix.SqliteBugFixStore;
 
 /**
@@ -160,12 +164,15 @@ class BugFixOrchestratorTest {
         SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        BugFixAgentPort slow = (run, role, prompt) -> {
-            if (role == BugFixAgentPort.Role.ANALYZE) {
-                entered.countDown();
-                awaitLatch(release);
+        BugFixAgentPort slow = new FakeAgent() {
+            @Override
+            public <T> T runStructured(BugFixRun run, String prompt, Class<T> type) {
+                if (type == AnalyzeOutput.class) {
+                    entered.countDown();
+                    awaitLatch(release);
+                }
+                return super.runStructured(run, prompt, type);
             }
-            return defaultAnswer(role);
         };
         BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy(), slow,
                 (run, sha) -> "部署成功：" + sha);
@@ -211,9 +218,15 @@ class BugFixOrchestratorTest {
     @Test
     void lowConfidenceReproductionBlocksBeforeFix() throws Exception {
         SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
-        BugFixAgentPort weak = (run, role, prompt) -> role == BugFixAgentPort.Role.REPRODUCE
-                ? "```json\n{\"reproduced\":true,\"confidence\":0.2}\n```"
-                : defaultAnswer(role);
+        BugFixAgentPort weak = new FakeAgent() {
+            @Override
+            public <T> T runStructured(BugFixRun run, String prompt, Class<T> type) {
+                if (type == ReproduceOutput.class) {
+                    return type.cast(new ReproduceOutput(true, List.of(), "500 日志", 0.2));
+                }
+                return super.runStructured(run, prompt, type);
+            }
+        };
         BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy(), weak,
                 (run, sha) -> "部署成功：" + sha);
         BugFixRun started = orchestrator.start(issue("task-1", "BUG"));
@@ -228,12 +241,14 @@ class BugFixOrchestratorTest {
     void verifyFailureReturnsToFixAndRetries() throws Exception {
         SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
         AtomicInteger verifyCalls = new AtomicInteger();
-        BugFixAgentPort agent = (run, role, prompt) -> {
-            if (role == BugFixAgentPort.Role.VERIFY && verifyCalls.incrementAndGet() == 1) {
-                return "```json\n{\"fixed\":false,\"evidence\":\"仍然返回 500\","
-                        + "\"confidence\":0.9}\n```";
+        BugFixAgentPort agent = new FakeAgent() {
+            @Override
+            public <T> T runStructured(BugFixRun run, String prompt, Class<T> type) {
+                if (type == VerifyOutput.class && verifyCalls.incrementAndGet() == 1) {
+                    return type.cast(new VerifyOutput(false, List.of(), "仍然返回 500", 0.9, ""));
+                }
+                return super.runStructured(run, prompt, type);
             }
-            return defaultAnswer(role);
         };
         BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy(), agent,
                 (run, sha) -> "部署成功：" + sha);
@@ -323,10 +338,10 @@ class BugFixOrchestratorTest {
         List<BugFixStageHandler> handlers = List.of(
                 new AnalyzeStage(agent, git, json, prompts),
                 new DeployReproStage(deploy, bindings),
-                new ReproduceStage(agent, json, prompts),
+                new ReproduceStage(agent, prompts),
                 new FixStage(agent, git, json, new FakeChecks(), prompts),
                 new VerifyDeployStage(deploy, bindings),
-                new VerifyStage(agent, json, new FakeChecks(), prompts),
+                new VerifyStage(agent, new FakeChecks(), prompts),
                 new PullRequestStage(git, prompts));
         return new BugFixOrchestrator(store, store, handlers, (run, message) -> {
         }, store, new BugFixCancellationRegistry());
@@ -366,24 +381,39 @@ class BugFixOrchestratorTest {
     }
 
     private static String defaultAnswer(BugFixAgentPort.Role role) {
-        return switch (role) {
-            case ANALYZE -> "疑似空指针。\n```json\n{\"version\":\"1.4.0\","
-                    + "\"rootCause\":\"根因为空值未判空\",\"targetFiles\":[\"src/main/App.java\"],"
-                    + "\"confidence\":0.9}\n```";
-            case REPRODUCE -> "```json\n{\"reproduced\":true,\"evidence\":\"500 日志\","
-                    + "\"confidence\":0.9}\n```";
-            case FIX -> "```json\n{\"summary\":\"补空值判断\",\"edits\":[{\"path\":"
-                    + "\"src/main/App.java\",\"old\":\"return 0;\",\"new\":\"return 1;\"}]}\n```";
-            case VERIFY -> "```json\n{\"fixed\":true,\"evidence\":\"登录成功\","
-                    + "\"confidence\":0.9}\n```";
-            case DEPLOY -> "部署完成";
-        };
+        return "部署完成";
     }
 
-    private static final class FakeAgent implements BugFixAgentPort {
+    /** 结构化结果的默认假数据；按 schema 类型返回，模拟模型的结构化输出通道。 */
+    private static Object structuredAnswer(Class<?> type) {
+        if (type == AnalyzeOutput.class) {
+            return new AnalyzeOutput("1.4.0", "v1.4.0..HEAD", "根因为空值未判空",
+                    List.of("打开登录页", "提交表单"), List.of("src/main/App.java"), 0.9);
+        }
+        if (type == ReproduceOutput.class) {
+            return new ReproduceOutput(true, List.of("打开登录页并提交"),
+                    "500 日志", 0.9);
+        }
+        if (type == FixOutput.class) {
+            return new FixOutput("补空值判断",
+                    List.of(new FixOutput.Edit("src/main/App.java", "return 0;", "return 1;")),
+                    List.of());
+        }
+        if (type == VerifyOutput.class) {
+            return new VerifyOutput(true, List.of("重新提交登录"), "登录成功", 0.9, "");
+        }
+        throw new IllegalArgumentException("未配置结构化假数据：" + type.getName());
+    }
+
+    private static class FakeAgent implements BugFixAgentPort {
         @Override
         public String run(BugFixRun run, Role role, String prompt) {
             return defaultAnswer(role);
+        }
+
+        @Override
+        public <T> T runStructured(BugFixRun run, String prompt, Class<T> type) {
+            return type.cast(structuredAnswer(type));
         }
     }
 

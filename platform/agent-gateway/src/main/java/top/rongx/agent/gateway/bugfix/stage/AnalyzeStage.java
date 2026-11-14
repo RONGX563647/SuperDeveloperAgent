@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,8 +12,10 @@ import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStageResult;
 import top.rongx.agent.gateway.bugfix.BugFixJson;
+import top.rongx.agent.gateway.bugfix.BugFixOutputValidation;
 import top.rongx.agent.gateway.bugfix.BugFixPromptTemplates;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
+import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
 
 /**
  * 分析阶段：同步仓库 → 锁定基线提交 → 让只读 Agent 输出「版本范围 / 根因 / 复现步骤 / 目标文件」。
@@ -24,6 +27,9 @@ import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
 public class AnalyzeStage implements BugFixStageHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AnalyzeStage.class);
+
+    /** 分析置信度低于此值时不进入修复：错误根因会让后续所有阶段白跑。 */
+    static final double MIN_CONFIDENCE = 0.3;
 
     private final BugFixAgentPort agent;
     private final BugFixGitPort git;
@@ -66,44 +72,50 @@ public class AnalyzeStage implements BugFixStageHandler {
                 "issueTitle", safe(run.issueTitle()),
                 "issueBody", clip(run.issueBody(), 8000),
                 "baseSha", safe(baseSha)));
+        AnalyzeOutput output;
         try {
-            String text = agent.run(run, BugFixAgentPort.Role.ANALYZE, prompt);
-            if (text == null || text.isBlank()) {
-                return BugFixStageResult.blocked("分析 Agent 未返回内容");
-            }
-            var node = json.extract(text);
-            if (node.isEmpty()) {
-                return BugFixStageResult.blocked("分析未输出结构化结论（JSON），无法确认根因");
-            }
-            if (json.text(node.get(), "rootCause").isBlank()) {
-                return BugFixStageResult.blocked("分析结论缺少 rootCause，请补充根因后再重试");
-            }
-            // 结构化结论单独落库：修复阶段据此做改动范围校验，验证阶段据此复述复现步骤，
-            // 不依赖模型自然语言里可能被截断/改写的部分。
-            String artifact = node.get().toString();
-            String summary = """
-                    影响版本：%s
-                    提交范围：%s
-                    根因：%s
-                    复现步骤：
-                    %s
-                    目标文件：%s
-                    置信度：%s
-                    """.formatted(blankAsUnknown(json.text(node.get(), "version")),
-                    blankAsUnknown(json.text(node.get(), "commitRange")),
-                    json.text(node.get(), "rootCause"),
-                    bullets(node.get().get("reproSteps")),
-                    bullets(node.get().get("targetFiles")),
-                    ReproduceStage.percent(json.confidence(node.get(), "confidence")));
-            return BugFixStageResult.ok("分析完成，基线 " + shortSha(baseSha),
-                            summary + "\n---\n" + clip(text, 12_000))
-                    .withAnalysis(clip(text, 20_000))
-                    .withAnalysisJson(artifact)
-                    .withArtifact(artifact)
-                    .withBaseSha(baseSha);
+            output = agent.runStructured(run, prompt, AnalyzeOutput.class);
         } catch (RuntimeException e) {
             return BugFixStageResult.blocked("分析 Agent 不可用：" + message(e));
         }
+        if (output == null) {
+            return BugFixStageResult.blocked("分析 Agent 未返回结构化结论");
+        }
+        String rootCause = BugFixOutputValidation.text(output.rootCause());
+        if (rootCause.isBlank()) {
+            return BugFixStageResult.blocked("分析结论缺少 rootCause，请补充根因后再重试");
+        }
+        List<String> targetFiles;
+        try {
+            targetFiles = BugFixOutputValidation.paths(output.targetFiles());
+        } catch (IllegalArgumentException e) {
+            return BugFixStageResult.blocked("分析目标文件不合法：" + e.getMessage());
+        }
+        double confidence = BugFixOutputValidation.confidence(output.confidence());
+        if (confidence < MIN_CONFIDENCE) {
+            return BugFixStageResult.blocked("分析置信度不足（" + ReproduceStage.percent(confidence)
+                    + "），请人工确认根因或补充信息后重试");
+        }
+        // 结构化结论单独落库：修复阶段据此做改动范围校验，验证阶段据此复述复现步骤，
+        // 不依赖模型自然语言里可能被截断/改写的部分。
+        String artifact = json.toJson(output);
+        String summary = """
+                影响版本：%s
+                提交范围：%s
+                根因：%s
+                复现步骤：
+                %s
+                目标文件：%s
+                置信度：%s
+                """.formatted(blankAsUnknown(output.version()),
+                blankAsUnknown(output.commitRange()), rootCause,
+                bullets(output.reproSteps()), bullets(targetFiles),
+                ReproduceStage.percent(confidence));
+        return BugFixStageResult.ok("分析完成，基线 " + shortSha(baseSha), summary)
+                .withAnalysis(summary)
+                .withAnalysisJson(artifact)
+                .withArtifact(artifact)
+                .withBaseSha(baseSha);
     }
 
     static String safe(String value) {
@@ -118,15 +130,17 @@ public class AnalyzeStage implements BugFixStageHandler {
         return sha == null ? "" : sha.substring(0, Math.min(8, sha.length()));
     }
 
-    static String bullets(com.fasterxml.jackson.databind.JsonNode array) {
-        if (array == null || !array.isArray() || array.isEmpty()) {
+    static String bullets(List<String> values) {
+        if (values == null || values.isEmpty()) {
             return "未提供";
         }
         StringBuilder builder = new StringBuilder();
-        for (com.fasterxml.jackson.databind.JsonNode item : array) {
-            builder.append("- ").append(item.asText("")).append('\n');
+        for (String item : values) {
+            if (item != null && !item.isBlank()) {
+                builder.append("- ").append(item.strip()).append('\n');
+            }
         }
-        return builder.toString().stripTrailing();
+        return builder.isEmpty() ? "未提供" : builder.toString().stripTrailing();
     }
 
     static String clip(String value, int max) {
