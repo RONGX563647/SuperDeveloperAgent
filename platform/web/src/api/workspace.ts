@@ -103,6 +103,23 @@ export function listRuns(projectId: string, limit = 50): Promise<RunRow[]> {
   return apiFetch(`/api/v1/workspaces/${projectId}/runs?limit=${limit}`)
 }
 
+/** 跨引擎运行账本（对话/修复/流水线/发布），用于「最近运行」一屏查看失败。 */
+export interface RunLedgerRow {
+  id: string
+  kind: 'CHAT' | 'DEPLOY' | 'WORKSPACE' | 'BUGFIX' | 'PIPELINE'
+  projectId: string
+  subjectId: string
+  state: 'QUEUED' | 'RUNNING' | 'BLOCKED' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+  summary: string
+  error: string
+  createdAt: number
+  updatedAt: number
+}
+
+export function listRunLedger(projectId: string, limit = 50): Promise<RunLedgerRow[]> {
+  return apiFetch(`/api/v1/run-ledger?projectId=${encodeURIComponent(projectId)}&limit=${limit}`)
+}
+
 export function listConversationRuns(conversationId: string, limit = 20): Promise<RunRow[]> {
   return apiFetch(`/api/v1/conversations/${conversationId}/runs?limit=${limit}`)
 }

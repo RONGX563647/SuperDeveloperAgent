@@ -11,9 +11,9 @@ import { useWorkspaceEvents, type WorkspaceEvent } from '../composables/useWorks
 import { clearHistory, loadHistory, saveHistory } from '../state/sessionHistory'
 import type { ChatMessage } from '../types'
 import {
-  cancelRun, createConversation, createTask, getSupervisor, listConversations, listRuns, listTasks,
-  sendToConversation, syncConversations, updateConversation, updateTask,
-  type ConversationRow, type RunRow, type TaskRow,
+  cancelRun, createConversation, createTask, getSupervisor, listConversations, listRunLedger,
+  listRuns, listTasks, sendToConversation, syncConversations, updateConversation, updateTask,
+  type ConversationRow, type RunLedgerRow, type RunRow, type TaskRow,
 } from '../api/workspace'
 import { envLabel } from '../utils/pipelineLabels'
 
@@ -64,6 +64,7 @@ const taskForm = reactive({ goal: '', expectedOutput: '', status: 'TODO' })
 
 const runDialog = ref(false)
 const runDetail = ref<RunRow | null>(null)
+const ledgerRuns = ref<RunLedgerRow[]>([])
 
 const envOptions = ['dev', 'test', 'prod']
 const filters = [
@@ -84,6 +85,14 @@ const recentRuns = computed(() => runs.value
   .filter((run) => run.status !== 'QUEUED' && run.status !== 'RUNNING')
   .slice(0, 8))
 const visibleRuns = computed(() => (runTab.value === 'active' ? activeRuns.value : recentRuns.value))
+
+/** 跨引擎最近运行：流水线/修复/发布也会出现在这里（账本按项目聚合）。 */
+const recentLedgerRuns = computed(() => ledgerRuns.value
+  .filter((run) => run.state !== 'QUEUED' && run.state !== 'RUNNING')
+  .sort((a, b) => b.updatedAt - a.updatedAt)
+  .slice(0, 12))
+const ledgerFailures = computed(() => ledgerRuns.value
+  .filter((run) => run.state === 'FAILED').length)
 
 const filterCounts = computed(() => ({
   ALL: workerConversations.value.length,
@@ -229,14 +238,17 @@ function scheduleReconcile(): void {
 async function loadAll(): Promise<void> {
   loading.value = true
   try {
-    const [list, taskList, runList] = await Promise.all([
+    const [list, taskList, runList, ledgerList] = await Promise.all([
       listConversations(projectId.value, true),
       listTasks(projectId.value),
       listRuns(projectId.value, 30),
+      // 账本不可用时不影响主视图（例如后端版本较旧）
+      listRunLedger(projectId.value, 50).catch(() => [] as RunLedgerRow[]),
     ])
     conversations.value = list
     tasks.value = taskList
     runs.value = runList
+    ledgerRuns.value = ledgerList
     lastRefreshed.value = Date.now()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '工作区加载失败')
@@ -629,6 +641,29 @@ function timeAgo(ms: number): string {
   return `${Math.floor(diff / 86_400_000)} 天前`
 }
 
+const kindLabels: Record<string, string> = {
+  WORKSPACE: '会话',
+  CHAT: '对话',
+  BUGFIX: '修复',
+  PIPELINE: '流水线',
+  DEPLOY: '发布',
+}
+
+function kindLabel(kind: string): string {
+  return kindLabels[kind] ?? kind
+}
+
+/** 跨引擎运行的跳转目标：会话类回到对话，其余统一落到流水线页。 */
+function openLedgerRun(run: RunLedgerRow): void {
+  if ((run.kind === 'WORKSPACE' || run.kind === 'CHAT') && run.subjectId) {
+    appStore.projectId = projectId.value
+    appStore.selectSession(run.subjectId)
+    void router.push('/chat')
+    return
+  }
+  void router.push('/pipeline')
+}
+
 function formatTime(ms: number): string {
   if (!ms) return '—'
   return new Date(ms).toLocaleString('zh-CN', { hour12: false })
@@ -998,6 +1033,29 @@ onUnmounted(() => {
             <p v-if="!visibleRuns.length" class="empty">
               {{ runTab === 'active' ? '当前没有运行中的任务' : '还没有已结束的运行' }}
             </p>
+
+            <!-- 跨引擎运行：流水线/修复/发布也进入同一份账本 -->
+            <template v-if="runTab === 'recent'">
+              <p class="group-label">
+                全部引擎
+                <span v-if="ledgerFailures" class="fail-badge">{{ ledgerFailures }} 个失败</span>
+              </p>
+              <div
+                v-for="run in recentLedgerRuns" :key="`ledger-${run.id}`"
+                class="list-item" @click="openLedgerRun(run)"
+              >
+                <i class="run-dot" :data-s="run.state"></i>
+                <div class="item-main">
+                  <span class="item-title">{{ kindLabel(run.kind) }} · {{ run.summary || run.id }}</span>
+                  <span class="item-meta">
+                    {{ timeAgo(run.updatedAt) }}
+                    <template v-if="run.error"> · {{ run.error }}</template>
+                  </span>
+                </div>
+                <span class="item-status" :data-s="run.state">{{ statusLabel(run.state) }}</span>
+              </div>
+              <p v-if="!recentLedgerRuns.length" class="empty">还没有跨引擎运行记录</p>
+            </template>
           </template>
         </div>
       </aside>
@@ -1630,6 +1688,14 @@ onUnmounted(() => {
 .live.on { color: #047857; }
 
 .retry-btn { flex: none; font-size: 11px; }
+.group-label {
+  display: flex; gap: 6px; align-items: center; margin: 14px 2px 6px;
+  font-size: 11px; color: var(--ink-faint);
+}
+.fail-badge {
+  padding: 1px 6px; border-radius: 999px;
+  background: rgb(185 28 28 / 10%); color: #b91c1c; font-size: 10px;
+}
 
 /* 命令面板 */
 .palette-mask {
