@@ -687,13 +687,27 @@ function shortId(id: string): string {
   return id.length > 14 ? `${id.slice(0, 14)}…` : id
 }
 
+// 工具调用会连续更新 tools，逐次写 localStorage 会让长会话卡顿；合并成 800ms 一次
+let historyTimer: ReturnType<typeof setTimeout> | null = null
 watch(() => [projection.value.messages, projection.value.tools], () => {
-  if (supervisor.value) saveHistory(supervisor.value.id, projection.value.messages, projection.value.tools)
+  if (!supervisor.value) return
+  if (historyTimer) clearTimeout(historyTimer)
+  historyTimer = setTimeout(() => {
+    if (supervisor.value) {
+      saveHistory(supervisor.value.id, projection.value.messages, projection.value.tools)
+    }
+  }, 800)
 }, { deep: true })
 
+// 流式文本每个事件都会触发一次；合并到下一帧，避免每个 token 都强制布局
+let scrollFrame = 0
 function scrollToBottom(): void {
-  const el = messageListRef.value
-  if (el) el.scrollTop = el.scrollHeight
+  if (scrollFrame) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0
+    const el = messageListRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
 }
 
 watch(() => projection.value.messages.length, async () => {
@@ -711,6 +725,7 @@ watch(projectId, () => {
   conversations.value = []
   tasks.value = []
   runs.value = []
+  ledgerRuns.value = []
   workspaceEvents.start()
   void init()
 })
@@ -729,6 +744,8 @@ onMounted(async () => {
 onUnmounted(() => {
   if (timer) clearInterval(timer)
   if (reconcileTimer) clearTimeout(reconcileTimer)
+  if (historyTimer) clearTimeout(historyTimer)
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
   document.removeEventListener('keydown', onGlobalKeydown)
   document.removeEventListener('visibilitychange', onVisibility)
   workspaceEvents.stop()

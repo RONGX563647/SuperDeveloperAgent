@@ -37,7 +37,9 @@ public class WorkspaceEventBus {
 
     /** 订阅某个项目的全部事件；调用方按 conversationId / runId 自行过滤。 */
     public Flux<WorkspaceEvent> subscribe(String projectId) {
+        // directBestEffort：事件是"状态提示"而非真相（真相在 SQLite），
+        // 慢客户端/断连时宁可丢弃也不能无限缓冲，否则一个挂起的 SSE 就能把内存吃满。
         return sinks.computeIfAbsent(projectId,
-                ignored -> Sinks.many().multicast().onBackpressureBuffer()).asFlux();
+                ignored -> Sinks.many().multicast().directBestEffort()).asFlux();
     }
 }

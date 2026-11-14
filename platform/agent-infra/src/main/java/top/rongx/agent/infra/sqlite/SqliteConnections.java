@@ -25,7 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class SqliteConnections {
 
-    private static final int MAX_CONNECTIONS_PER_DB = 4;
+    // WAL 下读不互斥，但写仍是单写者；8 个连接足以覆盖工作区聚合查询与登录链路，
+    // 又不会让 SQLite 的写锁排队过长（更深排队的连接会等待，而不是报 database is locked）。
+    private static final int MAX_CONNECTIONS_PER_DB = 8;
 
     private static final Map<String, Pool> POOLS = new ConcurrentHashMap<>();
 

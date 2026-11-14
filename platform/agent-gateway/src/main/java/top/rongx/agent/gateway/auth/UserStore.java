@@ -4,7 +4,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -91,7 +90,8 @@ public class UserStore implements UserRolePort {
     }
 
     private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
+        // 登录链路高频读：复用连接，避免每次打开文件；busy_timeout/WAL 由连接池统一设置
+        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
     }
 
     /**

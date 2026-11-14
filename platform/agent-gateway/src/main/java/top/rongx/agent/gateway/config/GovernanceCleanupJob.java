@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.run.RunLedgerRepository;
 import top.rongx.agent.governance.ChangeRegistry;
 import top.rongx.agent.governance.ConfirmTokenService;
 import top.rongx.agent.governance.PatchRegistry;
@@ -24,15 +25,20 @@ public class GovernanceCleanupJob {
     /** 变更单保留时长：覆盖一次人工确认的正常操作时间即可。 */
     private static final Duration CHANGE_RETENTION = Duration.ofHours(24);
 
+    /** 运行账本保留时长：够回看一个月内的失败与重试，又不让表无限增长。 */
+    private static final Duration RUN_RETENTION = Duration.ofDays(30);
+
     private final ChangeRegistry changes;
     private final PatchRegistry patches;
     private final ConfirmTokenService tokens;
+    private final RunLedgerRepository runs;
 
     public GovernanceCleanupJob(ChangeRegistry changes, PatchRegistry patches,
-                                ConfirmTokenService tokens) {
+                                ConfirmTokenService tokens, RunLedgerRepository runs) {
         this.changes = changes;
         this.patches = patches;
         this.tokens = tokens;
+        this.runs = runs;
     }
 
     /** 启动 1 分钟后先清一次，之后每 10 分钟一次。 */
@@ -41,9 +47,11 @@ public class GovernanceCleanupJob {
         int expiredCount = tokens.purgeExpired();
         int staleChanges = changes.purgeBefore(Instant.now().minus(CHANGE_RETENTION));
         int stalePatches = patches.purgeBefore(Instant.now().minus(CHANGE_RETENTION));
-        if (expiredCount + staleChanges + stalePatches > 0) {
-            log.info("治理数据清理：过期令牌 {} 条，超期变更单 {} 条，超期补丁 {} 条",
-                    expiredCount, staleChanges, stalePatches);
+        int staleRuns = runs.purgeTerminalBefore(
+                System.currentTimeMillis() - RUN_RETENTION.toMillis());
+        if (expiredCount + staleChanges + stalePatches + staleRuns > 0) {
+            log.info("治理数据清理：过期令牌 {} 条，超期变更单 {} 条，超期补丁 {} 条，超期运行 {} 条",
+                    expiredCount, staleChanges, stalePatches, staleRuns);
         }
     }
 }

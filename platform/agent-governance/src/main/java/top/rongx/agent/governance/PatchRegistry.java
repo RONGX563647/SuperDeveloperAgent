@@ -3,7 +3,6 @@ package top.rongx.agent.governance;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -86,7 +85,7 @@ public class PatchRegistry implements PatchStore {
     }
 
     private Connection open() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + dbFile);
+        return GovernanceDb.open(dbFile);
     }
 
     @Override

@@ -27,6 +27,14 @@ public interface RunLedgerRepository {
      */
     int markStaleRunning(long staleBefore, String reason);
 
+    /**
+     * 清理已结束且超过保留期的运行记录，避免账本无限增长。
+     *
+     * @param updatedBefore 早于该时间戳的终态记录才会被删除
+     * @return 删除行数
+     */
+    int purgeTerminalBefore(long updatedBefore);
+
     /** 测试/降级用：不落盘。 */
     static RunLedgerRepository noop() {
         return new RunLedgerRepository() {
@@ -52,6 +60,11 @@ public interface RunLedgerRepository {
 
             @Override
             public int markStaleRunning(long staleBefore, String reason) {
+                return 0;
+            }
+
+            @Override
+            public int purgeTerminalBefore(long updatedBefore) {
                 return 0;
             }
         };

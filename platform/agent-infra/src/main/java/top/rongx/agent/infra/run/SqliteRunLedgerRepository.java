@@ -156,6 +156,21 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
         }
     }
 
+    @Override
+    public int purgeTerminalBefore(long updatedBefore) {
+        // 只删终态记录；QUEUED/RUNNING/BLOCKED 可能还在推进，留给恢复任务处理
+        String sql = """
+                DELETE FROM run_ledger
+                WHERE state NOT IN ('QUEUED', 'RUNNING', 'BLOCKED') AND updated_at < ?
+                """;
+        try (Connection conn = connect(); PreparedStatement st = conn.prepareStatement(sql)) {
+            st.setLong(1, updatedBefore);
+            return st.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("运行账本清理失败：" + e.getMessage(), e);
+        }
+    }
+
     private List<RunRecord> query(String sql, StatementBinder binder) {
         try (Connection conn = connect(); PreparedStatement st = conn.prepareStatement(sql)) {
             binder.bind(st);
