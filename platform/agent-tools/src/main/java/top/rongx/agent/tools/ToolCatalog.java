@@ -38,6 +38,21 @@ public class ToolCatalog {
                                    EnvQueryTools envQueryTools,
                                    GitIssueQueryTools gitIssueQueryTools) {
         Toolkit toolkit = new Toolkit();
+        registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
+                repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools);
+        return toolkit;
+    }
+
+    /** 只读工具面：生产会话与调度 Agent 共用，保证"不挂写工具"是装配层面的保证。 */
+    private static void registerReadOnlyTools(Toolkit toolkit,
+                                              ProjectTools projectTools,
+                                              CiQueryTools ciQueryTools,
+                                              ActionQueryTools actionQueryTools,
+                                              RepoQueryTools repoQueryTools,
+                                              RuntimeTools runtimeTools,
+                                              ConfigTools configTools,
+                                              EnvQueryTools envQueryTools,
+                                              GitIssueQueryTools gitIssueQueryTools) {
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
@@ -48,7 +63,6 @@ public class ToolCatalog {
         toolkit.registerTool(envQueryTools);
         // 任务页只读：生产会话也能看到 Issue 任务
         toolkit.registerTool(gitIssueQueryTools);
-        return toolkit;
     }
 
     @Bean
@@ -102,15 +116,26 @@ public class ToolCatalog {
     }
 
     /**
-     * 工作区调度 Agent 专用工具面：只有会话/运行/任务的管理能力。
+     * 工作区调度 Agent 专用工具面：管理能力 + 全部只读工具。
      *
-     * <p>刻意<b>不</b>注册任何文件、命令、补丁、部署或 MCP 工具：调度 Agent 的职责是编排，
+     * <p>只读工具让"工作区现在什么状态/为什么失败"这类问题可以直接回答，
+     * 不必再绕子会话；但依然<b>没有</b>任何文件写入、命令执行、补丁、部署或 MCP 工具，
      * 真正动手必须落到子会话，并由子会话按环境策略与人工确认执行。
      */
     @Bean
     @Qualifier("supervisorToolkit")
-    public Toolkit supervisorToolkit(WorkspaceSupervisorTools supervisorTools) {
+    public Toolkit supervisorToolkit(WorkspaceSupervisorTools supervisorTools,
+                                     ProjectTools projectTools,
+                                     CiQueryTools ciQueryTools,
+                                     ActionQueryTools actionQueryTools,
+                                     RepoQueryTools repoQueryTools,
+                                     RuntimeTools runtimeTools,
+                                     ConfigTools configTools,
+                                     EnvQueryTools envQueryTools,
+                                     GitIssueQueryTools gitIssueQueryTools) {
         Toolkit toolkit = new Toolkit();
+        registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
+                repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools);
         toolkit.registerTool(supervisorTools);
         return toolkit;
     }

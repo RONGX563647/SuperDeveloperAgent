@@ -103,7 +103,7 @@ public class DeployAgentController {
         log.info("启动发布 Agent：project={} env={} sha={} pipeline={} binding={} user={}",
                 ctx.projectId(), ctx.env(), sha, pipelineId, bindingId, userId);
         // 5. 并发闸门：部署比对话更重，同样受进程内并发上限约束
-        limiter.acquireOrThrow();
+        AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicReference<Disposable> subscription = new AtomicReference<>();
@@ -118,7 +118,7 @@ public class DeployAgentController {
                 if (current != null) {
                     current.dispose();
                 }
-                limiter.release();
+                limiter.release(lease);
                 metrics.stop(sample, "deploy", failed.get() ? "error" : "closed");
                 log.info("发布 Agent 结束 project={} env={} run={} events={} cost={}ms",
                         ctx.projectId(), ctx.env(), sessionId, seq.get(),

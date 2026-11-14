@@ -220,7 +220,7 @@ class ToolChainTest {
     }
 
     @Test
-    @DisplayName("T13 调度 Agent 工具面：只有管理工作区的能力，没有任何写工具")
+    @DisplayName("T13 调度 Agent 工具面：管理能力 + 只读查证，没有任何写工具")
     void supervisorToolkitHasNoWriteTools() {
         assertTrue(supervisorToolkit.getToolNames().contains("workspace_snapshot"));
         assertTrue(supervisorToolkit.getToolNames().contains("conversation_list"));
@@ -231,8 +231,12 @@ class ToolChainTest {
         assertTrue(supervisorToolkit.getToolNames().contains("conversation_summarize"));
         assertTrue(supervisorToolkit.getToolNames().contains("task_create"));
         assertTrue(supervisorToolkit.getToolNames().contains("task_complete"));
-        // 调度 Agent 不能直接动手：文件、命令、补丁、部署、确认、委派都不在工具面里
-        for (String forbidden : List.of("read_file", "grep", "git_diff", "ci_run", "run_action",
+        // 只读工具让调度 Agent 能直接回答状态类问题，不必再绕子会话
+        assertTrue(supervisorToolkit.getToolNames().contains("read_file"));
+        assertTrue(supervisorToolkit.getToolNames().contains("grep"));
+        assertTrue(supervisorToolkit.getToolNames().contains("git_diff"));
+        // 仍然不能直接动手：命令、补丁、部署、确认、委派都不在工具面里
+        for (String forbidden : List.of("ci_run", "run_action",
                 "propose_patch", "deploy_run", "request_confirmation", "confirm",
                 "run_ops_agent", "env_ensure")) {
             assertFalse(supervisorToolkit.getToolNames().contains(forbidden), forbidden);

@@ -93,7 +93,7 @@ public class ChatController {
         // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树
         conversations.ensureFromChat(ctx, request.sessionId(), request.message(), request.worktree());
         // 3. 并发闸门：拿不到许可直接 429，不构建 Agent、不拉起 MCP
-        limiter.acquireOrThrow();
+        AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicReference<Disposable> subscription = new AtomicReference<>();
@@ -108,7 +108,7 @@ public class ChatController {
                 if (current != null) {
                     current.dispose();
                 }
-                limiter.release();
+                limiter.release(lease);
                 metrics.stop(sample, "chat", failed.get() ? "error" : "closed");
                 log.info("对话流结束 project={} env={} session={} events={} cost={}ms",
                         ctx.projectId(), ctx.env(), request.sessionId(), seq.get(),

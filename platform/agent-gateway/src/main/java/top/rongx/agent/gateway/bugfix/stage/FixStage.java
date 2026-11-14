@@ -16,6 +16,7 @@ import top.rongx.agent.gateway.bugfix.BugFixJson;
 import top.rongx.agent.gateway.bugfix.BugFixOutputValidation;
 import top.rongx.agent.gateway.bugfix.BugFixPromptTemplates;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
+import top.rongx.agent.gateway.bugfix.PatchApplier;
 import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
 import top.rongx.agent.gateway.bugfix.structured.FixOutput;
 
@@ -35,6 +36,8 @@ public class FixStage implements BugFixStageHandler {
 
     /** 目标文件为空（模型未给出）时不做过严的范围校验，但仍要求真实改动。 */
     static final int MAX_CHANGED_FILES = 15;
+    /** 片段应用失败后回灌重试的次数：代码变动大时精确片段经常失配。 */
+    static final int MAX_APPLY_RETRIES = 2;
 
     private final BugFixAgentPort agent;
     private final BugFixGitPort git;
@@ -58,58 +61,72 @@ public class FixStage implements BugFixStageHandler {
 
     @Override
     public BugFixStageResult execute(BugFixRun run, BugFixPolicy policy) {
-        String prompt = prompts.render("fix", Map.of(
+        String basePrompt = prompts.render("fix", Map.of(
                 "issueTitle", AnalyzeStage.safe(run.issueTitle()),
                 "issueBody", untrusted(AnalyzeStage.clip(run.issueBody(), 6000)),
                 "baseSha", AnalyzeStage.safe(run.baseSha()),
                 "branch", AnalyzeStage.safe(run.branch()),
                 "analysis", untrusted(AnalyzeStage.clip(analysisForPrompt(run), 8000))));
-        FixOutput output;
-        try {
-            output = agent.runStructured(run, prompt, FixOutput.class);
-        } catch (RuntimeException e) {
-            return BugFixStageResult.blocked("修复 Agent 不可用：" + AnalyzeStage.message(e));
-        }
-        if (output == null) {
-            return BugFixStageResult.blocked("修复 Agent 未返回结构化补丁");
-        }
-        List<BugFixEdit> edits;
-        try {
-            edits = BugFixOutputValidation.edits(output);
-        } catch (IllegalArgumentException e) {
-            return BugFixStageResult.blocked("补丁格式不合法：" + e.getMessage());
-        }
-        if (edits.isEmpty()) {
-            return BugFixStageResult.blocked("修复 Agent 未产出文件改动（edits/files 均为空）");
-        }
-        if (edits.stream().map(BugFixEdit::path).distinct().count() > MAX_CHANGED_FILES) {
-            return BugFixStageResult.blocked("单次修复改动文件过多（超过 " + MAX_CHANGED_FILES
-                    + " 个），请拆分为更聚焦的修复");
-        }
         // 闸门 2（前置）：提交前先校验补丁路径是否落在分析确认的目标文件内。
         // 原来先 commit 再校验，越界改动会在分支上留下一个提交，重试还会叠加上去。
         List<String> targets = targetFiles(run);
-        if (!targets.isEmpty()) {
-            List<String> unexpected = edits.stream()
-                    .map(BugFixEdit::path)
-                    .filter(path -> targets.stream().noneMatch(target -> sameFile(target, path)))
-                    .distinct()
-                    .toList();
-            if (!unexpected.isEmpty()) {
-                return BugFixStageResult.blocked("修复改动了分析未确认的文件，已拒绝提交："
-                        + String.join(", ", unexpected)
-                        + "；如确属必要，请在分析结论中补充 targetFiles 后重试");
+        String title = AnalyzeStage.safe(run.issueTitle()).replaceAll("\\s+", " ").trim();
+        String message = "fix(bug): " + (title.isBlank() ? run.id() : title);
+        FixOutput output = null;
+        List<BugFixEdit> edits = List.of();
+        String sha = null;
+        String applyFeedback = "";
+        int applyAttempts = 0;
+        // 片段应用失败时把结构化原因回灌给修复 Agent，最多重试 2 次（代码变动大时很常见）
+        while (sha == null) {
+            String prompt = applyFeedback.isBlank() ? basePrompt
+                    : basePrompt + "\n\n上一次补丁应用失败，请针对性修正后重新输出完整补丁：\n"
+                            + untrusted(AnalyzeStage.clip(applyFeedback, 2000));
+            try {
+                output = agent.runStructured(run, prompt, FixOutput.class);
+            } catch (RuntimeException e) {
+                return BugFixStageResult.blocked("修复 Agent 不可用：" + AnalyzeStage.message(e));
             }
-        }
-        String sha;
-        try {
-            String title = AnalyzeStage.safe(run.issueTitle()).replaceAll("\\s+", " ").trim();
-            sha = git.commitFix(run, edits,
-                    "fix(bug): " + (title.isBlank() ? run.id() : title));
-        } catch (IllegalArgumentException e) {
-            return BugFixStageResult.blocked("补丁未通过校验：" + e.getMessage());
-        } catch (RuntimeException e) {
-            return BugFixStageResult.failed("提交修复失败：" + AnalyzeStage.message(e));
+            if (output == null) {
+                return BugFixStageResult.blocked("修复 Agent 未返回结构化补丁");
+            }
+            try {
+                edits = BugFixOutputValidation.edits(output);
+            } catch (IllegalArgumentException e) {
+                return BugFixStageResult.blocked("补丁格式不合法：" + e.getMessage());
+            }
+            if (edits.isEmpty()) {
+                return BugFixStageResult.blocked("修复 Agent 未产出文件改动（edits/files 均为空）");
+            }
+            if (edits.stream().map(BugFixEdit::path).distinct().count() > MAX_CHANGED_FILES) {
+                return BugFixStageResult.blocked("单次修复改动文件过多（超过 " + MAX_CHANGED_FILES
+                        + " 个），请拆分为更聚焦的修复");
+            }
+            if (!targets.isEmpty()) {
+                List<String> unexpected = edits.stream()
+                        .map(BugFixEdit::path)
+                        .filter(path -> targets.stream().noneMatch(target -> sameFile(target, path)))
+                        .distinct()
+                        .toList();
+                if (!unexpected.isEmpty()) {
+                    return BugFixStageResult.blocked("修复改动了分析未确认的文件，已拒绝提交："
+                            + String.join(", ", unexpected)
+                            + "；如确属必要，请在分析结论中补充 targetFiles 后重试");
+                }
+            }
+            try {
+                sha = git.commitFix(run, edits, message);
+            } catch (PatchApplier.ApplyException e) {
+                if (++applyAttempts > MAX_APPLY_RETRIES) {
+                    return BugFixStageResult.blocked("补丁应用失败（已重试 " + MAX_APPLY_RETRIES
+                            + " 次）：" + e.getMessage());
+                }
+                applyFeedback = e.getMessage();
+            } catch (IllegalArgumentException e) {
+                return BugFixStageResult.blocked("补丁未通过校验：" + e.getMessage());
+            } catch (RuntimeException e) {
+                return BugFixStageResult.failed("提交修复失败：" + AnalyzeStage.message(e));
+            }
         }
         // 闸门 2（提交后复核）：实际改动范围必须与分析结论一致
         if (!targets.isEmpty()) {

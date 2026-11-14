@@ -97,6 +97,12 @@ public class ChangeController {
                         "该变更不是可执行动作（kind=" + plan.kind() + "）"));
         ProjectContext ctx = contextResolver.resolve(plan.projectId(), plan.env(), userId);
         // 5. 带令牌落地执行（ActionService 再次核对 planHash）
+        // 破坏性 L2（reset/delete/migrate 等）在非生产也要确认，确认后走同一个令牌入口；
+        // applyConfirmed 会再次校验"确实是破坏性动作 + 配方哈希未变"。
+        if (action.autoExecutable()) {
+            return ActionController.RunView.of(
+                    actions.applyConfirmed(ctx, action, plan.planHash()));
+        }
         return ActionController.RunView.of(actions.apply(ctx, action, plan.planHash()));
     }
 

@@ -324,10 +324,10 @@ public class AgentFactory {
     }
 
     /**
-     * 工作区调度 Agent：只装配管理工具（会话 / 运行 / 任务），没有任何写代码或写环境的工具。
+     * 工作区调度 Agent：管理工具（会话 / 运行 / 任务）+ 全部只读工具。
      *
-     * <p>它不挂 MCP、不挂 Skill：调度 Agent 的职责是"编排"，把执行交给子会话；
-     * 任何扩展都只会扩大它的权限面，与"统一调度但不直接动手"的定位冲突。
+     * <p>只读工具用于直接回答"状态/日志/配置"类问题，减少不必要的子会话；
+     * 它不挂 MCP、不挂 Skill、没有任何写工具，真正动手仍交给子会话。
      */
     public ReActAgent createSupervisor(ProjectContext ctx) {
         PermissionContextState permission = PermissionContextState.builder()
@@ -357,11 +357,15 @@ public class AgentFactory {
                    conversation_status、conversation_wait（最多 60 秒）、conversation_cancel。
                 4. 汇总：conversation_summarize 读取某个会话最近一次运行的结论。
                 5. 任务板：task_create、task_update、task_complete、task_list。
+                6. 只读查证：项目/CI/流水线/环境/运行态/配置/仓库/Issue 的查询工具（如 project_info、
+                   ci_list_pipelines、env_status、runtime_status、read_file、grep、git_diff 等）。
 
                 工作方式：
-                - 用户提出一个需要动手的目标时，先判断应该新建会话还是复用已有会话；
-                  新建后用 conversation_send 派发，再用 conversation_wait 等待（一次最多 60 秒，
-                  超时就告诉用户还在跑，稍后用 conversation_status 再看，不要高频轮询）。
+                - 先判断问题需不需要"动手"：
+                  · 只是问状态、日志、配置、失败原因：直接用只读工具查证后回答，不要派发子会话；
+                  · 需要改代码、跑命令、部署或长时间处理：先判断应该新建会话还是复用已有会话，
+                    新建后用 conversation_send 派发，再用 conversation_wait 等待（一次最多 60 秒，
+                    超时就告诉用户还在跑，稍后用 conversation_status 再看，不要高频轮询）。
                 - 派发后不要把子会话的输出当成自己做的：如实汇报 runId、状态与摘要。
                 - 多个独立目标可以分别派发；同一目标正在运行时不要重复派发。
                 - 需要长期跟踪的事项用 task_create 登记，完成后 task_complete。

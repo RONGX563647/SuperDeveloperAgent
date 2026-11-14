@@ -30,6 +30,10 @@ import top.rongx.agent.domain.bugfix.BugFixStageRun;
 import top.rongx.agent.domain.bugfix.BugFixStatus;
 import top.rongx.agent.domain.bugfix.BugFixTransitions;
 import top.rongx.agent.domain.gitissue.GitIssue;
+import top.rongx.agent.domain.run.RunKind;
+import top.rongx.agent.domain.run.RunLedgerRepository;
+import top.rongx.agent.domain.run.RunRecord;
+import top.rongx.agent.domain.run.RunState;
 
 /**
  * Bug 自动修复编排器：把「分析 → 复现 → 修复 → 验证 → PR」串成可持久化的状态机。
@@ -59,6 +63,7 @@ public class BugFixOrchestrator {
     private final BugFixNotifier notifier;
     private final BugFixNotificationStore notifications;
     private final BugFixCancellationRegistry cancellations;
+    private final RunLedgerRepository ledger;
     private final Map<BugFixStage, BugFixStageHandler> handlers;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService retryScheduler = Executors.newSingleThreadScheduledExecutor(
@@ -73,12 +78,14 @@ public class BugFixOrchestrator {
     public BugFixOrchestrator(BugFixRunStore runs, BugFixPolicyStore policies,
                               List<BugFixStageHandler> handlers, BugFixNotifier notifier,
                               BugFixNotificationStore notifications,
-                              BugFixCancellationRegistry cancellations) {
+                              BugFixCancellationRegistry cancellations,
+                              RunLedgerRepository ledger) {
         this.runs = runs;
         this.policies = policies;
         this.notifier = notifier;
         this.notifications = notifications;
         this.cancellations = cancellations;
+        this.ledger = ledger;
         this.handlers = handlers.stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(
                         BugFixStageHandler::stage, handler -> handler, (a, b) -> a));
@@ -126,6 +133,7 @@ public class BugFixOrchestrator {
                 BugFixStage.ANALYZE, BugFixStatus.QUEUED, "已入队，等待执行",
                 BugFixRunArtifacts.EMPTY, 0, now, now, 0);
         runs.save(run);
+        track(run);
         runs.appendEvent(BugFixEvent.info(id, BugFixStage.ANALYZE, "自动修复已入队"));
         submit(id);
         return run;
@@ -153,6 +161,7 @@ public class BugFixOrchestrator {
             BugFixRun next = run.withState(run.stage(), BugFixStatus.QUEUED, "等待重试",
                     run.attempt() + 1, now, 0);
             runs.save(next);
+            track(next);
             runs.appendEvent(BugFixEvent.info(id, run.stage(), "用户触发重试"));
             cancellations.clear(id);
             submit(id);
@@ -172,6 +181,7 @@ public class BugFixOrchestrator {
             BugFixRun cancelled = run.withState(run.stage(), BugFixStatus.CANCELLED, "用户取消",
                     run.attempt(), now, now);
             runs.save(cancelled);
+            track(cancelled);
             runs.closeOpenStages(id, BugFixStageRun.CANCELLED, "用户取消", now);
             runs.releaseEnvLeases(id);
             runs.appendEvent(BugFixEvent.warn(id, run.stage(), "用户取消自动修复"));
@@ -197,6 +207,7 @@ public class BugFixOrchestrator {
             long now = System.currentTimeMillis();
             BugFixRun done = run.completed(now);
             runs.save(done);
+            track(done);
             runs.appendEvent(BugFixEvent.info(id, BugFixStage.PULL_REQUEST, "PR 已合并，自动修复完成"));
             runs.releaseEnvLeases(id);
             enqueue(done, "自动修复 · PR 已合并\n\nBug 修复已合入主干：" + safeUrl(done.prUrl()));
@@ -215,6 +226,7 @@ public class BugFixOrchestrator {
             BugFixRun blocked = run.withState(BugFixStage.PULL_REQUEST, BugFixStatus.BLOCKED,
                     "PR 已被关闭但未合并，请人工确认后重试", run.attempt(), now, now);
             runs.save(blocked);
+            track(blocked);
             runs.appendEvent(BugFixEvent.warn(id, BugFixStage.PULL_REQUEST, blocked.message()));
             enqueue(blocked, "自动修复 · PR 已关闭但未合并\n\n" + safeUrl(blocked.prUrl())
                     + "\n可人工确认后重试。");
@@ -337,6 +349,7 @@ public class BugFixOrchestrator {
                 run = runs.save(run.withState(run.stage(), BugFixStatus.RUNNING,
                         "正在执行：" + run.stage().label(), run.attempt(),
                         System.currentTimeMillis(), 0));
+                track(run);
                 runs.appendEvent(BugFixEvent.info(id, run.stage(),
                         "阶段开始：" + run.stage().label()));
             }
@@ -426,6 +439,7 @@ public class BugFixOrchestrator {
                     .withState(decision.nextStage(), decision.status(), message, decision.attempt(),
                             now, decision.finished() ? now : 0)
                     .withResult(result));
+            track(saved);
             runs.appendEvent(eventFor(saved, stage, result));
             if (decision.finished()) {
                 runs.releaseEnvLeases(run.id());
@@ -501,8 +515,10 @@ public class BugFixOrchestrator {
                 return;
             }
             long now = System.currentTimeMillis();
-            runs.save(current.withState(current.stage(), BugFixStatus.BLOCKED, message,
-                    current.attempt(), now, now));
+            BugFixRun blocked = current.withState(current.stage(), BugFixStatus.BLOCKED, message,
+                    current.attempt(), now, now);
+            runs.save(blocked);
+            track(blocked);
             runs.appendEvent(BugFixEvent.warn(run.id(), run.stage(), message));
             runs.releaseEnvLeases(run.id());
         }
@@ -516,8 +532,10 @@ public class BugFixOrchestrator {
             }
             BugFixRun current = run.get();
             long now = System.currentTimeMillis();
-            runs.save(current.withState(current.stage(), BugFixStatus.FAILED, message,
-                    current.attempt() + 1, now, now));
+            BugFixRun failed = current.withState(current.stage(), BugFixStatus.FAILED, message,
+                    current.attempt() + 1, now, now);
+            runs.save(failed);
+            track(failed);
             runs.appendEvent(BugFixEvent.error(id, current.stage(), message));
             runs.closeOpenStages(id, BugFixStageRun.FAILED, message, now);
             runs.releaseEnvLeases(id);
@@ -526,6 +544,26 @@ public class BugFixOrchestrator {
 
     private Object lockFor(String id) {
         return runLocks[Math.floorMod(id == null ? 0 : id.hashCode(), LOCK_STRIPES)];
+    }
+
+    /** 统一运行账本双写：只用于全局视图与恢复，失败绝不影响自动修复本身。 */
+    private void track(BugFixRun run) {
+        try {
+            RunState state = switch (run.status()) {
+                case QUEUED -> RunState.QUEUED;
+                case RUNNING -> RunState.RUNNING;
+                case BLOCKED, WAITING_MERGE -> RunState.BLOCKED;
+                case SUCCEEDED -> RunState.SUCCEEDED;
+                case FAILED -> RunState.FAILED;
+                case CANCELLED -> RunState.CANCELLED;
+            };
+            String error = run.status() == BugFixStatus.FAILED ? run.message() : "";
+            ledger.save(new RunRecord(run.id(), RunKind.BUGFIX, run.projectId(), run.issueId(),
+                    run.userId(), state, run.message(), error, run.createdAt(),
+                    System.currentTimeMillis()));
+        } catch (RuntimeException e) {
+            log.warn("运行账本写入失败 run={}：{}", run.id(), e.getMessage());
+        }
     }
 
     private static String shortSha(String sha) {

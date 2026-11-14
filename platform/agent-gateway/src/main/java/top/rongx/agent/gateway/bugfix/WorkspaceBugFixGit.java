@@ -144,17 +144,8 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
             }
             return newText;
         }
-        int first = current.indexOf(oldText);
-        if (first < 0) {
-            throw new IllegalArgumentException("替换片段未在基线文件中出现（文件可能已变更或片段不精确）："
-                    + path);
-        }
-        if (current.indexOf(oldText, first + oldText.length()) >= 0) {
-            throw new IllegalArgumentException("替换片段在文件中出现多次，请提供更长且唯一的上下文："
-                    + path);
-        }
-        return current.substring(0, first) + (newText == null ? "" : newText)
-                + current.substring(first + oldText.length());
+        // 精确 → 去行尾空白 → 忽略缩进；失败时返回带候选行号的结构化异常
+        return PatchApplier.replace(path, current, oldText, newText);
     }
 
     private static String readIfExists(Path target, String path) {

@@ -34,6 +34,11 @@ agent:
   # 未提供的账号会生成随机密码并写入 <workspace>/_platform/seed-passwords.txt（600）。
   auth:
     seed-passwords: ${AGENT_SEED_PASSWORDS:}
+  # 对话并发闸门：memory=进程内信号量（单实例）；jdbc=SQLite 租约（多实例共享配额）
+  chat:
+    limiter: ${AGENT_CHAT_LIMITER:memory}
+    max-concurrent: ${AGENT_CHAT_MAX_CONCURRENT:8}
+    lease-ttl-seconds: ${AGENT_CHAT_LEASE_TTL:600}
   # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）
   workspace:
     root: ${AGENT_WORKSPACE_ROOT:./data/workspaces}
@@ -67,6 +72,14 @@ agent:
     client-id: ${GITLAB_CLIENT_ID:}
     client-secret: ${GITLAB_CLIENT_SECRET:}
     redirect-uri: ${GITLAB_REDIRECT_URI:http://localhost:8090/api/v1/settings/git-hosts/oauth/gitlab/callback}
+  # 非生产破坏性动作防护：即使 dev/test 的 L2 默认放行，破坏性动作也要人工确认，
+  # 且同一操作人 + 动作在窗口内最多执行 N 次（防提示注入引发的重试风暴）
+  security:
+    dangerous-max-per-window: ${AGENT_DANGEROUS_MAX_PER_WINDOW:3}
+    dangerous-window-seconds: ${AGENT_DANGEROUS_WINDOW_SECONDS:600}
+  # 统一运行账本：RUNNING 超过该秒数未更新视为进程中断留下的孤儿（多实例安全）
+  run:
+    stale-seconds: ${AGENT_RUN_STALE_SECONDS:300}
   # 动作执行沙箱：默认 fail-closed（Docker 不可用则启动失败）；仅本地开发显式设为 process
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:docker}        # docker | process

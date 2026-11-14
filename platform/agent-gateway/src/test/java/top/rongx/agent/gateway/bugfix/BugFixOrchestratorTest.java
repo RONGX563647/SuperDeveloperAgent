@@ -344,7 +344,8 @@ class BugFixOrchestratorTest {
                 new VerifyStage(agent, new FakeChecks(), prompts),
                 new PullRequestStage(git, prompts));
         return new BugFixOrchestrator(store, store, handlers, (run, message) -> {
-        }, store, new BugFixCancellationRegistry());
+        }, store, new BugFixCancellationRegistry(),
+                top.rongx.agent.domain.run.RunLedgerRepository.noop());
     }
 
     private static BugFixPolicy enabledPolicy() {

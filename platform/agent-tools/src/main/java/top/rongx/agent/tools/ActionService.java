@@ -20,6 +20,8 @@ import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.tool.ToolLevel;
 import top.rongx.agent.domain.policy.PolicyPort;
+import top.rongx.agent.domain.policy.ConfirmationRequiredException;
+import top.rongx.agent.domain.policy.DangerousActionPolicy;
 
 /**
  * 动作编排服务（工具与 HTTP 共用同一套门禁，避免两条路径行为不一致）。
@@ -46,6 +48,7 @@ public class ActionService {
     private final ActionRunner runner;
     private final ChangeStore changes;
     private final PolicyPort policy;
+    private final DangerousActionPolicy dangerous;
     private final String workspaceRoot;
     /** 仅供测试：让可用性测试在无 Docker 环境也能验证 L3 令牌闭环。生产恒为 false。 */
     private final boolean allowTestL3;
@@ -54,12 +57,14 @@ public class ActionService {
                          ActionRunner runner,
                          ChangeStore changes,
                          PolicyPort policy,
+                         DangerousActionPolicy dangerous,
                          @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
                          @Value("${agent.sandbox.allow-test-l3:false}") boolean allowTestL3) {
         this.resolver = resolver;
         this.runner = runner;
         this.changes = changes;
         this.policy = policy;
+        this.dangerous = dangerous;
         this.workspaceRoot = workspaceRoot;
         this.allowTestL3 = allowTestL3;
     }
@@ -101,6 +106,22 @@ public class ActionService {
         policy.requireNotDenied(ctx, ToolLevel.L2_EXECUTE_ISOLATED, action.wireName());
         Path root = requireWorkspace(ctx);
         ActionSpec spec = plan(ctx, action);
+        // 破坏性动作即使在 dev/test 也不能被模型连续直接执行：先登记变更，等人工确认
+        String commands = spec.steps().stream()
+                .map(argv -> String.join(" ", argv))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        if (dangerous.requiresConfirmation(action.wireName(), commands)) {
+            dangerous.checkFrequency(ctx, action.wireName(), commands);
+            ChangePlan change = changes.registerWithHash(ctx.projectId(), ctx.env(),
+                    action.wireName(), spec.describe(), specHash(ctx, spec), true);
+            throw new ConfirmationRequiredException(change.changeId(), """
+                    破坏性动作 %s 需要人工确认，未执行。
+                    changeId: %s
+                    env: %s
+                    next: 请把 changeId 告知用户，在平台确认卡片上确认后再执行；
+                          不要重复调用本动作或自行假设已确认。
+                    """.formatted(action.wireName(), change.changeId(), ctx.env()));
+        }
         ActionSpec bound = bindParams(spec, overrides);
         assertHostSafe(ctx, bound);
         return runner.run(root, bound);
@@ -150,6 +171,32 @@ public class ActionService {
         ActionSpec bound = bindParams(spec, overrides);
         assertHostSafe(ctx, bound);
         return runner.run(root, bound);
+    }
+
+    /**
+     * 凭证执行破坏性 L2（由确认卡片的 apply 入口调用）。
+     *
+     * <p>与 L3 的区别：动作本身仍是 L2（非生产），但因为它会重置/删除数据，必须先经人工确认。
+     * 令牌绑定的 planHash 必须等于当前配方哈希，防止"确认 A、执行 B"。
+     */
+    public ActionResult applyConfirmed(ProjectContext ctx, ActionId action, String confirmedPlanHash) {
+        if (!action.autoExecutable()) {
+            throw new IllegalArgumentException(action.wireName() + " 属 L3，请走 L3 的 apply 流程");
+        }
+        Path root = requireWorkspace(ctx);
+        ActionSpec spec = plan(ctx, action);
+        String commands = spec.steps().stream()
+                .map(argv -> String.join(" ", argv))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        if (!dangerous.requiresConfirmation(action.wireName(), commands)) {
+            throw new IllegalArgumentException(action.wireName() + " 不是破坏性动作，可直接执行");
+        }
+        policy.requireNotDenied(ctx, ToolLevel.L2_EXECUTE_ISOLATED, action.wireName());
+        if (!specHash(ctx, spec).equals(confirmedPlanHash)) {
+            throw new IllegalStateException("配方在确认后已被修改，请重新确认（planHash 不匹配）");
+        }
+        assertHostSafe(ctx, spec);
+        return runner.run(root, spec);
     }
 
     /**

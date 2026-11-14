@@ -2,16 +2,17 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Promotion, Refresh, VideoPause, Search, Plus, Check, MoreFilled } from '@element-plus/icons-vue'
+import { Promotion, Refresh, VideoPause, Search, Plus, Check, MoreFilled, Aim } from '@element-plus/icons-vue'
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
 import { listProjects, type ProjectRow } from '../api/project'
 import { useAgentChat } from '../composables/useAgentChat'
+import { useWorkspaceEvents, type WorkspaceEvent } from '../composables/useWorkspaceEvents'
 import { clearHistory, loadHistory, saveHistory } from '../state/sessionHistory'
 import type { ChatMessage } from '../types'
 import {
   cancelRun, createConversation, createTask, getSupervisor, listConversations, listRuns, listTasks,
-  syncConversations, updateConversation, updateTask,
+  sendToConversation, syncConversations, updateConversation, updateTask,
   type ConversationRow, type RunRow, type TaskRow,
 } from '../api/workspace'
 import { envLabel } from '../utils/pipelineLabels'
@@ -48,6 +49,11 @@ const sideTab = ref<'tasks' | 'runs'>('tasks')
 const runTab = ref<'active' | 'recent'>('active')
 const showDoneTasks = ref(false)
 const toolsOpen = ref(false)
+
+const paletteOpen = ref(false)
+const paletteQuery = ref('')
+const paletteIndex = ref(0)
+const paletteInputRef = ref<HTMLInputElement | null>(null)
 
 const createOpen = ref(false)
 const createForm = reactive({ title: '', env: appStore.env, worktree: '' })
@@ -169,6 +175,56 @@ function toolLabel(name: string): string {
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
+let reconcileTimer: ReturnType<typeof setTimeout> | null = null
+
+const terminalRunStatuses = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED'])
+
+/** 事件驱动的状态更新：先就地打补丁，终态再触发一次 REST 对账。 */
+const workspaceEvents = useWorkspaceEvents({
+  url: () => `/api/v1/workspaces/${projectId.value}/events`,
+  getHeaders: () => ({ Authorization: `Bearer ${getToken()}` }),
+  onEvent: (event) => applyWorkspaceEvent(event),
+  onConnectedChange: (connected) => {
+    if (connected) void loadAll()
+  },
+})
+const liveConnected = workspaceEvents.connected
+
+function applyWorkspaceEvent(event: WorkspaceEvent): void {
+  const at = event.at || Date.now()
+  if (event.runId) {
+    const run = runs.value.find((row) => row.id === event.runId)
+    if (run) {
+      if (event.status) run.status = event.status as RunRow['status']
+      if (event.status === 'RUNNING') run.startedAt = run.startedAt || at
+      if (event.status && terminalRunStatuses.has(event.status)) {
+        run.endedAt = at
+        if (event.text) run.result = event.text
+        scheduleReconcile()
+      }
+    } else if (event.status && (event.status === 'RUNNING' || terminalRunStatuses.has(event.status))) {
+      // 调度 Agent 刚派发的运行还不在本地列表里，对账一次即可
+      scheduleReconcile()
+    }
+  }
+  if (event.conversationId && event.status) {
+    const conversation = conversations.value.find((row) => row.id === event.conversationId)
+    if (conversation) {
+      conversation.status = event.status as ConversationRow['status']
+      conversation.lastActivityAt = at
+      if (event.text) conversation.summary = event.text.slice(0, 200)
+    }
+  }
+}
+
+/** 合并短时间内的多次事件，最多每 1.2 秒对账一次。 */
+function scheduleReconcile(): void {
+  if (reconcileTimer) return
+  reconcileTimer = setTimeout(() => {
+    reconcileTimer = null
+    if (!document.hidden) void loadAll()
+  }, 1200)
+}
 
 async function loadAll(): Promise<void> {
   loading.value = true
@@ -411,6 +467,126 @@ function usePrompt(text: string): void {
   void nextTick(() => composerRef.value?.focus())
 }
 
+function onEscape(): void {
+  if (streaming.value) stop()
+}
+
+/** 一键诊断：把本地快照拼进提示词，让调度 Agent 用只读工具核对后给结论。 */
+function diagnose(): void {
+  if (!supervisor.value) {
+    ElMessage.info('调度会话尚未就绪')
+    return
+  }
+  if (streaming.value) {
+    ElMessage.info('调度 Agent 正在处理，请稍候')
+    return
+  }
+  const failed = recentRuns.value.filter((run) => run.status === 'FAILED').slice(0, 3)
+  const lines = [
+    '请对当前工作区做一次健康诊断：',
+    `- 会话 ${workerConversations.value.length} 个，运行中 ${activeRuns.value.length} 个，待办 ${openTasks.value.length} 个`,
+    failed.length
+      ? `- 最近失败：${failed.map((run) => `${conversationTitle(run.conversationId)}（${run.error || '无错误信息'}）`).join('；')}`
+      : '- 最近没有失败运行',
+    '请用只读工具核对实际状态，指出最需要处理的 1-3 件事，并直接给出下一步动作。',
+  ]
+  input.value = lines.join('\n')
+  void submit()
+}
+
+/** 失败/取消的运行重新派发到原会话。 */
+async function retryRun(run: RunRow): Promise<void> {
+  if (!run.conversationId) {
+    ElMessage.info('该运行没有关联会话，无法重试')
+    return
+  }
+  try {
+    await sendToConversation(run.conversationId, run.goal || '继续上一次任务')
+    runDialog.value = false
+    ElMessage.success('已重新派发到该会话')
+    await loadAll()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '重试失败')
+  }
+}
+
+interface PaletteCommand {
+  id: string
+  title: string
+  hint: string
+  run: () => void
+}
+
+const paletteCommands = computed<PaletteCommand[]>(() => {
+  const list: PaletteCommand[] = [
+    { id: 'diagnose', title: '一键诊断工作区', hint: '健康检查', run: diagnose },
+    { id: 'new', title: '新建会话', hint: '⌘N', run: openCreate },
+    { id: 'refresh', title: '刷新工作区', hint: 'R', run: () => void loadAll() },
+    { id: 'tasks', title: '切换到任务面板', hint: '面板', run: () => { sideTab.value = 'tasks' } },
+    { id: 'runs', title: '切换到运行面板', hint: '面板', run: () => { sideTab.value = 'runs' } },
+    ...workerConversations.value.slice(0, 8).map((row) => ({
+      id: `conv-${row.id}`,
+      title: `打开会话：${row.title}`,
+      hint: envLabel(row.env),
+      run: () => openConversation(row),
+    })),
+  ]
+  const query = paletteQuery.value.trim().toLowerCase()
+  if (!query) return list
+  return list.filter((item) => `${item.title} ${item.hint}`.toLowerCase().includes(query))
+})
+
+function openPalette(): void {
+  paletteQuery.value = ''
+  paletteIndex.value = 0
+  paletteOpen.value = true
+  void nextTick(() => paletteInputRef.value?.focus())
+}
+
+function runPaletteCommand(command: PaletteCommand): void {
+  paletteOpen.value = false
+  command.run()
+}
+
+function onPaletteKeydown(event: KeyboardEvent): void {
+  const list = paletteCommands.value
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    paletteIndex.value = list.length ? (paletteIndex.value + 1) % list.length : 0
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    paletteIndex.value = list.length ? (paletteIndex.value - 1 + list.length) % list.length : 0
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    const command = list[paletteIndex.value]
+    if (command) runPaletteCommand(command)
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    paletteOpen.value = false
+  }
+}
+
+function onGlobalKeydown(event: KeyboardEvent): void {
+  if (!(event.metaKey || event.ctrlKey)) return
+  const key = event.key.toLowerCase()
+  if (key === 'k') {
+    event.preventDefault()
+    if (paletteOpen.value) paletteOpen.value = false
+    else openPalette()
+  } else if (key === 'n' && !event.shiftKey) {
+    event.preventDefault()
+    openCreate()
+  }
+}
+
+function onVisibility(): void {
+  if (!document.hidden) void loadAll()
+}
+
+watch(paletteQuery, () => {
+  paletteIndex.value = 0
+})
+
 async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -499,18 +675,27 @@ watch(projectId, () => {
   conversations.value = []
   tasks.value = []
   runs.value = []
+  workspaceEvents.start()
   void init()
 })
 
 onMounted(async () => {
+  document.addEventListener('keydown', onGlobalKeydown)
+  document.addEventListener('visibilitychange', onVisibility)
   await init()
+  workspaceEvents.start()
+  // 事件流断开时才启用低频兜底轮询，避免大规模工作区反复全量拉取
   timer = setInterval(() => {
-    if (!document.hidden) void loadAll()
-  }, 3000)
+    if (!document.hidden && !workspaceEvents.connected.value) void loadAll()
+  }, 10_000)
 })
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  if (reconcileTimer) clearTimeout(reconcileTimer)
+  document.removeEventListener('keydown', onGlobalKeydown)
+  document.removeEventListener('visibilitychange', onVisibility)
+  workspaceEvents.stop()
 })
 </script>
 
@@ -526,6 +711,10 @@ onUnmounted(() => {
             <i>·</i><span>{{ kpis.conversations }} 会话</span>
             <i>·</i><span :class="{ hot: kpis.activeRuns > 0 }">{{ kpis.activeRuns }} 运行中</span>
             <i>·</i><span>{{ kpis.openTasks }} 待办</span>
+            <i>·</i>
+            <span class="live" :class="{ on: liveConnected }">
+              <i class="live-dot"></i>{{ liveConnected ? '实时' : '轮询兜底' }}
+            </span>
             <template v-if="lastRefreshed">
               <i>·</i><span class="muted">更新于 {{ timeAgo(lastRefreshed) }}</span>
             </template>
@@ -533,6 +722,12 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="ws-actions">
+        <button type="button" class="btn ghost" title="一键诊断工作区" @click="diagnose">
+          <el-icon><Aim /></el-icon>诊断
+        </button>
+        <button type="button" class="icon-btn" title="命令面板（Ctrl/⌘ + K）" @click="openPalette">
+          <el-icon><Search /></el-icon>
+        </button>
         <el-select v-model="appStore.env" size="small" class="env-select" aria-label="环境">
           <el-option v-for="e in envOptions" :key="e" :label="envLabel(e)" :value="e" />
         </el-select>
@@ -692,13 +887,14 @@ onUnmounted(() => {
           <div class="composer-box">
             <textarea
               ref="composerRef" v-model="input" rows="2"
-              placeholder="告诉调度 Agent 要做什么，或询问工作区状态"
+              placeholder="告诉调度 Agent 要做什么，或询问工作区状态（Ctrl/⌘ + K 命令面板）"
               @keydown.enter="onEnter"
+              @keydown.esc="onEscape"
             />
             <div class="composer-bar">
               <span class="composer-hint">
                 {{ streaming
-                  ? `调度中 ${(elapsedMs / 1000).toFixed(1)}s`
+                  ? `调度中 ${(elapsedMs / 1000).toFixed(1)}s · Esc 停止`
                   : 'Enter 发送 · Shift + Enter 换行' }}
               </span>
               <button v-if="streaming" type="button" class="text-btn" @click="stop">
@@ -793,6 +989,11 @@ onUnmounted(() => {
                 </span>
               </div>
               <span class="item-status" :data-s="run.status">{{ statusLabel(run.status) }}</span>
+              <button
+                v-if="run.status === 'FAILED' || run.status === 'CANCELLED'"
+                type="button" class="text-btn retry-btn" title="重新派发"
+                @click.stop="retryRun(run)"
+              >重试</button>
             </div>
             <p v-if="!visibleRuns.length" class="empty">
               {{ runTab === 'active' ? '当前没有运行中的任务' : '还没有已结束的运行' }}
@@ -888,6 +1089,10 @@ onUnmounted(() => {
             v-if="runDetail && (runDetail.status === 'QUEUED' || runDetail.status === 'RUNNING')"
             type="button" class="btn ghost" @click="cancel(runDetail)"
           >取消运行</button>
+          <button
+            v-if="runDetail && (runDetail.status === 'FAILED' || runDetail.status === 'CANCELLED')"
+            type="button" class="btn ghost" @click="retryRun(runDetail)"
+          >重试</button>
           <button type="button" class="btn ghost" @click="runDialog = false">关闭</button>
           <button
             v-if="runDetail" type="button" class="btn primary"
@@ -896,6 +1101,28 @@ onUnmounted(() => {
         </div>
       </template>
     </el-dialog>
+
+    <!-- 命令面板 -->
+    <div v-if="paletteOpen" class="palette-mask" @click.self="paletteOpen = false">
+      <div class="palette">
+        <input
+          ref="paletteInputRef" v-model="paletteQuery" class="palette-input"
+          placeholder="搜索动作或会话，↑↓ 选择，Enter 执行，Esc 关闭"
+          @keydown="onPaletteKeydown"
+        />
+        <div class="palette-list">
+          <button
+            v-for="(command, index) in paletteCommands" :key="command.id"
+            type="button" class="palette-row" :class="{ on: index === paletteIndex }"
+            @mouseenter="paletteIndex = index" @click="runPaletteCommand(command)"
+          >
+            <span class="palette-title">{{ command.title }}</span>
+            <span class="palette-hint">{{ command.hint }}<template v-if="index === paletteIndex"> · ↵</template></span>
+          </button>
+          <p v-if="!paletteCommands.length" class="empty">没有匹配的动作</p>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1395,6 +1622,63 @@ onUnmounted(() => {
 .run-dot[data-s='SUCCEEDED'] { background: #10b981; }
 .run-dot[data-s='FAILED'] { background: #ef4444; }
 .run-dot[data-s='CANCELLED'] { background: #cbd5e1; }
+
+/* 实时状态 */
+.live { display: inline-flex; align-items: center; gap: 4px; }
+.live-dot { width: 6px; height: 6px; background: #cbd5e1; border-radius: 50%; }
+.live.on .live-dot { background: #10b981; box-shadow: 0 0 0 3px rgb(16 185 129 / 12%); }
+.live.on { color: #047857; }
+
+.retry-btn { flex: none; font-size: 11px; }
+
+/* 命令面板 */
+.palette-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgb(15 23 42 / 32%);
+}
+.palette {
+  width: min(560px, calc(100vw - 32px));
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgb(15 23 42 / 22%);
+}
+.palette-input {
+  width: 100%;
+  padding: 14px 16px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  outline: none;
+}
+.palette-list { max-height: 320px; padding: 6px; overflow-y: auto; }
+.palette-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 9px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+}
+.palette-row.on { background: var(--accent-soft); }
+.palette-hint { font-size: 11px; color: var(--ink-faint); }
 
 /* 弹窗 */
 .form { display: flex; flex-direction: column; gap: 12px; }

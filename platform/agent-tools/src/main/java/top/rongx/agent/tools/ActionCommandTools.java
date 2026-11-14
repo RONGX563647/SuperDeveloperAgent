@@ -47,7 +47,13 @@ public class ActionCommandTools {
         if (id.isEmpty()) {
             return "err: 未知动作 " + action + "；可用：" + wireNames();
         }
-        ActionResult result = actions.run(ctx, id.get(), params == null ? Map.of() : params);
+        ActionResult result;
+        try {
+            result = actions.run(ctx, id.get(), params == null ? Map.of() : params);
+        } catch (top.rongx.agent.domain.policy.ConfirmationRequiredException e) {
+            // 破坏性动作必须先人工确认：把 changeId 明确回给模型，禁止它重试
+            return "err: 该动作需要人工确认，未执行。\n" + e.getMessage();
+        }
         // 计划已在 plan_action 输出过；这里不再重复命令原文，减少 token
         return format(result);
     }

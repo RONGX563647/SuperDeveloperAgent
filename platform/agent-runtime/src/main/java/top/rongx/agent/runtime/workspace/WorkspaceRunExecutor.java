@@ -27,6 +27,10 @@ import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.run.RunKind;
+import top.rongx.agent.domain.run.RunLedgerRepository;
+import top.rongx.agent.domain.run.RunRecord;
+import top.rongx.agent.domain.run.RunState;
 import top.rongx.agent.runtime.ChatService;
 
 /**
@@ -60,6 +64,7 @@ public class WorkspaceRunExecutor {
     private final ConversationRunRepository runs;
     private final ConversationRepository conversations;
     private final WorkspaceEventBus events;
+    private final RunLedgerRepository ledger;
     private final int maxConcurrent;
 
     private final Map<String, Handle> handles = new ConcurrentHashMap<>();
@@ -69,11 +74,13 @@ public class WorkspaceRunExecutor {
                                 ConversationRunRepository runs,
                                 ConversationRepository conversations,
                                 WorkspaceEventBus events,
+                                RunLedgerRepository ledger,
                                 @Value("${agent.workspace.supervisor.max-concurrent:3}") int maxConcurrent) {
         this.chatService = chatService;
         this.runs = runs;
         this.conversations = conversations;
         this.events = events;
+        this.ledger = ledger;
         this.maxConcurrent = Math.max(1, Math.min(maxConcurrent, 10));
     }
 
@@ -81,6 +88,7 @@ public class WorkspaceRunExecutor {
     public void submit(ProjectContext ctx, ConversationRun run, String text) {
         Handle handle = new Handle();
         handles.put(run.id(), handle);
+        track(run, RunState.QUEUED, "已入队", "");
         try {
             handle.future = pool(run.projectId()).submit(
                     () -> execute(ctx, run, text, handle));
@@ -143,6 +151,7 @@ public class WorkspaceRunExecutor {
             events.publish(new WorkspaceEventBus.WorkspaceEvent(run.projectId(),
                     run.conversationId(), run.id(), run.ownerUserId(),
                     "run.status", "RUNNING", "", now));
+            track(run, RunState.RUNNING, "正在执行", "");
         }
 
         Results results = stream(ctx, run, text, handle);
@@ -219,6 +228,7 @@ public class WorkspaceRunExecutor {
             events.publish(new WorkspaceEventBus.WorkspaceEvent(updated.projectId(),
                     updated.conversationId(), updated.id(), updated.ownerUserId(),
                     "run.status", status.name(), updated.result(), now));
+            track(updated, ledgerState(status), summaryOf(updated), updated.error());
             handles.remove(updated.id());
             handle.streamDone.countDown();
             handle.done.countDown();
@@ -248,6 +258,28 @@ public class WorkspaceRunExecutor {
             case FAILED -> ConversationStatus.FAILED;
             case CANCELLED -> ConversationStatus.CANCELLED;
         };
+    }
+
+    private static RunState ledgerState(RunStatus status) {
+        return switch (status) {
+            case QUEUED -> RunState.QUEUED;
+            case RUNNING -> RunState.RUNNING;
+            case SUCCEEDED -> RunState.SUCCEEDED;
+            case FAILED -> RunState.FAILED;
+            case CANCELLED -> RunState.CANCELLED;
+        };
+    }
+
+    /** 统一运行账本双写：失败只记日志，绝不影响会话运行本身。 */
+    private void track(ConversationRun run, RunState state, String summary, String error) {
+        try {
+            long now = System.currentTimeMillis();
+            ledger.save(new RunRecord(run.id(), RunKind.WORKSPACE, run.projectId(),
+                    run.conversationId(), run.ownerUserId(), state, summary, error,
+                    run.createdAt(), now));
+        } catch (RuntimeException e) {
+            log.warn("运行账本写入失败 run={}：{}", run.id(), e.getMessage());
+        }
     }
 
     private static String summaryOf(ConversationRun run) {

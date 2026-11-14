@@ -13,6 +13,7 @@ import cn.dev33.satoken.exception.DisableServiceException;
 import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.exception.NotPermissionException;
 import cn.dev33.satoken.exception.NotRoleException;
+import top.rongx.agent.domain.policy.ConfirmationRequiredException;
 
 /** 统一错误响应：含 traceId，不含堆栈与内部细节（规约 §3）。 */
 @RestControllerAdvice
@@ -41,6 +42,12 @@ public class GlobalExceptionHandler {
     /** 确认令牌相关失败 → 409（状态冲突，需要重新确认）。 */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> conflict(IllegalStateException e) {
+        return body(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    /** 破坏性动作需要人工确认 → 409，message 里带 changeId。 */
+    @ExceptionHandler(ConfirmationRequiredException.class)
+    public ResponseEntity<Map<String, Object>> confirmationRequired(ConfirmationRequiredException e) {
         return body(HttpStatus.CONFLICT, e.getMessage());
     }
 

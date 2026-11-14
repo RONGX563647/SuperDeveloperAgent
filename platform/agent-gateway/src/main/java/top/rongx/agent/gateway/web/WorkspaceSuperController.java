@@ -74,7 +74,7 @@ public class WorkspaceSuperController {
             conversations.updateOwned(supervisor.id(), userId,
                     new ConversationPatch(null, ctx.env(), null, null, null, null, null));
         }
-        limiter.acquireOrThrow();
+        AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicReference<Disposable> subscription = new AtomicReference<>();
@@ -86,7 +86,7 @@ public class WorkspaceSuperController {
                 if (current != null) {
                     current.dispose();
                 }
-                limiter.release();
+                limiter.release(lease);
             }
         };
         emitter.onTimeout(() -> {

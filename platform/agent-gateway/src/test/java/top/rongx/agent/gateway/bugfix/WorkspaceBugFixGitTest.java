@@ -92,7 +92,7 @@ class WorkspaceBugFixGitTest {
         IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
                 () -> git.commitFix(run,
                         List.of(BugFixEdit.replace("src/main/App.java", "not-found", "x")), "bad"));
-        assertTrue(missing.getMessage().contains("未在基线文件中出现"), missing.getMessage());
+        assertTrue(missing.getMessage().contains("片段替换失败"), missing.getMessage());
 
         Files.writeString(repo.resolve("src/main/App.java"),
                 "class App { int a() { return 0; } int b() { return 0; } }",
