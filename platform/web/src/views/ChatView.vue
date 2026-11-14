@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
+  ArrowDown, CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../stores/app'
 import type { TraceTurn } from '../types'
@@ -279,15 +279,25 @@ const showWelcome = computed(() =>
   !streaming.value && projection.value.messages.length === 0)
 
 const suggestions = [
-  '这个项目有哪些流水线？',
-  '当前环境的中间件都起了吗？',
-  '解释一下最近一次失败的运行'
+  { title: '排查一次失败', desc: '读日志、定位原因、给出下一步', prompt: '最近一次失败的运行是什么原因？读日志给出结论和修复建议' },
+  { title: '部署到测试环境', desc: '跑通流水线并在测试环境验证', prompt: '把当前项目部署到测试环境，失败就诊断并修复' },
+  { title: '了解项目现状', desc: '流水线、环境与最近运行一屏概览', prompt: '介绍一下当前项目的流水线、环境状态和最近运行情况' },
 ]
 
-function useSuggestion(text: string): void {
+function startWith(text: string): void {
+  if (streaming.value) return
   input.value = text
-  void nextTick(() => inputRef.value?.focus())
+  void send()
 }
+
+/** 次级视图统一收进「更多」，顶栏只保留对话一个主入口。 */
+const secondaryLabels: Record<string, string> = {
+  trace: '轨迹',
+  capabilities: '能力',
+  issues: '任务',
+}
+const secondaryLabel = computed(() =>
+  viewMode.value === 'chat' ? '更多' : (secondaryLabels[viewMode.value] ?? '更多'))
 
 /** 输入框自增高：1 行起，最高约 30vh，超出后内部滚动。 */
 function resizeInput(): void {
@@ -434,7 +444,7 @@ onMounted(async () => {
 <template>
   <div class="chat-page">
     <PageHeader
-      title="通用对话"
+      title="助手"
       context
       context-env
     >
@@ -490,28 +500,23 @@ onMounted(async () => {
         >
           对话
         </button>
-        <button
-          type="button" class="switch-tab" :class="{ on: viewMode === 'trace' }"
-          @click="viewMode = 'trace'"
-        >
-          轨迹
-        </button>
-        <button
-          type="button" class="switch-tab" :class="{ on: viewMode === 'capabilities' }"
-          @click="viewMode = 'capabilities'"
-        >
-          能力
-          <span v-if="selectedSkills.length + selectedMcp.length" class="tab-badge mono">
-            {{ selectedSkills.length + selectedMcp.length }}
-          </span>
-        </button>
-        <button
-          type="button" class="switch-tab" :class="{ on: viewMode === 'issues' }"
-          @click="viewMode = 'issues'"
-        >
-          任务
-          <span v-if="issueCount" class="tab-badge mono">{{ issueCount }}</span>
-        </button>
+        <el-dropdown trigger="click" @command="(cmd: string) => (viewMode = cmd as 'chat' | 'trace' | 'capabilities' | 'issues')">
+          <button type="button" class="switch-tab more-tab" :class="{ on: viewMode !== 'chat' }">
+            {{ secondaryLabel }}
+            <span v-if="viewMode === 'capabilities' && selectedSkills.length + selectedMcp.length" class="tab-badge mono">
+              {{ selectedSkills.length + selectedMcp.length }}
+            </span>
+            <span v-else-if="viewMode === 'issues' && issueCount" class="tab-badge mono">{{ issueCount }}</span>
+            <el-icon><ArrowDown /></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="trace">轨迹</el-dropdown-item>
+              <el-dropdown-item command="capabilities">能力</el-dropdown-item>
+              <el-dropdown-item command="issues">任务</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
       <EnvironmentStatusBar
         :project-id="projectId"
@@ -562,16 +567,19 @@ onMounted(async () => {
         <span class="welcome-icon" aria-hidden="true">
           <el-icon><ChatDotRound /></el-icon>
         </span>
-        <h2 class="welcome-title">研发运维助手</h2>
+        <h2 class="welcome-title">今天要做什么？</h2>
         <p class="welcome-desc">
-          {{ `${projectDisplayName} · ${envLabel(env)}。可以问流水线、环境状态、代码位置，或让我跑一次诊断。` }}
+          {{ `${projectDisplayName} · ${envLabel(env)}。选一个常用场景，或直接在下方描述你的问题。` }}
         </p>
         <div class="welcome-suggestions">
           <button
-            v-for="s in suggestions" :key="s" type="button" class="suggestion"
-            @click="useSuggestion(s)"
+            v-for="s in suggestions" :key="s.title" type="button" class="suggestion"
+            @click="startWith(s.prompt)"
           >
-            <span>{{ s }}</span>
+            <span class="suggestion-main">
+              <strong>{{ s.title }}</strong>
+              <small>{{ s.desc }}</small>
+            </span>
             <el-icon><CaretRight /></el-icon>
           </button>
         </div>
@@ -849,34 +857,56 @@ onMounted(async () => {
 .welcome-suggestions {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 8px;
   margin-top: 22px;
 }
+/* 一张卡 = 一个常用场景：标题 + 一句说明，点一下直接开跑 */
 .suggestion {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   width: 100%;
-  padding: 10px 2px;
+  padding: 12px 14px;
   font-family: inherit;
   font-size: 13px;
   color: var(--ink-soft);
   text-align: left;
   cursor: pointer;
-  background: none;
-  border: 0;
-  border-top: 1px solid var(--line-soft);
-  transition: color var(--dur-fast) ease, padding-left var(--dur-fast) ease;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 .suggestion:hover {
-  padding-left: 6px;
   color: var(--ink);
+  border-color: var(--line);
+  box-shadow: var(--shadow-1);
+}
+.suggestion-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.suggestion-main strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.suggestion-main small {
+  font-size: 12px;
+  color: var(--ink-muted);
 }
 .suggestion .el-icon {
   flex: none;
   font-size: 12px;
   color: var(--ink-faint);
+}
+.more-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* 展开确认卡片按钮（在 ConversationTimeline 的 change-action 插槽里） */

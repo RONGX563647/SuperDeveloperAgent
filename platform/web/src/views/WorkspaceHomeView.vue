@@ -56,7 +56,7 @@ const paletteIndex = ref(0)
 const paletteInputRef = ref<HTMLInputElement | null>(null)
 
 const createOpen = ref(false)
-const createForm = reactive({ title: '', env: appStore.env, worktree: '' })
+const createForm = reactive({ title: '', env: appStore.env, worktree: '', advanced: false })
 
 const taskDialog = ref(false)
 const editingTask = ref<TaskRow | null>(null)
@@ -286,7 +286,7 @@ async function init(): Promise<void> {
     const history = loadHistory(sup.id)
     if (history) hydrate(history.messages, history.tools)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '调度会话初始化失败')
+    ElMessage.error(e instanceof Error ? e.message : '工作区助手初始化失败')
   }
   await loadAll()
 }
@@ -301,9 +301,10 @@ function openConversation(row: ConversationRow): void {
 }
 
 function openCreate(): void {
-  createForm.title = ''
+  createForm.title = `新会话 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
   createForm.env = appStore.env
   createForm.worktree = ''
+  createForm.advanced = false
   createOpen.value = true
 }
 
@@ -486,11 +487,11 @@ function onEscape(): void {
 /** 一键诊断：把本地快照拼进提示词，让调度 Agent 用只读工具核对后给结论。 */
 function diagnose(): void {
   if (!supervisor.value) {
-    ElMessage.info('调度会话尚未就绪')
+    ElMessage.info('工作区助手尚未就绪')
     return
   }
   if (streaming.value) {
-    ElMessage.info('调度 Agent 正在处理，请稍候')
+    ElMessage.info('工作区助手正在处理，请稍候')
     return
   }
   const failed = recentRuns.value.filter((run) => run.status === 'FAILED').slice(0, 3)
@@ -612,8 +613,8 @@ async function clearChat(): Promise<void> {
   if (!supervisor.value) return
   try {
     await ElMessageBox.confirm(
-      '只删除本机保存的调度对话记录，服务端会话与运行记录仍保留。',
-      '清空调度对话',
+      '只删除本机保存的对话记录，服务端会话与运行记录仍保留。',
+      '清空对话',
       { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' },
     )
   } catch {
@@ -621,7 +622,7 @@ async function clearChat(): Promise<void> {
   }
   clearHistory(supervisor.value.id)
   reset()
-  ElMessage.success('已清空调度对话')
+  ElMessage.success('已清空对话')
 }
 
 function statusLabel(status: string): string {
@@ -852,12 +853,12 @@ onUnmounted(() => {
         </button>
       </aside>
 
-      <!-- 中：调度 Agent -->
+      <!-- 中：工作区助手 -->
       <section class="col chat-col">
         <div class="chat-head">
           <div class="chat-title">
-            <span>调度 Agent</span>
-            <span class="tag">只读编排</span>
+            <span>工作区助手</span>
+            <span class="tag">只读，不会直接改代码</span>
           </div>
           <div class="chat-head-actions">
             <span v-if="supervisor" class="mono muted">{{ shortId(supervisor.id) }}</span>
@@ -870,8 +871,8 @@ onUnmounted(() => {
 
         <div ref="messageListRef" class="chat-scroll">
           <div v-if="!timeline.length" class="hero">
-            <h2>把整个工作区交给它</h2>
-            <p>创建会话、派发任务、跟踪运行、汇总结果。它只做编排，真正执行仍落到子会话。</p>
+            <h2>要做什么？</h2>
+            <p>可以直接问工作区状态，也可以让它创建会话、派发任务并跟踪到完成。</p>
             <div class="action-grid">
               <button
                 v-for="a in actionCards" :key="a.title" type="button"
@@ -922,7 +923,7 @@ onUnmounted(() => {
           <div class="composer-box">
             <textarea
               ref="composerRef" v-model="input" rows="2"
-              placeholder="告诉调度 Agent 要做什么，或询问工作区状态（Ctrl/⌘ + K 命令面板）"
+              placeholder="直接问工作区状态，或描述要做的事（Ctrl/⌘ + K 打开命令面板）"
               @keydown.enter="onEnter"
               @keydown.esc="onEscape"
             />
@@ -1074,10 +1075,14 @@ onUnmounted(() => {
             <el-option v-for="e in envOptions" :key="e" :label="envLabel(e)" :value="e" />
           </el-select>
         </label>
-        <label>
+        <label v-if="createForm.advanced">
           <span>工作树</span>
           <el-input v-model="createForm.worktree" placeholder="留空使用主仓库" />
         </label>
+        <button
+          v-else type="button" class="advanced-toggle"
+          @click="createForm.advanced = true"
+        >高级选项：指定工作树</button>
       </div>
       <template #footer>
         <div class="dialog-actions">
@@ -1749,6 +1754,11 @@ onUnmounted(() => {
 /* 弹窗 */
 .form { display: flex; flex-direction: column; gap: 12px; }
 .form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--ink-muted); }
+.advanced-toggle {
+  align-self: flex-start; padding: 0; font-family: inherit; font-size: 12px;
+  color: var(--ink-muted); cursor: pointer; background: none; border: 0;
+}
+.advanced-toggle:hover { color: var(--accent-ink); }
 .form :deep(.el-select) { width: 100%; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .detail { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }

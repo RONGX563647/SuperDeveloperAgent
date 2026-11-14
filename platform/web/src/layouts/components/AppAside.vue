@@ -183,7 +183,12 @@ function visibleSessions(group: { id: string; sessions: SessionItem[] }): Sessio
 }
 
 function toggleGroup(id: string): void {
-  collapsedGroups.value = { ...collapsedGroups.value, [id]: !collapsedGroups.value[id] }
+  collapsedGroups.value = { ...collapsedGroups.value, [id]: !groupCollapsed(id) }
+}
+
+/** 默认只展开当前工作区，其余分组收起——侧栏首屏不再堆几十条历史会话。 */
+function groupCollapsed(id: string): boolean {
+  return collapsedGroups.value[id] ?? id !== appStore.projectId
 }
 
 function toggleExpand(id: string): void {
@@ -375,13 +380,13 @@ watch(() => appStore.projectId, () => void loadServerSessions())
               </span>
               <button
                 type="button" class="ws-caret"
-                :title="collapsedGroups[g.id] ? '展开分组' : '收起分组'"
+                :title="groupCollapsed(g.id) ? '展开分组' : '收起分组'"
                 @click="toggleGroup(g.id)"
               >
-                <el-icon><component :is="collapsedGroups[g.id] ? ArrowRight : ArrowDown" /></el-icon>
+                <el-icon><component :is="groupCollapsed(g.id) ? ArrowRight : ArrowDown" /></el-icon>
               </button>
             </div>
-            <div v-if="!collapsedGroups[g.id]" class="ws-sessions">
+            <div v-if="!groupCollapsed(g.id)" class="ws-sessions">
               <div
                 v-for="s in visibleSessions(g)" :key="s.id"
                 class="session-row" :class="{ active: s.id === appStore.sessionId }"
