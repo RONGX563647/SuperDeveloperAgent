@@ -3,6 +3,8 @@
 > 基线：2026-11-14 当前主干代码（`platform/` 7 个运行时模块 + `spec-checks` 校验模块 + `web/` 前端 + `specs/` 3 份规格）。
 > 本文档面向新成员与代码评审，覆盖：整体架构、模块职责、关键类与函数、依赖关系、HTTP API、运行方式与质量门禁。
 > 配套规约：《项目规约-v1.0》《PRD-DevOps-Agent平台-v1.0》《规约-流水线执行器-v1.0》（均在 `docs/`）。
+> 文档索引与状态：[docs/README.md](README.md)（唯一索引）；架构决策：[ADR](adr/README.md)；运维：[运维手册](operation/README.md)；开发：[开发指南](dev/README.md)。
+> 机器可读入口：仓库根 `llms.txt`；断链巡检：`node scripts/docs/check-links.mjs`。
 > 环境子系统决策：《环境模板与中间件自动注入 v2》（`docs/环境变量与环境模板设计-v2.md`）。
 > 使用文档：《流水线工作台-使用指南-v1》（`docs/流水线工作台-使用指南-v1.md`，面向使用者的工作台操作说明）。
 > 功能规格：`specs/dev-local-deploy`（流水线体验 + dev 本机部署）、`specs/env-inject-health`（注入自检与中间件健康）、`specs/env-runtime-consistency`（环境一致性）。
@@ -59,7 +61,7 @@
 ```
 agentscope-ruoyi/
 ├── README.md              项目入口（阅读顺序、快速开始、提交规范）
-├── docs/                  设计与规约文档（24 份 Markdown + 1 份汇报稿，含本文）
+├── docs/                  文档（唯一索引 docs/README.md；adr/ architecture/ api/ operation/ dev/ changelog/ deprecated/ + 24 篇存量设计）
 ├── specs/                 功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 ├── platform/              平台代码（本文档主体）
 │   ├── pom.xml            父 POM（模块与依赖管理）

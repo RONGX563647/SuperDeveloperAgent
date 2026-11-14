@@ -1,0 +1,54 @@
+# DevOps Agent 平台
+
+> 面向研发运维场景的 Agent 平台：读代码仓库、跑流水线、部署与自证、缺陷修复，全部动作受平台层门禁约束。本文件是给 LLM / RAG 的检索入口，列出高价值文档与阅读顺序；文档唯一索引见 docs/README.md。
+
+## 必读（按顺序）
+
+- [PRD](docs/PRD-DevOps-Agent平台-v1.0.md): 产品边界、角色、验收标准
+- [项目规约](docs/项目规约-v1.0.md): 强制约束（分层、禁令 R01–R13、密钥与金额规则）
+- [规约自动化检查](docs/规约自动化检查-v1.0.md): 规约如何落到 mvn verify
+- [Code Wiki](docs/Code-Wiki.md): 模块职责、关键类、61 个工具、HTTP 接口、配置键、已知边界
+
+## 架构决策（为什么这么做）
+
+- [ADR 索引](docs/adr/README.md)
+- [ADR-0001 独立平台而非改造若依](docs/adr/0001-独立平台而非改造若依.md)
+- [ADR-0002 不造 CI DSL：5 动作 + 仓库内配方](docs/adr/0002-不造CI-DSL用动作+仓库内配方.md)
+- [ADR-0003 环境配置三层与 secret:// 引用](docs/adr/0003-环境配置三层与环境模板.md)
+- [ADR-0004 统一运行账本而非重写编排](docs/adr/0004-统一运行账本而非重写编排.md)
+- [ADR-0005 安全边界放在平台层](docs/adr/0005-安全边界放在平台层.md)
+- [ADR-0006 工作区事件驱动与降级](docs/adr/0006-工作区事件驱动与降级.md)
+
+## 使用与运维
+
+- [流水线工作台使用指南](docs/流水线工作台-使用指南-v1.md): 接入项目、配方、触发/重跑/回滚、错误码
+- [运维手册](docs/operation/README.md): 启动、端口、数据目录、备份、SSE 代理、排障、回滚
+- [开发指南](docs/dev/README.md): 本地启动、质量门禁、加工具步骤、常见坑
+- [API 说明](docs/api/README.md): 接口分组、SSE 事件、契约变更流程
+
+## 设计与规格
+
+- [架构索引](docs/architecture/README.md): 系统全景、信任边界、模块依赖
+- [环境模板与中间件注入 v2](docs/环境变量与环境模板设计-v2.md)
+- [环境配置事实层与分环境门控](docs/环境配置事实层与分环境门控-方案-v1.md)
+- [项目接入设计 v2](docs/项目接入设计-v2.md)
+- [发布编排与平台部署器](docs/发布编排与平台部署器-v1.md)
+- [流水线设计：Java+Vue 双栈](docs/流水线设计-Java与Vue双栈.md)
+- [流水线执行器规约](docs/规约-流水线执行器-v1.0.md)
+- [设置：服务器与模型连接](docs/设置-服务器与模型连接-v1.md)
+- [多项目托管设计 v4](docs/多项目托管设计-v4.md)
+- [变更记录](docs/changelog/2026-11.md)
+
+## 历史与背景（仅追溯，勿作为当前结论）
+
+- [v3 独立平台可行性](docs/devops-agent-独立平台-可行性分析-v3.md)
+- [v2 Vue-Plus 重评](docs/ruoyi-vue-plus-agent-可行性分析-v2.md)
+- [v1 若依 4.8.3 基线](docs/ruoyi-agent-可行性分析与市场调研.md)
+- [CICD 决策](docs/CICD方案替代与自创-决策-v1.md) / [验收报告](docs/CICD验收报告-v1.md)
+- [Jenkins 能力规划](docs/Jenkins能力复刻与复用-规划-v1.md) / [开源 CI 调研](docs/开源CI集成复用-调研-v1.md)
+- [废弃登记](docs/deprecated/README.md)
+
+## 可选
+
+- [功能规格](specs/dev-local-deploy/spec.md)、[任务清单](specs/dev-local-deploy/tasks.md)
+- [平台模块说明](platform/README.md)

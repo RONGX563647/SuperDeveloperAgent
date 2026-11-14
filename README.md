@@ -10,14 +10,19 @@
 ## 目录
 
 ```
-docs/          设计与规约（24 份 Markdown + 1 份汇报稿，含 Code Wiki）
+docs/          文档（唯一索引 docs/README.md；子目录 adr/architecture/api/operation/dev/changelog/deprecated + 24 篇存量设计）
 specs/         功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 platform/      后端 8 个 Maven 模块 + Vue3 前端
 _research/     市场调研与源码能力盘点（含采集脚本）
+scripts/       仓库级脚本（docs/check-links.mjs 文档断链巡检）
+llms.txt       给 LLM / RAG 的文档入口
 .workflow/     Gitee Go CI（本质：cd platform && mvn -B verify）
 ```
 
 ## 文档阅读顺序
+
+> 完整索引、文档状态（稳定/现行/历史/规划）、复审日期与 P0/P1/P2 处置规则：**[docs/README.md](docs/README.md)**。
+> 机器可读入口：**[llms.txt](llms.txt)**；断链巡检：`node scripts/docs/check-links.mjs`。
 
 ### 核心必读（先看这四篇）
 
@@ -27,6 +32,8 @@ _research/     市场调研与源码能力盘点（含采集脚本）
 | 2 | [项目规约 v1.0](docs/项目规约-v1.0.md) | 代码与流程的强制约束（MUST / MUST NOT） |
 | 3 | [规约自动化检查](docs/规约自动化检查-v1.0.md) | 规约如何落到 `mvn verify` |
 | 4 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
+
+> 为什么这么设计：见 [ADR 索引](docs/adr/README.md)（6 篇：独立平台、CI 形态、环境三层、运行账本、安全边界、事件驱动）。
 
 ### 设计与实现（现行方案）
 
