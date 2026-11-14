@@ -34,7 +34,7 @@ _research/     市场调研与源码能力盘点（含采集脚本）
 | 11 | [CI/CD 方案替代与自创 · 决策](docs/CICD方案替代与自创-决策-v1.md) | 不造 DSL，改用「5 个动作 + 仓库内配方」 |
 | 12 | [自研流水线能否替代 Jenkins · 验收报告](docs/CICD验收报告-v1.md) | 真实 git→构建→镜像→部署→健康→回滚，4/4 通过 |
 | 13 | [流水线工作台 · 使用指南](docs/流水线工作台-使用指南-v1.md) | 接入项目、写配方、触发/重跑/回滚、看懂错误码 |
-| 14 | [环境模板与中间件自动注入 v2](docs/环境变量与环境模板设计-v2.md) | 环境变量 / 中间件 / 部署注入的现行决策（v1 仅存档） |
+| 14 | [环境模板与中间件自动注入 v2](docs/环境变量与环境模板设计-v2.md) | 环境变量 / 中间件 / 部署注入的现行决策 |
 | 15 | [发布编排 + 平台部署器 v1](docs/发布编排与平台部署器-v1.md) | HOST / DOCKER / SERVER 三种部署语义 |
 | 16 | [设置：服务器与模型连接 v1](docs/设置-服务器与模型连接-v1.md) | 设置页数据模型、密钥加密与连通性探测 |
 | 17 | [项目接入设计 v2](docs/项目接入设计-v2.md) | DIRECT 本地引用 / MANAGED bare + worktree |
@@ -44,7 +44,7 @@ _research/     市场调研与源码能力盘点（含采集脚本）
 **背景与推演**（按时间顺序，记录结论如何演化）：
 
 [v1 若依 4.8.3](docs/ruoyi-agent-可行性分析与市场调研.md) → [v2 Vue-Plus 重评](docs/ruoyi-vue-plus-agent-可行性分析-v2.md) → [v3 独立平台](docs/devops-agent-独立平台-可行性分析-v3.md) → [v4 多项目](docs/多项目托管设计-v4.md)；
-另有 [ruoyi-ai 编程助手拆解](docs/ruoyi-ai-编程助手拆解.md)、[脚手架完善分析](docs/脚手架完善分析-v1.md)、[架构分析](docs/架构分析-agentscope-ruoyi-platform-v1.md) 与 [方案 D 修复方案](docs/方案D修复方案-v1.md)。
+另有 [ruoyi-ai 编程助手拆解](docs/ruoyi-ai-编程助手拆解.md) 与 [架构分析](docs/架构分析-agentscope-ruoyi-platform-v1.md)。
 
 ## 快速开始
 

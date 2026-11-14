@@ -1,9 +1,9 @@
 # Code Wiki：研发运维智能体平台（agentscope-ruoyi）
 
-> 基线：2026-11 当前主干代码（`platform/` 7 个运行时模块 + `spec-checks` 校验模块 + `web/` 前端 + `specs/` 3 份规格）。
+> 基线：2026-11-14 当前主干代码（`platform/` 7 个运行时模块 + `spec-checks` 校验模块 + `web/` 前端 + `specs/` 3 份规格）。
 > 本文档面向新成员与代码评审，覆盖：整体架构、模块职责、关键类与函数、依赖关系、HTTP API、运行方式与质量门禁。
 > 配套规约：《项目规约-v1.0》《PRD-DevOps-Agent平台-v1.0》《规约-流水线执行器-v1.0》（均在 `docs/`）。
-> 环境子系统决策：《环境模板与中间件自动注入 v1/v2》（`docs/环境变量与环境模板设计-v1.md` 仅存档、`-v2.md` 为现行决策）。
+> 环境子系统决策：《环境模板与中间件自动注入 v2》（`docs/环境变量与环境模板设计-v2.md`）。
 > 使用文档：《流水线工作台-使用指南-v1》（`docs/流水线工作台-使用指南-v1.md`，面向使用者的工作台操作说明）。
 > 功能规格：`specs/dev-local-deploy`（流水线体验 + dev 本机部署）、`specs/env-inject-health`（注入自检与中间件健康）、`specs/env-runtime-consistency`（环境一致性）。
 
@@ -59,7 +59,7 @@
 ```
 agentscope-ruoyi/
 ├── README.md              项目入口（阅读顺序、快速开始、提交规范）
-├── docs/                  设计与规约文档（27 份 Markdown + 2 份汇报稿，含本文）
+├── docs/                  设计与规约文档（24 份 Markdown + 1 份汇报稿，含本文）
 ├── specs/                 功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 ├── platform/              平台代码（本文档主体）
 │   ├── pom.xml            父 POM（模块与依赖管理）
@@ -387,7 +387,7 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 `ProcessExecutor.redact` 过滤 Bearer、赋值型 token/secret/password/api_key、64 位 hex、PEM 私钥块（64 位 hex 规则用负向后顾保留 `sha256:` 镜像指纹）；`BuiltInPipelineEngine` 日志尾部与 `RunState.snapshot` 均走脱敏——凭证不进证据链。部署链路额外两层：`DockerDeployer.sanitize` 在失败摘要中按本次注入的 env 值全局抹除（`KEY=***`，值长度≥6）；`ServerDeployer` 远端 `-e` 参数单引号转义，值含空格/引号不被 shell 拆开。
 
 ### 5.11 环境模板、项目覆盖与部署注入（env 子系统，2026-11 新增）
-决策文档：`docs/环境变量与环境模板设计-v2.md`（v1 仅存档）。核心思想：**变量按环境配一次、项目只写差异、部署只注入合并结果、Agent 只能"建议映射"不能"擅自使用"**。
+决策文档：`docs/环境变量与环境模板设计-v2.md`。核心思想：**变量按环境配一次、项目只写差异、部署只注入合并结果、Agent 只能"建议映射"不能"擅自使用"**。
 
 1. **三层数据**（`EnvironmentStore` 端口，SQLite 实现 `SqliteEnvironmentStore`）：
    - 环境模板（dev/test/prod）：网络、默认部署目标/端口、健康路径、**runtimeMode（HOST_LOCAL/DOCKER/SERVER）与 namespace（中间件命名隔离段，默认项目 ID）**、模板变量、中间件资源；
@@ -424,6 +424,28 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
    只读预检复用 `preview`，额外检查 `missingSecrets`、`deploy.env-required` 缺失（E-509）、可执行阶段为空、image/docker 类型所需 Docker 可用性（5s 超时），产出 `ok/blockers/warnings/stages + fingerprint + reportHash`，零 outward 变更。`POST /ci/pipelines/{id}/dry-run` 与工具 `ci_dry_run` 调用；`run` 与 `ci_run` 执行前先 dry-run，未通过 **E-708**，传入的 `dryRunHash` 与当前不一致 **E-706**（代码/配方/环境/密钥版本变化即失效）。指纹与报告哈希随 trigger params 进入证据链。
 5. **前端**：设置页新增「密钥库」（增删/轮换）；项目环境表单支持「直接填值 / 引用密钥」，并提供「配置解析」弹窗展示 resolved/missing/conflicts/candidates，非密钥候选可一键「采纳」写为项目覆盖（人工点击即确认，Agent 不会自动调用）；流水线运行卡新增「预检」按钮与报告面板（阻塞项/警告/阶段可执行性/哈希）。
 
+### 5.15 统一运行账本与重启恢复（2026-11 新增）
+三套编排（`WorkspaceRunExecutor`、`BugFixOrchestrator`、`BuiltInPipelineEngine`）的运行/阶段/恢复模型不同，平台用一层**扁平生命周期账本**统一可观测与恢复，而不重写各引擎状态机：
+
+- **模型**（domain `run` 包）：`RunKind`（CHAT/DEPLOY/WORKSPACE/BUGFIX/PIPELINE）× `RunState`（QUEUED/RUNNING/BLOCKED/SUCCEEDED/FAILED/CANCELLED）；`RunRecord` 只存跨引擎可比的字段（kind、subjectId、actor、摘要、错误、created/updated）。
+- **存储**：`RunLedgerRepository` 端口 + `SqliteRunLedgerRepository` 实现，落 `_platform/run_ledger.db`，`project_id`/`state`/`updated_at` 建索引；终态记录保留 30 天，由 `GovernanceCleanupJob` 定期 `purgeTerminalBefore` 清理。
+- **写入时机**：工作区运行在提交与终态各写一次；BugFix 在每次阶段流转写一次；流水线在 `trigger` 写 QUEUED、`execute` 的 `finally` 写终态。写入失败只记日志，绝不影响主流程。
+- **恢复**：`RunRecoveryService` 启动时把「RUNNING 且超过 5 分钟未更新」的记录标为 FAILED（原因 INTERRUPTED）。用时间阈值而非全量清空，避免多实例把别的实例正在跑的任务误杀。
+- **查询**：`GET /api/v1/run-ledger?projectId=&limit=`（只读、登录校验、按发起人过滤），前端工作区「运行 → 最近」用它聚合四类引擎的失败与历史。
+
+### 5.16 并发闸门与 L2 防滥用（2026-11 新增）
+- **限流可跨实例**：`AgentStreamLimiter` 改为接口，`MemoryAgentStreamLimiter`（默认，进程内信号量）与 `JdbcAgentStreamLimiter`（SQLite 租约，`_platform/rate_limit.db`，TTL 10 分钟兜底崩溃残留）按 `agent.chat.limiter=memory|jdbc` 选择；拿不到许可返回 429。多实例部署时切换 jdbc，并建议在网关层再做一次用户级限流。
+- **破坏性动作必须人工确认**：domain `DangerousActionPolicy` 按动作名/配方命令关键词（`rm -rf`、`drop table`、`git reset --hard`、`migrate`、`rollback` 等）识别破坏性 L2。即使在 dev/test（模型侧 BYPASS），`ActionService` 也会登记变更并返回 changeId（`ConfirmationRequiredException` → HTTP 409），人工用一次性令牌 apply 后才执行，apply 时再次校验配方哈希。
+- **频次限制**：同一操作人 + 项目 + 动作，10 分钟内最多 3 次，超限 `E-709`。
+- **保留 BYPASS 的原因**：AgentScope 的 ReAct 循环在 CONFIRM 模式下容易卡死；安全边界放在平台层（确认 + 频次），而不是依赖模型自觉。
+
+### 5.17 补丁匹配容错与体验/性能优化（2026-11 新增）
+- **`PatchApplier`**（bugfix）：`FIX` 阶段的 `edits(old/new 片段)` 按 精确 → 统一换行/去行尾空白 → 忽略缩进全等 → 唯一子串 的顺序匹配；多处命中直接失败并返回结构化原因（文件、原因、候选行号）。`FixStage` 把失败原因回灌 prompt 重试最多 2 次，`files` 整文件重写仍受文件数/大小限制。
+- **工作区事件驱动**：`GET /workspaces/{projectId}/events` 提供聚合 SSE；前端 `useWorkspaceEvents`（fetch 流解析、1s→15s 指数退避重连、卸载自动断开）就地更新会话/运行，终态 1.2s 防抖对账；**仅当事件流断开时**启用 10 秒兜底轮询，页面隐藏不拉取。
+- **调度 Agent 可直接答题**：`supervisorToolkit` = 会话/任务管理工具 + 全部只读工具（仍无文件写、命令、补丁、部署工具）；系统提示要求状态/日志/配置类问题直接用只读工具回答，多步动手才派子会话。
+- **易用性**：对话首屏为三张场景卡（排查失败/部署到测试/了解项目）；顶栏收敛为「对话 + 更多（轨迹/能力/任务）」；侧栏默认只展开当前工作区；新建会话标题自动预填、工作树收进高级选项；`Ctrl/⌘+K` 打开命令面板（诊断/新建会话/刷新/切换会话）；失败运行可一键重试。
+- **性能**：SQLite 每库连接池 4→8（WAL 并发读）；`UserStore`/`GiteeAccountStore` 复用连接池；事件总线改用 `directBestEffort`（慢订阅者丢弃而非无界缓冲）；前端历史写 localStorage 合并为 800ms、流式滚动合并到 `requestAnimationFrame`。
+
 ---
 
 ## 6. HTTP API 一览
@@ -434,6 +456,13 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 |---|---|---|
 | AuthController | POST `/auth/login` `/auth/logout` `/auth/me` | 登录/登出/当前身份 |
 | ChatController | POST `/chat`（SSE） | 对话，流式 Agent 事件（body：projectId/env/sessionId/message/worktree） |
+| WorkspaceController | GET/POST `/workspaces/{projectId}/conversations`、PATCH/DELETE `/conversations/{id}` | 工作区会话列表 / 新建 / 重命名、置顶、归档 / 删除 |
+| | GET `/workspaces/{projectId}/super` | 获取（或确保存在）该项目的调度 Agent 会话 |
+| | GET/POST `/workspaces/{projectId}/{runs,tasks}`、PATCH `/tasks/{id}`、GET `/runs/{runId}`、POST `/runs/{runId}/cancel` | 运行与任务：列表 / 详情 / 取消 / 任务增改 |
+| | POST `/conversations/{id}/send` | 给子会话派发消息（创建一次运行） |
+| WorkspaceSuperController | POST `/workspaces/{projectId}/super/stream`（SSE） | 调度 Agent 对话流：可直接用只读工具答题，也可创建/派发/等待/汇总子会话 |
+| WorkspaceEventController | GET `/workspaces/{projectId}/events`（SSE） | **工作区聚合事件流**：会话/运行状态变更推送（前端事件驱动，断线才回退轮询） |
+| RunLedgerController | GET `/run-ledger?projectId&limit` | **跨引擎运行账本**：PIPELINE/BUGFIX/WORKSPACE 的终态、失败原因与时间，供「全部引擎」视图聚合 |
 | AgentProfileController | GET `/agent/profile?projectId&env` | 当前生效系统提示词与工具面（轨迹视图只读核对） |
 | ActionController | GET `/actions`、GET `/actions/{action}/plan` | 看动作目录 / 看执行计划（命令原文） |
 | | POST `/actions/{action}/run`、POST `/actions/{action}/request` | L2 直接执行 / L3 登记变更 |
@@ -477,7 +506,9 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 
 ## 7. 模型工具（@Tool）一览 —— 33 个方法 / 12 个工具类
 
-AgentScope `Toolkit` 注册（`ToolCatalog` 装配三套无状态单例，按环境二选一：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent；`agent-tools` 模块共 15 类，其中 12 个是 @Tool 类，另含 `ToolCatalog`、`ActionService` 与 `ConfigResolver`）：
+AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 模块共 15 类，其中 12 个是 @Tool 类，另含 `ToolCatalog`、`ActionService` 与 `ConfigResolver`）：
+
+> `supervisorToolkit` = `WorkspaceSupervisorTools`（会话/运行/任务管理）+ 全部只读工具；**不含**任何文件写、命令、补丁、部署工具，保证调度 Agent 只能编排与只读取证。
 
 | 工具 | 级别 | 所在类 | 作用 |
 |---|---|---|---|
@@ -514,7 +545,8 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 | 路由 | 视图 | 职责 |
 |---|---|---|
 | `/login` | `LoginView.vue` | 登录（公开页） |
-| `/` → `/chat` | `ChatView.vue` | 对话（SSE 流式、工具调用卡片、审批卡片、**流式思考块、轨迹视图、DeepSeek 费用统计、本机环境状态条**） |
+| `/` → `/chat` | `ChatView.vue` | 对话（SSE 流式、工具调用卡片、审批卡片、**流式思考块、轨迹视图、DeepSeek 费用统计、本机环境状态条**）；首屏为三张场景卡（排查失败/部署到测试/了解项目），顶栏为「对话 + 更多」两级结构 |
+| `/workspace/:projectId` | `WorkspaceHomeView.vue` | 工作区首页：左会话 / 中调度 Agent / 右任务与运行；事件驱动刷新、`Ctrl/⌘+K` 命令面板、一键诊断、失败重试、运行「最近」聚合「全部引擎」账本 |
 | `/pipeline` | `PipelineView.vue` | 流水线工作台（触发、**命令级预览、单步重试、产物下载**、历史（可删除/耗时）、stage 时间线、日志） |
 | `/projects` | `ProjectListView.vue` | 项目列表 |
 | `/projects/intake` | `ProjectIntakeView.vue` | 项目接入向导（本地目录/Gitee 仓库选择） |
@@ -530,10 +562,10 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 | `src/api/` | `http.ts`（统一 fetch + Bearer）、`auth.ts`、`chat.ts`、`agent.ts`（`GET /agent/profile`，2026-11 新增）、`sse.ts`（fetch+ReadableStream 解析 SSE，支持 POST 单流与 GET 续传流、`Last-Event-ID`/`afterSequence`、4xx 不重试）、`action.ts`、`change.ts`（含 `getChangePatch` 补丁复核）、`pipeline.ts`（含 `retryStage`/`artifactFilePath`/`deleteHistory`/`stopLocalDeploy`/**`dryRunPipeline`**）、`deploy.ts`、`project.ts`（含 `projectEnvs`/`gitCheckout`/`fsRead`）、`settings.ts`（含资源 start/stop、services 本机服务管理、reveal 明文回显、env-check、**密钥库 CRUD/轮换、`resolveProjectConfig`、`listPolicies`**） |
 | `src/views/` | 7 个页面（见上表） |
 | `src/components/` | `chat/`（ConversationTimeline、MessageItem、ToolCallCard、ApprovalRequestCard、MarkdownView、**ThinkingBlock 流式思考块（默认折叠、完成后摘要"思考 N 步"）**、**ChatStatusStrip 底部状态条（连接/模型/费用/工具数）**、**ChatTraceRail 轨迹侧栏（按轮折叠）**、**ChatTraceView 轨迹视图（系统提示词+工具面+逐轮步骤，数据仅本地会话）**、**EnvironmentStatusBar 对话页环境状态条（中间件/应用/端口/最近运行，只读）**）、`pipeline/`（TriggerBar 运行卡（提交+命令级阶段预览+运行+**预检/dry-run 报告**）、StageTimeline、RunLog、HistoryList（环境筛选/删除/耗时）、EnvStateBand 环境胶囊切换条、EnvSummary 运行前环境摘要（变量/引用健康/体检结论，只读不返回值））、`project/`（ProjectTree、ProjectOverview、TreeNodeRow、useProjectTree、FilePreview、TabbedFiles、ResizableSplitter）、`settings/`（ModelPanel、ServerPanel、RepoPanel、EnvTemplatePanel 环境模板（模板/发现/登记/健康检查/启停/模板变量/reveal）、ProjectEnvPanel 项目环境（覆盖/有效视图/端口租约/本机服务/Agent 绑定两步确认/**密钥引用与配置解析**）、**SecretPanel 项目密钥库（增删/轮换，只回名称与版本）**）、`DirPickerDialog.vue`、`GiteeRepoPicker.vue`。**ActionPanel 已删除**（工作台不再展示动作面板） |
-| `src/composables/` | `useAgentChat.ts`（对话事件消费）、`useRunTracker.ts`（运行轮询 + 日志 offset 增量拉取）、`useFollowScroll.ts` |
-| `src/state/` | `agentEventReducer.ts`（SSE 事件 → 消息状态归约，含同名 `.test.ts` 单测）、`sessionHistory.ts`（**会话时间线按 projectId+env 存 localStorage，每会话上限 200 条，重启不丢**） |
+| `src/composables/` | `useAgentChat.ts`（对话事件消费）、`useRunTracker.ts`（运行轮询 + 日志 offset 增量拉取）、`useWorkspaceEvents.ts`（**工作区聚合 SSE：fetch 流解析、1s→15s 指数退避重连、卸载断开；仅在断开时才由视图启用 10s 兜底轮询**）、`useFollowScroll.ts` |
+| `src/state/` | `agentEventReducer.ts`（SSE 事件 → 消息状态归约，含同名 `.test.ts` 单测）、`sessionHistory.ts`（**会话时间线按 projectId+env 存 localStorage，每会话上限 200 条，重启不丢；写入方按 800ms 合并，避免工具流式更新时反复序列化**） |
 | `src/stores/` | `app.ts`（登录身份、**会话权限模式 readonly/confirm/auto（纯前端确认策略，服务端门禁不受影响）**等全局状态；无 Pinia，轻量 store 模块） |
-| `src/layouts/` | `AppLayout.vue` + `AppAside`/`PageHeader`（外壳） |
+| `src/layouts/` | `AppLayout.vue` + `AppAside`/`PageHeader`（外壳；顶栏「对话 + 更多（轨迹/能力/任务）」，侧栏默认只展开当前工作区） |
 | `src/utils/` | `markdown.ts`、`pipelineLabels.ts`、`projectId.ts`、`status.ts`、`deepseekPricing.ts`（**DeepSeek 官方价目本地算费用：按模型档位/缓存命中/思考模式计价，仅展示用途，后端 usage 原样透传**） |
 | `src/types.ts` | 与后端 DTO 对应的核心类型（ActionView、RunView、StageResult、ChangeView、身份、**TraceTurn/TraceStep 轨迹轮次**等） |
 
@@ -607,6 +639,8 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 | `agent.gitee.client-id/secret/redirect-uri` | 空 | Gitee OAuth 应用 |
 | `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | auto / `maven:3.9-eclipse-temurin-21` / bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache-` | 执行沙箱（缓存卷按项目隔离挂 Maven/npm 依赖） |
 | `agent.model.base-url/api-key/model/max-iters/temperature` | DashScope 兼容端点 / 空 / qwen-plus / 8 / 0.2 | 模型兜底（设置页优先） |
+| `agent.chat.max-concurrent` | 8 | 单实例同时进行的 Agent 轮次上限（超限 429） |
+| `agent.chat.limiter` | `memory` | `memory`=进程内信号量；`jdbc`=SQLite 租约（`_platform/rate_limit.db`），多实例部署时使用 |
 
 ### 10.2 环境变量名（值放 `platform/.env`，已 gitignore，绝不入库）
 
@@ -636,10 +670,12 @@ cd platform
 $env:AGENT_MODEL_API_KEY="sk-xxx"    # 或依赖 platform/.env（AgentApplication 启动时 loadDotEnv 加载，真实环境变量优先）
 mvn -q verify                        # 编译 + 规约检查 + 单测（推荐先跑）
 mvn -q -DskipTests package           # 只打包
-java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
+java --enable-native-access=ALL-UNNAMED -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
 # 健康检查: http://127.0.0.1:8090/actuator/health
 # 登录种子账号: admin/admin-2026、devops/devops-2026、viewer/viewer-2026
 ```
+
+> `--enable-native-access=ALL-UNNAMED` 用于消除 JDK 24+ 对 `System.load`（sqlite-jdbc）的受限方法告警；JDK 21 上可省略。
 
 日常开发建议用 IDE 运行 `AgentApplication` + Spring Boot devtools/热部署（改依赖或新增模块才需要完整 `mvn package`），避免反复重启打包。
 
@@ -681,7 +717,7 @@ npm run typecheck
 | agent-governance | `ConfirmTokenServiceTest`（六重校验） |
 | agent-infra | `RecipeActionResolverTest`、`GitWorktreeManagerTest`、`IntakeScaffoldTest`、`RecipeCheckTest`、`IntakeProjectStoreTest`、`FileRecipeStoreTest`、`SecretBoxTest`、`SqliteSettingsStoreTest`、`SqliteProjectEnvVarStoreTest`、`RecipeScaffolderTest`（工程根识别/env-required）、`WorkspaceCodePatcherTest`（baseSha/白名单/独立分支三道校验） |
 | agent-runtime | `DynamicModelProviderTest` |
-| agent-gateway | `PipelineAcceptanceTest`、`DualStackPipelineTest`（Java+Vue 双栈）、`IntakeE2ETest`、`ActionUsabilityTest`、`ToolChainTest`、`DeployStageTest`、`DotEnvLoaderTest`、`GiteeWebhookControllerTest`、`SettingsControllerTest`、`ModelProbeTest`、`ChatRunRecoveryAdvisorFormatTest`（恢复建议格式）、`ToolEvalBaselineTest`/`LiveModelToolEvalTest`（需真实模型 Key，缺 Key 自动跳过） |
+| agent-gateway | `PipelineAcceptanceTest`、`DualStackPipelineTest`（Java+Vue 双栈）、`IntakeE2ETest`、`ActionUsabilityTest`、`ToolChainTest`（含断言：调度 Agent 只读面无写工具）、`DeployStageTest`、`DotEnvLoaderTest`、`GiteeWebhookControllerTest`、`SettingsControllerTest`、`ModelProbeTest`、`ChatRunRecoveryAdvisorFormatTest`（恢复建议格式）、`PatchApplierTest`（补丁四种匹配与结构化失败）、`DangerousActionPolicyTest`（破坏性动作识别与频次）、`AgentStreamLimiterTest`（内存/jdbc 两种租约）、`RunRecoveryServiceTest`（孤儿 RUNNING 判定）、`ToolEvalBaselineTest`/`LiveModelToolEvalTest`（需真实模型 Key，缺 Key 自动跳过） |
 | web | `state/agentEventReducer.test.ts` + `scripts/*.mjs` 无头浏览器回归 |
 
 ---
@@ -690,7 +726,7 @@ npm run typecheck
 
 1. **会话持久化已部分落地（2026-11）**——模型上下文经 `JsonFileAgentStateStore` 按 userId+sessionId 落 `data/agent-state`（重启续聊）；前端时间线存 localStorage（`sessionHistory.ts`，每会话 200 条上限）；但**轨迹视图数据仅本地会话**（刷新前不落服务端）、多租户未做。
 2. **`GET /api/v1/fs/read` 未实现**——前端文件预览调用该端点，后端 `FsBrowserController` 只有 ls/probe/roots。
-3. **用户体系为内存版**（`UserStore`），未接数据库；高危二级密码走 `SessionPasswordVerifier`。
+3. **用户体系已落 SQLite**（`UserStore` → `_platform/users.db`，口令散列 + 角色），高危二级密码走 `SessionPasswordVerifier`；尚无组织/多租户隔离。
 4. **事件映射用反射**（`AgentEventMapper`）——正式版应把 32 类 AgentScope 事件映射成稳定枚举。
 5. **`changeId` 由前端正则从文本提取**——应由后端发专用 SSE `change` 事件。
 6. **构建历史为 YAML 文件**（`RunHistoryStore`）——换 MySQL 成本低（接口已留）。
@@ -698,8 +734,11 @@ npm run typecheck
 8. **窄控制器 8 步滚动发布未做**——当前 deploy 由仓库配方/平台部署器提供。
 9. **沙箱不注入私服凭据**——需要时挂只读 `settings.xml`。
 10. **中间件发现候选暂存进程内存**（`EnvironmentController.candidates`）——重启后未导入的候选丢失，需重新发现。
-11. **待确认补丁存储为内存版**（`PatchRegistry`）——重启后未应用的补丁提案丢失（变更单本身同样在 `ChangeRegistry` 内存版），生产需落库。
+11. **变更单、补丁与令牌均已落 SQLite**（`ChangeRegistry`/`PatchRegistry`/`ConfirmTokenService` 经 `GovernanceDb`，`busy_timeout=5000` + WAL）；但中间件发现候选仍暂存进程内存（见第 10 条）。
 12. **DeepSeek 费用为前端本地估算**——后端只透传 usage，价目表更新需同步 `utils/deepseekPricing.ts`；其他模型显示"费用未知"。
+13. **运行账本只做统一观测，不改引擎语义**——流水线恢复仍由 `RunHistoryStore` 负责（非终态标 CANCELLED），账本只补一条终态记录；工作区的取消/重试也只作用于工作区运行，不跨引擎操作。
+14. **限流默认按进程计数**——单实例够用；多实例必须 `agent.chat.limiter=jdbc` 并在网关层加用户级限流，否则 N 个实例的总并发是 N×`max-concurrent`。
+15. **破坏性动作识别是关键词兜底**——`DangerousActionPolicy` 按动作名/命令关键词判断，不能覆盖语义级破坏（如自定义脚本内部删除数据）；配方在流水线内部直接执行时也不经过该策略。
 
 ---
 
@@ -722,6 +761,11 @@ npm run typecheck
 | 受限补丁 | `agent-domain/.../domain/patch/CodePatch.java`、`agent-infra/src/main/java/top/rongx/agent/infra/patch/WorkspaceCodePatcher.java`、`agent-tools/src/main/java/top/rongx/agent/tools/PatchTools.java` |
 | 运行时取证/恢复建议 | `agent-executor/src/main/java/top/rongx/agent/executor/AppRuntimeInspector.java`、`agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/ChatRunRecoveryAdvisor.java` |
 | 一键自动部署入口 | `agent-gateway/src/main/java/top/rongx/agent/gateway/web/DeployAgentController.java` |
+| 统一运行账本 | `agent-domain/.../domain/run/RunLedgerRepository.java`、`agent-infra/src/main/java/top/rongx/agent/infra/run/SqliteRunLedgerRepository.java`、`agent-gateway/src/main/java/top/rongx/agent/gateway/run/RunRecoveryService.java`、`agent-gateway/src/main/java/top/rongx/agent/gateway/web/RunLedgerController.java` |
+| 并发闸门 | `agent-gateway/src/main/java/top/rongx/agent/gateway/web/AgentStreamLimiter.java`（接口）、`MemoryAgentStreamLimiter.java`、`JdbcAgentStreamLimiter.java` |
+| 破坏性动作策略 | `agent-domain/.../domain/policy/DangerousActionPolicy.java`、`agent-tools/src/main/java/top/rongx/agent/tools/ActionService.java` |
+| BugFix 补丁应用 | `agent-gateway/src/main/java/top/rongx/agent/gateway/bugfix/PatchApplier.java`、`.../bugfix/stage/FixStage.java` |
+| 工作区事件流 | `agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceEventController.java`、`web/src/composables/useWorkspaceEvents.ts` |
 | 轨迹与费用前端 | `web/src/components/chat/ChatTraceView.vue`、`web/src/utils/deepseekPricing.ts`、`web/src/state/sessionHistory.ts` |
 | 项目接入 | `agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java` |
 | Agent 工厂 | `agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java` |

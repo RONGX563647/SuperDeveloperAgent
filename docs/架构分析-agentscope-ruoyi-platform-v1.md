@@ -1,7 +1,7 @@
 # 架构分析：agentscope-ruoyi/platform（研发运维智能体平台）
 
 > 分析基线：`platform/` 模块（AgentScope 2.0.0 + Spring Boot 4.0.4 + JDK 21，Maven 8 模块）
-> 配套阅读：《CICD方案替代与自创-决策-v1.md》《规约-流水线执行器-v1.0.md》《方案D修复方案-v1.md》
+> 配套阅读：《CICD方案替代与自创-决策-v1.md》《规约-流水线执行器-v1.0.md》
 > 本文档结合**当前代码**讲解架构是如何落地的（带 file:line 证据），不是泛泛而谈。
 
 ---
