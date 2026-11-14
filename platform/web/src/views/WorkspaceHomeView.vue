@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Promotion, Refresh, VideoPause } from '@element-plus/icons-vue'
+import { Promotion, Refresh, VideoPause, Search, Plus, Check, MoreFilled } from '@element-plus/icons-vue'
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
 import { listProjects, type ProjectRow } from '../api/project'
@@ -17,16 +17,17 @@ import {
 import { envLabel } from '../utils/pipelineLabels'
 
 /**
- * 工作区首页：左侧会话列表、中间调度 Agent、右侧任务板 / 运行队列。
+ * 工作区首页：左会话、中调度 Agent、右任务/运行。
  *
- * 工作区 = 项目；点击侧栏工作区标题会进入这里，由调度 Agent 统一创建、派发、
- * 跟踪与汇总该工作区内的会话。调度 Agent 没有任何写工具，真正执行仍落到子会话。
+ * 工作区 = 项目；调度 Agent 只做编排（创建/派发/跟踪/汇总），没有任何写工具，
+ * 真正执行落到子会话，生产写操作仍由人工确认。
  */
 const route = useRoute()
 const router = useRouter()
 const projectId = computed(() => String(route.params.projectId ?? appStore.projectId))
 const projectName = ref('')
 const projects = ref<ProjectRow[]>([])
+const initial = computed(() => (projectName.value || projectId.value).slice(0, 1).toUpperCase())
 
 const conversations = ref<ConversationRow[]>([])
 const supervisor = ref<ConversationRow | null>(null)
@@ -38,20 +39,39 @@ const lastRefreshed = ref(0)
 const messageListRef = ref<HTMLElement | null>(null)
 const composerRef = ref<HTMLTextAreaElement | null>(null)
 
-/** 左侧筛选：全部 / 进行中 / 失败 / 待确认。 */
 type ConvFilter = 'ALL' | 'ACTIVE' | 'FAILED' | 'CONFIRM'
 const convSearch = ref('')
 const convFilter = ref<ConvFilter>('ALL')
+const showArchived = ref(false)
 
-/** 右侧运行队列：进行中 / 最近结束。 */
+const sideTab = ref<'tasks' | 'runs'>('tasks')
 const runTab = ref<'active' | 'recent'>('active')
 const showDoneTasks = ref(false)
-const taskDraft = ref({ goal: '', expectedOutput: '' })
-const creatingTask = ref(false)
+const toolsOpen = ref(false)
+
+const createOpen = ref(false)
+const createForm = reactive({ title: '', env: appStore.env, worktree: '' })
+
+const taskDialog = ref(false)
+const editingTask = ref<TaskRow | null>(null)
+const taskForm = reactive({ goal: '', expectedOutput: '', status: 'TODO' })
+
+const runDialog = ref(false)
+const runDetail = ref<RunRow | null>(null)
 
 const envOptions = ['dev', 'test', 'prod']
+const filters = [
+  { key: 'ALL', label: '全部' },
+  { key: 'ACTIVE', label: '活跃' },
+  { key: 'FAILED', label: '失败' },
+  { key: 'CONFIRM', label: '待确认' },
+] as const
 
-const workerConversations = computed(() => conversations.value.filter((c) => c.kind !== 'SUPERVISOR'))
+const allConversations = computed(() =>
+  conversations.value.filter((c) => c.kind !== 'SUPERVISOR'))
+const workerConversations = computed(() => allConversations.value.filter((c) => !c.archived))
+const archivedConversations = computed(() => allConversations.value.filter((c) => c.archived))
+
 const activeRuns = computed(() => runs.value.filter(
   (run) => run.status === 'QUEUED' || run.status === 'RUNNING'))
 const recentRuns = computed(() => runs.value
@@ -68,16 +88,19 @@ const filterCounts = computed(() => ({
 
 const filteredConversations = computed(() => {
   const query = convSearch.value.trim().toLowerCase()
-  let list = workerConversations.value
+  let list = showArchived.value ? archivedConversations.value : workerConversations.value
   if (query) {
     list = list.filter((c) =>
       c.title.toLowerCase().includes(query)
       || (c.summary ?? '').toLowerCase().includes(query)
       || c.id.toLowerCase().includes(query))
   }
-  if (convFilter.value === 'ACTIVE') list = list.filter((c) => c.status === 'RUNNING')
-  if (convFilter.value === 'FAILED') list = list.filter((c) => c.status === 'FAILED')
-  if (convFilter.value === 'CONFIRM') list = list.filter((c) => c.status === 'NEEDS_CONFIRMATION')
+  if (!showArchived.value && convFilter.value !== 'ALL') {
+    const wanted = convFilter.value === 'ACTIVE'
+      ? 'RUNNING'
+      : convFilter.value === 'FAILED' ? 'FAILED' : 'NEEDS_CONFIRMATION'
+    list = list.filter((c) => c.status === wanted)
+  }
   return [...list].sort((a, b) =>
     Number(b.pinned) - Number(a.pinned) || b.lastActivityAt - a.lastActivityAt)
 })
@@ -95,11 +118,11 @@ const kpis = computed(() => ({
   openTasks: openTasks.value.length,
 }))
 
-const quickActions = [
-  '工作区现在什么状态？',
-  '列出运行中的会话和最近失败',
-  '新建一个会话修复构建失败，并跟踪到完成',
-  '汇总今天的运行，把待办登记成任务',
+const actionCards = [
+  { title: '查看工作区状态', desc: '会话、运行与任务一屏概览', prompt: '工作区现在什么状态？' },
+  { title: '处理失败运行', desc: '定位失败会话并重新派发', prompt: '列出运行中的会话和最近失败，给出处理建议' },
+  { title: '新建修复会话', desc: '创建会话并跟踪到完成', prompt: '新建一个会话修复构建失败，并跟踪到完成' },
+  { title: '登记待办任务', desc: '把问题沉淀成可跟踪任务', prompt: '汇总今天的运行，把待办登记成任务' },
 ]
 
 const chat = useAgentChat({
@@ -122,8 +145,7 @@ const timeline = computed<ChatMessage[]>(() => {
   return list
 })
 
-/** 最近几次调度动作：让用户看到 Agent 到底调用了哪些管理工具。 */
-const recentTools = computed(() => Object.values(projection.value.tools ?? {}).slice(-5).reverse())
+const recentTools = computed(() => Object.values(projection.value.tools ?? {}).slice(-6).reverse())
 const toolLabels: Record<string, string> = {
   workspace_snapshot: '工作区快照',
   conversation_list: '会话列表',
@@ -172,6 +194,7 @@ async function init(): Promise<void> {
   input.value = ''
   convSearch.value = ''
   convFilter.value = 'ALL'
+  showArchived.value = false
   try {
     projects.value = await listProjects()
     projectName.value = projects.value.find((p) => p.id === projectId.value)?.name ?? projectId.value
@@ -179,7 +202,6 @@ async function init(): Promise<void> {
     projectName.value = projectId.value
   }
   appStore.projectId = projectId.value
-  // 把本地历史会话导入服务端（同 id 跳过），让工作区首页能看到旧会话
   const local = appStore.sessions
     .filter((s) => s.projectId === projectId.value)
     .map((s) => ({ id: s.id, title: s.title, at: s.at }))
@@ -210,16 +232,44 @@ function openConversation(row: ConversationRow): void {
   void router.push('/chat')
 }
 
-async function newConversation(): Promise<void> {
+function openCreate(): void {
+  createForm.title = ''
+  createForm.env = appStore.env
+  createForm.worktree = ''
+  createOpen.value = true
+}
+
+async function createNew(): Promise<void> {
+  const title = createForm.title.trim()
+  if (!title) return
   try {
     const created = await createConversation(projectId.value, {
-      title: '新会话',
-      env: appStore.env,
+      title,
+      env: createForm.env,
+      worktree: createForm.worktree.trim() || undefined,
     })
+    createOpen.value = false
     await loadAll()
     openConversation(created)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '新建会话失败')
+  }
+}
+
+async function renameConversation(row: ConversationRow): Promise<void> {
+  try {
+    const result = await ElMessageBox.prompt('新的会话标题', '重命名会话', {
+      inputValue: row.title,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (value) => (String(value ?? '').trim() ? true : '标题不能为空'),
+    })
+    const title = String(result.value ?? '').trim()
+    if (!title) return
+    await updateConversation(row.id, { title })
+    await loadAll()
+  } catch (e) {
+    if (e instanceof Error) ElMessage.error(e.message)
   }
 }
 
@@ -232,22 +282,63 @@ async function togglePin(row: ConversationRow): Promise<void> {
   }
 }
 
+async function archiveConversation(row: ConversationRow): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '归档后会话从列表隐藏，历史记录保留，可在「已归档」中恢复。',
+      '归档会话',
+      { type: 'warning', confirmButtonText: '归档', cancelButtonText: '取消' },
+    )
+    await updateConversation(row.id, { archived: true })
+    await loadAll()
+  } catch (e) {
+    if (e instanceof Error) ElMessage.error(e.message)
+  }
+}
+
+async function restoreConversation(row: ConversationRow): Promise<void> {
+  try {
+    await updateConversation(row.id, { archived: false })
+    await loadAll()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '恢复失败')
+  }
+}
+
+function onConvCommand(command: string, row: ConversationRow): void {
+  if (command === 'rename') void renameConversation(row)
+  if (command === 'pin') void togglePin(row)
+  if (command === 'archive') void archiveConversation(row)
+}
+
+function toggleArchived(): void {
+  showArchived.value = !showArchived.value
+  convSearch.value = ''
+  convFilter.value = 'ALL'
+}
+
 async function cancel(run: RunRow): Promise<void> {
   try {
     await cancelRun(run.id)
+    runDialog.value = false
     await loadAll()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '取消失败')
   }
 }
 
-/** 运行所属会话可能已归档或被删除，找不到时给出提示而不是跳到错误会话。 */
-function openRun(run: RunRow): void {
+function openRunDetail(run: RunRow): void {
+  runDetail.value = run
+  runDialog.value = true
+}
+
+function openRunConversation(run: RunRow): void {
   const conversation = conversations.value.find((c) => c.id === run.conversationId)
   if (!conversation) {
     ElMessage.info('该运行所属的会话已不在当前工作区')
     return
   }
+  runDialog.value = false
   openConversation(conversation)
 }
 
@@ -260,21 +351,42 @@ async function setTaskStatus(task: TaskRow, status: string): Promise<void> {
   }
 }
 
-async function addTask(): Promise<void> {
-  const goal = taskDraft.value.goal.trim()
-  if (!goal || creatingTask.value) return
-  creatingTask.value = true
+function openTaskCreate(): void {
+  editingTask.value = null
+  taskForm.goal = ''
+  taskForm.expectedOutput = ''
+  taskForm.status = 'TODO'
+  taskDialog.value = true
+}
+
+function openTaskEdit(task: TaskRow): void {
+  editingTask.value = task
+  taskForm.goal = task.goal
+  taskForm.expectedOutput = task.expectedOutput
+  taskForm.status = task.status
+  taskDialog.value = true
+}
+
+async function saveTask(): Promise<void> {
+  const goal = taskForm.goal.trim()
+  if (!goal) return
   try {
-    await createTask(projectId.value, {
-      goal,
-      expectedOutput: taskDraft.value.expectedOutput.trim() || undefined,
-    })
-    taskDraft.value = { goal: '', expectedOutput: '' }
+    if (editingTask.value) {
+      await updateTask(projectId.value, editingTask.value.id, {
+        goal,
+        expectedOutput: taskForm.expectedOutput.trim(),
+        status: taskForm.status,
+      })
+    } else {
+      await createTask(projectId.value, {
+        goal,
+        expectedOutput: taskForm.expectedOutput.trim() || undefined,
+      })
+    }
+    taskDialog.value = false
     await loadAll()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '新建任务失败')
-  } finally {
-    creatingTask.value = false
+    ElMessage.error(e instanceof Error ? e.message : '保存任务失败')
   }
 }
 
@@ -294,16 +406,25 @@ function onEnter(event: KeyboardEvent): void {
   }
 }
 
-function useQuick(text: string): void {
+function usePrompt(text: string): void {
   input.value = text
   void nextTick(() => composerRef.value?.focus())
+}
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败')
+  }
 }
 
 async function clearChat(): Promise<void> {
   if (!supervisor.value) return
   try {
     await ElMessageBox.confirm(
-      '清空后只删除本机保存的调度对话记录，服务端会话与运行记录仍保留。',
+      '只删除本机保存的调度对话记录，服务端会话与运行记录仍保留。',
       '清空调度对话',
       { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' },
     )
@@ -332,7 +453,11 @@ function timeAgo(ms: number): string {
   return `${Math.floor(diff / 86_400_000)} 天前`
 }
 
-/** 运行耗时：进行中按当前时间算，结束后用结束时间。 */
+function formatTime(ms: number): string {
+  if (!ms) return '—'
+  return new Date(ms).toLocaleString('zh-CN', { hour12: false })
+}
+
 function runDuration(run: RunRow): string {
   const start = run.startedAt || run.createdAt
   if (!start) return ''
@@ -347,7 +472,7 @@ function conversationTitle(id: string): string {
 }
 
 function shortId(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 12)}…` : id
+  return id.length > 14 ? `${id.slice(0, 14)}…` : id
 }
 
 watch(() => [projection.value.messages, projection.value.tools], () => {
@@ -364,7 +489,6 @@ watch(() => projection.value.messages.length, async () => {
   scrollToBottom()
 })
 
-// 流式正文是逐字追加的，长度 watcher 不会触发，单独跟随一次
 watch(() => projection.value.streamingTurn?.text, async () => {
   await Promise.resolve()
   scrollToBottom()
@@ -380,7 +504,6 @@ watch(projectId, () => {
 
 onMounted(async () => {
   await init()
-  // 页面不可见时不轮询，避免后台标签页持续打接口
   timer = setInterval(() => {
     if (!document.hidden) void loadAll()
   }, 3000)
@@ -393,237 +516,386 @@ onUnmounted(() => {
 
 <template>
   <div class="workspace">
-    <header class="ws-header">
-      <div class="ws-title">
-        <span class="eyebrow">工作区</span>
-        <h1>{{ projectName }}</h1>
-        <div class="ws-meta">
-          <span class="ws-id mono">{{ projectId }}</span>
-          <span class="kpi"><b>{{ kpis.conversations }}</b> 会话</span>
-          <span class="kpi" :class="{ hot: kpis.activeRuns > 0 }"><b>{{ kpis.activeRuns }}</b> 运行中</span>
-          <span class="kpi"><b>{{ kpis.openTasks }}</b> 待办</span>
-          <span v-if="lastRefreshed" class="refreshed">更新于 {{ timeAgo(lastRefreshed) }}</span>
+    <header class="ws-top">
+      <div class="ws-ident">
+        <span class="ws-mark">{{ initial }}</span>
+        <div class="ws-name">
+          <h1>{{ projectName }}</h1>
+          <p>
+            <span class="mono">{{ projectId }}</span>
+            <i>·</i><span>{{ kpis.conversations }} 会话</span>
+            <i>·</i><span :class="{ hot: kpis.activeRuns > 0 }">{{ kpis.activeRuns }} 运行中</span>
+            <i>·</i><span>{{ kpis.openTasks }} 待办</span>
+            <template v-if="lastRefreshed">
+              <i>·</i><span class="muted">更新于 {{ timeAgo(lastRefreshed) }}</span>
+            </template>
+          </p>
         </div>
       </div>
       <div class="ws-actions">
         <el-select v-model="appStore.env" size="small" class="env-select" aria-label="环境">
           <el-option v-for="e in envOptions" :key="e" :label="envLabel(e)" :value="e" />
         </el-select>
-        <button type="button" class="ghost-btn" :disabled="loading" @click="loadAll">
-          <el-icon><Refresh /></el-icon> 刷新
+        <button type="button" class="icon-btn" title="刷新" :disabled="loading" @click="loadAll">
+          <el-icon><Refresh /></el-icon>
         </button>
-        <button type="button" class="primary-btn" @click="newConversation">新建会话</button>
+        <button type="button" class="btn primary" @click="openCreate">
+          <el-icon><Plus /></el-icon>新建会话
+        </button>
       </div>
     </header>
 
-    <div class="ws-body">
-      <!-- 左：会话列表 -->
-      <aside class="pane conversations">
-        <div class="pane-head">
-          <span>会话</span>
-          <span class="pill">{{ filterCounts.ALL }}</span>
+    <div class="ws-grid">
+      <!-- 左：会话 -->
+      <aside class="col conv-col">
+        <div class="col-head">
+          <span class="col-title">{{ showArchived ? '已归档' : '会话' }}</span>
+          <span class="col-count">{{ showArchived ? archivedConversations.length : filterCounts.ALL }}</span>
+          <button
+            v-if="!showArchived" type="button" class="icon-btn sm"
+            title="新建会话" @click="openCreate"
+          >
+            <el-icon><Plus /></el-icon>
+          </button>
         </div>
-        <div class="conv-tools">
-          <input
-            v-model="convSearch" class="conv-search" type="search"
-            placeholder="搜索标题 / 摘要 / ID" aria-label="搜索会话"
-          />
-          <div class="conv-filters">
-            <button
-              v-for="f in ([
-                { key: 'ALL', label: '全部' },
-                { key: 'ACTIVE', label: '进行中' },
-                { key: 'FAILED', label: '失败' },
-                { key: 'CONFIRM', label: '待确认' },
-              ] as const)" :key="f.key"
-              type="button" class="filter-chip" :class="{ on: convFilter === f.key }"
-              @click="convFilter = f.key"
-            >
-              {{ f.label }}<span v-if="filterCounts[f.key]" class="chip-count">{{ filterCounts[f.key] }}</span>
-            </button>
-          </div>
+
+        <label class="search-box">
+          <el-icon><Search /></el-icon>
+          <input v-model="convSearch" type="search" placeholder="搜索会话" />
+        </label>
+
+        <div v-if="!showArchived" class="seg">
+          <button
+            v-for="f in filters" :key="f.key" type="button"
+            :class="{ on: convFilter === f.key }" @click="convFilter = f.key"
+          >
+            {{ f.label }}<span v-if="filterCounts[f.key]" class="seg-count">{{ filterCounts[f.key] }}</span>
+          </button>
         </div>
+
         <div class="conv-list">
           <div
             v-for="row in filteredConversations" :key="row.id"
-            class="conv-row" @click="openConversation(row)"
+            class="conv-item" @click="openConversation(row)"
           >
-            <div class="conv-main">
-              <span class="conv-title" :title="row.title">
-                <span v-if="row.pinned" class="pin-mark">★</span>{{ row.title }}
+            <span class="conv-state" :data-s="row.status" :title="statusLabel(row.status)"></span>
+            <div class="item-main">
+              <span class="item-title">
+                <em v-if="row.pinned" class="pin">★</em>{{ row.title }}
               </span>
-              <span class="conv-meta">
-                {{ envLabel(row.env) }} · {{ row.worktree || '主仓库' }} · {{ timeAgo(row.lastActivityAt) }}
+              <span class="item-meta">
+                {{ envLabel(row.env) }} · {{ timeAgo(row.lastActivityAt) }}
+                <template v-if="row.summary"> · {{ row.summary }}</template>
               </span>
-              <span v-if="row.summary" class="conv-summary" :title="row.summary">{{ row.summary }}</span>
             </div>
-            <span class="status-chip" :data-s="row.status">{{ statusLabel(row.status) }}</span>
             <button
-              type="button" class="pin-btn" :class="{ on: row.pinned }"
-              :title="row.pinned ? '取消置顶' : '置顶'" @click.stop="togglePin(row)"
-            >★</button>
+              v-if="showArchived" type="button" class="text-btn"
+              @click.stop="restoreConversation(row)"
+            >恢复</button>
+            <span v-else class="row-actions" @click.stop>
+              <el-dropdown trigger="click" @command="onConvCommand($event, row)">
+                <button type="button" class="more-btn" title="更多操作">
+                  <el-icon><MoreFilled /></el-icon>
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                    <el-dropdown-item command="pin">{{ row.pinned ? '取消置顶' : '置顶' }}</el-dropdown-item>
+                    <el-dropdown-item command="archive" divided>归档</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </span>
           </div>
           <p v-if="!filteredConversations.length" class="empty">
-            {{ convSearch || convFilter !== 'ALL'
-              ? '没有匹配的会话。'
-              : '还没有会话。可以在中间让调度 Agent 新建并派发，或点右上角「新建会话」。' }}
+            {{ convSearch || (!showArchived && convFilter !== 'ALL')
+              ? '没有匹配的会话'
+              : showArchived ? '没有已归档的会话' : '还没有会话，点右上角新建' }}
           </p>
         </div>
+
+        <button
+          v-if="archivedConversations.length || showArchived"
+          type="button" class="archived-toggle" @click="toggleArchived"
+        >
+          {{ showArchived ? '← 返回会话' : `已归档 ${archivedConversations.length}` }}
+        </button>
       </aside>
 
       <!-- 中：调度 Agent -->
-      <section class="pane supervisor">
-        <div class="pane-head">
-          <span>工作区调度 Agent</span>
-          <span class="hint">只做编排：创建 / 派发 / 跟踪 / 汇总，不直接改代码</span>
-          <button
-            type="button" class="mini-btn clear-btn" :disabled="streaming || !timeline.length"
-            title="清空本机保存的调度对话" @click="clearChat"
-          >清空</button>
-        </div>
-        <div ref="messageListRef" class="messages">
-          <div v-if="!timeline.length" class="welcome">
-            <p class="welcome-title">把整个工作区交给它调度</p>
-            <p>例如：「看看有哪些会话在跑，把失败的那个重启」，「新建一个会话修复构建，完成后告诉我」，
-              或「把登录相关问题登记成任务并派给合适的会话」。</p>
-            <p class="muted">子会话仍在各自环境中执行；生产写操作需要你在确认卡上确认。</p>
-            <div class="quick-list">
-              <button
-                v-for="q in quickActions" :key="q" type="button" class="quick-chip"
-                @click="useQuick(q)"
-              >{{ q }}</button>
-            </div>
+      <section class="col chat-col">
+        <div class="chat-head">
+          <div class="chat-title">
+            <span>调度 Agent</span>
+            <span class="tag">只读编排</span>
           </div>
+          <div class="chat-head-actions">
+            <span v-if="supervisor" class="mono muted">{{ shortId(supervisor.id) }}</span>
+            <button
+              type="button" class="text-btn"
+              :disabled="streaming || !timeline.length" @click="clearChat"
+            >清空</button>
+          </div>
+        </div>
+
+        <div ref="messageListRef" class="chat-scroll">
+          <div v-if="!timeline.length" class="hero">
+            <h2>把整个工作区交给它</h2>
+            <p>创建会话、派发任务、跟踪运行、汇总结果。它只做编排，真正执行仍落到子会话。</p>
+            <div class="action-grid">
+              <button
+                v-for="a in actionCards" :key="a.title" type="button"
+                class="action-card" @click="usePrompt(a.prompt)"
+              >
+                <span class="action-title">{{ a.title }}</span>
+                <span class="action-desc">{{ a.desc }}</span>
+              </button>
+            </div>
+            <p class="hero-note">生产写操作需要你在确认卡上确认。</p>
+          </div>
+
           <div
-            v-for="m in timeline" :key="m.id" class="msg"
+            v-for="m in timeline" :key="m.id" class="turn"
             :class="m.role === 'user' ? 'user' : 'assistant'"
           >
-            <div class="bubble">{{ m.text }}</div>
+            <template v-if="m.role === 'assistant'">
+              <span class="assistant-avatar">调</span>
+              <div class="turn-body">
+                <div class="turn-text">{{ m.text }}</div>
+                <button type="button" class="copy-btn" @click="copyText(m.text)">复制</button>
+              </div>
+            </template>
+            <div v-else class="user-bubble">{{ m.text }}</div>
           </div>
+
           <div v-if="streaming && !projection.streamingTurn" class="typing">
             <span></span><span></span><span></span>
           </div>
           <p v-if="error" class="stream-error">{{ error }}</p>
         </div>
-        <div v-if="recentTools.length" class="tool-strip">
-          <span class="tool-strip-label">最近动作</span>
-          <span
-            v-for="t in recentTools" :key="t.toolCallId" class="tool-chip"
-            :data-s="t.status" :title="t.arguments || t.toolName"
-          >
-            <i class="dot"></i>{{ toolLabel(t.toolName) }}
-          </span>
+
+        <div v-if="recentTools.length" class="activity">
+          <button type="button" class="activity-head" @click="toolsOpen = !toolsOpen">
+            <i class="activity-dot"></i>最近动作 · {{ recentTools.length }}
+            <span class="chev">{{ toolsOpen ? '收起' : '展开' }}</span>
+          </button>
+          <div v-if="toolsOpen" class="activity-list">
+            <div v-for="t in recentTools" :key="t.toolCallId" class="activity-row">
+              <i class="activity-dot" :data-s="t.status"></i>
+              <span class="activity-name">{{ toolLabel(t.toolName) }}</span>
+              <span class="activity-args">{{ t.arguments || t.resultText }}</span>
+            </div>
+          </div>
         </div>
+
         <div class="composer">
-          <textarea
-            ref="composerRef" v-model="input" rows="3"
-            placeholder="告诉调度 Agent 要做什么 / 问工作区状态（Enter 发送，Shift+Enter 换行）"
-            @keydown.enter="onEnter"
-          />
-          <div class="composer-actions">
-            <span class="composer-hint">
-              {{ streaming
-                ? `调度中 ${(elapsedMs / 1000).toFixed(1)}s，可随时停止`
-                : (supervisor ? `调度会话 ${shortId(supervisor.id)}` : '调度会话初始化中…') }}
-            </span>
-            <button v-if="streaming" type="button" class="ghost-btn" @click="stop">
-              <el-icon><VideoPause /></el-icon> 停止
-            </button>
-            <button
-              type="button" class="primary-btn" :disabled="streaming || !supervisor"
-              @click="submit"
-            >
-              <el-icon><Promotion /></el-icon> 发送
-            </button>
+          <div class="composer-box">
+            <textarea
+              ref="composerRef" v-model="input" rows="2"
+              placeholder="告诉调度 Agent 要做什么，或询问工作区状态"
+              @keydown.enter="onEnter"
+            />
+            <div class="composer-bar">
+              <span class="composer-hint">
+                {{ streaming
+                  ? `调度中 ${(elapsedMs / 1000).toFixed(1)}s`
+                  : 'Enter 发送 · Shift + Enter 换行' }}
+              </span>
+              <button v-if="streaming" type="button" class="text-btn" @click="stop">
+                <el-icon><VideoPause /></el-icon> 停止
+              </button>
+              <button
+                type="button" class="send-btn" :disabled="streaming || !supervisor || !input.trim()"
+                title="发送" @click="submit"
+              >
+                <el-icon><Promotion /></el-icon>
+              </button>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- 右：任务板 + 运行队列 -->
-      <aside class="pane side">
-        <div class="pane-head">
-          <span>任务板</span><span class="pill">{{ kpis.openTasks }}</span>
-          <button
-            type="button" class="mini-btn head-btn"
-            :disabled="!doneTasks.length" @click="showDoneTasks = !showDoneTasks"
-          >{{ showDoneTasks ? '收起完成' : `已完成 ${doneTasks.length}` }}</button>
-        </div>
-        <div class="task-add">
-          <input v-model="taskDraft.goal" placeholder="登记一个任务…" @keydown.enter="addTask" />
-          <input v-model="taskDraft.expectedOutput" placeholder="期望产出（可选）" @keydown.enter="addTask" />
-          <button
-            type="button" class="primary-btn sm" :disabled="!taskDraft.goal.trim() || creatingTask"
-            @click="addTask"
-          >{{ creatingTask ? '添加中…' : '添加' }}</button>
-        </div>
-        <div class="task-list">
-          <div v-for="task in openTasks" :key="task.id" class="task-row">
-            <span class="task-status" :data-s="task.status">{{ statusLabel(task.status) }}</span>
-            <div class="task-main">
-              <span class="task-goal">{{ task.goal }}</span>
-              <span v-if="task.expectedOutput" class="task-out">产出：{{ task.expectedOutput }}</span>
-              <span class="task-meta">
-                <span v-if="task.priority" class="prio">P{{ task.priority }}</span>
-                <span v-if="task.conversationId">{{ conversationTitle(task.conversationId) }}</span>
-              </span>
-            </div>
-            <span class="task-actions">
-              <button
-                v-if="task.status === 'TODO' || task.status === 'BLOCKED'"
-                type="button" class="mini-btn" @click="setTaskStatus(task, 'RUNNING')"
-              >{{ task.status === 'BLOCKED' ? '重试' : '开始' }}</button>
-              <button type="button" class="mini-btn" @click="setTaskStatus(task, 'DONE')">完成</button>
-            </span>
+      <!-- 右：任务 / 运行 -->
+      <aside class="col side-col">
+        <div class="side-head">
+          <div class="seg inline">
+            <button type="button" :class="{ on: sideTab === 'tasks' }" @click="sideTab = 'tasks'">
+              任务<span v-if="openTasks.length" class="seg-count">{{ openTasks.length }}</span>
+            </button>
+            <button type="button" :class="{ on: sideTab === 'runs' }" @click="sideTab = 'runs'">
+              运行<span v-if="activeRuns.length" class="seg-count">{{ activeRuns.length }}</span>
+            </button>
           </div>
-          <p v-if="!openTasks.length" class="empty">暂无待办任务，可在上方登记，或让调度 Agent 创建。</p>
-          <div v-if="showDoneTasks && doneTasks.length" class="done-list">
-            <div v-for="task in doneTasks" :key="task.id" class="task-row done">
-              <span class="task-status" data-s="DONE">完成</span>
-              <div class="task-main">
-                <span class="task-goal">{{ task.goal }}</span>
-                <span class="task-out">{{ timeAgo(task.updatedAt) }}</span>
-              </div>
-              <button type="button" class="mini-btn" @click="setTaskStatus(task, 'TODO')">重开</button>
-            </div>
-          </div>
+          <button
+            v-if="sideTab === 'tasks'" type="button" class="icon-btn sm"
+            title="新建任务" @click="openTaskCreate"
+          >
+            <el-icon><Plus /></el-icon>
+          </button>
         </div>
 
-        <div class="pane-head runs-head">
-          <span>运行队列</span><span class="pill">{{ activeRuns.length }}</span>
-          <span class="run-tabs">
-            <button
-              type="button" class="filter-chip" :class="{ on: runTab === 'active' }"
-              @click="runTab = 'active'"
-            >进行中</button>
-            <button
-              type="button" class="filter-chip" :class="{ on: runTab === 'recent' }"
-              @click="runTab = 'recent'"
-            >最近</button>
-          </span>
-        </div>
-        <div class="run-list">
-          <div
-            v-for="run in visibleRuns" :key="run.id" class="run-row"
-            :title="run.error || run.result || run.goal" @click="openRun(run)"
-          >
-            <div class="run-main">
-              <span class="run-goal">{{ run.goal }}</span>
-              <span class="run-meta">
-                {{ statusLabel(run.status) }} · {{ conversationTitle(run.conversationId) }} · {{ runDuration(run) }}
-              </span>
-              <span v-if="run.error" class="run-error">{{ run.error }}</span>
+        <div class="side-body">
+          <template v-if="sideTab === 'tasks'">
+            <div
+              v-for="task in openTasks" :key="task.id"
+              class="list-item" @click="openTaskEdit(task)"
+            >
+              <button type="button" class="check" title="标记完成" @click.stop="setTaskStatus(task, 'DONE')">
+                <el-icon><Check /></el-icon>
+              </button>
+              <div class="item-main">
+                <span class="item-title">{{ task.goal }}</span>
+                <span class="item-meta">
+                  <em v-if="task.priority" class="prio">P{{ task.priority }}</em>
+                  <span v-if="task.conversationId">{{ conversationTitle(task.conversationId) }}</span>
+                  <span v-if="task.expectedOutput">{{ task.expectedOutput }}</span>
+                </span>
+              </div>
+              <span class="item-status" :data-s="task.status">{{ statusLabel(task.status) }}</span>
             </div>
+            <p v-if="!openTasks.length" class="empty">暂无待办，点右上角 + 登记</p>
+
             <button
-              v-if="run.status === 'QUEUED' || run.status === 'RUNNING'"
-              type="button" class="mini-btn" @click.stop="cancel(run)"
-            >取消</button>
-          </div>
-          <p v-if="!visibleRuns.length" class="empty">
-            {{ runTab === 'active' ? '当前没有运行中的任务' : '还没有已结束的运行' }}
-          </p>
+              v-if="doneTasks.length" type="button" class="done-toggle"
+              @click="showDoneTasks = !showDoneTasks"
+            >{{ showDoneTasks ? '收起已完成' : `已完成 ${doneTasks.length}` }}</button>
+            <template v-if="showDoneTasks">
+              <div
+                v-for="task in doneTasks" :key="task.id"
+                class="list-item done" @click="openTaskEdit(task)"
+              >
+                <span class="done-mark">✓</span>
+                <div class="item-main">
+                  <span class="item-title">{{ task.goal }}</span>
+                  <span class="item-meta">{{ timeAgo(task.updatedAt) }}</span>
+                </div>
+              </div>
+            </template>
+          </template>
+
+          <template v-else>
+            <div class="seg inline run-seg">
+              <button type="button" :class="{ on: runTab === 'active' }" @click="runTab = 'active'">
+                进行中<span v-if="activeRuns.length" class="seg-count">{{ activeRuns.length }}</span>
+              </button>
+              <button type="button" :class="{ on: runTab === 'recent' }" @click="runTab = 'recent'">最近</button>
+            </div>
+            <div
+              v-for="run in visibleRuns" :key="run.id"
+              class="list-item" @click="openRunDetail(run)"
+            >
+              <i class="run-dot" :data-s="run.status"></i>
+              <div class="item-main">
+                <span class="item-title">{{ run.goal }}</span>
+                <span class="item-meta">
+                  {{ conversationTitle(run.conversationId) }} · {{ runDuration(run) }}
+                  <template v-if="run.error"> · {{ run.error }}</template>
+                </span>
+              </div>
+              <span class="item-status" :data-s="run.status">{{ statusLabel(run.status) }}</span>
+            </div>
+            <p v-if="!visibleRuns.length" class="empty">
+              {{ runTab === 'active' ? '当前没有运行中的任务' : '还没有已结束的运行' }}
+            </p>
+          </template>
         </div>
       </aside>
     </div>
+
+    <!-- 新建会话 -->
+    <el-dialog v-model="createOpen" title="新建会话" width="420px" align-center>
+      <div class="form">
+        <label>
+          <span>标题</span>
+          <el-input v-model="createForm.title" placeholder="例如：修复登录页报错" maxlength="60" />
+        </label>
+        <label>
+          <span>环境</span>
+          <el-select v-model="createForm.env">
+            <el-option v-for="e in envOptions" :key="e" :label="envLabel(e)" :value="e" />
+          </el-select>
+        </label>
+        <label>
+          <span>工作树</span>
+          <el-input v-model="createForm.worktree" placeholder="留空使用主仓库" />
+        </label>
+      </div>
+      <template #footer>
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost" @click="createOpen = false">取消</button>
+          <button
+            type="button" class="btn primary"
+            :disabled="!createForm.title.trim()" @click="createNew"
+          >创建并打开</button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 任务 -->
+    <el-dialog
+      v-model="taskDialog" :title="editingTask ? '编辑任务' : '新建任务'"
+      width="460px" align-center
+    >
+      <div class="form">
+        <label>
+          <span>目标</span>
+          <el-input v-model="taskForm.goal" placeholder="要完成什么" />
+        </label>
+        <label>
+          <span>期望产出</span>
+          <el-input v-model="taskForm.expectedOutput" placeholder="可选的验收标准" />
+        </label>
+        <label v-if="editingTask">
+          <span>状态</span>
+          <el-select v-model="taskForm.status">
+            <el-option label="待办" value="TODO" />
+            <el-option label="进行中" value="RUNNING" />
+            <el-option label="阻塞" value="BLOCKED" />
+            <el-option label="完成" value="DONE" />
+          </el-select>
+        </label>
+      </div>
+      <template #footer>
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost" @click="taskDialog = false">取消</button>
+          <button
+            type="button" class="btn primary"
+            :disabled="!taskForm.goal.trim()" @click="saveTask"
+          >保存</button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 运行详情 -->
+    <el-dialog v-model="runDialog" title="运行详情" width="520px" align-center>
+      <div v-if="runDetail" class="detail">
+        <div class="detail-row"><span>目标</span><b>{{ runDetail.goal }}</b></div>
+        <div class="detail-row"><span>状态</span><b>{{ statusLabel(runDetail.status) }}</b></div>
+        <div class="detail-row"><span>会话</span><b>{{ conversationTitle(runDetail.conversationId) }}</b></div>
+        <div class="detail-row"><span>耗时</span><b>{{ runDuration(runDetail) }}</b></div>
+        <div class="detail-row"><span>创建</span><b>{{ formatTime(runDetail.createdAt) }}</b></div>
+        <div class="detail-row"><span>结束</span><b>{{ formatTime(runDetail.endedAt) }}</b></div>
+        <div v-if="runDetail.error" class="detail-row">
+          <span>错误</span><b class="danger">{{ runDetail.error }}</b>
+        </div>
+        <div v-if="runDetail.result" class="detail-row">
+          <span>结果</span><b>{{ runDetail.result }}</b>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-actions">
+          <button
+            v-if="runDetail && (runDetail.status === 'QUEUED' || runDetail.status === 'RUNNING')"
+            type="button" class="btn ghost" @click="cancel(runDetail)"
+          >取消运行</button>
+          <button type="button" class="btn ghost" @click="runDialog = false">关闭</button>
+          <button
+            v-if="runDetail" type="button" class="btn primary"
+            @click="openRunConversation(runDetail)"
+          >打开会话</button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -633,41 +905,60 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--surface-sunken);
+  background: #f6f7f9;
 }
-.ws-header {
+.mono { font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-faint); }
+.hot { color: #b45309; }
+
+/* 顶栏 */
+.ws-top {
   display: flex;
   flex: none;
-  align-items: flex-end;
+  align-items: center;
   gap: 16px;
-  padding: 18px 22px 14px;
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--line-soft);
+  padding: 14px 20px;
 }
-.ws-title { flex: 1; min-width: 0; }
-.eyebrow {
-  display: block;
-  font-size: 11px;
+.ws-ident { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; }
+.ws-mark {
+  display: grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  font-size: 15px;
   font-weight: 600;
-  color: var(--ink-muted);
-  letter-spacing: 0.08em;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: 10px;
+  place-items: center;
 }
-.ws-title h1 {
-  margin: 2px 0 0;
-  font-size: 20px;
+.ws-name { min-width: 0; }
+.ws-name h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.01em;
   color: var(--ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.ws-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
-.ws-id { font-size: 11px; color: var(--ink-faint); }
-.kpi { font-size: 11.5px; color: var(--ink-muted); }
-.kpi b { font-weight: 600; color: var(--ink); }
-.kpi.hot b { color: #b45309; }
-.refreshed { font-size: 10.5px; color: var(--ink-faint); }
+.ws-name p {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 0 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.ws-name p i { font-style: normal; opacity: 0.5; }
 .ws-actions { display: flex; align-items: center; gap: 8px; }
-.env-select { width: 104px; }
-.ghost-btn, .primary-btn, .mini-btn {
+.env-select { width: 100px; }
+
+/* 通用控件 */
+.btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -676,134 +967,150 @@ onUnmounted(() => {
   font-family: inherit;
   font-size: 12.5px;
   cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
-}
-.ghost-btn {
-  color: var(--ink-soft);
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-}
-.ghost-btn:hover:not(:disabled) { background: var(--surface-hover); }
-.primary-btn {
-  color: #fff;
-  background: var(--accent);
   border: 1px solid transparent;
+  border-radius: 8px;
 }
-.primary-btn:hover:not(:disabled) { filter: brightness(1.05); }
-.primary-btn:disabled, .ghost-btn:disabled { cursor: not-allowed; opacity: 0.5; }
-.primary-btn.sm { height: 26px; padding: 0 10px; font-size: 11.5px; }
-.mini-btn {
-  height: 24px;
-  padding: 0 8px;
-  font-size: 11.5px;
+.btn.primary { color: #fff; background: var(--accent); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.05); }
+.btn.ghost { color: var(--ink-soft); background: #fff; border-color: var(--line-soft); }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-hover); }
+.btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.icon-btn {
+  display: grid;
+  width: 30px;
+  height: 30px;
   color: var(--ink-muted);
-  background: none;
+  cursor: pointer;
+  background: #fff;
   border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  place-items: center;
 }
-.mini-btn:hover:not(:disabled) { color: var(--accent-ink); border-color: var(--accent); }
-.mini-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.icon-btn:hover:not(:disabled) { color: var(--ink); background: var(--surface-hover); }
+.icon-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.icon-btn.sm { width: 24px; height: 24px; border: 0; background: none; }
+.text-btn {
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.text-btn:hover:not(:disabled) { color: var(--accent-ink); }
+.text-btn:disabled { cursor: not-allowed; opacity: 0.45; }
 
-.ws-body {
+/* 三栏 */
+.ws-grid {
   display: grid;
   flex: 1;
-  grid-template-columns: 288px minmax(0, 1fr) 340px;
-  gap: 12px;
+  grid-template-columns: 264px minmax(0, 1fr) 320px;
+  gap: 14px;
   min-height: 0;
-  padding: 12px;
+  padding: 0 20px 18px;
 }
-.pane {
+.col {
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: var(--surface-raised);
+  background: #fff;
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
+  border-radius: 12px;
 }
-.pane-head {
+.col-head,
+.side-head,
+.chat-head {
   display: flex;
   flex: none;
   align-items: center;
   gap: 8px;
   padding: 12px 14px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink);
 }
-.pane-head .hint {
-  flex: 1;
-  overflow: hidden;
+.side-head { justify-content: space-between; padding: 10px 12px 8px; border-bottom: 1px solid var(--line-soft); }
+.chat-head { justify-content: space-between; border-bottom: 1px solid var(--line-soft); }
+.col-title { font-size: 12px; font-weight: 600; color: var(--ink); }
+.col-count {
+  padding: 0 5px;
   font-size: 10.5px;
-  font-weight: 400;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.clear-btn { flex: none; }
-.head-btn { margin-left: auto; font-weight: 400; }
-.pill {
-  padding: 0 6px;
-  font-size: 10.5px;
-  font-weight: 500;
   color: var(--ink-muted);
   background: var(--surface-sunken);
-  border-radius: var(--radius-pill);
+  border-radius: 999px;
 }
-.empty {
-  padding: 10px 14px;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--ink-faint);
+.col-head .icon-btn.sm { margin-left: auto; }
+.chat-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.chat-title .tag {
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: 999px;
 }
+.chat-head-actions { display: flex; align-items: center; gap: 10px; font-size: 10.5px; }
 
-/* 会话列表 */
-.conv-tools { flex: none; padding: 0 8px 6px; }
-.conv-search {
-  width: 100%;
-  height: 28px;
+/* 左栏 */
+.search-box {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  margin: 0 12px 8px;
   padding: 0 9px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.search-box input {
+  flex: 1;
+  min-width: 0;
   font-family: inherit;
   font-size: 12px;
   color: var(--ink);
-  background: var(--surface-sunken);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
+  background: none;
+  border: 0;
   outline: none;
 }
-.conv-search:focus { border-color: var(--accent); }
-.conv-filters { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.filter-chip {
+.seg { display: flex; flex: none; gap: 2px; padding: 0 12px 8px; }
+.seg.inline { padding: 0; }
+.seg button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
-  padding: 0 8px;
+  padding: 3px 8px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--ink-muted);
   cursor: pointer;
   background: none;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-pill);
+  border: 0;
+  border-radius: 6px;
 }
-.filter-chip:hover { color: var(--ink); background: var(--surface-hover); }
-.filter-chip.on { color: var(--accent-ink); background: var(--accent-soft); border-color: transparent; }
-.chip-count { font-size: 10px; opacity: 0.75; }
-.conv-list { flex: 1; overflow-y: auto; padding: 0 6px 8px; }
-.conv-row {
+.seg button:hover { color: var(--ink); }
+.seg button.on { color: var(--ink); background: var(--surface-sunken); font-weight: 500; }
+.seg-count { font-size: 10px; opacity: 0.7; }
+.conv-list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 8px; }
+.conv-item,
+.list-item {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 8px;
   padding: 8px;
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
 }
-.conv-row:hover { background: var(--surface-hover); }
-.conv-main { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 1px; }
-.conv-title {
+.conv-item { align-items: center; }
+.conv-item:hover,
+.list-item:hover { background: var(--surface-hover); }
+.conv-state { flex: none; width: 6px; height: 6px; background: #cbd5e1; border-radius: 50%; }
+.conv-state[data-s='RUNNING'] { background: #f59e0b; }
+.conv-state[data-s='NEEDS_CONFIRMATION'] { background: #8b5cf6; }
+.conv-state[data-s='SUCCEEDED'] { background: #10b981; }
+.conv-state[data-s='FAILED'] { background: #ef4444; }
+.item-main { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
+.item-title {
   display: flex;
   gap: 3px;
   overflow: hidden;
@@ -812,83 +1119,140 @@ onUnmounted(() => {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.pin-mark { color: #f59e0b; }
-.conv-meta { font-size: 10.5px; color: var(--ink-faint); }
-.conv-summary {
+.item-meta {
+  display: flex;
+  gap: 5px;
   overflow: hidden;
   font-size: 10.5px;
-  color: var(--ink-muted);
+  color: var(--ink-faint);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.status-chip, .task-status {
-  flex: none;
-  padding: 1px 6px;
-  font-size: 10px;
-  color: var(--ink-muted);
-  white-space: nowrap;
+.item-meta .prio {
+  padding: 0 4px;
+  font-style: normal;
   background: var(--surface-sunken);
-  border-radius: var(--radius-pill);
+  border-radius: 3px;
 }
-.status-chip[data-s='RUNNING'], .task-status[data-s='RUNNING'] { color: #b45309; background: #fef3c7; }
-.status-chip[data-s='NEEDS_CONFIRMATION'] { color: #b45309; background: #fef3c7; }
-.status-chip[data-s='SUCCEEDED'], .task-status[data-s='DONE'] { color: #047857; background: #d1fae5; }
-.status-chip[data-s='FAILED'], .task-status[data-s='BLOCKED'] { color: #b91c1c; background: #fee2e2; }
-.status-chip[data-s='CANCELLED'] { color: var(--ink-muted); background: var(--surface-active); }
-.pin-btn {
-  flex: none;
-  width: 20px;
-  padding: 0;
-  font-size: 12px;
+.pin { font-style: normal; color: #f59e0b; }
+.row-actions { flex: none; opacity: 0; transition: opacity 0.12s ease; }
+.conv-item:hover .row-actions { opacity: 1; }
+.more-btn {
+  display: grid;
+  width: 22px;
+  height: 22px;
   color: var(--ink-faint);
   cursor: pointer;
   background: none;
   border: 0;
+  border-radius: 6px;
+  place-items: center;
 }
-.pin-btn.on { color: #f59e0b; }
-
-/* 中间调度区 */
-.messages {
-  flex: 1;
-  min-height: 0;
-  padding: 0 16px 12px;
-  overflow-y: auto;
-}
-.welcome {
-  padding: 28px 6px;
-  font-size: 13px;
-  line-height: 1.8;
-  color: var(--ink-soft);
-}
-.welcome-title { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--ink); }
-.welcome .muted { color: var(--ink-faint); font-size: 12px; }
-.quick-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
-.quick-chip {
-  padding: 5px 10px;
+.more-btn:hover { color: var(--ink); background: var(--surface-sunken); }
+.archived-toggle {
+  flex: none;
+  padding: 8px 14px;
   font-family: inherit;
-  font-size: 11.5px;
-  color: var(--ink-soft);
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: left;
   cursor: pointer;
-  background: var(--surface-sunken);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-pill);
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
 }
-.quick-chip:hover { color: var(--accent-ink); background: var(--accent-soft); border-color: transparent; }
-.msg { display: flex; margin-top: 12px; }
-.msg.user { justify-content: flex-end; }
-.bubble {
+.archived-toggle:hover { color: var(--accent-ink); }
+.empty {
+  padding: 18px 10px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+/* 中间 */
+.chat-scroll { flex: 1; min-height: 0; padding: 24px 28px; overflow-y: auto; }
+.hero { max-width: 600px; margin: 5vh auto 0; text-align: center; }
+.hero h2 {
+  margin: 0 0 6px;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.hero p { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ink-muted); }
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 22px;
+  text-align: left;
+}
+.action-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.action-card:hover { border-color: var(--accent); box-shadow: var(--shadow-1); }
+.action-title { font-size: 12.5px; font-weight: 500; color: var(--ink); }
+.action-desc { font-size: 11px; color: var(--ink-faint); }
+.hero-note { margin-top: 16px; font-size: 11px; color: var(--ink-faint); }
+
+.turn { display: flex; gap: 10px; margin-bottom: 18px; }
+.turn.user { justify-content: flex-end; }
+.assistant-avatar {
+  display: grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  place-items: center;
+}
+.turn-body { max-width: min(680px, 82%); }
+.turn-text {
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--ink);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.copy-btn {
+  margin-top: 3px;
+  padding: 0;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  opacity: 0;
+}
+.turn:hover .copy-btn { opacity: 1; }
+.user-bubble {
   max-width: 78%;
-  padding: 9px 12px;
+  padding: 8px 12px;
   font-size: 13px;
   line-height: 1.7;
-  color: var(--ink);
-  white-space: pre-wrap;
+  color: #fff;
   word-break: break-word;
-  background: var(--surface-sunken);
-  border-radius: 10px;
+  white-space: pre-wrap;
+  background: var(--accent);
+  border-radius: 12px 12px 4px 12px;
 }
-.msg.user .bubble { color: #fff; background: var(--accent); }
-.typing { display: flex; gap: 4px; padding: 8px 0 0; }
+.typing { display: flex; gap: 4px; padding: 4px 0 0 34px; }
 .typing span {
   width: 5px;
   height: 5px;
@@ -902,61 +1266,67 @@ onUnmounted(() => {
   0%, 80%, 100% { opacity: 0.25; }
   40% { opacity: 1; }
 }
-.stream-error { margin: 10px 0 0; font-size: 12px; color: var(--danger); }
-.tool-strip {
+.stream-error { margin: 10px 0 0 34px; font-size: 12px; color: var(--danger); }
+
+.activity { flex: none; padding: 4px 16px 2px; border-top: 1px solid var(--line-soft); }
+.activity-head {
   display: flex;
-  flex: none;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  padding: 6px 14px;
-  border-top: 1px solid var(--line-soft);
-}
-.tool-strip-label { font-size: 10.5px; color: var(--ink-faint); }
-.tool-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 0;
+  font-family: inherit;
   font-size: 10.5px;
   color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: var(--radius-pill);
+  cursor: pointer;
+  background: none;
+  border: 0;
 }
-.tool-chip .dot {
-  width: 5px;
-  height: 5px;
-  background: var(--ink-faint);
-  border-radius: 50%;
-}
-.tool-chip[data-s='RUNNING'] .dot { background: #f59e0b; }
-.tool-chip[data-s='COMPLETED'] .dot { background: #10b981; }
-.tool-chip[data-s='FAILED'] .dot { background: #ef4444; }
-.composer {
-  flex: none;
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--line-soft);
-}
-.composer textarea {
-  width: 100%;
-  padding: 9px 10px;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--ink);
-  resize: none;
-  background: var(--surface-sunken);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  outline: none;
-}
-.composer textarea:focus { border-color: var(--accent); }
-.composer-actions {
+.activity-head .chev { margin-left: auto; color: var(--ink-faint); }
+.activity-dot { width: 5px; height: 5px; background: var(--ink-faint); border-radius: 50%; }
+.activity-dot[data-s='RUNNING'] { background: #f59e0b; }
+.activity-dot[data-s='COMPLETED'] { background: #10b981; }
+.activity-dot[data-s='FAILED'] { background: #ef4444; }
+.activity-list { max-height: 118px; padding-bottom: 6px; overflow-y: auto; }
+.activity-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--ink-muted);
 }
+.activity-name { flex: none; }
+.activity-args {
+  flex: 1;
+  overflow: hidden;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.composer { flex: none; padding: 10px 16px 14px; }
+.composer-box {
+  padding: 8px 10px;
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.composer-box:focus-within { background: #fff; border-color: var(--accent); }
+.composer textarea {
+  width: 100%;
+  max-height: 160px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--ink);
+  resize: none;
+  background: none;
+  border: 0;
+  outline: none;
+}
+.composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .composer-hint {
   flex: 1;
   overflow: hidden;
@@ -965,69 +1335,87 @@ onUnmounted(() => {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-
-/* 右侧任务 / 运行 */
-.side { overflow-y: auto; }
-.task-add { flex: none; display: flex; flex-direction: column; gap: 5px; padding: 0 10px 8px; }
-.task-add input {
-  height: 27px;
-  padding: 0 9px;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--ink);
-  background: var(--surface-sunken);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  outline: none;
+.send-btn {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  color: #fff;
+  cursor: pointer;
+  background: var(--accent);
+  border: 0;
+  border-radius: 8px;
+  place-items: center;
 }
-.task-add input:focus { border-color: var(--accent); }
-.task-add .primary-btn { align-self: flex-end; }
-.task-list, .run-list { padding: 0 8px 8px; }
-.done-list { margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--line-soft); }
-.runs-head { margin-top: 4px; border-top: 1px solid var(--line-soft); }
-.run-tabs { display: flex; gap: 4px; margin-left: auto; }
-.task-row, .run-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
+.send-btn:disabled { cursor: not-allowed; opacity: 0.4; }
+
+/* 右栏 */
+.side-body { flex: 1; min-height: 0; padding: 6px 8px 10px; overflow-y: auto; }
+.list-item { align-items: flex-start; }
+.check {
+  display: grid;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  padding: 0;
+  font-size: 9px;
+  color: transparent;
+  cursor: pointer;
+  background: none;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 50%;
+  place-items: center;
+}
+.check:hover { color: #10b981; border-color: #10b981; }
+.item-status { flex: none; padding-top: 1px; font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
+.item-status[data-s='RUNNING'] { color: #b45309; }
+.item-status[data-s='DONE'] { color: #047857; }
+.item-status[data-s='FAILED'] { color: #b91c1c; }
+.list-item.done { opacity: 0.66; }
+.done-mark { flex: none; width: 16px; font-size: 11px; color: #10b981; text-align: center; }
+.done-toggle {
+  display: block;
+  width: 100%;
   padding: 8px;
-  border-radius: var(--radius-sm);
+  margin-top: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-top: 1px dashed var(--line-soft);
 }
-.task-row:hover, .run-row:hover { background: var(--surface-hover); }
-.run-row { cursor: pointer; }
-.task-row.done { opacity: 0.72; }
-.task-main, .run-main { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
-.task-goal, .run-goal {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ink);
-  word-break: break-word;
-}
-.task-out, .run-meta { font-size: 10.5px; color: var(--ink-faint); }
-.task-meta { display: flex; gap: 6px; font-size: 10.5px; color: var(--ink-faint); }
-.prio {
-  padding: 0 4px;
-  font-size: 9.5px;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: 3px;
-}
-.task-actions { display: flex; flex: none; flex-direction: column; gap: 4px; }
-.run-error {
-  overflow: hidden;
-  font-size: 10.5px;
-  color: var(--danger);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
+.done-toggle:hover { color: var(--accent-ink); }
+.run-seg { padding: 4px 8px 8px; }
+.run-dot { flex: none; width: 6px; height: 6px; margin-top: 6px; background: #cbd5e1; border-radius: 50%; }
+.run-dot[data-s='QUEUED'] { background: #94a3b8; }
+.run-dot[data-s='RUNNING'] { background: #f59e0b; }
+.run-dot[data-s='SUCCEEDED'] { background: #10b981; }
+.run-dot[data-s='FAILED'] { background: #ef4444; }
+.run-dot[data-s='CANCELLED'] { background: #cbd5e1; }
 
-@media (max-width: 1100px) {
-  .ws-body { grid-template-columns: 250px minmax(0, 1fr); }
-  .pane.side { display: none; }
+/* 弹窗 */
+.form { display: flex; flex-direction: column; gap: 12px; }
+.form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--ink-muted); }
+.form :deep(.el-select) { width: 100%; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.detail { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.detail-row { display: flex; gap: 12px; line-height: 1.6; }
+.detail-row > span { flex: none; width: 48px; color: var(--ink-faint); }
+.detail-row > b { font-weight: 500; color: var(--ink); word-break: break-word; }
+.detail-row .danger { color: var(--danger); }
+
+@media (max-width: 1180px) {
+  .ws-grid { grid-template-columns: 240px minmax(0, 1fr); }
+  .side-col { display: none; }
 }
-@media (max-width: 760px) {
-  .ws-body { grid-template-columns: 1fr; }
-  .pane.conversations { display: none; }
-  .ws-header { flex-wrap: wrap; align-items: center; }
+@media (max-width: 820px) {
+  .ws-top { flex-wrap: wrap; padding: 12px; }
+  .ws-grid { grid-template-columns: 1fr; padding: 0 12px 12px; }
+  .conv-col { display: none; }
+  .chat-scroll { padding: 16px; }
+  .action-grid { grid-template-columns: 1fr; }
 }
 </style>
