@@ -4,6 +4,7 @@ import { appStore } from './stores/app'
 
 // 路由级懒加载：首屏只下载当前页面（对话/流水线/设置各自一个 chunk）
 const ChatView = () => import('./views/ChatView.vue')
+const WorkspaceHomeView = () => import('./views/WorkspaceHomeView.vue')
 const PipelineView = () => import('./views/PipelineView.vue')
 const LoginView = () => import('./views/LoginView.vue')
 const ProjectIntakeView = () => import('./views/ProjectIntakeView.vue')
@@ -16,6 +17,8 @@ const router = createRouter({
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     { path: '/', redirect: '/chat' },
     { path: '/chat', name: 'chat', component: ChatView },
+    // 点击侧栏工作区标题进入：该工作区的调度 Agent + 全部会话
+    { path: '/workspace/:projectId', name: 'workspace', component: WorkspaceHomeView },
     { path: '/pipeline', name: 'pipeline', component: PipelineView },
     { path: '/projects', name: 'project-list', component: ProjectListView },
     { path: '/settings', name: 'settings', component: SettingsView },

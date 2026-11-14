@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChatDotRound, Delete, Document, Folder, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, Box, SwitchButton, ArrowRight, ArrowDown, FolderAdd } from '@element-plus/icons-vue'
 import { logout } from '../../api/auth'
 import { listProjects, type ProjectRow } from '../../api/project'
 import { appStore, type SessionItem } from '../../stores/app'
 import { clearHistory } from '../../state/sessionHistory'
+import { createConversation, listConversations } from '../../api/workspace'
 
 /**
  * 左侧栏 —— 结构对齐 DSH：
@@ -73,6 +74,38 @@ async function loadProjects(): Promise<void> {
   }
 }
 
+/**
+ * 用服务端会话补全侧栏：换浏览器 / 清缓存后仍能看到已持久化的会话。
+ * 只拉当前工作区（其余工作区由项目列表 + 本地会话覆盖），避免打开页面就 N 次请求。
+ */
+async function loadServerSessions(): Promise<void> {
+  const projectId = appStore.projectId
+  if (!projectId) return
+  try {
+    const rows = await listConversations(projectId, false)
+    const local = new Map(appStore.sessions.map((s) => [s.id, s]))
+    const merged: SessionItem[] = []
+    for (const row of rows) {
+      // 调度会话只存在于工作区首页，不混进普通会话列表
+      if (row.kind === 'SUPERVISOR' || row.archived) continue
+      const known = local.get(row.id)
+      local.delete(row.id)
+      merged.push({
+        id: row.id,
+        title: row.title || known?.title || '新会话',
+        at: Math.max(known?.at ?? 0, row.lastActivityAt),
+        projectId: row.projectId
+      })
+    }
+    // 当前工作区以服务端为准，本地其余工作区的会话原样保留
+    appStore.sessions = [...merged, ...local.values()]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 30)
+  } catch {
+    // 服务端不可用时退回纯本地会话
+  }
+}
+
 function projectName(id: string): string {
   return projects.value.find((p) => p.id === id)?.name ?? id
 }
@@ -89,10 +122,13 @@ const groups = computed(() => {
     bucket.push(s)
     byProject.set(s.projectId, bucket)
   }
-  const ids = [
+  // 当前工作区始终保留：项目清单为空（未接入 / 已下线）时也要能点击进入调度页；
+  // 用 Set 去重，避免「项目清单 + 当前工作区 + 本地会话」三路来源出现同名分组。
+  const ids = [...new Set([
     ...projects.value.map((p) => p.id),
-    ...[...byProject.keys()].filter((id) => !projects.value.some((p) => p.id === id))
-  ]
+    ...(appStore.projectId ? [appStore.projectId] : []),
+    ...byProject.keys()
+  ])]
   return ids
     .filter((id) => !archivedIds.value.includes(id))
     .map((id) => ({
@@ -108,9 +144,14 @@ const archivedGroups = computed(() =>
   archivedIds.value.map((id) => ({ id, name: projectName(id) })))
 
 /** 在指定工作区里新建会话并跳转。 */
-function newSessionIn(projectId: string): void {
+async function newSessionIn(projectId: string): Promise<void> {
   appStore.projectId = projectId
-  appStore.newSession()
+  try {
+    const created = await createConversation(projectId, { title: '新会话', env: appStore.env })
+    appStore.selectSession(created.id)
+  } catch {
+    appStore.newSession()
+  }
   void router.push('/chat')
 }
 
@@ -155,18 +196,28 @@ function toggleSearch(): void {
   else searchText.value = ''
 }
 
-/** 点组头 = 切换当前工作区，并落到该项目最近的一条会话。 */
+/**
+ * 点组头 = 打开该工作区的调度首页（工作区 = 项目）。
+ * 这里不再直接落到某条会话：工作区本身有一个统一管理全部会话的调度 Agent。
+ */
 function selectWorkspace(id: string): void {
-  appStore.switchProject(id)
-  void router.push('/chat')
+  appStore.projectId = id
+  void router.push(`/workspace/${id}`)
+  emit('close')
 }
 
 function toggle() {
   emit('update:collapsed', !props.collapsed)
 }
 
-function newSession() {
-  appStore.newSession()
+async function newSession() {
+  const projectId = appStore.projectId
+  try {
+    const created = await createConversation(projectId, { title: '新会话', env: appStore.env })
+    appStore.selectSession(created.id)
+  } catch {
+    appStore.newSession()
+  }
   void router.push('/chat')
 }
 
@@ -202,7 +253,13 @@ function formatTime(ms: number): string {
   return `${Math.floor(diff / 86_400_000)} 天前`
 }
 
-onMounted(() => void loadProjects())
+onMounted(async () => {
+  await loadProjects()
+  await loadServerSessions()
+})
+
+// 切换工作区（含从工作区页返回）时刷新该工作区的服务端会话
+watch(() => appStore.projectId, () => void loadServerSessions())
 </script>
 
 <template>

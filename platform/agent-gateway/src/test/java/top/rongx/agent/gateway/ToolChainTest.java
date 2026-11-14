@@ -64,6 +64,9 @@ class ToolChainTest {
     @Autowired
     @Qualifier("deployToolkit")
     private Toolkit deployToolkit;
+    @Autowired
+    @Qualifier("supervisorToolkit")
+    private Toolkit supervisorToolkit;
 
     /** 构造与 ChatService.stream 相同形态的 RuntimeContext。 */
     private static RuntimeContext runtime(ProjectContext ctx) {
@@ -214,6 +217,26 @@ class ToolChainTest {
 
         String unknown = changeTools.confirm("chg-not-exists", ctx("test"));
         assertTrue(unknown.startsWith("err:"), unknown);
+    }
+
+    @Test
+    @DisplayName("T13 调度 Agent 工具面：只有管理工作区的能力，没有任何写工具")
+    void supervisorToolkitHasNoWriteTools() {
+        assertTrue(supervisorToolkit.getToolNames().contains("workspace_snapshot"));
+        assertTrue(supervisorToolkit.getToolNames().contains("conversation_list"));
+        assertTrue(supervisorToolkit.getToolNames().contains("conversation_create"));
+        assertTrue(supervisorToolkit.getToolNames().contains("conversation_send"));
+        assertTrue(supervisorToolkit.getToolNames().contains("conversation_wait"));
+        assertTrue(supervisorToolkit.getToolNames().contains("conversation_cancel"));
+        assertTrue(supervisorToolkit.getToolNames().contains("conversation_summarize"));
+        assertTrue(supervisorToolkit.getToolNames().contains("task_create"));
+        assertTrue(supervisorToolkit.getToolNames().contains("task_complete"));
+        // 调度 Agent 不能直接动手：文件、命令、补丁、部署、确认、委派都不在工具面里
+        for (String forbidden : List.of("read_file", "grep", "git_diff", "ci_run", "run_action",
+                "propose_patch", "deploy_run", "request_confirmation", "confirm",
+                "run_ops_agent", "env_ensure")) {
+            assertFalse(supervisorToolkit.getToolNames().contains(forbidden), forbidden);
+        }
     }
 
     @Test

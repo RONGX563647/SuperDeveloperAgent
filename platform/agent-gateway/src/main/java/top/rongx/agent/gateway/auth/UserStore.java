@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.bcrypt.BCrypt;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.port.UserRolePort;
 
 /**
  * 用户仓库（SQLite 持久化）。
@@ -33,7 +34,7 @@ import org.springframework.stereotype.Component;
  * <p>密码用 BCrypt 存哈希（spring-security-crypto），明文不落任何地方。
  */
 @Component
-public class UserStore {
+public class UserStore implements UserRolePort {
 
     private static final Logger log = LoggerFactory.getLogger(UserStore.class);
 
@@ -220,6 +221,12 @@ public class UserStore {
         } catch (SQLException e) {
             throw new IllegalStateException("用户查询失败：" + e.getMessage(), e);
         }
+    }
+
+    @Override
+    public boolean isReadOnly(String userId) {
+        User user = find(userId);
+        return user == null || user.role() == Role.VIEWER;
     }
 
     /** 全部用户（管理面板预留）。 */

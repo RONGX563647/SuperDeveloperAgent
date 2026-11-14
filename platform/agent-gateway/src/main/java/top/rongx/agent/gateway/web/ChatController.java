@@ -26,6 +26,7 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.web.dto.ChatRequest;
 import top.rongx.agent.governance.ChangeRegistry;
 import top.rongx.agent.runtime.ChatService;
+import top.rongx.agent.runtime.workspace.ConversationManager;
 
 /**
  * 对话入口（SSE）。
@@ -56,6 +57,7 @@ public class ChatController {
     private final ChangeRegistry changes;
     private final AgentStreamLimiter limiter;
     private final AgentMetrics metrics;
+    private final ConversationManager conversations;
 
     public ChatController(ChatService chatService,
                           ProjectContextResolver contextResolver,
@@ -63,7 +65,8 @@ public class ChatController {
                           top.rongx.agent.gateway.auth.CurrentUser currentUser,
                           ChangeRegistry changes,
                           AgentStreamLimiter limiter,
-                          AgentMetrics metrics) {
+                          AgentMetrics metrics,
+                          ConversationManager conversations) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
@@ -71,6 +74,7 @@ public class ChatController {
         this.changes = changes;
         this.limiter = limiter;
         this.metrics = metrics;
+        this.conversations = conversations;
     }
 
     /**
@@ -86,6 +90,8 @@ public class ChatController {
         // 2. 服务端解析并校验项目上下文（模型不可篡改）
         ProjectContext ctx = contextResolver.resolve(
                 request.projectId(), request.env(), userId, request.worktree());
+        // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树
+        conversations.ensureFromChat(ctx, request.sessionId(), request.message(), request.worktree());
         // 3. 并发闸门：拿不到许可直接 429，不构建 Agent、不拉起 MCP
         limiter.acquireOrThrow();
 

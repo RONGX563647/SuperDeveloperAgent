@@ -20,8 +20,8 @@ export type ConnectionState = 'IDLE' | 'CONNECTING' | 'OPEN' | 'RECONNECTING' | 
 interface UseAgentChatOptions {
   /** 构造 ChatRequest 请求体（projectId/env/sessionId 由调用方持有）。 */
   buildRequest: (message: string) => Record<string, unknown>
-  /** 请求路径，默认 /api/v1/chat。 */
-  url?: string
+  /** 请求路径，默认 /api/v1/chat；传函数可在路由参数变化后取到最新地址。 */
+  url?: string | (() => string)
   /** 每次发送时构造请求头（如 Authorization）；函数形式避免 setup 时固化过期 token。 */
   getHeaders?: () => Record<string, string>
   /** 发送前置检查（如 IME 组合中）；返回 false 则不发送。 */
@@ -29,7 +29,10 @@ interface UseAgentChatOptions {
 }
 
 export function useAgentChat(options: UseAgentChatOptions) {
-  const url = options.url ?? '/api/v1/chat'
+  const url = () => {
+    const value = options.url
+    return typeof value === 'function' ? value() : (value ?? '/api/v1/chat')
+  }
   const projection: ShallowRef<AgentProjection> = shallowRef(emptyAgentProjection())
   const streaming = shallowRef(false)
   const elapsedMs = shallowRef(0)
@@ -95,7 +98,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
     try {
       await streamChatOnce(
-        url,
+        url(),
         {
           method: 'POST',
           headers: {

@@ -102,6 +102,20 @@ public class ToolCatalog {
     }
 
     /**
+     * 工作区调度 Agent 专用工具面：只有会话/运行/任务的管理能力。
+     *
+     * <p>刻意<b>不</b>注册任何文件、命令、补丁、部署或 MCP 工具：调度 Agent 的职责是编排，
+     * 真正动手必须落到子会话，并由子会话按环境策略与人工确认执行。
+     */
+    @Bean
+    @Qualifier("supervisorToolkit")
+    public Toolkit supervisorToolkit(WorkspaceSupervisorTools supervisorTools) {
+        Toolkit toolkit = new Toolkit();
+        toolkit.registerTool(supervisorTools);
+        return toolkit;
+    }
+
+    /**
      * 部署 Agent 专用工具面：环境状态 + 触发 + 固化 + 只读取证 + 受限修复能力。
      *
      * <p>修复能力来自两处：
