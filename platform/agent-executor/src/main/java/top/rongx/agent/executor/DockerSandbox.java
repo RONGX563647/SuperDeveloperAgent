@@ -5,7 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import top.rongx.agent.domain.process.BoundedCommand;
 
 /**
  * 容器沙箱：把一条业务命令包成 {@code docker run}。
@@ -23,11 +25,27 @@ import java.util.concurrent.TimeUnit;
  *
  * <p><b>注意</b>：镜像需自带工具链（如 {@code maven:3.9-eclipse-temurin-21}）。
  * 当前**不往容器注入任何凭据**（本环境无私服）；需要时挂只读 settings.xml。
+ *
+ * <p><b>准备阶段的可观测性</b>：依赖缓存卷的初始化曾经藏在 {@link #wrap} 里，用
+ * {@code readAllBytes()} 无限等待 docker CLI（且超时写在读流之后、异常被吞），
+ * 一次镜像拉取卡住就会让整条运行静默停在 RUNNING。现在它由
+ * {@link #prepareCacheVolume} 在动作开始前显式执行，走 {@link ProcessExecutor}
+ * 的超时 / 取消 / 实时日志链路，失败即抛出并交给调用方记为失败。
  */
 public class DockerSandbox {
 
     /** 容器内工作目录。 */
     public static final String CONTAINER_WORKDIR = "/ws";
+
+    /** 准备阶段单步预算：镜像未预热时拉镜像可能很慢，但不能无限等。 */
+    private static final long PREPARE_TIMEOUT_MS = 30_000L;
+
+    /** 外部命令执行器：抽出以便超时逻辑复用、也便于在不依赖 Docker 的情况下单测。 */
+    @FunctionalInterface
+    interface CommandExecutor {
+        ProcessExecutor.StepOutcome run(List<String> cmd, long timeoutMs,
+                                        BooleanSupplier cancelled, Consumer<String> live);
+    }
 
     private final String dockerBinary;
     private final String image;
@@ -38,10 +56,13 @@ public class DockerSandbox {
     private final String user;
     /** 依赖缓存卷前缀（每项目独立），为空则不启用缓存。 */
     private final String cacheVolumePrefix;
-    /** 已初始化的卷（避免每次 docker run 都做一次 chown）。 */
-    private static final Set<String> INITIALIZED_VOLUMES = ConcurrentHashMap.newKeySet();
+    /** 已初始化的卷（避免每次 docker run 都做一次 chown）。withImage 派生的沙箱共享同一份。 */
+    private final Set<String> initializedVolumes;
     /** 当前线程正在运行的容器名（用于超时/取消后清理，避免 docker run 客户端被杀而容器残留）。 */
     private static final ThreadLocal<String> ACTIVE_CONTAINER = new ThreadLocal<>();
+    private final CommandExecutor commandExecutor;
+    /** 动作前是否预检工具链镜像（离线/自建 registry 场景可关闭）。 */
+    private boolean precheckImage = true;
 
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user) {
@@ -51,6 +72,22 @@ public class DockerSandbox {
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user,
                          String cacheVolumePrefix) {
+        this(dockerBinary, image, network, memory, cpus, pidsLimit, user, cacheVolumePrefix,
+                DockerSandbox::defaultExec);
+    }
+
+    /** 测试装配点：注入命令执行器，独立卷状态，不依赖 Docker 守护进程。 */
+    DockerSandbox(String dockerBinary, String image, String network,
+                  String memory, String cpus, int pidsLimit, String user,
+                  String cacheVolumePrefix, CommandExecutor commandExecutor) {
+        this(dockerBinary, image, network, memory, cpus, pidsLimit, user, cacheVolumePrefix,
+                ConcurrentHashMap.newKeySet(), commandExecutor);
+    }
+
+    private DockerSandbox(String dockerBinary, String image, String network,
+                          String memory, String cpus, int pidsLimit, String user,
+                          String cacheVolumePrefix, Set<String> initializedVolumes,
+                          CommandExecutor commandExecutor) {
         this.dockerBinary = dockerBinary == null ? "docker" : dockerBinary;
         this.image = image;
         this.network = network == null ? "bridge" : network;
@@ -59,10 +96,23 @@ public class DockerSandbox {
         this.pidsLimit = pidsLimit <= 0 ? 512 : pidsLimit;
         this.user = user == null ? "1000:1000" : user;
         this.cacheVolumePrefix = cacheVolumePrefix;
+        this.initializedVolumes = initializedVolumes;
+        this.commandExecutor = commandExecutor;
+    }
+
+    private static ProcessExecutor.StepOutcome defaultExec(List<String> cmd, long timeoutMs,
+                                                           BooleanSupplier cancelled,
+                                                           Consumer<String> live) {
+        return new ProcessExecutor().exec(Path.of("."), cmd, timeoutMs, new StringBuilder(),
+                cancelled, live);
     }
 
     /**
      * 构造 docker run 命令。
+     *
+     * <p><b>纯函数</b>：不再在这里启动任何进程。缓存卷的初始化由
+     * {@link #prepareCacheVolume} 在动作开始前显式完成，否则命令构造这个
+     * 看起来无副作用的方法会偷偷阻塞几分钟且绕过动作超时预算。
      *
      * @param workspace 宿主工作区（必须绝对路径）
      * @param argv      业务命令
@@ -103,9 +153,8 @@ public class DockerSandbox {
         cmd.add("-v");
         cmd.add(hostPath(workspace) + ":" + CONTAINER_WORKDIR);
         // 5b. 依赖缓存卷：Maven ~/.m2 与 npm cache 跨构建复用（按项目隔离）
-        if (cacheVolumePrefix != null && !cacheVolumePrefix.isBlank()) {
-            String name = safeVolumeName(cacheVolumePrefix + "-" + cacheKey(workspace));
-            ensureCacheVolumeWritable(name);
+        String name = cacheVolumeName(workspace);
+        if (name != null) {
             cmd.add("-v");
             cmd.add(name + ":/cache");
             cmd.add("-e");
@@ -140,6 +189,12 @@ public class DockerSandbox {
         return workspace.getFileName() == null ? "default" : workspace.getFileName().toString();
     }
 
+    /** 卷名（未启用缓存时返回 null）。 */
+    String cacheVolumeName(Path workspace) {
+        return cacheVolumePrefix == null || cacheVolumePrefix.isBlank()
+                ? null : safeVolumeName(cacheVolumePrefix + "-" + cacheKey(workspace));
+    }
+
     /** 开始一次容器执行：生成容器名并绑定到当前线程，供超时清理使用。 */
     public String beginContainer() {
         String name = "agent-act-" + java.util.UUID.randomUUID().toString()
@@ -148,46 +203,58 @@ public class DockerSandbox {
         return name;
     }
 
-    /** 结束容器执行：无论成功、失败还是超时都清理容器，避免孤儿进程占端口/内存。 */
-    public void endContainer(String name) {
-        ACTIVE_CONTAINER.remove();
-        if (name == null || name.isBlank()) {
+    /** 关闭/开启镜像预检（由 SandboxConfig 的配置注入）。 */
+    public DockerSandbox setImagePrecheck(boolean enabled) {
+        this.precheckImage = enabled;
+        return this;
+    }
+
+    /**
+     * 动作前预检工具链镜像是否已在本机。
+     *
+     * <p>镜像标签是可配置的选择，不是平台硬编码的前提；但缺镜像时 docker CLI 会去拉，
+     * 网络不通就是一次没有输出的长时间等待。预检把它变成 5 秒内、带两条可选路径的
+     * 明确失败：先 {@code docker pull}，或通过 {@code agent.sandbox.image} 换成本机已有镜像。
+     */
+    public void ensureImageReady(BooleanSupplier cancelled, Consumer<String> live) {
+        if (!precheckImage) {
             return;
         }
-        try {
-            Process p = new ProcessBuilder(dockerBinary, "rm", "-f", name)
-                    .redirectErrorStream(true).start();
-            p.getInputStream().readAllBytes();
-            p.waitFor(30, TimeUnit.SECONDS);
-        } catch (Exception ignored) {
-            // 容器已随 --rm 退出或 docker 不可用：清理失败不影响动作结果
+        List<String> cmd = List.of(dockerBinary, "image", "inspect", image);
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, 5_000L,
+                cancelled == null ? () -> false : cancelled, live);
+        if (outcome.errorCode() != null) {
+            throw new IllegalStateException("构建镜像未就绪（" + image + "）：请先执行 docker pull "
+                    + image + "，或用 agent.sandbox.image 指定本机已有的工具链镜像"
+                    + "（预检 " + outcome.errorCode() + "：" + outcome.summary() + "）");
         }
     }
 
     /**
-     * Docker 新建的命名卷属主是 root；构建容器以 uid 1000 运行会写不进缓存。
-     * 这里用一次特权容器把 /cache 及其子目录 chown 给构建用户（幂等、只做一次）。
+     * 动作开始前准备依赖缓存卷：用特权容器建目录并 chown，幂等且只做一次。
+     *
+     * <p>每一步都有 30s 超时与取消检查；失败时抛异常且**不**把卷标记为已初始化，
+     * 避免后续构建误用一个属主还是 root 的缓存卷。异常信息会进入运行日志。
      */
-    private void ensureCacheVolumeWritable(String volume) {
-        if (INITIALIZED_VOLUMES.contains(volume)) {
+    public void prepareCacheVolume(Path workspace, BooleanSupplier cancelled, Consumer<String> live) {
+        String volume = cacheVolumeName(workspace);
+        if (volume == null || initializedVolumes.contains(volume)) {
             return;
         }
-        synchronized (INITIALIZED_VOLUMES) {
-            if (INITIALIZED_VOLUMES.contains(volume)) {
+        synchronized (initializedVolumes) {
+            if (initializedVolumes.contains(volume)) {
                 return;
             }
-            try {
-                // 两步都用 argv 直执行（不经 shell），固定字符串，不接受外部输入
-                runAsRoot(volume, "mkdir", "-p", "/cache/m2", "/cache/npm");
-                runAsRoot(volume, "chown", "-R", "1000:1000", "/cache");
-                INITIALIZED_VOLUMES.add(volume);
-            } catch (Exception ignored) {
-                INITIALIZED_VOLUMES.add(volume);
-            }
+            notify(live, "[sandbox] 首次初始化依赖缓存卷 " + volume
+                    + "（每步 30s 超时，可取消）\n");
+            runAsRoot(volume, cancelled, live, "mkdir", "-p", "/cache/m2", "/cache/npm");
+            runAsRoot(volume, cancelled, live, "chown", "-R", "1000:1000", "/cache");
+            initializedVolumes.add(volume);
         }
     }
 
-    private void runAsRoot(String volume, String... argv) throws Exception {
+    private void runAsRoot(String volume, BooleanSupplier cancelled, Consumer<String> live,
+                           String... argv) {
         List<String> cmd = new ArrayList<>();
         cmd.add(dockerBinary);
         cmd.add("run");
@@ -199,11 +266,31 @@ public class DockerSandbox {
         cmd.add(volume + ":/cache");
         cmd.add(image);
         cmd.addAll(List.of(argv));
-        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        p.getInputStream().readAllBytes();
-        if (!p.waitFor(30, TimeUnit.SECONDS) || p.exitValue() != 0) {
-            throw new IllegalStateException("缓存卷初始化失败: " + String.join(" ", argv));
+        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, PREPARE_TIMEOUT_MS,
+                cancelled == null ? () -> false : cancelled, live);
+        if (outcome.errorCode() != null) {
+            throw new IllegalStateException("缓存卷初始化失败（" + outcome.errorCode() + "）："
+                    + outcome.summary() + "；命令：" + String.join(" ", cmd));
         }
+    }
+
+    private static void notify(Consumer<String> live, String text) {
+        if (live != null) {
+            live.accept(text);
+        }
+    }
+
+    /** 结束容器执行：无论成功、失败还是超时都清理容器，避免孤儿进程占端口/内存。 */
+    public void endContainer(String name) {
+        ACTIVE_CONTAINER.remove();
+        if (name == null || name.isBlank()) {
+            return;
+        }
+        // 清理不可被取消跳过（否则取消运行会留下容器），但仍受 30s 超时保护：
+        // 原先 readAllBytes() 在 waitFor 之前，docker CLI 不退出就会永久卡住收尾。
+        commandExecutor.run(List.of(dockerBinary, "rm", "-f", name), PREPARE_TIMEOUT_MS,
+                () -> false, null);
     }
 
     /** 卷名只允许小写字母/数字/_-，避免非法项目名注入 docker 参数。 */
@@ -213,32 +300,31 @@ public class DockerSandbox {
         return normalized.length() > 60 ? normalized.substring(0, 60) : normalized;
     }
 
-    /** 守护进程是否可用（3 秒超时，避免启动被拖住）。 */
+    /** 守护进程是否可用（3 秒硬超时 + 并行排空输出，避免启动被拖住）。 */
     public boolean available() {
-        try {
-            // 1. 探测 docker info，3 秒超时
-            Process process = new ProcessBuilder(dockerBinary, "info", "--format", "{{.ServerVersion}}")
-                    .redirectErrorStream(true)
-                    .start();
-            if (!process.waitFor(3, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                return false;
-            }
-            // 2. 退出码 0 即可用
-            return process.exitValue() == 0;
-        } catch (Exception e) {
-            return false;
-        }
+        return BoundedCommand.run(
+                List.of(dockerBinary, "info", "--format", "{{.ServerVersion}}"), 3_000L).ok();
     }
 
     public String image() {
         return image;
     }
 
+    /** 自动修复用的拉取命令：镜像只来自平台配置，不接受日志/模型提供的参数。 */
+    public List<String> imagePullCommand() {
+        return List.of(dockerBinary, "pull", image);
+    }
+
+    /** 自动修复用的复核命令：修复是否生效只由平台自己执行的 inspect 判定。 */
+    public List<String> imageInspectCommand() {
+        return List.of(dockerBinary, "image", "inspect", image);
+    }
+
     /** 复制一份沙箱，只替换镜像（其余隔离参数与缓存卷不变）。 */
     public DockerSandbox withImage(String newImage) {
-        return new DockerSandbox(dockerBinary, newImage, network, memory, cpus, pidsLimit,
-                user, cacheVolumePrefix);
+        DockerSandbox copy = new DockerSandbox(dockerBinary, newImage, network, memory, cpus,
+                pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
+        return copy.setImagePrecheck(precheckImage);
     }
 
     public String describe() {

@@ -441,8 +441,8 @@ public class LocalDevHostDeployer {
     }
 
     private static String javaBin() {
-        Path java = Path.of(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java");
-        return Files.isRegularFile(java) ? java.toString() : "java";
+        // 与 HostDeployer 共用同一解析：以当前 JVM 为准，不依赖 PATH 上的 java 版本。
+        return top.rongx.agent.domain.process.JavaRuntime.javaBinary();
     }
 
     private static String nodeBin() {

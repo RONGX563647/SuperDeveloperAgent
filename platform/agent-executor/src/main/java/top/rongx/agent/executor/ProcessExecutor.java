@@ -68,7 +68,7 @@ final class ProcessExecutor {
         try {
             while (true) {
                 if (cancelled != null && cancelled.getAsBoolean()) {
-                    process.destroyForcibly();
+                    killTree(process);
                     joinQuietly(reader);
                     return StepOutcome.failed(143, "E-303", "执行被取消：" + String.join(" ", argv));
                 }
@@ -83,20 +83,20 @@ final class ProcessExecutor {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            process.destroyForcibly();
+            killTree(process);
             joinQuietly(reader);
             return StepOutcome.failed(143, "E-303", "执行被中断");
         }
 
         if (!finished) {
-            process.destroy();
+            killTree(process);
             try {
                 if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
+                    killTree(process);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                process.destroyForcibly();
+                killTree(process);
             }
             joinQuietly(reader);
             return StepOutcome.failed(124, "E-302",
@@ -144,6 +144,33 @@ final class ProcessExecutor {
             thread.join(3_000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * 终止进程树并关闭输出管道。
+     *
+     * <p>Windows 上 docker CLI 会拉起子进程，只 destroy CLI 会留下继续持有管道写端的
+     * 后代进程，读线程永远等不到 EOF；关掉输入流让 pump 立即结束，joinQuietly 才不会
+     * 白等 3 秒，超时/取消也能真正收敛。
+     */
+    private static void killTree(Process process) {
+        try {
+            process.descendants().forEach(handle -> {
+                try {
+                    handle.destroyForcibly();
+                } catch (RuntimeException ignored) {
+                    // 已退出的子进程
+                }
+            });
+        } catch (RuntimeException ignored) {
+            // 平台不支持 descendants 时忽略
+        }
+        process.destroyForcibly();
+        try {
+            process.getInputStream().close();
+        } catch (IOException ignored) {
+            // 流已关闭
         }
     }
 

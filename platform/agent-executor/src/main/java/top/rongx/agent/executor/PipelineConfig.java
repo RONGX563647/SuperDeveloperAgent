@@ -73,8 +73,11 @@ public class PipelineConfig {
     @Bean
     public top.rongx.agent.domain.env.EnvProvisioner envProvisioner(
             top.rongx.agent.domain.env.EnvironmentStore envStore,
-            top.rongx.agent.domain.port.ProjectRepoLocator repoLocator) {
-        return new DockerEnvProvisioner(envStore, repoLocator);
+            top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
+            @Value("${agent.env.middleware-images:}") String middlewareImages,
+            @Value("${agent.env.precheck-images:true}") boolean precheckImages) {
+        return new DockerEnvProvisioner(envStore, repoLocator,
+                DockerEnvProvisioner.parseImageOverrides(middlewareImages), precheckImages);
     }
 
     /** 开发环境本机托管（后端 jar + 前端 dist）；登记 ServiceLease 并共用 dev 日志目录。 */
@@ -110,7 +113,12 @@ public class PipelineConfig {
                                          org.springframework.beans.factory.ObjectProvider<
                                                  top.rongx.agent.domain.run.RunRecoveryAdvisor> recoveryAdvisor,
                                          org.springframework.beans.factory.ObjectProvider<
-                                                 top.rongx.agent.domain.run.RunLedgerRepository> ledger) {
+                                                 top.rongx.agent.domain.run.RunLedgerRepository> ledger,
+                                         @Value("${agent.pipeline.auto-repair.enabled:true}") boolean autoRepairEnabled,
+                                         @Value("${agent.pipeline.auto-repair.max-attempts:2}") int autoRepairAttempts,
+                                         @Value("${agent.pipeline.auto-repair.pull-timeout-seconds:180}") long pullTimeoutSeconds,
+                                         @Value("${agent.pipeline.auto-repair.agent-fallback:true}") boolean agentFallback,
+                                         @Value("${agent.pipeline.auto-repair.auto-resume:true}") boolean autoResume) {
         Path root = Path.of(workspaceRoot);
         RunHistoryStore store = persist ? RunHistoryStore.file(root) : RunHistoryStore.disabled();
         // 定义解析：仓库提交覆盖 > 环境固化脚本 > 平台定义 > 规则生成 > agent 兜底
@@ -135,6 +143,9 @@ public class PipelineConfig {
         BuiltInPipelineEngine engine = new BuiltInPipelineEngine(recipes, sandboxed, host, root, store,
                 imagePrefix, repoLocator, deployers, resolver, recipeStore, envVars, envStore,
                 envRuntime, envProvisioner, lazyRecovery, localDevHost, ledger.getIfAvailable());
+        // 失败自动修复策略由配置注入；修复链传 null = 用默认链（镜像自愈 → 发布 Agent 兜底）。
+        engine.withAutoRepair(AutoRepairPolicy.of(autoRepairEnabled, autoRepairAttempts,
+                pullTimeoutSeconds, agentFallback, autoResume), null);
         // 应用关闭时中断执行线程，避免悬挂构建进程。
         // 用虚拟线程工厂创建钩子线程（规约 R04 禁止 new Thread）；
         // 虚拟线程必须为 daemon，而 JVM 退出本身会回收这些轻量线程，关闭语义不受影响。

@@ -114,9 +114,31 @@ public class JschSsh {
         }
     }
 
-    /** 执行远程命令（合并 stderr，返回可读错误）。 */
+    /** 未显式指定预算时的远程命令上限：必须有限，不能让远端 hang 无限拖住调用方。 */
+    private static final long DEFAULT_REMOTE_TIMEOUT_MS = 30_000L;
+    /** 通道建立阶段的超时（与整体预算分开，避免慢握手吃掉整个预算）。 */
+    private static final long CHANNEL_CONNECT_TIMEOUT_MS = 10_000L;
+    /** 远程输出上限，避免异常命令刷爆内存。 */
+    private static final int MAX_REMOTE_OUTPUT_CHARS = 200_000;
+
+    /** 兼容既有调用（连通性探测、测试）：使用默认预算。 */
     public Result run(String host, int port, String user, String authType,
                       String keyPath, String secret, String command) {
+        return run(host, port, user, authType, keyPath, secret, command, DEFAULT_REMOTE_TIMEOUT_MS);
+    }
+
+    /**
+     * 执行远程命令：并行排空 stdout/stderr，并按 {@code timeoutMs} 硬超时。
+     *
+     * <p>原实现先顺序 {@code readAllBytes()} 两个流（stderr 写满就会互锁），
+     * 再 {@code while (!isClosed()) sleep(50)} 无上限等待；上层
+     * {@code SshAccess.run(..., timeoutMs)} 传来的预算被整段丢弃。
+     * 远端命令卡住时设置页「测试连接」/部署会永久转圈且没有任何错误。
+     */
+    public Result run(String host, int port, String user, String authType,
+                      String keyPath, String secret, String command, long timeoutMs) {
+        long budget = Math.max(1_000L, timeoutMs);
+        long deadline = System.nanoTime() + budget * 1_000_000L;
         Session session = null;
         ChannelExec channel = null;
         try {
@@ -125,19 +147,30 @@ public class JschSsh {
             channel.setCommand(command);
             InputStream out = channel.getInputStream();
             InputStream err = channel.getErrStream();
-            channel.connect(10_000);
-            String stdout = readAll(out);
-            String stderr = readAll(err);
-            while (!channel.isClosed()) {
-                Thread.sleep(50);
+            channel.connect((int) Math.min(CHANNEL_CONNECT_TIMEOUT_MS, budget));
+            StringBuilder stdout = new StringBuilder();
+            StringBuilder stderr = new StringBuilder();
+            Thread outPump = Thread.ofVirtual().start(() -> pump(out, stdout));
+            Thread errPump = Thread.ofVirtual().start(() -> pump(err, stderr));
+
+            boolean closed = awaitClosed(channel, deadline, outPump, errPump);
+            joinQuietly(outPump);
+            joinQuietly(errPump);
+            if (!closed) {
+                return Result.failed("SSH 命令超时（" + (budget / 1000) + "s），已断开："
+                        + command);
             }
             if (channel.getExitStatus() == 0) {
-                return Result.ok(stdout);
+                return Result.ok(stdout.toString().trim());
             }
-            return Result.failed(stderr.isBlank() ? stdout : stderr);
+            String reason = stderr.toString().trim();
+            return Result.failed(reason.isBlank() ? stdout.toString().trim() : reason);
         } catch (JSchException e) {
             return Result.failed(friendly(e));
         } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             return Result.failed("SSH 执行失败：" + e.getMessage());
         } finally {
             if (channel != null) {
@@ -149,15 +182,63 @@ public class JschSsh {
         }
     }
 
-    /** 上传文件。 */
+    /** 等待通道关闭且两条输出流都已排空；超时返回 false 让 finally 断开连接。 */
+    private boolean awaitClosed(ChannelExec channel, long deadline,
+                                Thread outPump, Thread errPump) throws InterruptedException {
+        while (System.nanoTime() < deadline) {
+            if (channel.isClosed() && !outPump.isAlive() && !errPump.isAlive()) {
+                return true;
+            }
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
+    /** 并行排空单条远程流（按字符解码 + 限长），进程断开时自然结束。 */
+    private static void pump(InputStream in, StringBuilder sink) {
+        try (var reader = new java.io.InputStreamReader(in, StandardCharsets.UTF_8)) {
+            char[] buffer = new char[4096];
+            int read;
+            while ((read = reader.read(buffer)) >= 0) {
+                synchronized (sink) {
+                    sink.append(buffer, 0, read);
+                    int overflow = sink.length() - MAX_REMOTE_OUTPUT_CHARS;
+                    if (overflow > 0) {
+                        sink.delete(0, overflow);
+                    }
+                }
+            }
+        } catch (IOException ignored) {
+            // 通道断开时流会关闭，属正常收尾
+        }
+    }
+
+    private static void joinQuietly(Thread thread) {
+        try {
+            thread.join(3_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 兼容既有调用：上传预算取默认值。 */
     public Result upload(String host, int port, String user, String authType,
                          String keyPath, String secret, Path local, String remotePath) {
+        return upload(host, port, user, authType, keyPath, secret, local, remotePath,
+                DEFAULT_REMOTE_TIMEOUT_MS);
+    }
+
+    /** 上传文件：超时预算通过 JSch 的 session timeout 生效，不再被丢弃。 */
+    public Result upload(String host, int port, String user, String authType,
+                         String keyPath, String secret, Path local, String remotePath,
+                         long timeoutMs) {
         Session session = null;
         ChannelSftp sftp = null;
         try {
             session = open(host, port, user, authType, keyPath, secret);
+            session.setTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1_000L, timeoutMs)));
             sftp = (ChannelSftp) session.openChannel("sftp");
-            sftp.connect(10_000);
+            sftp.connect((int) Math.min(CHANNEL_CONNECT_TIMEOUT_MS, Math.max(1_000L, timeoutMs)));
             try {
                 sftp.mkdir(remotePath.substring(0, remotePath.lastIndexOf('/')));
             } catch (Exception ignored) {
@@ -179,14 +260,6 @@ public class JschSsh {
                 session.disconnect();
             }
         }
-    }
-
-    private String readAll(InputStream in) throws IOException {
-        if (in == null) {
-            return "";
-        }
-        byte[] bytes = in.readAllBytes();
-        return new String(bytes, StandardCharsets.UTF_8).trim();
     }
 
     private String friendly(JSchException e) {

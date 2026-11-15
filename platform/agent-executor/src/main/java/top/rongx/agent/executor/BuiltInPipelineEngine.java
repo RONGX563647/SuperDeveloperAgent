@@ -24,6 +24,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.yaml.snakeyaml.Yaml;
@@ -48,6 +50,7 @@ import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.ImageVersion;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.StagePreview;
+import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.executor.RunHistoryStore.RunSnapshot;
@@ -74,6 +77,12 @@ import top.rongx.agent.executor.RunHistoryStore.RunSnapshot;
 public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private static final Duration STAGE_TIMEOUT = Duration.ofMinutes(5);
+    /** 运行看护：扫描周期 / 落盘间隔 / 无输出心跳 / 强制终态前的宽限。 */
+    private static final long WATCHDOG_TICK_MS = 5_000L;
+    private static final long HEARTBEAT_SAVE_MS = 10_000L;
+    private static final long HEARTBEAT_LOG_MS = 30_000L;
+    private static final long WATCHDOG_GRACE_MS = 5 * 60_000L;
+    private static final long FORCE_TERMINATE_AFTER_MS = 60_000L;
     /** 命令里的 ${var} 占位符（预览展示模板，运行时替换）。 */
     private static final java.util.regex.Pattern PLACEHOLDER =
             java.util.regex.Pattern.compile("\\$\\{([A-Za-z0-9_]+)}");
@@ -100,6 +109,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     /** 有界队列：全局并发上限 4；同一项目同一环境串行由 TriggerScheduler 保证。 */
     private final ExecutorService workers = Executors.newFixedThreadPool(4, Thread.ofVirtual().factory());
+    /**
+     * 运行看护：单线程周期扫描所有 RUNNING 的运行，负责
+     * ① 运行中定期落盘 ② 长时间无输出时写心跳 ③ 超预算请求取消 ④ 仍不收敛时强制终态。
+     * 任何未覆盖的阻塞点（外部 CLI、文件 IO、模型诊断）都不会再留下永久 RUNNING 的幽灵任务。
+     */
+    private final ScheduledExecutorService watchdog =
+            Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
     private final TriggerScheduler scheduler = new TriggerScheduler();
     /** 构建历史持久化（重启可恢复）。 */
     private final RunHistoryStore history;
@@ -127,6 +143,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private final top.rongx.agent.domain.env.EnvProvisioner envProvisioner;
     /** 失败后自动诊断（部署 Agent）；空 = 不介入。 */
     private final top.rongx.agent.domain.run.RunRecoveryAdvisor recoveryAdvisor;
+    /**
+     * 自动修复策略：默认开启「确定性修复 → 平台复核 → 自动续跑」，发布 Agent 作为兜底。
+     * 用装配点注入（不写死环境/镜像/路径），测试也可换成自定义修复链。
+     */
+    private volatile AutoRepairPolicy autoRepairPolicy = AutoRepairPolicy.defaults();
+    private volatile List<FailureRepair> autoRepairs = List.of();
     /** 多服务部署（test 前后端分离）直接使用 docker 实现。 */
     private final DockerDeployer dockerDeployer = new DockerDeployer();
 
@@ -139,7 +161,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     /** 应用关闭时停掉执行线程：不再接新任务，正在跑的构建被中断（避免悬挂进程）。 */
     @Override
     public void close() {
-        workers.shutdownNow();
+        watchdog.shutdownNow();
+        // 优雅关闭：终态对外可见后，doExecute 的 finally 还要清理 worktree 并再次落盘。
+        // 直接 shutdownNow 会打断这段收尾，在 Windows 上留下删不掉的工作树与半截历史。
+        workers.shutdown();
+        try {
+            if (!workers.awaitTermination(3, TimeUnit.SECONDS)) {
+                workers.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            workers.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     public BuiltInPipelineEngine(ActionResolver recipes, ActionRunner sandboxed,
@@ -367,6 +400,28 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         this.imageVersions = workspaceRoot == null
                 ? ImageVersionStore.disabled() : ImageVersionStore.file(workspaceRoot);
         restoreHistory();
+        watchdog.scheduleAtFixedRate(this::watchdogTick, WATCHDOG_TICK_MS, WATCHDOG_TICK_MS,
+                TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * 装配自动修复策略与修复链（同包调用：Spring 配置与单测）。
+     * {@code repairs} 为空时按策略构造默认链：镜像自愈优先，发布 Agent 兜底。
+     */
+    BuiltInPipelineEngine withAutoRepair(AutoRepairPolicy policy, List<FailureRepair> repairs) {
+        this.autoRepairPolicy = policy == null ? AutoRepairPolicy.disabled() : policy;
+        this.autoRepairs = repairs == null ? List.of() : List.copyOf(repairs);
+        return this;
+    }
+
+    private List<FailureRepair> repairChain() {
+        if (!autoRepairs.isEmpty()) {
+            return autoRepairs;
+        }
+        List<FailureRepair> chain = new ArrayList<>();
+        chain.add(new ImagePullRepair());
+        chain.add(new AgentDiagnosisRepair(autoRepairPolicy.agentFallback()));
+        return chain;
     }
 
     // ---------------------------------------------------------------- PipelineEngine
@@ -554,26 +609,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (now - dockerProbeAt < 10_000) {
             return dockerProbeOk;
         }
-        boolean ok;
-        try {
-            Process process = new ProcessBuilder("docker", "version", "--format", "{{.Server.Version}}")
-                    .redirectErrorStream(true).start();
-            process.getInputStream().readAllBytes();
-            if (!process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                ok = false;
-            } else {
-                ok = process.exitValue() == 0;
-            }
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            ok = false;
-        }
-        dockerProbeOk = ok;
+        // 有界探测：原先 readAllBytes() 在 waitFor 之前，docker CLI 不退出时 3s 超时形同虚设，
+        // 会让 dry-run 门控与界面下拉永久卡住。走共用原语：并行读流 + 硬超时 + 明确结果。
+        dockerProbeOk = BoundedCommand.run(
+                List.of("docker", "version", "--format", "{{.Server.Version}}"), 3_000L).ok();
         dockerProbeAt = now;
-        return ok;
+        return dockerProbeOk;
     }
 
     /**
@@ -607,23 +648,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     /** git show 单个文件；该提交里不存在时返回 null。 */
     private static String gitShow(Path repoDir, String gitSha, String relPath) {
-        try {
-            Process process = new ProcessBuilder("git", "-C", repoDir.toString(),
-                    "show", gitSha + ":" + relPath)
-                    .redirectErrorStream(true)
-                    .start();
-            if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                return null;
-            }
-            String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            return process.exitValue() == 0 ? out : null;
-        } catch (IOException e) {
-            return null;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
-        }
+        // waitFor 之后再读流同样不安全：输出超过管道缓冲时子进程会阻塞在写，
+        // 永远等不到退出。统一用有界原语并行排空输出。
+        BoundedCommand.Outcome outcome = BoundedCommand.run(
+                List.of("git", "-C", repoDir.toString(), "show", gitSha + ":" + relPath),
+                repoDir, 10_000L);
+        return outcome.ok() ? outcome.output() : null;
     }
 
     /** 删除临时目录（预览用；失败不影响结果）。 */
@@ -1099,6 +1129,33 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return s == null ? StageStatus.PENDING : s.status;
     }
 
+    /** 运行中阶段进度：供工作台渲染「当前阶段 / 总阶段」与运行中占位。 */
+    @Override
+    public PipelineEngine.RunProgress progress(String runId) {
+        RunState s = runs.get(runId);
+        if (s == null) {
+            return null;
+        }
+        long now = System.currentTimeMillis();
+        return new PipelineEngine.RunProgress(s.currentStageId, s.stageTotal, s.stages.size(),
+                now - s.createdAt,
+                s.stageStartedAt > 0 ? now - s.stageStartedAt : 0,
+                s.cancelled, s.forceTerminated);
+    }
+
+    /** 自动修复状态：供工作台显示「已自动修复 / 已自动续跑 / 仍需人工」。 */
+    @Override
+    public PipelineEngine.AutoRepairView autoRepair(String runId) {
+        RunState s = runs.get(runId);
+        if (s == null) {
+            return null;
+        }
+        return new PipelineEngine.AutoRepairView(autoRepairPolicy.enabled(),
+                s.autoRepairAttempts, autoRepairPolicy.maxAttempts(), s.autoRepairResumed,
+                s.autoRepairLastAction == null ? "" : s.autoRepairLastAction,
+                s.autoRepairLastResult == null ? "" : s.autoRepairLastResult);
+    }
+
     /** 该 runId 是否真实存在（用于把"不存在"与"排队中"区分开）。 */
     public boolean hasRun(String runId) {
         return runId != null && runs.containsKey(runId);
@@ -1115,6 +1172,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         RunState s = runs.get(runId);
         if (s != null && !s.status.isTerminal()) {
             s.cancelled = true;
+            s.cancelRequestedAt = System.currentTimeMillis();
+            // 立即给出可见反馈；真正的终止由各阻塞点的 200ms 取消检查完成，
+            // 看护会在 60s 后仍未收敛时强制终态。
+            s.log.append("[cancel] 已请求取消，正在终止当前命令…\n");
             history.save(s.snapshot());
         }
     }
@@ -1298,14 +1359,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     private boolean dockerImageExists(String tag) {
-        try {
-            Process p = new ProcessBuilder("docker", "image", "inspect", tag)
-                    .redirectErrorStream(true).start();
-            p.getInputStream().readAllBytes();
-            return p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0;
-        } catch (Exception e) {
-            return false;
-        }
+        // 只读预检：缺镜像是配置问题，5s 内给出 false，由调用方转成 E-705 明确阻塞原因。
+        return BoundedCommand.run(List.of("docker", "image", "inspect", tag), 5_000L).ok();
     }
 
     @Override
@@ -1408,9 +1463,93 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     // ---------------------------------------------------------------- 执行
 
+    // ---------------------------------------------------------------- 运行看护
+
+    /**
+     * 周期扫描所有进行中的运行：定期落盘、无输出时写心跳、超预算请求取消、
+     * 取消后仍不收敛则强制终态。
+     *
+     * <p>动作级超时只覆盖 {@link ProcessExecutor} 管辖的进程；准备阶段、收尾清理、
+     * 文件 IO、失败自动诊断等都在其外。看护是最后一道防线，保证任何阻塞点都不会
+     * 让工作台永远显示「运行中」。
+     */
+    private void watchdogTick() {
+        long now = System.currentTimeMillis();
+        for (RunState s : runs.values()) {
+            if (s.status != StageStatus.RUNNING) {
+                continue;
+            }
+            try {
+                heartbeat(s, now);
+            } catch (Exception e) {
+                log.warn("运行看护异常 run={}：{}", s.runId, e.getMessage());
+            }
+        }
+    }
+
+    private void heartbeat(RunState s, long now) {
+        // 1. 运行中定期落盘：后端崩溃/重启后历史不再是 PENDING 空日志
+        if (now - s.lastSavedAt >= HEARTBEAT_SAVE_MS) {
+            history.save(s.snapshot());
+            s.lastSavedAt = now;
+        }
+        // 2. 日志长时间无变化 → 写心跳行（mvn -q 之类静默命令也能看出"还活着"）
+        synchronized (s.log) {
+            if (s.log.length() != s.lastLogLength) {
+                s.lastLogLength = s.log.length();
+                s.lastLogChangeAt = now;
+            } else if (now - s.lastLogChangeAt >= HEARTBEAT_LOG_MS) {
+                s.log.append("[heartbeat] 运行中 · 已耗时 ")
+                        .append((now - s.createdAt) / 1000).append("s · 当前阶段 ")
+                        .append(s.currentStageId == null ? "准备中" : s.currentStageId)
+                        .append("（暂无新输出，进程仍在运行）\n");
+                s.lastLogLength = s.log.length();
+                s.lastLogChangeAt = now;
+            }
+        }
+        // 3. 超出总预算：先请求取消，所有受管进程会在 200ms 内被终止并走正常失败路径。
+        // 自动修复期间不按原预算误杀：pull（硬超时）与 Agent 诊断（5 分钟）本来就有界，
+        // 且续跑开始时会把新增耗时计入 maxRunMillis。
+        if (!s.autoRepairing && !s.cancelled && now - s.createdAt > s.maxRunMillis) {
+            s.cancelled = true;
+            s.cancelRequestedAt = now;
+            synchronized (s.log) {
+                s.log.append("[watchdog] 运行超过总预算 ")
+                        .append(s.maxRunMillis / 60_000).append(" 分钟，已请求取消\n");
+            }
+        }
+        // 4. 仍不收敛（卡在没有取消检查点的调用）→ 强制终态并落盘
+        if (s.cancelRequestedAt > 0 && now - s.cancelRequestedAt > FORCE_TERMINATE_AFTER_MS) {
+            forceTerminate(s, "E-302 运行超时且无法中断，已强制结束");
+        }
+    }
+
+    private void forceTerminate(RunState s, String reason) {
+        synchronized (s) {
+            if (s.status.isTerminal()) {
+                return;
+            }
+            s.forceTerminated = true;
+            s.cancelled = true;
+            s.status = StageStatus.TIMEOUT;
+            synchronized (s.log) {
+                s.log.append("[watchdog] ").append(reason).append('\n');
+            }
+            s.stages.add(StageResult.failed("watchdog", 124, "E-302", reason, 0));
+            history.save(s.snapshot());
+            recordLedger(s);
+            scheduler.complete(s.projectId, s.env);
+        }
+    }
+
     private void execute(RunState state) {
         try {
             state.status = StageStatus.RUNNING;
+            state.lastSavedAt = System.currentTimeMillis();
+            state.lastLogChangeAt = state.lastSavedAt;
+            state.maxRunMillis = WATCHDOG_GRACE_MS;
+            state.cancelRequestedAt = 0;
+            state.forceTerminated = false;
             doExecute(state);
             recoverIfNeeded(state);
         } catch (Throwable e) {
@@ -1421,10 +1560,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.stages.add(StageResult.failed("engine", 1, "E-2xx", why, 0));
             state.status = StageStatus.FAILED;
         } finally {
-            // 每次运行结束（含异常）都落盘，保证重启后可查询历史
-            history.save(state.snapshot());
-            recordLedger(state);
-            scheduler.complete(state.projectId, state.env);
+            if (!state.forceTerminated) {
+                // 每次运行结束（含异常）都落盘，保证重启后可查询历史。
+                // 看护已强制终态时跳过，避免重复 complete 或把 TIMEOUT 覆盖回 RUNNING。
+                history.save(state.snapshot());
+                recordLedger(state);
+                scheduler.complete(state.projectId, state.env);
+            }
         }
     }
 
@@ -1481,43 +1623,248 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
-     * 失败自动诊断：仅 UI 触发的非生产运行进入，由部署 Agent 读日志、自愈环境并给出修复结论。
+     * 失败处理：先做**平台可自证**的自动修复，复核通过就自动从失败阶段续跑；
+     * 修复不成功或策略关闭时才回落到「发布 Agent 诊断 + 人工重跑」。
      *
-     * <p>诊断期间把状态放回 RUNNING：前端按"终态"停止轮询日志，若先置 FAILED 再让 Agent
-     * 工作，用户就看不到 {@code [agent]} 步骤。Agent 自己触发的运行（actor=agent）不进入，
-     * 避免"触发 → 失败 → 再触发"的递归。
+     * <p>与旧行为的区别：以前只有一句「自动调用发布 Agent 诊断与修复…」，诊断结论不会让
+     * 运行继续，镜像缺失这类确定性故障也必须人工 pull + 点重跑。现在「修复 → 验证 →
+     * 续跑」由执行器闭环完成，模型只在确定性修复失败时兜底。
+     *
+     * <p>约束：生产 / Agent 自触发不进入（避免递归）；诊断期间状态回 RUNNING 让前端继续
+     * 轮询日志；同一失败周期幂等，一次运行最多 {@link AutoRepairPolicy#maxAttempts()} 轮。
      */
     private void recoverIfNeeded(RunState state) {
-        if (recoveryAdvisor == null || !recoveryAdvisor.available()
-                || state.status != StageStatus.FAILED) {
+        if (state.status != StageStatus.FAILED || state.forceTerminated || state.cancelled
+                || state.recoveryDone) {
             return;
         }
         if ("prod".equalsIgnoreCase(state.env)
                 || state.actor == null || !state.actor.startsWith("ui:")) {
             return;
         }
+        state.recoveryDone = true;
+        if (!autoRepairPolicy.enabled()) {
+            agentDiagnosisOnly(state);
+            return;
+        }
         state.status = StageStatus.RUNNING;
-        state.log.append("[agent] 运行失败，自动调用发布 Agent 诊断与修复…\n");
+        state.autoRepairing = true;
+        state.cancelRequestedAt = 0;
+        appendLog(state, "[autofix] 运行失败，开始自动修复（最多 "
+                + autoRepairPolicy.maxAttempts() + " 轮；只有平台复核通过才自动续跑）\n");
         try {
-            String log = state.log.toString();
-            if (log.length() > 20000) {
-                log = log.substring(log.length() - 20000);
+            AutoRepairCoordinator.Result result = new AutoRepairCoordinator(
+                    autoRepairPolicy, repairChain()).run(new AutoRepairCoordinator.Host() {
+                        @Override
+                        public FailureRepair.Diagnosis diagnosis(int attempt) {
+                            return diagnoseFailure(state, attempt);
+                        }
+
+                        @Override
+                        public FailureRepair.Context context(int attempt) {
+                            return repairContext(state);
+                        }
+
+                        @Override
+                        public void log(String line) {
+                            appendLog(state, line);
+                        }
+
+                        @Override
+                        public boolean cancelled() {
+                            return state.cancelled || state.forceTerminated;
+                        }
+
+                        @Override
+                        public boolean resume(String stageId) {
+                            return resumeFromFailedStage(state, stageId);
+                        }
+                    });
+            state.autoRepairAttempts = result.attempts();
+            state.autoRepairResumed = result.resumed();
+            state.autoRepairLastAction = result.lastAction();
+            state.autoRepairLastResult = result.lastResult();
+            if (result.succeeded()) {
+                appendLog(state, "[autofix] ✅ 自动修复完成，运行已恢复成功（无需人工介入）\n");
+            } else {
+                appendLog(state, "[autofix] 自动修复未收敛：" + result.lastResult()
+                        + " · 共 " + result.attempts() + " 轮 · 运行保持失败，请查看结论或手动重跑\n");
             }
-            List<String> lines = recoveryAdvisor.advise(new top.rongx.agent.domain.run.RunRecoveryAdvisor.Context(
-                    state.runId, state.projectId, state.env, state.pipelineId, state.gitSha,
-                    state.actor, log));
+            history.save(state.snapshot());
+        } finally {
+            state.autoRepairing = false;
+            if (state.status == StageStatus.RUNNING) {
+                state.status = StageStatus.FAILED;
+            }
+        }
+    }
+
+    /** 策略关闭时的原行为：只把发布 Agent 的诊断步骤写进日志，不改变终态。 */
+    private void agentDiagnosisOnly(RunState state) {
+        if (recoveryAdvisor == null || !recoveryAdvisor.available()) {
+            return;
+        }
+        state.status = StageStatus.RUNNING;
+        appendLog(state, "[agent] 运行失败，自动调用发布 Agent 诊断与修复…\n");
+        try {
+            List<String> lines = recoveryAdvisor.advise(
+                    new top.rongx.agent.domain.run.RunRecoveryAdvisor.Context(
+                            state.runId, state.projectId, state.env, state.pipelineId,
+                            state.gitSha, state.actor, tailOfLog(state, 20_000)));
             if (lines == null || lines.isEmpty()) {
-                state.log.append("[agent] 本次未产生诊断步骤\n");
+                appendLog(state, "[agent] 本次未产生诊断步骤\n");
             } else {
                 for (String line : lines) {
-                    state.log.append("[agent] ").append(line).append('\n');
+                    appendLog(state, "[agent] " + line + "\n");
                 }
             }
         } catch (Throwable e) {
-            state.log.append("[agent] 自动诊断异常：")
-                    .append(e.getMessage() == null ? e.toString() : e.getMessage()).append('\n');
+            appendLog(state, "[agent] 自动诊断异常："
+                    + (e.getMessage() == null ? e.toString() : e.getMessage()) + "\n");
         } finally {
             state.status = StageStatus.FAILED;
+        }
+    }
+
+    /** 当前失败快照：失败阶段、错误码、日志尾部、日志里出现的缺失镜像名。 */
+    private FailureRepair.Diagnosis diagnoseFailure(RunState state, int attempt) {
+        StageResult failed = lastFailedStage(state);
+        String code = failed == null ? "" : String.valueOf(failed.errorCode());
+        String message = failed == null ? "运行失败"
+                : failed.errorSummary() == null ? code : failed.errorSummary();
+        String tail = tailOfLog(state, 20_000);
+        return new FailureRepair.Diagnosis(state.runId,
+                failed == null ? null : failed.stageId(), code, message, tail,
+                FailureRepair.Diagnosis.missingImage(message, tail), attempt,
+                autoRepairPolicy.agentFallback());
+    }
+
+    private static StageResult lastFailedStage(RunState state) {
+        for (int i = state.stages.size() - 1; i >= 0; i--) {
+            StageResult r = state.stages.get(i);
+            if (r.status() == StageStatus.FAILED || r.status() == StageStatus.TIMEOUT) {
+                return r;
+            }
+        }
+        return null;
+    }
+
+    private static String tailOfLog(RunState state, int max) {
+        String text;
+        synchronized (state.log) {
+            text = state.log.toString();
+        }
+        return text.length() > max ? text.substring(text.length() - max) : text;
+    }
+
+    /** 线程安全地追加一行日志，并刷新「最后输出时间」避免看护误写心跳。 */
+    private static void appendLog(RunState state, String line) {
+        synchronized (state.log) {
+            state.log.append(line);
+        }
+        state.lastLogChangeAt = System.currentTimeMillis();
+    }
+
+    /** 修复上下文：命令只由管理员配置的沙箱生成，日志/模型提供的字符串不进入 argv。 */
+    private FailureRepair.Context repairContext(RunState state) {
+        DockerSandbox sandbox = sandboxed instanceof DockerActionRunner dockerRunner
+                ? dockerRunner.sandbox() : null;
+        return new FailureRepair.Context(
+                () -> state.cancelled || state.forceTerminated,
+                line -> appendLog(state, line),
+                (argv, timeoutMs, live) -> new ProcessExecutor().exec(
+                        workspaceRoot == null ? Path.of(".") : workspaceRoot,
+                        argv, timeoutMs, new StringBuilder(),
+                        () -> state.cancelled || state.forceTerminated, live),
+                autoRepairPolicy.pullTimeoutMs(),
+                sandbox == null ? null : sandbox.imagePullCommand(),
+                sandbox == null ? null : sandbox.imageInspectCommand(),
+                sandbox == null ? null : sandbox.image(),
+                recoveryAdvisor, state.projectId, state.env, state.pipelineId,
+                state.gitSha, state.actor, tailOfLog(state, 20_000));
+    }
+
+    /**
+     * 自动续跑：复用保留的构建现场，只重跑失败阶段及其后阶段。
+     *
+     * <p>与人工「从失败阶段继续」共用 {@link #prepareResume}，行为完全一致；
+     * 区别只是触发者是平台自己，且不会再次进入失败自愈（由协调器统一控制轮次）。
+     *
+     * @return 运行是否已恢复成功
+     */
+    private boolean resumeFromFailedStage(RunState state, String stageId) {
+        PipelineDefinition definition = state.definition;
+        Path runDir = state.keptRunDir;
+        if (definition == null || runDir == null || !Files.isDirectory(runDir)
+                || isLocalDev(state) || state.deployImage != null) {
+            appendLog(state, "[autofix] 无可用构建现场（本机部署/按版本部署），跳过自动续跑\n");
+            return false;
+        }
+        int idx = -1;
+        for (int i = 0; i < definition.stages().size(); i++) {
+            if (definition.stages().get(i).id().equals(stageId)) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            appendLog(state, "[autofix] 失败阶段 " + stageId + " 不在当前定义中，跳过自动续跑\n");
+            return false;
+        }
+        Map<String, String> vars = state.keptVars;
+        if (vars == null) {
+            String tag = imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
+            vars = Map.of("gitSha", state.gitSha,
+                    "gitSha7", state.gitSha.substring(0, 7), "tag", tag);
+        }
+        prepareResume(state, definition, idx);
+        state.status = StageStatus.RUNNING;
+        state.cancelled = false;
+        state.forceTerminated = false;
+        state.cancelRequestedAt = 0;
+        state.lastSavedAt = System.currentTimeMillis();
+        state.lastLogChangeAt = state.lastSavedAt;
+        // 自愈 + 续跑是新增的执行周期，不能让原来的总预算把刚恢复的运行再次杀掉
+        state.maxRunMillis += autoRepairPolicy.pullTimeoutMs() + 600_000L;
+        appendLog(state, "[retry] 自动修复后从阶段 " + stageId + " 继续（复用构建现场）\n");
+        try {
+            runStagesFrom(state, definition, runDir, vars, idx);
+        } catch (Throwable e) {
+            String why = e.getMessage() == null ? e.toString() : e.getMessage();
+            appendLog(state, "[autofix] 自动续跑异常：" + why + "\n");
+            state.stages.add(StageResult.failed("engine", 1, "E-2xx", why, 0));
+            state.status = StageStatus.FAILED;
+        }
+        if (state.status == StageStatus.SUCCEEDED) {
+            if (state.keptBare != null) {
+                cleanupWorktree(state.keptBare, runDir, state);
+            }
+            state.keptRunDir = null;
+            state.keptBare = null;
+        }
+        history.save(state.snapshot());
+        return state.status == StageStatus.SUCCEEDED;
+    }
+
+    /** 保留失败阶段之前的结果，回收该阶段及之后产生的产物，避免续跑后产物重复。 */
+    private void prepareResume(RunState state, PipelineDefinition definition, int idx) {
+        List<PipelineDefinition.StageDef> all = definition.stages();
+        java.util.Set<String> before = new java.util.HashSet<>();
+        for (int i = 0; i < idx; i++) {
+            before.add(all.get(i).id());
+        }
+        List<StageResult> prefix = new ArrayList<>();
+        for (StageResult r : state.stages) {
+            if (before.contains(r.stageId()) && prefix.size() < idx) {
+                prefix.add(r);
+            }
+        }
+        state.stages.clear();
+        state.stages.addAll(prefix);
+        Integer mark = state.artifactMark.get(all.get(idx).id());
+        int cut = mark == null ? state.artifacts.size() : Math.min(mark, state.artifacts.size());
+        if (cut < state.artifacts.size()) {
+            state.artifacts.subList(cut, state.artifacts.size()).clear();
         }
     }
 
@@ -1622,14 +1969,22 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             String tag = state.deployImage != null ? state.deployImage
                     : imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
             if (state.deployImage == null) {
-                state.log.append("[image] 镜像版本 ").append(versionOf(state))
-                        .append(" · 本地镜像 ").append(tag).append('\n');
+                if ("verify".equals(state.pipelineId)) {
+                    // 检查构建不打包、不记账：别让日志宣称"镜像版本 vN"
+                    // 而环境面板显示"这个环境还没有镜像版本"。
+                    state.log.append("[image] 检查构建：跳过镜像打包，不记录环境镜像版本\n");
+                } else {
+                    state.log.append("[image] 镜像版本 ").append(versionOf(state))
+                            .append(" · 本地镜像 ").append(tag).append('\n');
+                }
             }
             Map<String, String> vars = Map.of(
                     "gitSha", state.gitSha,
                     "gitSha7", state.gitSha.substring(0, 7),
                     "tag", tag);
             state.definition = definition;
+            // 自动续跑要复用同一份变量（tag / sha），不能靠重建，否则按版本部署会串 tag
+            state.keptVars = vars;
 
             // E-508：部署配置必须与默认分支一致（防"改 YAML 即发布"绕过 review）
             if (!deployGuard(bare, runDir, definition, state)) {
@@ -1677,7 +2032,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private void runStagesFrom(RunState state, PipelineDefinition definition, Path runDir,
                                Map<String, String> vars, int from) {
         List<PipelineDefinition.StageDef> all = definition.stages();
+        // +1 = 引擎内置的 checkout 阶段（forDeployOnly 跳过检出时不计）
+        state.stageTotal = state.deployImage == null ? all.size() + 1 : all.size();
         for (int i = from; i < all.size(); i++) {
+            if (state.forceTerminated) {
+                return; // 看护已置终态，执行线程不得再改状态
+            }
             if (state.cancelled) {
                 state.status = StageStatus.CANCELLED;
                 return;
@@ -1721,6 +2081,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         } else {
             state.log.append("[recipe] 本次是检查构建（未部署），不固化环境脚本、不更新回滚锚点\n");
         }
+        if (state.forceTerminated) {
+            return;
+        }
         state.status = StageStatus.SUCCEEDED;
         // worktree 马上会被清理：先把文件产物搬出来，否则历史里的 ref 会立刻失效
         preserveArtifacts(state, runDir);
@@ -1746,6 +2109,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (isLocalDev(state)) {
             state.stages.clear();
             state.artifacts.clear();
+            state.recoveryDone = false;
+            state.autoRepairAttempts = 0;
             state.log.append("[retry] 重新执行本机部署\n");
             state.status = StageStatus.RUNNING;
             state.cancelled = false;
@@ -1770,23 +2135,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             throw new IllegalArgumentException("阶段不可重试：" + stageId + "（请整条重跑）");
         }
         // 保留该阶段之前的结果，并回收该阶段及之后产生的产物（避免重试后产物重复）
-        java.util.Set<String> before = new java.util.HashSet<>();
-        for (int i = 0; i < idx; i++) {
-            before.add(all.get(i).id());
-        }
-        List<StageResult> prefix = new ArrayList<>();
-        for (StageResult r : state.stages) {
-            if (before.contains(r.stageId()) && prefix.size() < idx) {
-                prefix.add(r);
-            }
-        }
-        state.stages.clear();
-        state.stages.addAll(prefix);
-        Integer mark = state.artifactMark.get(stageId);
-        int cut = mark == null ? state.artifacts.size() : Math.min(mark, state.artifacts.size());
-        if (cut < state.artifacts.size()) {
-            state.artifacts.subList(cut, state.artifacts.size()).clear();
-        }
+        prepareResume(state, definition, idx);
+        // 人工重试是一轮新的失败周期：允许再次进入自动修复，但计数从头开始
+        state.recoveryDone = false;
+        state.autoRepairAttempts = 0;
+        state.autoRepairResumed = false;
 
         String tag = imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
         Map<String, String> vars = Map.of(
@@ -1805,6 +2158,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private void executeRetry(RunState state, PipelineDefinition definition, Path runDir,
                               Map<String, String> vars, int from) {
+        // 重试是一次新的运行周期：清掉上次的取消/强杀标记，否则看护会在 60s 后误杀
+        state.cancelRequestedAt = 0;
+        state.forceTerminated = false;
+        state.lastSavedAt = System.currentTimeMillis();
+        state.lastLogChangeAt = state.lastSavedAt;
+        state.maxRunMillis = WATCHDOG_GRACE_MS;
         try {
             runStagesFrom(state, definition, runDir, vars, from);
             recoverIfNeeded(state);
@@ -1822,7 +2181,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 state.keptBare = null;
             }
             history.save(state.snapshot());
-            scheduler.complete(state.projectId, state.env);
+            if (!state.forceTerminated) {
+                scheduler.complete(state.projectId, state.env);
+            }
         }
     }
 
@@ -2318,7 +2679,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private boolean runStage(RunState state, PipelineDefinition.StageDef stage,
                              Path runDir, Map<String, String> vars) {
+        if (state.forceTerminated) {
+            return false;
+        }
         long start = System.nanoTime();
+        state.currentStageId = stage.id();
+        state.currentStageIndex = state.stages.size();
+        state.stageStartedAt = System.currentTimeMillis();
+        // 看护总预算按实际配方超时累加（内置阶段按默认 5m 计）
+        state.maxRunMillis += STAGE_TIMEOUT.toMillis();
+        state.log.append('[').append(stage.id()).append("] 阶段开始 · 第 ")
+                .append(state.currentStageIndex + 1).append('/').append(state.stageTotal)
+                .append(" 阶段\n");
         try {
             if ("git-checkout".equals(stage.type())) {
                 return true; // 已在 execute 里完成
@@ -2345,6 +2717,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
             ActionSpec original = resolved.get();
             ActionSpec substituted = substitute(original, vars);
+            state.maxRunMillis += Math.max(0, substituted.timeout().toMillis()
+                    - STAGE_TIMEOUT.toMillis() + 60_000L);
             ActionRunner runner = selectRunner(stage);
             // monorepo：stage 可在子目录执行（如 backend / frontend），
             // 但产物与镜像仍按仓库根记账，避免各模块配方各写一套路径。
@@ -2357,6 +2731,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                             .map(argv -> renderCommand(argv, shell))
                             .collect(Collectors.joining(" && ")))
                     .append('\n');
+            // 真实执行的命令：容器模式展开成 docker run …。只显示配方里的 mvn -q 时，
+            // 用户无法判断到底跑在宿主还是容器、用的哪个镜像、卡在哪一步。
+            if (runner instanceof DockerActionRunner dockerRunner
+                    && !substituted.steps().isEmpty()) {
+                List<String> effective = dockerRunner.sandbox()
+                        .wrap(stageDir, substituted.steps().get(0));
+                state.log.append('[').append(stage.id()).append("] 实际命令: ")
+                        .append(renderCommand(effective, shell)).append('\n');
+            }
+            state.log.append('[').append(stage.id()).append("] 预算 ")
+                    .append(substituted.timeout().toMinutes()).append("m · 开始执行\n");
             // 边跑边写：动作输出实时进入运行日志，页面轮询即可逐行看到构建进度。
             StageLog live = new StageLog(state, stage.id());
             ActionResult result = runner.run(stageDir, substituted, () -> state.cancelled, live);
@@ -2391,8 +2776,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
             return result.result().status() == StageStatus.SUCCEEDED;
         } catch (Exception e) {
-            state.stages.add(StageResult.failed(stage.id(), 1, "E-2xx", e.getMessage(), elapsed(start)));
+            String why = e.getMessage() == null ? e.toString() : e.getMessage();
+            state.stages.add(StageResult.failed(stage.id(), 1, "E-2xx", why, elapsed(start)));
             return false;
+        } finally {
+            state.currentStageId = null;
+            state.stageStartedAt = 0;
         }
     }
 
@@ -2474,20 +2863,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             List<ImageVersion> stale = rows.subList(KEEP_IMAGES, rows.size());
             int removed = 0;
             for (ImageVersion v : stale) {
-                String output = "";
-                try {
-                    Process p = new ProcessBuilder("docker", "rmi", "-f", v.tag())
-                            .redirectErrorStream(true).start();
-                    output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-                    if (!p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS) || p.exitValue() != 0) {
-                        state.log.append("[image] 清理镜像失败（保留账本外记录不占空间）：")
-                                .append(v.tag()).append(" — ").append(shorten(output)).append('\n');
-                    } else {
-                        removed++;
-                    }
-                } catch (Exception e) {
-                    state.log.append("[image] 清理镜像跳过：").append(v.tag())
-                            .append("（").append(e.getMessage()).append("）\n");
+                BoundedCommand.Outcome outcome = BoundedCommand.run(
+                        List.of("docker", "rmi", "-f", v.tag()), 20_000L);
+                if (!outcome.ok()) {
+                    state.log.append("[image] 清理镜像失败（保留账本外记录不占空间）：")
+                            .append(v.tag()).append(" — ")
+                            .append(shorten(outcome.detail().isBlank()
+                                    ? outcome.output().trim() : outcome.detail()))
+                            .append('\n');
+                } else {
+                    removed++;
                 }
                 // 账本只保留最近 KEEP_IMAGES 个：镜像没删掉也要移出，否则列表无限增长
                 imageVersions.remove(state.projectId, state.env, v.tag());
@@ -2687,7 +3072,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
         // 部署目标自愈：产物是镜像就不可能用 HOST 跑起来，产物是 jar 就没必要再起容器。
         // 环境策略/前端默认值都可能给出错的目标，这里按本次真实产物纠正，并在日志说明。
-        DeployTarget reconciled = reconcileTarget(state, target, image, rollback, runDir, spec);
+        // 但触发参数显式指定的目标是操作者的明确意图，不能被自愈悄悄改写：
+        // 只记录风险并交给部署器如实失败（例如 HOST 找不到可运行 jar）。
+        boolean explicitTarget = !rollback && state.deployTargetOverride != null
+                && !state.deployTargetOverride.isBlank();
+        DeployTarget reconciled = reconcileTarget(state, target, image, rollback, runDir, spec,
+                explicitTarget);
         if (reconciled == null) {
             state.stages.add(StageResult.failed(stageId, 1, "E-504",
                     "无法确定部署目标：本次既没有镜像也没有可运行 jar。"
@@ -2921,12 +3311,21 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      */
     private DeployTarget reconcileTarget(RunState state, DeployTarget requested, String image,
                                          boolean rollback, Path runDir,
-                                         PipelineDefinition.DeploySpec spec) {
+                                         PipelineDefinition.DeploySpec spec,
+                                         boolean explicitTarget) {
         if (rollback) {
             return requested; // 回滚沿用已有产物，不按本次构建判断
         }
         boolean hasImage = image != null && !image.isBlank();
         boolean hasJar = hasRunnableJar(runDir, spec.artifact());
+        if (!hasImage && !hasJar && spec.services().isEmpty()) {
+            return null; // E-504：没有任何可部署产物，显式目标也不能凭空部署
+        }
+        if (explicitTarget) {
+            state.log.append("[deploy] 触发参数显式指定目标 ").append(requested.wireName())
+                    .append("，跳过产物自愈（与产物不匹配时由部署器如实报错）\n");
+            return requested;
+        }
         if (requested == DeployTarget.HOST) {
             if (hasJar) {
                 return DeployTarget.HOST;
@@ -3614,7 +4013,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         final long createdAt = System.currentTimeMillis();
         final List<StageResult> stages = new ArrayList<>();
         final List<ArtifactRef> artifacts = new ArrayList<>();
-        final StringBuilder log = new StringBuilder();
+        // 线程安全：执行线程写阶段日志、看护线程写心跳，两条线程可能同时 append。
+        final StringBuffer log = new StringBuffer();
         /**
          * 本次运行注入过的密钥明文：写日志前整段替换。
          * 只放在内存，不落库；空集合表示尚未解析环境。
@@ -3656,8 +4056,35 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         /** 失败运行保留的构建现场（配合「从失败阶段继续」）；清理后为 null。 */
         volatile Path keptRunDir;
         volatile Path keptBare;
+        /** 自动续跑复用的变量（tag / gitSha）：与本次定义严格一致。 */
+        volatile Map<String, String> keptVars;
+        /** 同一失败周期只处理一次：避免 [agent]/[autofix] 日志被重复追加。 */
+        volatile boolean recoveryDone;
+        /** 自动修复进行中：看护跳过运行预算检查（修复动作自身有硬超时）。 */
+        volatile boolean autoRepairing;
+        volatile int autoRepairAttempts;
+        volatile boolean autoRepairResumed;
+        volatile String autoRepairLastAction;
+        volatile String autoRepairLastResult;
         /** 每个阶段开始前的产物数量：重试时回收该阶段及之后产生的产物，避免重复。 */
         final Map<String, Integer> artifactMark = new java.util.concurrent.ConcurrentHashMap<>();
+
+        // ---- 运行看护 / 进度（由 watchdog 线程与执行线程共享，全部 volatile）----
+        /** 上次落盘时间：运行中每 10s 保存一次，崩溃后不会只剩 PENDING 空日志。 */
+        volatile long lastSavedAt = System.currentTimeMillis();
+        /** 上次日志内容变化时间：静默命令（mvn -q）超过 30s 时补心跳行。 */
+        volatile long lastLogChangeAt = System.currentTimeMillis();
+        volatile int lastLogLength;
+        /** 请求取消的时间：看护据此在 60s 后强制终态。 */
+        volatile long cancelRequestedAt;
+        /** 本次运行允许的总时长（按实际配方超时累加，另有 5m 宽限）。 */
+        volatile long maxRunMillis = WATCHDOG_GRACE_MS;
+        /** 看护已强制置终态：执行线程不得再覆盖状态或重复 complete。 */
+        volatile boolean forceTerminated;
+        volatile String currentStageId;
+        volatile int currentStageIndex;
+        volatile int stageTotal;
+        volatile long stageStartedAt;
 
         RunSnapshot snapshot() {
             return new RunHistoryStore.RunSnapshot(runId, projectId, env, pipelineId, gitSha,

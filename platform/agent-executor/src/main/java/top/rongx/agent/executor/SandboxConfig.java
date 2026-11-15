@@ -34,9 +34,12 @@ public class SandboxConfig {
             @Value("${agent.sandbox.cpus:2}") String cpus,
             @Value("${agent.sandbox.pids-limit:512}") int pidsLimit,
             @Value("${agent.sandbox.user:1000:1000}") String user,
-            @Value("${agent.sandbox.cache-volume-prefix:}") String cacheVolumePrefix) {
+            @Value("${agent.sandbox.cache-volume-prefix:}") String cacheVolumePrefix,
+            @Value("${agent.sandbox.precheck-image:true}") boolean precheckImage) {
+        // 镜像标签由 agent.sandbox.image 决定；预检只是把"缺镜像"从静默等待变成明确失败，
+        // 离线/自建 registry 可通过 agent.sandbox.precheck-image=false 自行关闭。
         return new DockerSandbox(binary, image, network, memory, cpus, pidsLimit, user,
-                cacheVolumePrefix);
+                cacheVolumePrefix).setImagePrecheck(precheckImage);
     }
 
     @Bean

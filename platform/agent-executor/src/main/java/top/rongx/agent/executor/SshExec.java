@@ -50,8 +50,10 @@ public class SshExec implements SshAccess {
 
     @Override
     public Result run(DeployServer server, String secret, String remoteCommand, long timeoutMs) {
+        // 预算必须透传：早前这里直接调用无 timeout 的重载，上层传的 15s/90s 全部失效，
+        // 远端命令挂住会让设置页与部署链路永久等待且没有任何错误输出。
         JschSsh.Result result = ssh.run(server.host(), server.port(), server.sshUser(),
-                server.authType(), server.keyPath(), secret, remoteCommand);
+                server.authType(), server.keyPath(), secret, remoteCommand, timeoutMs);
         return result.ok()
                 ? Result.ok(result.stdout())
                 : Result.failed(1, result.stderr());
@@ -61,7 +63,7 @@ public class SshExec implements SshAccess {
     public Result upload(DeployServer server, String secret, Path local, String remotePath,
                          long timeoutMs) {
         JschSsh.Result result = ssh.upload(server.host(), server.port(), server.sshUser(),
-                server.authType(), server.keyPath(), secret, local, remotePath);
+                server.authType(), server.keyPath(), secret, local, remotePath, timeoutMs);
         return result.ok()
                 ? Result.ok(result.stdout())
                 : Result.failed(1, result.stderr());

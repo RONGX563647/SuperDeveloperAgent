@@ -25,6 +25,7 @@ import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.StackAdapter;
+import top.rongx.agent.domain.process.BoundedCommand;
 
 /**
  * 本机 Docker 环境自愈：按「项目 + 环境」准备隔离的中间件容器。
@@ -62,9 +63,33 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             "MONGO_PORT");
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    /**
+     * 中间件镜像默认值：只是兜底，不是平台前提。
+     *
+     * <p>早前这些标签直接写在 {@code runArgv} 的 switch 里，运维无法替换；本机没有时
+     * {@code docker run} 会静默去拉，最长等 {@link #TIMEOUT_MS} 才报一个语焉不详的失败。
+     * 现在统一从这里取值，可用 {@code agent.env.middleware-images.<kind>} 覆盖为本机已有
+     * 镜像或离线 registry 镜像，并在创建容器前预检。
+     */
+    private static final Map<String, String> DEFAULT_MIDDLEWARE_IMAGES = Map.of(
+            "mysql", "mysql:8.0",
+            "mariadb", "mysql:8.0",
+            "postgres", "postgres:16-alpine",
+            "redis", "redis:7-alpine",
+            "rabbitmq", "rabbitmq:3.12-management",
+            "minio", "minio/minio:latest",
+            "mongo", "mongo:7");
+
+    /** 镜像引用只允许 registry/仓库名、tag、digest 中的安全字符，防止把任意参数塞进 argv。 */
+    private static final Pattern IMAGE_REF = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._/:@-]{0,200}");
+
     private final EnvironmentStore store;
     private final top.rongx.agent.domain.port.ProjectRepoLocator repos;
     private final ProcessExecutor executor = new ProcessExecutor();
+    /** kind → 镜像引用；未覆盖的 kind 走 {@link #DEFAULT_MIDDLEWARE_IMAGES}。 */
+    private final Map<String, String> middlewareImages;
+    /** 创建容器前是否预检镜像已在本地；离线/自建 registry 可关闭。 */
+    private final boolean precheckImages;
 
     public DockerEnvProvisioner(EnvironmentStore store) {
         this(store, null);
@@ -72,8 +97,46 @@ public class DockerEnvProvisioner implements EnvProvisioner {
 
     public DockerEnvProvisioner(EnvironmentStore store,
                                 top.rongx.agent.domain.port.ProjectRepoLocator repos) {
+        this(store, repos, Map.of(), true);
+    }
+
+    public DockerEnvProvisioner(EnvironmentStore store,
+                                top.rongx.agent.domain.port.ProjectRepoLocator repos,
+                                Map<String, String> middlewareImages,
+                                boolean precheckImages) {
         this.store = store;
         this.repos = repos;
+        this.middlewareImages = middlewareImages == null ? Map.of() : Map.copyOf(middlewareImages);
+        this.precheckImages = precheckImages;
+    }
+
+    /** 解析 {@code mysql=xxx,redis=yyy} 形式的镜像覆盖；非法条目直接报出，不静默忽略。 */
+    public static Map<String, String> parseImageOverrides(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Map.of();
+        }
+        Map<String, String> parsed = new LinkedHashMap<>();
+        for (String entry : raw.split("[,;]")) {
+            String pair = entry.trim();
+            if (pair.isEmpty()) {
+                continue;
+            }
+            int eq = pair.indexOf('=');
+            String kind = eq < 0 ? "" : pair.substring(0, eq).trim().toLowerCase(Locale.ROOT);
+            String image = eq < 0 ? "" : pair.substring(eq + 1).trim();
+            if (!DEFAULT_MIDDLEWARE_IMAGES.containsKey(kind) || !IMAGE_REF.matcher(image).matches()) {
+                throw new IllegalArgumentException("agent.env.middleware-images 含非法条目「" + pair
+                        + "」；格式应为 <kind>=<image>，kind 可选 "
+                        + DEFAULT_MIDDLEWARE_IMAGES.keySet() + "，镜像只含字母数字与 ._/:@-");
+            }
+            parsed.put(kind, image);
+        }
+        return Map.copyOf(parsed);
+    }
+
+    /** 当前 kind 生效的镜像引用。 */
+    String imageOf(String kind) {
+        return middlewareImages.getOrDefault(kind, DEFAULT_MIDDLEWARE_IMAGES.getOrDefault(kind, ""));
     }
 
     @Override
@@ -679,10 +742,23 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     /** 执行 docker run；成功返回 null，失败返回可读原因（不含密码）。 */
     private String runContainer(String kind, String name, int port, String database,
                                 String username, String password, String network) {
+        String image = imageOf(kind);
+        // 启动前预检：缺镜像时 docker run 会自行拉取，网络不通就是一次长达 180s 的静默等待。
+        // 先用 docker image inspect 在 5s 内确认，缺了直接给出可操作的两条路径。
+        if (precheckImages) {
+            BoundedCommand.Outcome check = BoundedCommand.run(
+                    List.of("docker", "image", "inspect", image), 5_000L);
+            if (!check.ok()) {
+                return "环境中间件镜像未就绪（" + image + "）：请先执行 docker pull " + image
+                        + "，或通过 agent.env.middleware-images." + kind
+                        + " 指定本机已有的镜像（预检 " + check.detail() + "）；"
+                        + "也可设 agent.env.precheck-images=false 关闭预检";
+            }
+        }
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
-                executor.exec(CWD, runArgv(kind, name, port, database, username, password, network),
-                        TIMEOUT_MS, sink, () -> false);
+                executor.exec(CWD, runArgv(kind, name, port, database, username, password,
+                        network, middlewareImages), TIMEOUT_MS, sink, () -> false);
         if (outcome.exitCode() != 0) {
             return ProcessExecutor.redact(ProcessExecutor.tail(sink));
         }
@@ -694,6 +770,14 @@ public class DockerEnvProvisioner implements EnvProvisioner {
 
     static List<String> runArgv(String kind, String name, int port, String database,
                                 String username, String password, String network) {
+        return runArgv(kind, name, port, database, username, password, network,
+                DEFAULT_MIDDLEWARE_IMAGES);
+    }
+
+    /** 带镜像覆盖的构造：镜像引用由配置决定，不再写死在 switch 里。 */
+    static List<String> runArgv(String kind, String name, int port, String database,
+                                String username, String password, String network,
+                                Map<String, String> images) {
         List<String> argv = new ArrayList<>(List.of("docker", "run", "-d", "--name", name,
                 "--restart", "unless-stopped", "--network", network,
                 // 与应用容器同一 compose 组：Docker Desktop 里一个环境一个组
@@ -706,20 +790,24 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             argv.add("-v");
             argv.add(name + "-data:" + volume);
         }
+        String image = images.getOrDefault(kind, DEFAULT_MIDDLEWARE_IMAGES.getOrDefault(kind, ""));
+        if (image.isBlank() || !IMAGE_REF.matcher(image).matches()) {
+            throw new IllegalArgumentException("中间件 " + kind + " 的镜像引用未配置或非法：" + image);
+        }
         switch (kind) {
             case "mysql", "mariadb" -> {
                 argv.addAll(List.of("-e", "MYSQL_ROOT_PASSWORD=" + nullSafe(password),
                         "-e", "MYSQL_DATABASE=" + nullSafe(database)));
-                argv.add("mysql:8.0");
+                argv.add(image);
             }
             case "postgres" -> {
                 argv.addAll(List.of("-e", "POSTGRES_USER=" + nullSafe(username),
                         "-e", "POSTGRES_PASSWORD=" + nullSafe(password),
                         "-e", "POSTGRES_DB=" + nullSafe(database)));
-                argv.add("postgres:16-alpine");
+                argv.add(image);
             }
             case "redis" -> {
-                argv.add("redis:7-alpine");
+                argv.add(image);
                 if (password != null && !password.isBlank()) {
                     argv.addAll(List.of("redis-server", "--requirepass", password));
                 }
@@ -727,18 +815,18 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             case "rabbitmq" -> {
                 argv.addAll(List.of("-e", "RABBITMQ_DEFAULT_USER=" + nullSafe(username),
                         "-e", "RABBITMQ_DEFAULT_PASS=" + nullSafe(password)));
-                argv.add("rabbitmq:3.12-management");
+                argv.add(image);
             }
             case "minio" -> {
                 argv.addAll(List.of("-e", "MINIO_ROOT_USER=" + nullSafe(username),
                         "-e", "MINIO_ROOT_PASSWORD=" + nullSafe(password)));
-                argv.add("minio/minio:latest");
+                argv.add(image);
                 argv.addAll(List.of("server", "/data"));
             }
             case "mongo" -> {
                 argv.addAll(List.of("-e", "MONGO_INITDB_ROOT_USERNAME=" + nullSafe(username),
                         "-e", "MONGO_INITDB_ROOT_PASSWORD=" + nullSafe(password)));
-                argv.add("mongo:7");
+                argv.add(image);
             }
             default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
         }

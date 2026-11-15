@@ -11,6 +11,7 @@ import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.port.Deployer;
+import top.rongx.agent.domain.process.JavaRuntime;
 
 /**
  * 本机直接运行部署器（HOST）。
@@ -117,7 +118,8 @@ public class HostDeployer implements Deployer {
         Path logFile = stateDir.resolve("app.log");
         stopPrevious(pidFile, log);
 
-        List<String> argv = List.of("java", "-jar", jar.toString(),
+        // 用与当前平台一致的 JDK 启动，不去 PATH 上碰运气（PATH 可能是 JDK17、平台跑在 25）。
+        List<String> argv = List.of(JavaRuntime.javaBinary(), "-jar", jar.toString(),
                 "--server.port=" + request.hostPort());
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(workdir.toFile())
