@@ -522,6 +522,38 @@ const canStopLocal = computed(() => env.value === 'dev')
 const canRun = computed(() =>
   !!pipelineId.value && shaValid.value && !triggerBusy.value && !pipelinesLoading.value)
 
+/** 运行中阶段占位：后端 stages 只含已结束阶段，进度由 progress 单独下发。 */
+const displayStages = computed<StageView[]>(() => {
+  const base = run.value?.stages ?? []
+  const p = run.value?.progress
+  if (!running.value || !p?.currentStageId) return base
+  if (base.some((s) => s.id === p.currentStageId && s.status === 'RUNNING')) return base
+  return [...base, {
+    id: p.currentStageId,
+    status: 'RUNNING',
+    exitCode: 0,
+    errorCode: '',
+    summary: p.cancelRequested ? '正在取消…' : '',
+    durationMs: p.stageElapsedMs,
+    artifacts: 0,
+  }]
+})
+
+const stageCountText = computed(() => {
+  const done = run.value?.stages.length ?? 0
+  const total = run.value?.progress?.stageTotal ?? 0
+  return total > done ? `${done}/${total} 阶段` : `${done} 阶段`
+})
+
+/** 自动修复是否介入过、是否已替用户重跑：不用翻日志就能看出有没有人工参与。 */
+const autoRepairText = computed(() => {
+  const a = run.value?.autoRepair
+  if (!a?.enabled || !a.attempts) return ''
+  return a.resumed
+    ? `自动修复 ${a.attempts}/${a.maxAttempts} 轮 · 已自动续跑`
+    : `自动修复 ${a.attempts}/${a.maxAttempts} 轮 · 仍需人工`
+})
+
 const runDuration = computed(() => {
   if (!run.value) return ''
   if (!running.value) {
@@ -1298,7 +1330,12 @@ async function copyDigest(digest: string): Promise<void> {
               :title="`环境绑定 ${run.meta.bindingId}（确认人 ${run.meta.confirmedBy || '—'}）`"
             >binding</span>
             <span v-if="run?.meta?.actor" class="rb-tag plain">{{ run.meta.actor }}</span>
-            <span v-if="run" class="rb-meta">{{ run.stages.length }} 阶段 · {{ run.artifacts.length }} 产物 · {{ runDuration }}</span>
+            <span v-if="run" class="rb-meta">{{ stageCountText }} · {{ run.artifacts.length }} 产物 · {{ runDuration }}</span>
+            <span
+              v-if="autoRepairText" class="rb-tag auto-repair"
+              :class="{ ok: run?.status === 'SUCCEEDED' }"
+              :title="run?.autoRepair?.lastResult || ''"
+            >{{ autoRepairText }}</span>
             <span v-if="errorText" class="rb-err">{{ errorText }}</span>
             <div class="rb-actions">
               <button
@@ -1361,7 +1398,7 @@ async function copyDigest(digest: string): Promise<void> {
 
             <StageTimeline
               v-if="run"
-              :stages="run.stages"
+              :stages="displayStages"
               :running="running"
               :started-at="startedAt"
             />
@@ -1686,6 +1723,15 @@ async function copyDigest(digest: string): Promise<void> {
 .rb-tag.plain {
   color: var(--ink-muted);
   background: var(--surface-sunken);
+}
+.rb-tag.auto-repair {
+  color: var(--warning, #b26a00);
+  background: color-mix(in srgb, var(--warning, #b26a00) 12%, transparent);
+  cursor: help;
+}
+.rb-tag.auto-repair.ok {
+  color: var(--success, #1a7f4b);
+  background: color-mix(in srgb, var(--success, #1a7f4b) 12%, transparent);
 }
 .rb-sha {
   font-size: 10.5px;

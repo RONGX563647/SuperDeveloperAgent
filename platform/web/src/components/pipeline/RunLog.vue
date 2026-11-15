@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown, CopyDocument, Download, Search } from '@element-plus/icons-vue'
 import { fetchRunLog } from '../../api/pipeline'
@@ -29,7 +29,16 @@ const follow = ref(true)
 const scroller = ref<HTMLElement | null>(null)
 
 let timer: ReturnType<typeof setInterval> | null = null
+let idleTimer: ReturnType<typeof setInterval> | null = null
 const POLL_MS = 800
+
+/** 无新输出时长：静默命令（mvn -q）也能区分「还在跑」和「页面坏了」。 */
+const lastAppendAt = ref(0)
+const nowTick = ref(Date.now())
+const silentSeconds = computed(() => {
+  if (!props.running || !lastAppendAt.value) return 0
+  return Math.max(0, Math.floor((nowTick.value - lastAppendAt.value) / 1000))
+})
 
 const ERROR_PATTERN = /(\bERROR\b|\bFAIL(ED|URE)?\b|Exception|panic:|error:|\bfatal\b)/i
 
@@ -53,22 +62,34 @@ const lines = computed<LogLine[]>(() => {
 const errorCount = computed(() => allLines.value.filter((l) => l.error).length)
 const lineNoWidth = computed(() => `${String(allLines.value.length).length + 1}ch`)
 
-/** 拉一段增量；首次调用从 offset=0 开始，等价于整段加载。 */
+/**
+ * 拉一段增量；首次调用从 offset=0 开始，等价于整段加载。
+ *
+ * 并发保护：watch(runId, immediate) 与 watch(running) 可能在首帧同时触发 pull，
+ * 两个请求都从 offset=0 返回时，旧响应会把同一段日志追加两遍（表现为失败尾部重复）。
+ * 用「请求时的 offset + 代次」双重校验，过期响应直接丢弃。
+ */
+let generation = 0
+
 async function pull(): Promise<void> {
   if (!props.runId) return
+  const gen = generation
+  const from = offset.value
   try {
-    const slice = await fetchRunLog(props.runId, offset.value)
+    const slice = await fetchRunLog(props.runId, from)
+    if (gen !== generation || from !== offset.value) return
     errorText.value = ''
     if (slice.text) {
       text.value += slice.text
       offset.value = slice.end
+      lastAppendAt.value = Date.now()
       if (follow.value) await scrollToBottom()
     } else {
       offset.value = slice.end
     }
     if (slice.complete) stopTimer()
   } catch (e) {
-    errorText.value = e instanceof Error ? e.message : '日志加载失败'
+    if (gen === generation) errorText.value = e instanceof Error ? e.message : '日志加载失败'
   }
 }
 
@@ -100,9 +121,11 @@ function stopTimer(): void {
 }
 
 async function restart(): Promise<void> {
+  generation++
   stopTimer()
   text.value = ''
   offset.value = 0
+  lastAppendAt.value = 0
   follow.value = true
   loading.value = true
   await pull()
@@ -122,7 +145,13 @@ watch(() => props.running, (running) => {
   if (timer === null) timer = setInterval(() => void pull(), POLL_MS)
 })
 
-onBeforeUnmount(stopTimer)
+onMounted(() => {
+  idleTimer = setInterval(() => (nowTick.value = Date.now()), 1000)
+})
+onBeforeUnmount(() => {
+  stopTimer()
+  if (idleTimer !== null) clearInterval(idleTimer)
+})
 
 async function copyAll(): Promise<void> {
   if (!text.value) return
@@ -152,6 +181,11 @@ function download(): void {
       <span class="log-title">日志</span>
       <span class="log-stat">{{ allLines.length }} 行</span>
       <span v-if="errorCount" class="log-errors">{{ errorCount }} 处错误</span>
+      <span
+        v-if="silentSeconds >= 15" class="log-idle"
+        :class="{ warn: silentSeconds >= 60 }"
+        title="后端有心跳日志；长时间无输出也可能是构建命令静默（如 mvn -q）"
+      >已 {{ silentSeconds }}s 无新输出</span>
 
       <div class="log-search">
         <el-icon class="search-icon"><Search /></el-icon>
@@ -299,6 +333,18 @@ function download(): void {
   color: var(--ink-soft);
   cursor: pointer;
   user-select: none;
+}
+.log-idle {
+  flex: none;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+}
+.log-idle.warn {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 .log-error {
   padding: 6px 12px;

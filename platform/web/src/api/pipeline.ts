@@ -43,6 +43,27 @@ export interface RunMetaView {
   definitionNote: string
 }
 
+/** 运行中阶段进度（后端 progress；终态运行也可能保留最后一次快照）。 */
+export interface RunProgressView {
+  currentStageId: string
+  stageTotal: number
+  completedStages: number
+  elapsedMs: number
+  stageElapsedMs: number
+  cancelRequested: boolean
+  forceTerminated: boolean
+}
+
+/** 失败自动修复状态：平台是否动手、动了几次、是否已自动续跑。 */
+export interface RunAutoRepairView {
+  enabled: boolean
+  attempts: number
+  maxAttempts: number
+  resumed: boolean
+  lastAction: string
+  lastResult: string
+}
+
 /** GET /api/v1/ci/runs/{runId} 的响应；log 为脱敏后的日志尾部。 */
 export interface RunView {
   runId: string
@@ -51,6 +72,8 @@ export interface RunView {
   artifacts: ArtifactView[]
   log: string
   meta?: RunMetaView
+  progress?: RunProgressView
+  autoRepair?: RunAutoRepairView
 }
 
 /** 与后端 StageStatus.isTerminal() 对齐的终态集合。 */
