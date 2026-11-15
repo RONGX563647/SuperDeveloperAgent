@@ -68,7 +68,7 @@ stages:
     action: backend_build        # 必须是动作白名单里的名字（见 §2）
     runner: container            # container=容器沙箱 | host=宿主机
     workdir: backend             # 可选：monorepo 子目录
-    image: maven:3.9-eclipse-temurin-21   # 可选：该 stage 专用工具链镜像
+    image: maven:3.9-eclipse-temurin-21   # 示例默认值，可覆盖；动作前预检，缺镜像明确报错而非静默拉取
   - id: frontend
     type: action
     action: frontend_build

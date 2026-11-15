@@ -31,6 +31,8 @@ code_refs:
 | `docker-build` | 由执行器调用（不经沙箱） | `Dockerfile` + 构建上下文 | `image` + `digest` |
 | `static-publish` | `alpine + rsync + curl` | `dist/` | nginx 站点目录 |
 
+> 表内标签是示例默认值而非硬依赖：可用 `agent.sandbox.image` / `agent.env.middleware-images.<kind>` / `agent.scaffold.node-image` 换成本机已有镜像。按 digest 钉死仍是推荐做法，但平台会在启动前 `docker image inspect` 预检，缺镜像立即明确报错，不再静默拉取。
+
 每个 stage 的公共字段：
 
 ```yaml
@@ -368,7 +370,7 @@ docker run -d -p 5000:5000 --restart=always --name registry \
 
 **结论**：`PipelineSpec` 的 `image` 字段要支持两种写法——`repo@sha256:...`（优先）与 `sha256:...`（本地 id），并在启动时校验镜像存在。**不要假设一定有 registry。**
 
-另：内网环境可能访问不了镜像加速器，**建议把 `maven:3.9-eclipse-temurin-21` 与 `node:22-bookworm-slim` 预加载到每台构建机**，构建流程只依赖本地镜像。这样即使外网抖动也不影响构建。
+另：内网环境可能访问不了镜像加速器，**建议把实际使用的工具链镜像预加载到每台构建机**（默认 `maven:3.9-eclipse-temurin-21`，可通过 `agent.sandbox.image` / `agent.env.middleware-images.<kind>` / `agent.scaffold.node-image` 覆盖），构建流程只依赖本地镜像。平台在动作/容器启动前做 `docker image inspect` 预检；本机没有该镜像时立即给出「`docker pull` 或换成本机已有镜像」的明确失败，而不是静默等待拉取直到超时。
 
 ---
 

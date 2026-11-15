@@ -28,7 +28,35 @@ platform/
 
 ## 跑起来
 
-**前置**：JDK 21、Maven 3.9+、Node 20+；Docker 可选（沙箱构建、容器/中间件部署；无 Docker 时 L2 可回退宿主，L3 与容器部署 fail-closed）。
+**前置**：任意发行版的 **JDK 21 或更高**（虚拟线程等 API 的最低级别，不是某个固定路径）、Maven 3.9+、Node 20+；Docker 可选（沙箱构建、容器/中间件部署；无 Docker 时 L2 可回退宿主，L3 与容器部署 fail-closed）。
+
+**环境可自由替换，仓库不写死机器配置**：
+
+- 构建 JDK 由 `JAVA_HOME` 决定，一次性覆盖即可，无需改 `pom.xml`：
+  `JAVA_HOME=/path/to/any-jdk-21+ mvn -q verify`；用 `mvn -v` 里的 `Java version` 自检。
+- 目标字节码版本默认 21，可用 `-Djava.release=25` 覆盖（例如本机只有 25 时统一目标级别）。
+- 容器工具链镜像默认 `maven:3.9-eclipse-temurin-21`，可用 `agent.sandbox.image=<任意已安装镜像>` 覆盖；
+  平台在动作前做一次 `docker image inspect` 预检，镜像缺失会进入下面的自动修复闭环，
+  而不是静默等镜像拉取。离线/自建 registry 场景可设 `agent.sandbox.precheck-image=false` 关闭预检。
+
+### 失败自动修复（默认开启，无需人工介入）
+
+运行失败后平台先自己动手，**只有平台复核通过才自动从失败阶段续跑**，不需要人点「重跑」：
+
+1. **确定性修复**：工具链镜像缺失 → `docker pull <配置的镜像>`（3 分钟硬超时、可取消、输出实时进日志）。
+2. **平台复核**：重新执行 `docker image inspect`。不采信 pull 的输出文本，也不采信模型「已修复」的自述。
+3. **自动续跑**：复用保留的构建现场，只重跑失败阶段及其后阶段；最多 2 轮，仍失败则保持 `FAILED` 并写出结论。
+4. **兜底诊断**：确定性修复没成功才交发布 Agent（最长 5 分钟），诊断后同样要经平台复核。
+
+安全边界：只拉取 `agent.sandbox.image` 配置的镜像，日志里出现的镜像名不会进入命令（防提示注入）；生产环境与 Agent 自触发的运行不进入自动修复；同一失败周期只处理一次。
+
+| 配置（`application.yml`） | 默认 | 说明 |
+|---|---|---|
+| `agent.pipeline.auto-repair.enabled` | `true` | 关闭后回到「只诊断 + 人工重跑」 |
+| `agent.pipeline.auto-repair.max-attempts` | `2` | 单次运行的「修复 → 续跑」轮次上限 |
+| `agent.pipeline.auto-repair.pull-timeout-seconds` | `180` | 自动拉取镜像的硬超时 |
+| `agent.pipeline.auto-repair.agent-fallback` | `true` | 确定性修复失败后是否调用发布 Agent |
+| `agent.pipeline.auto-repair.auto-resume` | `true` | 关闭后只验证、不自动续跑 |
 
 ### 后端
 

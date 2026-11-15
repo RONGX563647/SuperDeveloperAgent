@@ -531,6 +531,8 @@ deliverable: static
 | `docker-build` | 执行器调用 | image + digest | 层缓存 `--cache-from` |
 | `static-publish` | `alpine + rsync + curl` | nginx 站点目录 | 版本目录保留 N 份 |
 
+> 上表是 v1.3 早期设计的示例标签，现行实现里镜像只是默认兜底：`agent.sandbox.image`（沙箱）、`agent.env.middleware-images`（中间件容器）、`agent.scaffold.node-image`（生成的前端 stage）均可覆盖；动作/容器启动前做 `docker image inspect` 预检，缺失立即给出「`docker pull` 或换镜像」的明确失败，不再静默等拉取直到超时（见 Code-Wiki §10.1）。
+
 **工具链探测（防"锁文件漂移"）**：包管理器按 `pnpm-lock.yaml` → `npm-shrinkwrap/package-lock.json` → `yarn.lock` 识别；Node 版本按 `.nvmrc` → `package.json engines` → 项目配置；**多处冲突即失败，不猜**。
 
 > **未来若改接外部引擎**（GitLab CI 等），只需实现同样的 stage 映射（action/deploy/health/rollback），工具面与 `PipelineSpec` 不变——这是 v1.2 留下的可逆性。

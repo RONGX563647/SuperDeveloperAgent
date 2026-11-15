@@ -665,7 +665,7 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 
 - **先 import Spring Boot BOM、再 import AgentScope BOM**——Spring 版本以 Boot 4.0.4 为准，防止被反向降级；
 - `spring-boot-maven-plugin` repackage 使用 `classifier=exec`：主 artifact 保持普通 jar（ArchUnit 才能读到 gateway 类），可执行 jar 为 `*-exec.jar`；
-- 全局 test 依赖 JUnit 5.11.3；编译 `release=21` + `-parameters`。
+- 全局 test 依赖 JUnit 5.11.3；编译 `release=21` + `-parameters`。**21 是 Java API 下限**（`Thread.ofVirtual()`、`ProcessHandle.descendants()`），不是某个安装路径：任意 JDK ≥21 都能构建，目标级别可用 `-Djava.release=25` 覆盖；构建机 JDK 由 `JAVA_HOME` 决定，验证只用一次性环境变量，仓库不写任何绝对路径。
 
 ### 9.3 运行时第三方要点
 
@@ -695,7 +695,11 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 | `agent.intake.shared-root` | 空（全盘） | 目录浏览边界 |
 | `agent.intake.gitee-token` | 空 | 平台兜底 Gitee token（私有库 clone） |
 | `agent.gitee.client-id/secret/redirect-uri` | 空 | Gitee OAuth 应用 |
-| `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | `docker` / `maven:3.9-eclipse-temurin-21` / bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache` | 执行沙箱（默认 fail-closed；缓存卷按项目隔离挂 Maven/npm 依赖） |
+| `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | `docker` / `maven:3.9-eclipse-temurin-21`（仅默认兜底，可覆盖）/ bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache` | 执行沙箱（默认 fail-closed；缓存卷按项目隔离挂 Maven/npm 依赖）。动作前 `docker image inspect` 预检，缺镜像立即给出「pull 或换镜像」的明确失败，不会静默等拉取 |
+| `agent.sandbox.precheck-image` | true | 关闭后回到 docker CLI 自行拉取的行为（离线 / 自建 registry 场景） |
+| `agent.env.middleware-images` / `agent.env.precheck-images` | 空 / true | 中间件镜像覆盖 `<kind>=<image>,...`；创建容器前预检，缺失即明确失败 |
+| `agent.scaffold.node-image` | `node:20-bookworm`（可覆盖） | 项目接入时生成的 `ci/pipeline.yml` 前端工具链镜像 |
+| `agent.bugfix.shell` | 空（按 OS 自适应） | 自动修复构建/测试命令的解释器前缀：Windows → `cmd.exe /c`，其余 → `/bin/sh -c`；可显式覆盖，配置写错只让该次检查失败、不阻塞启动 |
 | `agent.model.base-url/api-key/model/max-iters/temperature` | DashScope 兼容端点 / 空 / qwen-plus / 8 / 0.2 | 模型兜底（设置页优先） |
 | `agent.model.prefix-cache` | true | 前缀缓存：系统提示 + 工具 schema 交给服务端复用（`cache_control`） |
 | `agent.tools.max-output-chars` | 12000 | 单次工具输出字符上限（超出截断并提示缩小查询） |
@@ -715,6 +719,8 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 |---|---|
 | `AGENT_MODEL_API_KEY` / `AGENT_MODEL_BASE_URL` / `AGENT_MODEL_NAME` | 模型接入（OpenAI 兼容）；**密钥可选**，推荐在设置页「模型连接」配置 |
 | `AGENT_WORKSPACE_ROOT` / `AGENT_SANDBOX_MODE` / `AGENT_SANDBOX_NETWORK` / `AGENT_SANDBOX_IMAGE` / `AGENT_SANDBOX_CACHE_VOLUME` / `AGENT_PIPELINE_IMAGE_PREFIX` | 工作区与沙箱覆盖 |
+| `AGENT_SANDBOX_PRECHECK_IMAGE` / `AGENT_ENV_MIDDLEWARE_IMAGES` / `AGENT_ENV_PRECHECK_IMAGES` / `AGENT_SCAFFOLD_NODE_IMAGE` / `AGENT_BUGFIX_SHELL` | 镜像与命令解释器的可移植性覆盖（默认可覆盖 + 预检 + 明确失败；不绑定本机路径） |
+| `JAVA_HOME`（仅验证命令里一次性设置） | 决定构建用 JDK；任意 ≥21 均可，不写进仓库代码 / 脚本 / 配置 |
 | `AGENT_INTAKE_SHARED_ROOT` / `AGENT_GITEE_TOKEN` | 接入边界与兜底 token |
 | `GITEE_CLIENT_ID` / `GITEE_CLIENT_SECRET` / `GITEE_REDIRECT_URI` | Gitee OAuth |
 | `AGENT_WEB_DIST` | HOST 部署器内部注入的前端 dist 目录（一般无需手工设置）；设置后 `StaticWebConfig` 在同一端口提供 SPA |
@@ -729,12 +735,16 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 
 ### 11.1 前置
 
-JDK 21、Maven 3.9+、Node 20+、（可选）Docker（沙箱执行与镜像发布；无 Docker 时 L2 可回退宿主但 L3 被 fail-closed 拒绝）。
+任意发行版 **JDK 21 或更高**（21 是 Java API 下限，不是某个固定安装路径）、Maven 3.9+、Node 20+、（可选）Docker（沙箱执行与镜像发布；无 Docker 时 L2 可回退宿主但 L3 被 fail-closed 拒绝）。
+
+> 构建机 JDK 由 `JAVA_HOME` 决定，仓库只声明最低/可覆盖的目标版本 `<java.release>`：任意 JDK ≥21 都能构建，也可用 `-Djava.release=25` 提高目标级别。本机默认是低版本 JDK 时，验证用一次性环境变量 `JAVA_HOME=<任意 JDK21+> mvn ...` 即可，**不要**把路径写进 `pom.xml`、脚本或配置文件。JDK 17 会被 `javac --release 21` 明确拒绝（预期下限）。
 
 ### 11.2 后端
 
 ```powershell
 cd platform
+# 若默认 JDK 低于 21：验证时用一次性环境变量覆盖即可，不写进任何代码/脚本/配置
+# $env:JAVA_HOME="C:\path\to\any-jdk-21+"; mvn -q verify
 # 可选：模型密钥也可在启动后到「设置 → 模型连接」配置（推荐，免重启热切换）
 # $env:AGENT_MODEL_API_KEY="sk-xxx"  # 或依赖 platform/.env（AgentApplication 启动时 loadDotEnv 加载，真实环境变量优先）
 mvn -q verify                        # 编译 + 规约检查 + 单测（推荐先跑）

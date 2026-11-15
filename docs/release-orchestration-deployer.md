@@ -104,10 +104,10 @@ on-failure:
 |---|---|
 | E-501 | 目标前置条件缺失（无镜像 / 无状态目录） |
 | E-502 | 启动失败（容器起不来 / 进程退出 / 远端命令失败） |
-| E-504 | HOST 目标缺少可运行 jar（前端静态产物请用 DOCKER） |
+| E-504 | 本次既无镜像也无可运行 jar / 服务声明，无法确定部署目标（Java 请产出 `target/*.jar`；前端静态产物请在 deploy 段选 DOCKER） |
 | E-505 | 目标未配置（SERVER 无可用服务器 / 已停用 / KEY 认证缺 key-path / PASSWORD 缺密码） |
 | E-506 | pipeline.yml 缺少 deploy 段或目标非法 |
-| E-507 | 无可用回滚版本（本项目尚无成功发布记录 / previous 指针） |
+| E-507 | 部署器缺可用回滚版本（previous 指针为空）。单容器 deploy 阶段在「首次发布失败、尚无上一版」时**如实跳过回滚**并记录原因，不把回滚本身伪造成第二个故障；多服务回滚与 HOST/SERVER 部署器仍返回 E-507 |
 | E-508 | 流水线定义与默认分支不一致（部署配置未合并，见 §8） |
 
 ---
@@ -225,7 +225,7 @@ API：
 | 4 | 落盘防覆盖 | 已存在且 overwrite=false → 不写入 | `RecipeScaffolderTest.applyRespectsOverwrite` |
 | 5 | 触发时选 host | 部署器收到 `DeployTarget.HOST` | `DeployStageTest.triggerCanOverrideTarget` |
 | 6 | 选 server 未配置 | E-505，日志含配置指引 | `DeployersTest.serverFailsClosedWhenUnconfigured` |
-| 7 | 失败后回滚 | 无上一版时 E-507，不假成功 | `DeployStageTest.failureTriggersRollbackWithHonestError` |
+| 7 | 失败后回滚 | 无上一版时如实跳过回滚（日志写明原因、不调用部署器），不伪造第二个故障 | `DeployStageTest.failureTriggersRollbackWithHonestError` |
 | 8 | verify 流水线 | 不含 deploy/rollback/health stage | `DeployStageTest` + `PipelineAcceptanceTest` |
 | 9 | Docker 真实发布 | 容器可达 → 重复部署替换 → 标签更新 | `DockerDeployerTest.deploysAndReplacesContainer` |
 | 10 | HOST 真实发布 | 进程可达 → 替换 → 回滚到 previous | `HostDeployerTest.deploysRedploysAndRollsBack` |
