@@ -25,7 +25,11 @@
 
     <properties>
         <java.version>21</java.version>
-        <maven.compiler.release>21</maven.compiler.release>
+        <!-- 最低 API 级别 21（虚拟线程 / ProcessHandle.descendants），但编译目标可覆盖：
+             任意 JDK >= 21 都能构建，也可 -Djava.release=25 提高目标版本。
+             构建机 JDK 由 JAVA_HOME 决定，仓库不绑定任何具体安装路径。 -->
+        <java.release>21</java.release>
+        <maven.compiler.release>${java.release}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <sqlite-jdbc.version>3.46.1.3</sqlite-jdbc.version>
 
