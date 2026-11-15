@@ -8,9 +8,9 @@ related: [../README.md, ../项目规约-v1.0.md, ../规约自动化检查-v1.0.m
 
 # Agent 文档治理方案 v1
 
-> 日期：2026-11-15 ｜ 状态：部分实施（断链 + 未登记已进 CI；front-matter / drift / `_inbox` 暂缓）
+> 日期：2026-11-15 ｜ 状态：部分实施（断链 + 未登记 + 代码锚点已进 CI；front-matter / 语义 drift / `_inbox` 暂缓）
 > 上游：[docs 总览](../README.md)（Wikidoc v0）、[项目规约 v1.0](../项目规约-v1.0.md)、[规约自动化检查 v1.0](../规约自动化检查-v1.0.md)
-> 结论：**不引入外部文档平台**。本轮只落地「断链 + 未登记」两项机械检查；front-matter、`covers/lastVerified` 漂移、`_inbox` 闸门在触发条件出现前不实施。
+> 结论：**不引入外部文档平台**。本轮落地「断链 + 未登记 + 代码锚点存在性」三项机械检查；front-matter、`covers/lastVerified` 语义漂移、`_inbox` 闸门在触发条件出现前不实施。代码锚点表见 [CODE-MAP](../CODE-MAP.md)。
 
 ---
 
@@ -310,13 +310,14 @@ docs/reports/YYYY-MM/<slug>/
 
 | 交付物 | 内容 |
 |---|---|
-| `scripts/docs/check-docs.mjs` | 仅 D04：`docs/**/*.md` 未被任一 README 链接即失败 |
+| `scripts/docs/check-docs.mjs` | D04 未登记 + CODE-MAP 覆盖/代码锚点存在/日期格式 |
 | `scripts/docs/check-links.mjs` | 复用现有断链检查 |
+| `docs/CODE-MAP.md` | 每篇现行文档的代码锚点与最后核对日；锚点路径消失即失败 |
 | `docs/specs/README.md`、`docs/_research/README.md` | 子索引，消除规格/调研的未登记项 |
 | CI | `verify` 前执行两条 Node 命令，任一失败即中断 |
 | `docs/README.md` | 命令、巡检项、健康看板同步 |
 
-**验收**：未登记文档或断链时 CI 必红；当前 43 篇文档 0 未登记。
+**验收**：未登记文档、断链、代码锚点缺失时 CI 必红；当前 43 篇文档 0 未登记，22 篇现行文档 44 个锚点全部存在。
 
 **暂缓（触发条件出现前不做）**：
 

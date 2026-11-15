@@ -25,13 +25,13 @@ triggers:
 
 stages:
   - name: verify
-    displayName: 构建与规约检查
+    displayName: 文档检查与构建
     strategy: naturally
     trigger: auto
     steps:
       - step: build@nodejs
         name: docs_check
-        displayName: 文档断链与登记检查
+        displayName: 文档断链、登记与代码锚点检查
         nodeVersion: "20"
         commands:
           - node scripts/docs/check-links.mjs

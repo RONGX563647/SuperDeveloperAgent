@@ -14,15 +14,16 @@ docs/          文档（唯一索引 docs/README.md；子目录 adr/architecture
 docs/specs/    功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 platform/      后端 8 个 Maven 模块 + Vue3 前端
 docs/_research/ 市场调研与源码能力盘点（只读证据，含采集脚本）
-scripts/       仓库级脚本（docs 断链与未登记文档检查）
+scripts/       仓库级脚本（docs 断链、未登记、代码锚点检查）
 llms.txt       给 LLM / RAG 的文档入口
 .workflow/     Gitee Go CI（文档检查 + cd platform && mvn -B verify）
 ```
 
 ## 文档阅读顺序
 
-> 完整索引、文档状态（稳定/现行/历史/规划）、复审日期与 P0/P1/P2 处置规则：**[docs/README.md](docs/README.md)**。
-> 机器可读入口：**[llms.txt](llms.txt)**；文档门禁：`check-links`（断链）+ `check-docs`（未登记）。
+> 完整索引、文档状态（稳定/现行/参考/历史/规划）、复审日期与 P0/P1/P2 处置规则：**[docs/README.md](docs/README.md)**。
+> 机器可读入口：**[llms.txt](llms.txt)**；文档门禁：`check-links`（断链）+ `check-docs`（未登记 + 代码锚点）。
+> 文档与代码的对应关系：**[docs/CODE-MAP.md](docs/CODE-MAP.md)**。
 
 ### 核心必读（先看这四篇）
 
@@ -33,7 +34,7 @@ llms.txt       给 LLM / RAG 的文档入口
 | 3 | [规约自动化检查](docs/规约自动化检查-v1.0.md) | 规约如何落到 `mvn verify` |
 | 4 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
 
-> 为什么这么设计：见 [ADR 索引](docs/adr/README.md)（6 篇：独立平台、CI 形态、环境三层、运行账本、安全边界、事件驱动）。
+> 为什么这么设计：见 [ADR 索引](docs/adr/README.md)（7 篇：独立平台、CI 形态、环境三层、运行账本、安全边界、事件驱动、DAG 并行调度）。
 
 ### 设计与实现（现行方案）
 
@@ -93,7 +94,7 @@ cd web && npm install && npm run dev    # http://localhost:5173
 |---|---|
 | 代码托管 | **Gitee**（Maven groupId `top.rongx`，Java 根包 `top.rongx.agent`） |
 | 流水线 | [`.workflow/build.yml`](.workflow/build.yml)（Gitee Go）：文档检查 + `cd platform && mvn -B verify` |
-| 门禁 | 分支保护 + 文档检查（断链/未登记）+ `mvn verify` 必须绿 |
+| 门禁 | 分支保护 + 文档检查（断链/未登记/代码锚点）+ `mvn verify` 必须绿 |
 
 ```bash
 git remote add origin https://gitee.com/<你的账号>/agentscope-ruoyi.git

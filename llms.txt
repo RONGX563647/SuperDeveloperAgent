@@ -13,7 +13,7 @@
 
 - [ADR 索引](docs/adr/README.md)
 - [ADR-0001 独立平台而非改造若依](docs/adr/0001-独立平台而非改造若依.md)
-- [ADR-0002 不造 CI DSL：5 动作 + 仓库内配方](docs/adr/0002-不造CI-DSL用动作+仓库内配方.md)
+- [ADR-0002 不造 CI DSL：动作 + 仓库内配方（当时 5 个，现行 7 个）](docs/adr/0002-不造CI-DSL用动作+仓库内配方.md)
 - [ADR-0003 环境配置三层与 secret:// 引用](docs/adr/0003-环境配置三层与环境模板.md)
 - [ADR-0004 统一运行账本而非重写编排](docs/adr/0004-统一运行账本而非重写编排.md)
 - [ADR-0005 安全边界放在平台层](docs/adr/0005-安全边界放在平台层.md)
@@ -43,10 +43,11 @@
 
 ## 决策与背景
 
-- [CICD 决策](docs/CICD方案替代与自创-决策-v1.md): 不造 DSL，改用「5 个动作 + 仓库内配方」
+- [CICD 决策](docs/CICD方案替代与自创-决策-v1.md): 不造 DSL，改用「动作 + 仓库内配方」（决策时 5 个，现行 7 个）
 - 历史评估与验收文档已删除，去向与替代物见 [废弃登记](docs/deprecated/README.md)
 
 ## 可选
 
-- [功能规格](specs/dev-local-deploy/spec.md)、[任务清单](specs/dev-local-deploy/tasks.md)
+- [功能规格](docs/specs/dev-local-deploy/spec.md)、[任务清单](docs/specs/dev-local-deploy/tasks.md)
+- [文档-代码对照表](docs/CODE-MAP.md): 每篇现行文档对应的代码锚点与最后核对日
 - [平台模块说明](platform/README.md)
