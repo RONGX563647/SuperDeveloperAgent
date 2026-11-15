@@ -453,6 +453,13 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 - **易用性**：对话首屏为三张场景卡（排查失败/部署到测试/了解项目）；顶栏收敛为「对话 + 更多（轨迹/能力/任务）」；侧栏默认只展开当前工作区；新建会话标题自动预填、工作树收进高级选项；`Ctrl/⌘+K` 打开命令面板（诊断/新建会话/刷新/切换会话）；失败运行可一键重试。
 - **性能**：SQLite 每库连接池 4→8（WAL 并发读）；`UserStore`/`GiteeAccountStore` 复用连接池；事件总线改用 `directBestEffort`（慢订阅者丢弃而非无界缓冲）；前端历史写 localStorage 合并为 800ms、流式滚动合并到 `requestAnimationFrame`。
 
+### 5.18 DAG 并行调度与上下文治理（2026-11 新增，见 [ADR-0007](adr/0007-DAG并行调度与三级上下文治理.md)）
+- **`workspace_dispatch`（DAG 并行）**：调度 Agent 一次传入节点数组（`id/message/depends_on/required/timeout_seconds`），`WorkspaceDispatchScheduler` 把无依赖节点在 `max_parallel`（默认 4，上限 8）内同时派发；每个节点在自己的虚拟线程上等待，主循环只等「任意一个完成」，N 个互不依赖的目标总耗时≈最慢节点。依赖全部成功后才会派发后继；任一对必需节点的依赖失败，整条链路标记 `SKIPPED`（不占运行配额）。派发前用 Kahn 拓扑排序拒绝循环依赖，单节点超时会 cancel 对应 run。
+- **提前终止**：`required=true` 的节点失败且 `abort_on_failure`（默认 true）时，停止派发未开始节点；`required` 节点全部成功后，未开始的可选节点不再派发，已在跑的可选节点直接取消并标记 `SKIPPED`。必需节点始终允许跑完，避免误杀有用结果。
+- **前缀缓存**：`GenerateOptions.cacheControl(true)`（`agent.model.prefix-cache`，默认开）。每轮的系统提示与工具 schema 保持稳定（装配顺序固定、提示词无时间戳/随机值），由服务端复用前缀 KV；不支持 `cache_control` 的兼容服务会忽略该字段。
+- **语义缓存**：`cache/ToolResultCache` 对只读工具结果做进程内缓存——key 为 `project|env|worktree|user + 工具名 + 归一化参数`，参数词元 Jaccard ≥ 0.9 视为同一问题；TTL 90 秒 + LRU 512 条。任何写工具成功执行后清空同 scope 缓存。`CachingAgentTool.install` 在 `ToolCatalog` 装配阶段原地包装四套 Toolkit，工具名与 schema 不变。
+- **上下文精益（三层）**：① `CachingAgentTool` 统一截断超过 `agent.tools.max-output-chars`（默认 12000）的工具输出；② `ConversationContextTrimmer` 在状态落盘前按 `agent.context.max-chars`（默认 60000）/`keep-messages`（默认 24）裁剪最早的历史，保留开头 SYSTEM 提示且窗口不以 TOOL 开头（不破坏 tool_use/tool_result 配对），构造新状态而不修改运行中实例；③ 提示词要求「拿到足够信息立即回答、不复述长日志」。
+
 ---
 
 ## 6. HTTP API 一览
@@ -511,9 +518,9 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 
 ---
 
-## 7. 模型工具（@Tool）一览 —— 61 个方法 / 18 个工具类
+## 7. 模型工具（@Tool）一览 —— 62 个方法 / 18 个工具类
 
-AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 22 个类，其中 18 个是 @Tool 类（合计 61 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver` 等非工具类）：
+AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 24 个类，其中 18 个是 @Tool 类（合计 62 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver`、`cache/ToolResultCache`、`cache/CachingAgentTool` 等非工具类）：
 
 > `supervisorToolkit` = `WorkspaceSupervisorTools`（会话/运行/任务管理）+ 全部只读工具；**不含**任何文件写、命令、补丁、部署工具，保证调度 Agent 只能编排与只读取证。
 
@@ -547,6 +554,7 @@ AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readO
 | `create_git_issue` / `update_git_issue` / `comment_git_issue` / `close_git_issue` / `reopen_git_issue` / `sync_git_issue` | L2 | GitIssueCommandTools | 任务页写操作（与「任务」Tab 同一份数据） |
 | `workspace_snapshot` / `conversation_list` / `conversation_search` / `conversation_status` / `conversation_wait` / `conversation_summarize` | L0 只读 | WorkspaceSupervisorTools | 调度 Agent 的工作区视图：快照、会话检索、运行状态/等待、会话摘要 |
 | `conversation_create` / `conversation_rename` / `conversation_archive` / `conversation_pin` / `conversation_send` / `conversation_cancel` | L2 | WorkspaceSupervisorTools | 调度 Agent 的编排动作：建/改/归档/置顶会话，派发消息（建运行）与取消（仍无任何文件/命令写能力） |
+| `workspace_dispatch` | L2 | WorkspaceSupervisorTools | **DAG 并行派发**：节点数组（`depends_on/required/timeout_seconds`）一次派发、并行等待、失败熔断与提前终止；聚合结果有长度上限 |
 | `task_create` / `task_update` / `task_complete` / `task_list` | L2 | WorkspaceSupervisorTools | 工作区任务管理 |
 
 ---
@@ -654,6 +662,11 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 | `agent.gitee.client-id/secret/redirect-uri` | 空 | Gitee OAuth 应用 |
 | `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | auto / `maven:3.9-eclipse-temurin-21` / bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache-` | 执行沙箱（缓存卷按项目隔离挂 Maven/npm 依赖） |
 | `agent.model.base-url/api-key/model/max-iters/temperature` | DashScope 兼容端点 / 空 / qwen-plus / 8 / 0.2 | 模型兜底（设置页优先） |
+| `agent.model.prefix-cache` | true | 前缀缓存：系统提示 + 工具 schema 交给服务端复用（`cache_control`） |
+| `agent.tools.max-output-chars` | 12000 | 单次工具输出字符上限（超出截断并提示缩小查询） |
+| `agent.tools.cache.enabled/ttl-seconds/max-entries/similarity` | true / 90 / 512 / 0.9 | 只读工具结果语义缓存（写操作成功即失效） |
+| `agent.tools.cache.exclude` | `conversation_wait,conversation_status,conversation_summarize,workspace_snapshot,ci_status` | 结果随时间变化、缓存会误导决策的工具，不缓存 |
+| `agent.context.max-chars/keep-messages` | 60000 / 24 | 会话历史落盘前的预算与最少保留条数（SYSTEM 提示不占预算） |
 | `agent.chat.max-concurrent` | 8 | 单实例同时进行的 Agent 轮次上限（超限 429） |
 | `agent.chat.limiter` | `memory` | `memory`=进程内信号量；`jdbc`=SQLite 租约（`_platform/rate_limit.db`），多实例部署时使用 |
 

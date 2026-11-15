@@ -5,6 +5,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import top.rongx.agent.tools.cache.CachingAgentTool;
+import top.rongx.agent.tools.cache.ToolResultCache;
 
 /**
  * 工具装配。
@@ -36,10 +38,12 @@ public class ToolCatalog {
                                    RuntimeTools runtimeTools,
                                    ConfigTools configTools,
                                    EnvQueryTools envQueryTools,
-                                   GitIssueQueryTools gitIssueQueryTools) {
+                                   GitIssueQueryTools gitIssueQueryTools,
+                                   ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools);
+        CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
 
@@ -83,7 +87,8 @@ public class ToolCatalog {
                                 OpsAgentTools opsAgentTools,
                                 CapabilityMarketTools capabilityMarketTools,
                                 GitIssueQueryTools gitIssueQueryTools,
-                                GitIssueCommandTools gitIssueCommandTools) {
+                                GitIssueCommandTools gitIssueCommandTools,
+                                ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
 
         // 只读工具
@@ -112,6 +117,7 @@ public class ToolCatalog {
         toolkit.registerTool(gitIssueQueryTools);
         toolkit.registerTool(gitIssueCommandTools);
 
+        CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
 
@@ -132,11 +138,13 @@ public class ToolCatalog {
                                      RuntimeTools runtimeTools,
                                      ConfigTools configTools,
                                      EnvQueryTools envQueryTools,
-                                     GitIssueQueryTools gitIssueQueryTools) {
+                                     GitIssueQueryTools gitIssueQueryTools,
+                                     ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools);
         toolkit.registerTool(supervisorTools);
+        CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
 
@@ -164,7 +172,8 @@ public class ToolCatalog {
                                  ConfigTools configTools,
                                  ChangeTools changeTools,
                                  ActionCommandTools actionCommandTools,
-                                 PatchTools patchTools) {
+                                 PatchTools patchTools,
+                                 ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
@@ -178,6 +187,7 @@ public class ToolCatalog {
         toolkit.registerTool(changeTools);
         toolkit.registerTool(actionCommandTools);
         toolkit.registerTool(patchTools);
+        CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
 }

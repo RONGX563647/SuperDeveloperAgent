@@ -3,6 +3,7 @@ package top.rongx.agent.runtime;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.ModelRegistry;
 import top.rongx.agent.domain.port.ModelRegistry.ActiveModel;
@@ -21,11 +22,14 @@ import top.rongx.agent.domain.port.ModelRegistry.ActiveModel;
 public class DynamicModelProvider {
 
     private final ModelRegistry registry;
+    private final boolean prefixCache;
 
     private volatile Snapshot snapshot;
 
-    public DynamicModelProvider(ModelRegistry registry) {
+    public DynamicModelProvider(ModelRegistry registry,
+                                @Value("${agent.model.prefix-cache:true}") boolean prefixCache) {
         this.registry = registry;
+        this.prefixCache = prefixCache;
     }
 
     private record Snapshot(String fingerprint, Model model, ActiveModel config) {
@@ -64,7 +68,11 @@ public class DynamicModelProvider {
                 .modelName(config.modelName())
                 .stream(true)
                 .generateOptions(GenerateOptions.builder()
-                        .temperature(config.temperature()).build())
+                        .temperature(config.temperature())
+                        // 前缀缓存：把稳定的系统提示 + 工具 schema 标记为可复用，
+                        // 同一会话后续轮次只计增量 token（服务端不支持时是无害字段）
+                        .cacheControl(prefixCache)
+                        .build())
                 .build();
     }
 

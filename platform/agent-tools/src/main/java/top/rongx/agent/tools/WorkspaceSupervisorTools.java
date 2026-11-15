@@ -7,6 +7,10 @@ import java.util.Locale;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.conversation.Conversation;
 import top.rongx.agent.domain.conversation.ConversationRun;
+import top.rongx.agent.domain.conversation.DispatchNode;
+import top.rongx.agent.domain.conversation.DispatchNodeResult;
+import top.rongx.agent.domain.conversation.DispatchPlan;
+import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
@@ -15,9 +19,12 @@ import top.rongx.agent.domain.project.ProjectContext;
 /**
  * 工作区调度 Agent 的工具面。
  *
- * <p>只有"管理"能力：会话的增改查、异步派发、状态/等待/取消/汇总，以及任务板。
+ * <p>只有"管理"能力：会话的增改查、异步派发、<b>DAG 并行派发</b>、状态/等待/取消/汇总，以及任务板。
  * <b>没有任何写代码、写配置、执行命令或部署的工具</b>——需要动手时由调度 Agent
  * 新建/派发普通会话，子会话仍按环境策略与人工确认工作。
+ *
+ * <p>多目标协作优先用 {@code workspace_dispatch}：一次调用完成"按依赖并行派发 + 并行等待 +
+ * 失败熔断/提前终止 + 聚合汇报"，避免模型对每个子目标逐个 send→wait 串行等待。
  *
  * <p>所有方法都用 {@link ProjectContext} 里的 projectId / userId，模型无法伪造归属；
  * 端口实现再按 owner 过滤一次，防止模型引用别人的 conversationId。
@@ -188,6 +195,33 @@ public class WorkspaceSupervisorTools {
         return guard(() -> supervisor.summarize(conversationId, ctx.userId()));
     }
 
+    @Tool(name = "workspace_dispatch",
+            description = """
+                    把多个子目标按 DAG 一次性并行派发并等待汇总（替代逐个 send + wait 的串行方式）。
+                    无依赖的节点会同时运行；有依赖的节点用 depends_on 指定前置节点。
+                    必需节点失败、或必需节点全部成功时会提前终止剩余可选节点。
+                    nodes 示例：
+                    [{"id":"build","message":"构建并修复编译错误","required":true},
+                     {"id":"test","message":"跑单测并汇总失败用例","depends_on":["build"]},
+                     {"id":"docs","message":"更新相关文档","required":false}]
+                    只有需要"边跑边改"或依赖人工确认时才退回 conversation_send。""",
+            readOnly = false, concurrencySafe = false)
+    public String dispatch(ProjectContext ctx,
+                           @ToolParam(name = "nodes",
+                                   description = "节点数组；每项必填 id、message，可选 conversation_id、"
+                                           + "title、env、worktree、depends_on、required、timeout_seconds")
+                           List<DispatchNode> nodes,
+                           @ToolParam(name = "abort_on_failure", required = false,
+                                   description = "必需节点失败后是否停止剩余节点，默认 true")
+                           Boolean abortOnFailure,
+                           @ToolParam(name = "max_parallel", required = false,
+                                   description = "并行上限 1-8，默认 4")
+                           Integer maxParallel) {
+        return guard(() -> formatDispatch(supervisor.dispatch(ctx.projectId(), ctx.userId(),
+                new DispatchPlan(nodes, !Boolean.FALSE.equals(abortOnFailure),
+                        maxParallel == null ? DispatchPlan.DEFAULT_MAX_PARALLEL : maxParallel))));
+    }
+
     @Tool(name = "task_create",
             description = "在工作区任务板登记一个任务（不执行）。",
             readOnly = false, concurrencySafe = false)
@@ -300,6 +334,38 @@ public class WorkspaceSupervisorTools {
             sb.append('\n');
         }
         return sb.toString().trim();
+    }
+
+    private static String formatDispatch(DispatchResult result) {
+        StringBuilder sb = new StringBuilder("dispatch: nodes=").append(result.nodes().size())
+                .append("  succeeded=").append(result.succeeded())
+                .append("  failed=").append(result.failed())
+                .append("  skipped=").append(result.skipped())
+                .append("  elapsed_ms=").append(result.elapsedMillis()).append('\n');
+        if (result.earlyStopped()) {
+            sb.append("early_stopped: ").append(result.reason()).append('\n');
+        }
+        for (DispatchNodeResult node : result.nodes()) {
+            sb.append("- ").append(node.nodeId()).append(" [").append(node.status()).append(']');
+            if (!node.conversationId().isBlank()) {
+                sb.append("  conversation=").append(node.conversationId());
+            }
+            if (!node.runId().isBlank()) {
+                sb.append("  run=").append(node.runId());
+            }
+            sb.append('\n');
+            if (!node.error().isBlank()) {
+                sb.append("  error: ").append(oneLine(node.error(), 300)).append('\n');
+            }
+            if (!node.summary().isBlank()) {
+                sb.append("  summary: ").append(oneLine(node.summary(), 600)).append('\n');
+            }
+        }
+        String text = sb.toString().trim();
+        // 上下文精益：聚合结果本身也要有上限，细节留给 conversation_summarize
+        return text.length() > 6_000
+                ? text.substring(0, 6_000) + "\n…（已截断，单节点细节用 conversation_summarize 查询）"
+                : text;
     }
 
     private static String formatRun(ConversationRun run) {

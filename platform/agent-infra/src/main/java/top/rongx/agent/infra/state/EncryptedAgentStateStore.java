@@ -47,6 +47,8 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     private final Path root;
     private final SecretBox cipher;
+    private final int contextMaxChars;
+    private final int contextKeepMessages;
     private final JsonCodec codec = JsonUtils.getJsonCodec();
     /**
      * 会话级互斥：同一 sessionId 并发两轮对话时，不能出现"读-改-写"互相覆盖。
@@ -55,9 +57,12 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>
             sessionLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public EncryptedAgentStateStore(Path root, SecretBox cipher) {
+    public EncryptedAgentStateStore(Path root, SecretBox cipher,
+                                    int contextMaxChars, int contextKeepMessages) {
         this.root = root.toAbsolutePath().normalize();
         this.cipher = cipher;
+        this.contextMaxChars = contextMaxChars;
+        this.contextKeepMessages = contextKeepMessages;
     }
 
     @Override
@@ -65,8 +70,20 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         if (state == null) {
             return;
         }
-        withSessionLock(userId, sessionId, () -> write(file(userId, sessionId, key, VALUE_SUFFIX),
-                encrypt(codec.toJson(state)) + System.lineSeparator()));
+        State toSave = state;
+        if (state instanceof io.agentscope.core.state.AgentState agentState) {
+            toSave = ConversationContextTrimmer.trim(agentState, contextMaxChars,
+                    contextKeepMessages);
+            if (toSave != state) {
+                log.debug("会话上下文已裁剪：session={} before={} after={}", sessionId,
+                        agentState.getContext().size(),
+                        ((io.agentscope.core.state.AgentState) toSave).getContext().size());
+            }
+        }
+        State serialized = toSave;
+        withSessionLock(userId, sessionId, () -> write(
+                file(userId, sessionId, key, VALUE_SUFFIX),
+                encrypt(codec.toJson(serialized)) + System.lineSeparator()));
     }
 
     @Override

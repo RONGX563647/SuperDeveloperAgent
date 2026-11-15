@@ -33,7 +33,7 @@ class DynamicModelProviderTest {
     void reusesInstance() {
         MutableRegistry registry = new MutableRegistry(new ActiveModel(
                 "mdl-1", "默认", "https://example.com/v1", "sk-test", "qwen-plus", 0.2, 8));
-        DynamicModelProvider provider = new DynamicModelProvider(registry);
+        DynamicModelProvider provider = new DynamicModelProvider(registry, true);
 
         assertSame(provider.current(), provider.current());
         assertEquals("qwen-plus", provider.activeConfig().modelName());
@@ -44,7 +44,7 @@ class DynamicModelProviderTest {
     void rebuildsOnChange() {
         MutableRegistry registry = new MutableRegistry(new ActiveModel(
                 "mdl-1", "默认", "https://example.com/v1", "sk-test", "qwen-plus", 0.2, 8));
-        DynamicModelProvider provider = new DynamicModelProvider(registry);
+        DynamicModelProvider provider = new DynamicModelProvider(registry, true);
         Object before = provider.current();
 
         registry.value.set(new ActiveModel(
@@ -59,7 +59,7 @@ class DynamicModelProviderTest {
     @DisplayName("没有可用配置 → 明确报错，不返回 null")
     void failsWhenUnconfigured() {
         MutableRegistry registry = new MutableRegistry(null);
-        DynamicModelProvider provider = new DynamicModelProvider(registry);
+        DynamicModelProvider provider = new DynamicModelProvider(registry, true);
         assertTrue(assertThrowsMessage(provider).contains("没有可用"));
     }
 

@@ -18,6 +18,8 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.DispatchPlan;
+import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
@@ -52,6 +54,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     private final ProjectRepository projects;
     private final WorkspaceRunExecutor executor;
     private final UserRolePort userRoles;
+    private final WorkspaceDispatchScheduler dispatcher = new WorkspaceDispatchScheduler();
 
     public ConversationManager(ConversationRepository conversations,
                                ConversationRunRepository runs,
@@ -346,6 +349,36 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         conversations.update(run.conversationId(), ownerUserId,
                 ConversationPatch.status(ConversationStatus.CANCELLED));
         return true;
+    }
+
+    @Override
+    public DispatchResult dispatch(String projectId, String ownerUserId, DispatchPlan plan) {
+        requireProject(projectId);
+        requireUser(ownerUserId);
+        // 所有操作都绑定到当前 project/owner，模型无法借 DAG 越权访问别人的会话
+        WorkspaceDispatchScheduler.Backend backend = new WorkspaceDispatchScheduler.Backend() {
+            @Override
+            public String createConversation(String title, String env, String worktree) {
+                return ConversationManager.this.createConversation(projectId, ownerUserId,
+                        title, env, worktree).id();
+            }
+
+            @Override
+            public String send(String conversationId, String text) {
+                return ConversationManager.this.send(conversationId, ownerUserId, text);
+            }
+
+            @Override
+            public ConversationRun waitForRun(String runId, long timeoutMillis) {
+                return ConversationManager.this.waitForRun(runId, ownerUserId, timeoutMillis);
+            }
+
+            @Override
+            public boolean cancel(String runId) {
+                return ConversationManager.this.cancelRun(runId, ownerUserId);
+            }
+        };
+        return dispatcher.execute(plan, backend);
     }
 
     @Override

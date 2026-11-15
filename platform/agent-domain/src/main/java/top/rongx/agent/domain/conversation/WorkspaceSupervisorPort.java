@@ -30,6 +30,14 @@ public interface WorkspaceSupervisorPort {
     /** 异步发送一条消息；返回 runId。目标重复且仍在运行时直接返回已有 runId。 */
     String send(String conversationId, String ownerUserId, String text);
 
+    /**
+     * 按 DAG 并行派发一组子任务：无依赖的节点同时运行，依赖满足后再派发。
+     *
+     * <p>实现必须保证：节点内部只等待自己的 run（并行等待），不会串行占用调度 Agent；
+     * 必需节点失败或全部完成时提前终止未开始的节点，并返回可汇报的聚合结果。
+     */
+    DispatchResult dispatch(String projectId, String ownerUserId, DispatchPlan plan);
+
     ConversationRun runStatus(String runId, String ownerUserId);
 
     /** 最多等待 60 秒。 */

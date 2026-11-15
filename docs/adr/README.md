@@ -11,6 +11,7 @@
 | [0004](0004-统一运行账本而非重写编排.md) | 统一运行账本，而非重写三套编排 | 通过 | 2026-11-12 | `run_ledger`、`RunRecoveryService` |
 | [0005](0005-安全边界放在平台层.md) | 安全边界放在平台层：工具不可自我批准 | 通过 | 2026-11-12 | `DangerousActionPolicy`、`ConfirmTokenService` |
 | [0006](0006-工作区事件驱动与降级.md) | 工作区事件驱动优先，轮询只做降级 | 通过 | 2026-11-13 | `WorkspaceEventBus`、`useWorkspaceEvents` |
+| [0007](0007-DAG并行调度与三级上下文治理.md) | 调度改 DAG 并行 + 三级上下文治理 | 通过 | 2026-11-15 | `WorkspaceDispatchScheduler`、`ToolResultCache`、`ConversationContextTrimmer` |
 
 ## 何时需要写 ADR
 

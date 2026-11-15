@@ -27,8 +27,11 @@ public class AgentStateConfig {
     public AgentStateStore agentStateStore(
             SecretBox secretBox,
             @Value("${agent.state.root:}") String stateRoot,
-            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        return new EncryptedAgentStateStore(stateDirectory(stateRoot, workspaceRoot), secretBox);
+            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
+            @Value("${agent.context.max-chars:60000}") int contextMaxChars,
+            @Value("${agent.context.keep-messages:24}") int contextKeepMessages) {
+        return new EncryptedAgentStateStore(stateDirectory(stateRoot, workspaceRoot), secretBox,
+                contextMaxChars, contextKeepMessages);
     }
 
     /** 会话状态目录：默认挂在平台工作区下，创建后收紧为属主 700。 */

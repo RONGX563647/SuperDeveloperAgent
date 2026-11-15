@@ -100,6 +100,24 @@ agent:
     model: ${AGENT_MODEL_NAME:qwen-plus}
     max-iters: 8
     temperature: 0.2
+    # 前缀缓存：系统提示 + 工具 schema 在多轮之间保持不变，开启后由服务端复用这部分 KV
+    #（不支持 cache_control 的兼容服务会忽略该字段，无副作用）
+    prefix-cache: ${AGENT_MODEL_PREFIX_CACHE:true}
+  # 上下文精益：单次工具输出上限 + 会话历史预算（两层闸门，避免长会话把上下文撑爆）
+  tools:
+    max-output-chars: ${AGENT_TOOLS_MAX_OUTPUT_CHARS:12000}
+    # 只读工具结果语义缓存：TTL + LRU + 写操作失效；相似度阈值越高越保守
+    cache:
+      enabled: ${AGENT_TOOLS_CACHE:true}
+      ttl-seconds: ${AGENT_TOOLS_CACHE_TTL:90}
+      max-entries: ${AGENT_TOOLS_CACHE_MAX:512}
+      similarity: ${AGENT_TOOLS_CACHE_SIMILARITY:0.9}
+      # 状态/运行类工具结果变化快，命中会返回过期状态，默认不缓存（仍受输出预算约束）
+      exclude: ${AGENT_TOOLS_CACHE_EXCLUDE:conversation_wait,conversation_status,conversation_summarize,workspace_snapshot,ci_status}
+  context:
+    # 落盘前保留的上下文字符预算（不含开头的 SYSTEM 提示）与最少保留消息数
+    max-chars: ${AGENT_CONTEXT_MAX_CHARS:60000}
+    keep-messages: ${AGENT_CONTEXT_KEEP_MESSAGES:24}
 
 logging:
   level:

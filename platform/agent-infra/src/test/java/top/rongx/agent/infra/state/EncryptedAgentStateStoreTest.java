@@ -75,6 +75,6 @@ class EncryptedAgentStateStoreTest {
 
     private EncryptedAgentStateStore newStore() {
         SecretBox box = new SecretBox(temp.toString(), "");
-        return new EncryptedAgentStateStore(temp.resolve("state"), box);
+        return new EncryptedAgentStateStore(temp.resolve("state"), box, 60_000, 24);
     }
 }
