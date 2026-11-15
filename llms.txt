@@ -29,6 +29,7 @@
 
 ## 设计与规格
 
+- [Agent 文档治理方案](docs/governance/Agent文档治理方案-v1.md): 契约、同步、收敛、审批四道闸门；新增/修改文档前先看
 - [架构索引](docs/architecture/README.md): 系统全景、信任边界、模块依赖
 - [环境模板与中间件注入 v2](docs/环境变量与环境模板设计-v2.md)
 - [环境配置事实层与分环境门控](docs/环境配置事实层与分环境门控-方案-v1.md)
@@ -40,14 +41,10 @@
 - [多项目托管设计 v4](docs/多项目托管设计-v4.md)
 - [变更记录](docs/changelog/2026-11.md)
 
-## 历史与背景（仅追溯，勿作为当前结论）
+## 决策与背景
 
-- [v3 独立平台可行性](docs/devops-agent-独立平台-可行性分析-v3.md)
-- [v2 Vue-Plus 重评](docs/ruoyi-vue-plus-agent-可行性分析-v2.md)
-- [v1 若依 4.8.3 基线](docs/ruoyi-agent-可行性分析与市场调研.md)
-- [CICD 决策](docs/CICD方案替代与自创-决策-v1.md) / [验收报告](docs/CICD验收报告-v1.md)
-- [Jenkins 能力规划](docs/Jenkins能力复刻与复用-规划-v1.md) / [开源 CI 调研](docs/开源CI集成复用-调研-v1.md)
-- [废弃登记](docs/deprecated/README.md)
+- [CICD 决策](docs/CICD方案替代与自创-决策-v1.md): 不造 DSL，改用「5 个动作 + 仓库内配方」
+- 历史评估与验收文档已删除，去向与替代物见 [废弃登记](docs/deprecated/README.md)
 
 ## 可选
 

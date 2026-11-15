@@ -61,7 +61,7 @@
 ```
 agentscope-ruoyi/
 ├── README.md              项目入口（阅读顺序、快速开始、提交规范）
-├── docs/                  文档（唯一索引 docs/README.md；adr/ architecture/ api/ operation/ dev/ changelog/ deprecated/ + 24 篇存量设计）
+├── docs/                  文档（唯一索引 docs/README.md；adr/ architecture/ api/ operation/ dev/ changelog/ deprecated/ governance/ + 15 篇主目录文档）
 ├── specs/                 功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 ├── platform/              平台代码（本文档主体）
 │   ├── pom.xml            父 POM（模块与依赖管理）

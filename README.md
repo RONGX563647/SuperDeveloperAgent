@@ -10,7 +10,7 @@
 ## 目录
 
 ```
-docs/          文档（唯一索引 docs/README.md；子目录 adr/architecture/api/operation/dev/changelog/deprecated + 24 篇存量设计）
+docs/          文档（唯一索引 docs/README.md；子目录 adr/architecture/api/operation/dev/changelog/deprecated/governance + 15 篇主目录文档）
 specs/         功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 platform/      后端 8 个 Maven 模块 + Vue3 前端
 _research/     市场调研与源码能力盘点（含采集脚本）
@@ -54,16 +54,13 @@ llms.txt       给 LLM / RAG 的文档入口
 | # | 文档 | 作用 |
 |---|---|---|
 | 14 | [CI/CD 方案替代与自创 · 决策](docs/CICD方案替代与自创-决策-v1.md) | 不造 DSL，改用「5 个动作 + 仓库内配方」 |
-| 15 | [自研流水线能否替代 Jenkins · 验收报告](docs/CICD验收报告-v1.md) | 真实 git→构建→镜像→部署→健康→回滚，4/4 通过 |
-| 16 | [Jenkins 能力复刻与复用 · 规划](docs/Jenkins能力复刻与复用-规划-v1.md) | CI 引擎该复刻什么、复用什么、明确不做什么 |
-| 17 | [开源 CI 集成复用 · 调研](docs/开源CI集成复用-调研-v1.md) | 有没有现成开源 CI 能直接用（结论：SCM 绑死 Gitee） |
-| 18 | [执行面设计（K8s/Jenkins/Flyway）](docs/devops-agent-执行面设计-k8s-jenkins-flyway.md) | 「拥有类似能力」的三条备选路线 |
-| 19 | [窄控制器](docs/窄控制器设计-单机滚动部署器.md) | 单机 compose 滚动发布（**设计稿，未实施**） |
+| 15 | [窄控制器](docs/窄控制器设计-单机滚动部署器.md) | 单机 compose 滚动发布（**设计稿，未实施**） |
 
-### 背景与推演（记录结论如何演化）
+> 验收报告、Jenkins 规划、开源 CI 调研、执行面设计等历史文档已按废弃流程删除，原因与替代物见[废弃登记](docs/deprecated/README.md)。
 
-[v1 若依 4.8.3](docs/ruoyi-agent-可行性分析与市场调研.md) → [v2 Vue-Plus 重评](docs/ruoyi-vue-plus-agent-可行性分析-v2.md) → [v3 独立平台](docs/devops-agent-独立平台-可行性分析-v3.md) → [v4 多项目](docs/多项目托管设计-v4.md)；
-另有 [ruoyi-ai 编程助手拆解](docs/ruoyi-ai-编程助手拆解.md) 与 [架构分析](docs/架构分析-agentscope-ruoyi-platform-v1.md)。
+### 背景与推演（决策依据见 ADR）
+
+平台从若依嵌入式模块演进到独立多项目平台；现行方案见[多项目托管设计 v4](docs/多项目托管设计-v4.md)，为什么走独立平台见 [ADR-0001](docs/adr/0001-独立平台而非改造若依.md)。
 
 ## 快速开始
 
@@ -133,7 +130,7 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | ✅ `docs/` 24 份 Markdown + 1 份汇报稿；`docs/specs` 3 份规格与任务清单 |
+| 设计文档 | ✅ `docs/` 根目录 15 份（现行/规划）+ 1 份汇报稿；`docs/specs` 3 份规格与任务清单 |
 | 后端 | ✅ 8 个 Maven 模块（7 个运行时模块 + `spec-checks`），`mvn -B verify` 全绿 |
 | 前端 | ✅ Vue3 + Vite + Element Plus；7 个页面；`npm run build`（vue-tsc strict）通过 |
 | 认证与授权 | ✅ Sa-Token 会话、3 个种子账号、角色权限码；高危操作需二级密码 |
