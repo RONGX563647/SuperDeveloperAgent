@@ -40,7 +40,7 @@ class IntakeScaffoldTest {
 
         IntakeProjectStore store = new IntakeProjectStore(workspace.resolve("_platform/projects.db"));
         ProjectIntakeService service = new ProjectIntakeService(
-                new GitWorktreeManager(workspace), store, workspace.toString(), new RecipeScaffolder());
+                new GitWorktreeManager(workspace), store, workspace.toString(), new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE));
 
         service.submit(new ProjectIntakeService.IntakeRequest(
                 "DEMO", repo.toString(), null, "java", false, "DIRECT", null));
@@ -86,7 +86,7 @@ class IntakeScaffoldTest {
         ProjectIntakeService service = new ProjectIntakeService(
                 new GitWorktreeManager(workspace),
                 new IntakeProjectStore(workspace.resolve("_platform2/projects.db")),
-                workspace.toString(), new RecipeScaffolder());
+                workspace.toString(), new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE));
         service.submit(new ProjectIntakeService.IntakeRequest(
                 "DEMO2", repo.toString(), null, "java", false, "DIRECT", null));
         awaitRegistered(service, "DEMO2");
@@ -118,7 +118,7 @@ class IntakeScaffoldTest {
         ProjectIntakeService service = new ProjectIntakeService(
                 new GitWorktreeManager(workspace),
                 new IntakeProjectStore(workspace.resolve("_platform3/projects.db")),
-                workspace.toString(), new RecipeScaffolder());
+                workspace.toString(), new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE));
         service.submit(new ProjectIntakeService.IntakeRequest(
                 "RENEW", repo.toString(), null, "java", false, "DIRECT", null));
         awaitRegistered(service, "RENEW");

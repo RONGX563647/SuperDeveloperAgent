@@ -100,10 +100,17 @@ class IntakeE2ETest {
         git.fetchLocal("E2E", userDir);
 
         // 4. 引擎构建：verify 流水线（只构建，不部署）
-        DockerSandbox sandbox = new DockerSandbox("docker", "node:20-alpine", "bridge",
+        // 工具链镜像可用 -Ddocker.test.image 覆盖。平台现在会在动作前预检镜像，
+        // 缺失即明确报 E-209 而不是静默拉取，因此 E2E 必须先把「本机已有该镜像」
+        // 作为环境前提；否则会把环境缺镜像误报成流水线回归。
+        String toolchainImage = System.getProperty("docker.test.image", "node:20-alpine");
+        DockerSandbox sandbox = new DockerSandbox("docker", toolchainImage, "bridge",
                 "1g", "1", 256, "1000:1000");
-        boolean dockerReady = sandbox.available();
-        Assumptions.assumeTrue(dockerReady, "Docker 不可用，跳过引擎构建断言");
+        Assumptions.assumeTrue(sandbox.available(), "Docker 不可用，跳过引擎构建断言");
+        Assumptions.assumeTrue(
+                TestEnv.commandAvailable("docker", "image", "inspect", toolchainImage),
+                "本机缺少工具链镜像 " + toolchainImage
+                        + "，跳过引擎构建断言（先 docker pull，或用 -Ddocker.test.image 指向已有镜像）");
         PipelineEngine engine = new BuiltInPipelineEngine(new RecipeActionResolver(),
                 new DockerActionRunner(sandbox), new ProcessActionRunner(), ws);
 

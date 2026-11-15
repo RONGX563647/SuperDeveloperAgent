@@ -6,17 +6,21 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.RecipeStore;
+import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.executor.BuiltInPipelineEngine;
@@ -30,11 +34,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 方案 C 的端到端验证（不依赖真实 Docker）：deploy stage → 平台部署器 → 证据链。
+ * 方案 C 的端到端验证（不依赖真实容器发布）：deploy stage → 平台部署器 → 证据链。
  *
  * <p>用"记录型部署器"替身，验证引擎侧契约：目标解析、端口传递、覆盖优先级、
- * 缺 deploy 段的失败语义、rollback 的失败语义。真实容器发布由
+ * 缺 deploy 段的失败语义、rollback 的失败语义、受审校验。真实容器发布由
  * {@code PipelineAcceptanceTest} 覆盖（有 Docker 时）。
+ *
+ * <p>夹具必须产出 {@code image} 产物：引擎的「部署目标自愈」会在既无镜像又无可运行 jar
+ * 时诚实失败（E-504），不允许假部署。这里用一个无副作用的 image_package 动作
+ * （只跑 {@code git status}）登记镜像产物，不真的构建镜像。
  */
 class DeployStageTest {
 
@@ -43,6 +51,7 @@ class DeployStageTest {
 
     private static String sha;
     private static RecordingDeployer deployer;
+    private static EvidenceRecipeStore recipes;
     private static PipelineEngine engine;
 
     /** 记录调用参数并返回成功，用于断言引擎传了什么给部署器。 */
@@ -67,6 +76,51 @@ class DeployStageTest {
         }
     }
 
+    /**
+     * 只提供「测试环境成功案例」的证据，满足 prod 触发的晋升前置。
+     *
+     * <p>本用例没有注入定义解析器，固化脚本不参与定义解析（来源仍是 REPO），
+     * 因此这份替身不会把 E-508 的受审比对短路掉。gitSha 留空 = 不比对提交。
+     */
+    private static final class EvidenceRecipeStore implements RecipeStore {
+        private volatile String evidenceRunId;
+
+        @Override
+        public DeployRecipe save(DeployRecipe recipe) {
+            return recipe;
+        }
+
+        @Override
+        public Optional<DeployRecipe> current(String projectId, String env) {
+            if (!"test".equals(env) || evidenceRunId == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new DeployRecipe(projectId, "test", 1,
+                    "name: evidence\nstages: []\n", null,
+                    evidenceRunId, null, System.currentTimeMillis(), "test"));
+        }
+
+        @Override
+        public Optional<DeployRecipe> version(String projectId, String env, int version) {
+            return Optional.empty();
+        }
+
+        @Override
+        public List<DeployRecipe> versions(String projectId, String env) {
+            return List.of();
+        }
+
+        @Override
+        public boolean activate(String projectId, String env, int version) {
+            return false;
+        }
+
+        @Override
+        public Path rootOf(String projectId, String env, int version) {
+            return workspaces;
+        }
+    }
+
     @BeforeAll
     static void prepare() throws Exception {
         Assumptions.assumeTrue(TestEnv.dockerAvailable(),
@@ -82,23 +136,30 @@ class DeployStageTest {
                   containerPort: 8080
                   healthPath: /healthz
                 stages:
+                  - id: image
+                    type: action
+                    action: image_package
+                    runner: host
                   - id: deploy
                     type: deploy
                 """);
+        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
         sha = sh(repo, "git", "rev-parse", "HEAD").trim();
         new GitWorktreeManager(workspaces).linkLocal("RY", repo, false);
         deployer = new RecordingDeployer();
+        recipes = new EvidenceRecipeStore();
         engine = new BuiltInPipelineEngine(new RecipeActionResolver(),
                 new ProcessActionRunner(), new ProcessActionRunner(),
-                workspaces, RunHistoryStore.disabled(), "ci", null, deployer);
+                workspaces, RunHistoryStore.disabled(), "ci", null, deployer, null, recipes);
     }
 
     @Test
     @DisplayName("deploy stage：用 pipeline.yml 的 target/port 调用部署器，并登记 deployment 产物")
     void deployStageUsesPipelineDeclaration() throws Exception {
+        deployer.failNext = false;
         deployer.calls.clear();
         String runId = engine.trigger("RY", "release", Map.of("gitSha", sha));
         awaitTerminal(runId, 30);
@@ -121,6 +182,7 @@ class DeployStageTest {
     @Test
     @DisplayName("触发参数 deployTarget 覆盖 pipeline.yml 的 deploy.target")
     void triggerCanOverrideTarget() throws Exception {
+        deployer.failNext = false;
         deployer.calls.clear();
         String runId = engine.trigger("RY", "release", Map.of("gitSha", sha, "deployTarget", "host"));
         awaitTerminal(runId, 30);
@@ -138,15 +200,21 @@ class DeployStageTest {
         writePipeline(repo, """
                 name: release
                 stages:
+                  - id: image
+                    type: action
+                    action: image_package
+                    runner: host
                   - id: deploy
                     type: deploy
                 """);
+        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
         String otherSha = sh(repo, "git", "rev-parse", "HEAD").trim();
         new GitWorktreeManager(workspaces).linkLocal("RY2", repo, false);
 
+        deployer.failNext = false;
         String runId = engine.trigger("RY2", "release", Map.of("gitSha", otherSha));
         awaitTerminal(runId, 30);
 
@@ -155,7 +223,7 @@ class DeployStageTest {
     }
 
     @Test
-    @DisplayName("部署失败 → 进入 on-failure；无上一版时 rollback 报 E-507 而不是假成功")
+    @DisplayName("部署失败 → 进入 on-failure；无上一版时如实跳过回滚，不伪造第二个故障")
     void failureTriggersRollbackWithHonestError() throws Exception {
         Path repo = workspaces.resolve("RY3-repo");
         Files.createDirectories(repo.resolve("ci"));
@@ -166,12 +234,17 @@ class DeployStageTest {
                   target: docker
                   port: 18091
                 stages:
+                  - id: image
+                    type: action
+                    action: image_package
+                    runner: host
                   - id: deploy
                     type: deploy
                 on-failure:
                   - id: rollback
                     type: rollback
                 """);
+        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
@@ -186,14 +259,16 @@ class DeployStageTest {
         assertEquals(StageStatus.FAILED, engine.status(runId));
         assertEquals("E-599", stageOf(runId, "deploy").errorCode());
         StageResult rollback = stageOf(runId, "rollback");
-        assertEquals("E-507", rollback.errorCode(), "没有上一版时必须诚实失败");
-        // rollback 会再调用一次部署器（rollback=true），由引擎先行拒绝（E-507 在引擎侧）
+        assertEquals(StageStatus.SUCCEEDED, rollback.status(),
+                "首次发布失败没有上一版，回滚本身不该被判成第二个故障");
+        assertTrue(engine.logTail(runId).contains("跳过回滚"),
+                "必须如实记录跳过原因：" + engine.logTail(runId));
         assertFalse(deployer.calls.stream().anyMatch(DeployRequest::rollback),
                 "无 lastGood 时不应调用部署器执行回滚");
     }
 
     @Test
-    @DisplayName("E-508：流水线改动未合并到默认分支时，拒绝部署")
+    @DisplayName("E-508：prod 环境的未合并流水线改动，拒绝部署")
     void unmergedPipelineChangeIsRejected() throws Exception {
         Path repo = workspaces.resolve("RY4-repo");
         Files.createDirectories(repo.resolve("ci"));
@@ -204,9 +279,14 @@ class DeployStageTest {
                   target: docker
                   port: 18092
                 stages:
+                  - id: image
+                    type: action
+                    action: image_package
+                    runner: host
                   - id: deploy
                     type: deploy
                 """);
+        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "main");
@@ -217,6 +297,10 @@ class DeployStageTest {
                   target: docker
                   port: 19999
                 stages:
+                  - id: image
+                    type: action
+                    action: image_package
+                    runner: host
                   - id: deploy
                     type: deploy
                 """);
@@ -225,12 +309,23 @@ class DeployStageTest {
         String featureSha = sh(repo, "git", "rev-parse", "HEAD").trim();
         // 切回默认分支再接入：bare 的默认分支必须是"受审版本"
         sh(repo, "git", "checkout", "-q", "-");
+        String mainSha = sh(repo, "git", "rev-parse", "HEAD").trim();
         new GitWorktreeManager(workspaces).linkLocal("RY4", repo, false);
+
+        // 受审校验只在 prod 生效：先在 test 环境跑通一次，作为 prod 晋升的"成功案例"证据。
+        deployer.failNext = false;
+        deployer.calls.clear();
+        String evidence = engine.trigger("RY4", "release", Map.of("gitSha", mainSha));
+        awaitTerminal(evidence, 30);
+        assertEquals(StageStatus.SUCCEEDED, engine.status(evidence), engine.logTail(evidence));
+        recipes.evidenceRunId = evidence;
+
         // 把未合并的 feature 提交也推进 bare（模拟"有人 push 了未合并分支并要求构建它"）
         sh(repo, "git", "push", "--quiet", "agent", "feature:refs/heads/feature");
 
         deployer.calls.clear();
-        String runId = engine.trigger("RY4", "release", Map.of("gitSha", featureSha));
+        String runId = engine.trigger("RY4", "release",
+                Map.of("gitSha", featureSha, "env", "prod"));
         awaitTerminal(runId, 30);
 
         assertEquals(StageStatus.FAILED, engine.status(runId), engine.logTail(runId));
@@ -264,11 +359,23 @@ class DeployStageTest {
         Files.writeString(repo.resolve("ci/pipeline.yml"), yaml, StandardCharsets.UTF_8);
     }
 
-    private static String sh(Path dir, String... argv) throws Exception {
-        Process p = new ProcessBuilder(argv).directory(dir.toFile()).redirectErrorStream(true).start();
-        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        assertTrue(p.waitFor(30, TimeUnit.SECONDS), "命令超时：" + String.join(" ", argv));
-        assertEquals(0, p.exitValue(), "命令失败：" + String.join(" ", argv) + "\n" + out);
-        return out;
+    /** 无副作用的镜像打包动作：只登记 image 产物，不真的调用 docker build。 */
+    private static void writeActions(Path repo) throws Exception {
+        Files.writeString(repo.resolve("ci/actions.yml"), """
+                actions:
+                  image_package:
+                    run: ["git", "status", "--short"]
+                    timeout: 1m
+                """, StandardCharsets.UTF_8);
+    }
+
+    /** 有界执行：并行排空输出 + 硬超时，避免 readAllBytes 让 waitFor 的超时形同虚设。 */
+    private static String sh(Path dir, String... argv) {
+        String label = String.join(" ", argv);
+        BoundedCommand.Outcome outcome = BoundedCommand.run(List.of(argv), dir, 30_000L);
+        assertFalse(outcome.timedOut(), "命令超时：" + label + "\n" + outcome.output());
+        assertEquals(0, outcome.exitCode(),
+                "命令失败：" + label + "\n" + outcome.output() + "\n" + outcome.detail());
+        return outcome.output();
     }
 }

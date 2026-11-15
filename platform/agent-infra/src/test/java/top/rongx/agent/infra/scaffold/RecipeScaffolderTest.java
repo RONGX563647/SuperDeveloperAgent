@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RecipeScaffolderTest {
 
-    private final RecipeScaffolder scaffolder = new RecipeScaffolder();
+    private final RecipeScaffolder scaffolder = new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE);
 
     @Test
     @DisplayName("Java 单模块 + Dockerfile → 生成 build/image/deploy/health + rollback（不再拆 test stage）")
@@ -327,6 +327,22 @@ class RecipeScaffolderTest {
         assertTrue(actions.contains("backend/Dockerfile"), actions);
         assertTrue(actions.contains("\"backend\""), actions);
         assertTrue(content(plan, "ci/pipeline.yml").contains("expected: 2xx"));
+    }
+
+    @Test
+    @DisplayName("前端工具链镜像由配置注入：生成的 pipeline.yml 不再写死 node 标签")
+    void nodeImageIsConfigurable(@TempDir Path repo) throws Exception {
+        Files.createDirectories(repo.resolve("backend"));
+        Files.createDirectories(repo.resolve("frontend"));
+        Files.writeString(repo.resolve("backend/pom.xml"), "<project/>");
+        Files.writeString(repo.resolve("frontend/package.json"), "{}");
+
+        RecipeScaffolder custom = new RecipeScaffolder("registry.local/node:22-slim");
+        ScaffoldPlan plan = custom.plan("RY", repo, DeployTarget.HOST);
+
+        String pipeline = content(plan, "ci/pipeline.yml");
+        assertTrue(pipeline.contains("image: registry.local/node:22-slim"), pipeline);
+        assertFalse(pipeline.contains("image: node:20-bookworm"), pipeline);
     }
 
     private String content(ScaffoldPlan plan, String path) {
