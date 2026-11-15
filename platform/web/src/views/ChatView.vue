@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown, CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
+  CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../stores/app'
 import type { TraceTurn } from '../types'
@@ -290,14 +290,13 @@ function startWith(text: string): void {
   void send()
 }
 
-/** 次级视图统一收进「更多」，顶栏只保留对话一个主入口。 */
-const secondaryLabels: Record<string, string> = {
-  trace: '轨迹',
-  capabilities: '能力',
-  issues: '任务',
-}
-const secondaryLabel = computed(() =>
-  viewMode.value === 'chat' ? '更多' : (secondaryLabels[viewMode.value] ?? '更多'))
+/** 四个平级视图直接铺开，不再收进「更多」下拉。 */
+const viewTabs: { key: 'chat' | 'trace' | 'capabilities' | 'issues'; label: string }[] = [
+  { key: 'chat', label: '对话' },
+  { key: 'trace', label: '轨迹' },
+  { key: 'capabilities', label: '能力' },
+  { key: 'issues', label: '任务' },
+]
 
 /** 输入框自增高：1 行起，最高约 30vh，超出后内部滚动。 */
 function resizeInput(): void {
@@ -495,28 +494,22 @@ onMounted(async () => {
     <div class="topbar">
       <div class="view-switch">
         <button
-          type="button" class="switch-tab" :class="{ on: viewMode === 'chat' }"
-          @click="viewMode = 'chat'"
+          v-for="tab in viewTabs" :key="tab.key" type="button"
+          class="switch-tab" :class="{ on: viewMode === tab.key }"
+          @click="viewMode = tab.key"
         >
-          对话
+          {{ tab.label }}
+          <span
+            v-if="tab.key === 'capabilities' && selectedSkills.length + selectedMcp.length"
+            class="tab-badge mono"
+          >
+            {{ selectedSkills.length + selectedMcp.length }}
+          </span>
+          <span
+            v-else-if="tab.key === 'issues' && issueCount"
+            class="tab-badge mono"
+          >{{ issueCount }}</span>
         </button>
-        <el-dropdown trigger="click" @command="(cmd: string) => (viewMode = cmd as 'chat' | 'trace' | 'capabilities' | 'issues')">
-          <button type="button" class="switch-tab more-tab" :class="{ on: viewMode !== 'chat' }">
-            {{ secondaryLabel }}
-            <span v-if="viewMode === 'capabilities' && selectedSkills.length + selectedMcp.length" class="tab-badge mono">
-              {{ selectedSkills.length + selectedMcp.length }}
-            </span>
-            <span v-else-if="viewMode === 'issues' && issueCount" class="tab-badge mono">{{ issueCount }}</span>
-            <el-icon><ArrowDown /></el-icon>
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="trace">轨迹</el-dropdown-item>
-              <el-dropdown-item command="capabilities">能力</el-dropdown-item>
-              <el-dropdown-item command="issues">任务</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
       </div>
       <EnvironmentStatusBar
         :project-id="projectId"
@@ -814,7 +807,7 @@ onMounted(async () => {
   overscroll-behavior: contain;
 }
 .chat-approval {
-  max-width: 45rem;
+  max-width: 56rem;
   margin: 0 auto 24px;
 }
 
@@ -824,7 +817,7 @@ onMounted(async () => {
   flex-direction: column;
   justify-content: center;
   width: 100%;
-  max-width: 45rem;
+  max-width: 56rem;
   min-height: 100%;
   padding: 24px 0;
   margin: 0 auto;
@@ -903,11 +896,6 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--ink-faint);
 }
-.more-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
 
 /* 展开确认卡片按钮（在 ConversationTimeline 的 change-action 插槽里） */
 .tip-btn {
@@ -946,7 +934,7 @@ onMounted(async () => {
   flex-direction: column;
   gap: 6px;
   width: 100%;
-  max-width: 45rem;
+  max-width: 56rem;
   padding: 12px 12px 6px 14px;
   margin: 0 auto;
   background: var(--surface-raised);

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ArrowRight, ChatDotRound, Close, Delete, Edit, Link, Plus, Refresh, RefreshRight, Search,
-  Setting,
+  ChatDotRound, Close, Delete, Edit, Link, Plus, Refresh, RefreshRight, Search,
+  Setting, Tickets,
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
@@ -34,8 +34,7 @@ const error = ref('')
 const keyword = ref('')
 const stateFilter = ref('')
 const kindFilter = ref('')
-const expandedId = ref('')
-
+const selectedId = ref('')
 const comments = ref<GitIssueCommentRow[]>([])
 const commentsLoading = ref(false)
 const commentText = ref('')
@@ -181,7 +180,7 @@ async function loadBugFix(issueId: string): Promise<void> {
   fixLoading.value = true
   try {
     const rows = await listBugFixRuns(issueId)
-    if (expandedId.value !== issueId) return
+    if (selectedId.value !== issueId) return
     if (!rows.length) {
       fixRun.value = null
       fixEvents.value = []
@@ -189,18 +188,18 @@ async function loadBugFix(issueId: string): Promise<void> {
       return
     }
     const detail = await getBugFixRun(rows[0].id)
-    if (expandedId.value !== issueId) return
+    if (selectedId.value !== issueId) return
     fixRun.value = detail.run
     fixEvents.value = detail.events
     fixStages.value = detail.stages ?? []
   } catch {
-    if (expandedId.value === issueId) {
+    if (selectedId.value === issueId) {
       fixRun.value = null
       fixEvents.value = []
       fixStages.value = []
     }
   } finally {
-    if (expandedId.value === issueId) fixLoading.value = false
+    if (selectedId.value === issueId) fixLoading.value = false
   }
 }
 
@@ -208,10 +207,10 @@ async function loadBugFix(issueId: string): Promise<void> {
 function scheduleFixPoll(): void {
   clearTimeout(fixTimer)
   const run = fixRun.value
-  const issueId = expandedId.value
+  const issueId = selectedId.value
   if (!issueId || !run || !['QUEUED', 'RUNNING'].includes(run.status)) return
   fixTimer = setTimeout(async () => {
-    if (expandedId.value !== issueId) return
+    if (selectedId.value !== issueId) return
     await loadBugFix(issueId)
     scheduleFixPoll()
   }, 3000)
@@ -335,6 +334,14 @@ const visibleItems = computed(() => kindFilter.value
   ? items.value.filter((i) => (i.kind ?? 'BUG') === kindFilter.value)
   : items.value)
 
+/** 概览统计：列表数据在前端聚合，不额外请求。 */
+const openCount = computed(() => items.value.filter((i) => i.state === 'OPEN').length)
+const closedCount = computed(() => items.value.length - openCount.value)
+const bugCount = computed(() => items.value.filter((i) => (i.kind ?? 'BUG') === 'BUG').length)
+const featCount = computed(() => items.value.filter((i) => i.kind === 'FEAT').length)
+/** 右侧详情当前选中的任务。 */
+const selectedRow = computed(() => items.value.find((i) => i.id === selectedId.value) ?? null)
+
 const PROVIDER_LABEL: Record<string, string> = {
   GITEE: 'Gitee', GITHUB: 'GitHub', GITLAB: 'GitLab',
 }
@@ -423,8 +430,8 @@ async function load(silent = false): Promise<void> {
     if (seq !== loadSeq) return
     items.value = rows
     emit('count', rows.filter((r) => r.state === 'OPEN').length)
-    if (!rows.some((r) => r.id === expandedId.value)) {
-      expandedId.value = ''
+    if (!rows.some((r) => r.id === selectedId.value)) {
+      selectedId.value = ''
     }
   } catch (e) {
     if (seq === loadSeq) error.value = e instanceof Error ? e.message : '加载任务失败'
@@ -439,8 +446,8 @@ watch(keyword, () => {
 })
 watch(stateFilter, () => void load())
 watch(kindFilter, () => {
-  if (expandedId.value && !visibleItems.value.some((i) => i.id === expandedId.value)) {
-    expandedId.value = ''
+  if (selectedId.value && !visibleItems.value.some((i) => i.id === selectedId.value)) {
+    selectedId.value = ''
   }
 })
 
@@ -451,18 +458,13 @@ onMounted(() => {
 
 onUnmounted(() => clearTimeout(fixTimer))
 
-// ---------------------------------------------------------------- 展开 / 评论
+// ---------------------------------------------------------------- 选中 / 评论
 
-async function toggleExpand(row: GitIssueRow): Promise<void> {
-  if (expandedId.value === row.id) {
-    expandedId.value = ''
-    clearTimeout(fixTimer)
-    fixRun.value = null
-    fixEvents.value = []
-    fixStages.value = []
-    return
-  }
-  expandedId.value = row.id
+/** 左列选中一条任务，右列加载它的评论与自动修复状态（已选中则不重复请求）。 */
+async function select(row: GitIssueRow): Promise<void> {
+  if (selectedId.value === row.id) return
+  selectedId.value = row.id
+  editorOpen.value = false
   commentText.value = ''
   clearTimeout(fixTimer)
   fixRun.value = null
@@ -476,15 +478,15 @@ async function toggleExpand(row: GitIssueRow): Promise<void> {
 }
 
 async function loadComments(): Promise<void> {
-  if (!expandedId.value) {
+  if (!selectedId.value) {
     comments.value = []
     return
   }
-  const id = expandedId.value
+  const id = selectedId.value
   commentsLoading.value = true
   try {
     const rows = await listGitIssueComments(id)
-    if (expandedId.value === id) comments.value = rows
+    if (selectedId.value === id) comments.value = rows
   } catch (e) {
     comments.value = []
     ElMessage.error(e instanceof Error ? e.message : '加载评论失败')
@@ -494,7 +496,7 @@ async function loadComments(): Promise<void> {
 }
 
 async function submitComment(): Promise<void> {
-  const id = expandedId.value
+  const id = selectedId.value
   const text = commentText.value.trim()
   if (!id || !text) return
   commenting.value = true
@@ -510,7 +512,7 @@ async function submitComment(): Promise<void> {
 }
 
 async function removeComment(comment: GitIssueCommentRow): Promise<void> {
-  const id = expandedId.value
+  const id = selectedId.value
   if (!id || comment.source !== 'PLATFORM') return
   try {
     await deleteGitIssueComment(id, comment.id)
@@ -526,7 +528,6 @@ const editorOpen = ref(false)
 const editingId = ref('')
 const saving = ref(false)
 const form = reactive({ title: '', body: '', labels: '', kind: 'BUG' as 'BUG' | 'FEAT' })
-const listRef = ref<HTMLElement | null>(null)
 
 const editorTarget = computed(() => {
   const row = editingId.value
@@ -542,8 +543,7 @@ function openCreate(): void {
   editingId.value = ''
   Object.assign(form, { title: '', body: '', labels: '', kind: 'BUG' })
   editorOpen.value = true
-  expandedId.value = ''
-  scrollToEditor()
+  selectedId.value = ''
 }
 
 function openEdit(row: GitIssueRow): void {
@@ -552,12 +552,6 @@ function openEdit(row: GitIssueRow): void {
     title: row.title, body: row.body, labels: row.labels, kind: row.kind ?? 'BUG',
   })
   editorOpen.value = true
-  scrollToEditor()
-}
-
-/** 编辑卡片在列表顶部，滚动到顶避免用户看不到刚打开的卡片。 */
-function scrollToEditor(): void {
-  void nextTick(() => listRef.value?.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
 function closeEditor(): void {
@@ -594,7 +588,7 @@ async function submit(): Promise<void> {
     }
     closeEditor()
     await load(true)
-    expandedId.value = row.id
+    selectedId.value = row.id
     await loadComments()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存任务失败')
@@ -663,7 +657,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   try {
     await deleteGitIssue(row.id)
     items.value = items.value.filter((i) => i.id !== row.id)
-    if (expandedId.value === row.id) expandedId.value = ''
+    if (selectedId.value === row.id) selectedId.value = ''
     emit('count', items.value.filter((i) => i.state === 'OPEN').length)
     ElMessage.success('任务已删除')
   } catch (e) {
@@ -679,7 +673,10 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
     <div class="issues-shell">
       <header class="issues-head">
         <div class="issues-head-main">
-          <h1 class="issues-title">任务</h1>
+          <div class="issues-title-row">
+            <h1 class="issues-title">任务</h1>
+            <span class="issues-sub">Git Issue 双向同步</span>
+          </div>
           <p class="issues-desc">
             项目托管的 Git Issue 自动双向同步；Agent 可读取并操作同一批任务。
           </p>
@@ -689,9 +686,6 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
             <span class="repo-dot" />
             {{ providerLabel(currentRepo.provider) }}
             <span class="mono">{{ currentRepo.repo }}</span>
-          </span>
-          <span class="issues-stat">
-            待处理 <b class="mono">{{ items.filter((i) => i.state === 'OPEN').length }}</b>
           </span>
           <el-button size="small" @click="togglePolicy">
             <el-icon><Setting /></el-icon> 自动修复
@@ -705,122 +699,190 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
         </div>
       </header>
 
-      <div class="issues-panel">
-        <div class="issues-toolbar">
-          <el-input
-            v-model="keyword" size="default" clearable class="search"
-            placeholder="搜索标题 / 描述"
-          >
-            <template #prefix><el-icon><Search /></el-icon></template>
-          </el-input>
-          <div class="state-tabs">
-            <button
-              v-for="opt in stateOptions" :key="opt.value" type="button"
-              class="state-tab" :class="{ active: stateFilter === opt.value }"
-              @click="stateFilter = opt.value"
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-          <div class="state-tabs kind-tabs">
-            <button
-              v-for="opt in kindOptions" :key="opt.value" type="button"
-              class="state-tab"
-              :class="[
-                opt.value ? opt.value.toLowerCase() : '',
-                { active: kindFilter === opt.value },
-              ]"
-              @click="kindFilter = opt.value"
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-          <span class="toolbar-count mono">{{ visibleItems.length }} 个任务</span>
+      <!-- 概览：待处理 / 已完成 + 类型分布，一屏看清任务池 -->
+      <div class="issues-stats">
+        <div class="stat-card open">
+          <span class="stat-label">待处理</span>
+          <b class="stat-value mono">{{ openCount }}</b>
         </div>
+        <div class="stat-card closed">
+          <span class="stat-label">已完成</span>
+          <b class="stat-value mono">{{ closedCount }}</b>
+        </div>
+        <div class="stat-card bug">
+          <span class="stat-label">Bug</span>
+          <b class="stat-value mono">{{ bugCount }}</b>
+        </div>
+        <div class="stat-card feat">
+          <span class="stat-label">Feat</span>
+          <b class="stat-value mono">{{ featCount }}</b>
+        </div>
+      </div>
 
-        <!-- 自动修复策略：页内卡片，说明清楚“PR 必须人工合并” -->
-        <section v-if="policyOpen" class="policy-card">
-          <div class="editor-head">
-            <div>
-              <h2 class="editor-title">Bug 自动修复</h2>
-              <p class="editor-desc">
-                Bug 任务创建后自动：分析版本 → 部署测试环境复现 → 修复 → 重新部署验证 → 提交 PR。
-                平台只创建 PR，最终合并必须由人工完成。
-              </p>
-            </div>
-            <el-button text size="small" @click="policyOpen = false">收起</el-button>
+      <!-- 自动修复策略：页内卡片，说明清楚“PR 必须人工合并” -->
+      <section v-if="policyOpen" class="policy-card">
+        <div class="editor-head">
+          <div>
+            <h2 class="editor-title">Bug 自动修复</h2>
+            <p class="editor-desc">
+              Bug 任务创建后自动：分析版本 → 部署测试环境复现 → 修复 → 重新部署验证 → 提交 PR。
+              平台只创建 PR，最终合并必须由人工完成。
+            </p>
           </div>
-          <div v-if="policyLoading" class="block-empty">加载策略…</div>
-          <div v-else class="policy-grid">
-            <label class="policy-switch">
-              <el-switch v-model="policyForm.enabled" />
-              <span>启用自动修复（新建 Bug 自动入队）</span>
-            </label>
-            <label class="policy-switch">
-              <el-switch v-model="policyForm.autoDeploy" />
-              <span>允许运维 Agent 自动部署测试环境</span>
-            </label>
-            <label class="policy-switch">
-              <el-switch v-model="policyForm.autoCreatePr" />
-              <span>验证通过后自动推送分支并创建 PR</span>
-            </label>
-            <div class="policy-field">
-              <span class="policy-label">测试环境</span>
-              <el-input v-model="policyForm.testEnv" size="small" placeholder="test" />
-            </div>
-            <div class="policy-field">
-              <span class="policy-label">环境绑定 ID</span>
-              <el-input
-                v-model="policyForm.bindingId" size="small"
-                placeholder="已人工确认的 EnvBinding id"
-              />
-            </div>
-            <div class="policy-field">
-              <span class="policy-label">最大尝试次数</span>
-              <el-input-number v-model="policyForm.maxAttempts" :min="1" :max="5" size="small" />
-            </div>
-            <div class="policy-field">
-              <span class="policy-label">测试环境地址</span>
-              <el-input
-                v-model="policyForm.baseUrl" size="small"
-                placeholder="https://test.example.com（用于确定性冒烟检查）"
-              />
-            </div>
-            <div class="policy-field">
-              <span class="policy-label">构建命令</span>
-              <el-input
-                v-model="policyForm.buildCommand" size="small"
-                placeholder="mvn -q -DskipTests package（修复后必须通过）"
-              />
-            </div>
-            <div class="policy-field">
-              <span class="policy-label">测试命令</span>
-              <el-input
-                v-model="policyForm.testCommand" size="small"
-                placeholder="可选，例如 mvn -q test"
-              />
-            </div>
+          <el-button text size="small" @click="policyOpen = false">收起</el-button>
+        </div>
+        <div v-if="policyLoading" class="block-empty">加载策略…</div>
+        <div v-else class="policy-grid">
+          <label class="policy-switch">
+            <el-switch v-model="policyForm.enabled" />
+            <span>启用自动修复（新建 Bug 自动入队）</span>
+          </label>
+          <label class="policy-switch">
+            <el-switch v-model="policyForm.autoDeploy" />
+            <span>允许运维 Agent 自动部署测试环境</span>
+          </label>
+          <label class="policy-switch">
+            <el-switch v-model="policyForm.autoCreatePr" />
+            <span>验证通过后自动推送分支并创建 PR</span>
+          </label>
+          <div class="policy-field">
+            <span class="policy-label">测试环境</span>
+            <el-input v-model="policyForm.testEnv" size="small" placeholder="test" />
           </div>
-          <div class="editor-foot">
-            <span class="policy-hint">
-              {{ policy?.enabled ? '当前已启用，新建 Bug 会自动执行。' : '当前未启用，仅同步不自动执行。' }}
-            </span>
-            <el-button size="small" type="primary" :loading="policySaving" @click="submitPolicy">
-              保存策略
-            </el-button>
+          <div class="policy-field">
+            <span class="policy-label">环境绑定 ID</span>
+            <el-input
+              v-model="policyForm.bindingId" size="small"
+              placeholder="已人工确认的 EnvBinding id"
+            />
           </div>
-        </section>
+          <div class="policy-field">
+            <span class="policy-label">最大尝试次数</span>
+            <el-input-number v-model="policyForm.maxAttempts" :min="1" :max="5" size="small" />
+          </div>
+          <div class="policy-field">
+            <span class="policy-label">测试环境地址</span>
+            <el-input
+              v-model="policyForm.baseUrl" size="small"
+              placeholder="https://test.example.com（用于确定性冒烟检查）"
+            />
+          </div>
+          <div class="policy-field">
+            <span class="policy-label">构建命令</span>
+            <el-input
+              v-model="policyForm.buildCommand" size="small"
+              placeholder="mvn -q -DskipTests package（修复后必须通过）"
+            />
+          </div>
+          <div class="policy-field">
+            <span class="policy-label">测试命令</span>
+            <el-input
+              v-model="policyForm.testCommand" size="small"
+              placeholder="可选，例如 mvn -q test"
+            />
+          </div>
+        </div>
+        <div class="editor-foot">
+          <span class="policy-hint">
+            {{ policy?.enabled ? '当前已启用，新建 Bug 会自动执行。' : '当前未启用，仅同步不自动执行。' }}
+          </span>
+          <el-button size="small" type="primary" :loading="policySaving" @click="submitPolicy">
+            保存策略
+          </el-button>
+        </div>
+      </section>
 
-        <div ref="listRef" class="issues-list">
-          <!-- 新建 / 编辑：页内卡片，不遮挡列表 -->
-          <section v-if="editorOpen" class="editor-card">
-            <div class="editor-head">
-              <h2 class="editor-title">{{ editingId ? '编辑任务' : '新建任务' }}</h2>
-              <p class="editor-desc">
-                {{ editingId
-                  ? '修改后会同步到已绑定的 Git Issue；Agent 也能读取并操作这条任务。'
-                  : '保存后自动同步到项目托管的 Git 仓库；Agent 也能读取并操作这条任务。' }}
-              </p>
+      <div class="issues-body">
+        <!-- 左列：搜索 / 过滤 / 任务列表 -->
+        <aside class="issues-side">
+          <div class="side-toolbar">
+            <el-input
+              v-model="keyword" size="default" clearable class="search"
+              placeholder="搜索标题 / 描述"
+            >
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <div class="state-tabs">
+              <button
+                v-for="opt in stateOptions" :key="opt.value" type="button"
+                class="state-tab" :class="{ active: stateFilter === opt.value }"
+                @click="stateFilter = opt.value"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+            <div class="state-tabs kind-tabs">
+              <button
+                v-for="opt in kindOptions" :key="opt.value" type="button"
+                class="state-tab"
+                :class="[
+                  opt.value ? opt.value.toLowerCase() : '',
+                  { active: kindFilter === opt.value },
+                ]"
+                @click="kindFilter = opt.value"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+            <span class="toolbar-count mono">{{ visibleItems.length }} 个任务</span>
+          </div>
+
+          <div class="side-list">
+            <div v-if="loading && !items.length" class="list-empty">加载中…</div>
+            <div v-else-if="error" class="list-empty error">{{ error }}</div>
+            <div v-else-if="!visibleItems.length" class="list-empty">
+              {{ items.length
+                ? '当前分类下没有任务，切换分类看看。'
+                : '还没有任务。新建一个，或在 Git 上创建 Issue 自动同步过来。' }}
+            </div>
+
+            <button
+              v-for="row in visibleItems" :key="row.id" type="button" class="task-item"
+              :class="{ active: selectedId === row.id, closed: row.state === 'CLOSED' }"
+              @click="select(row)"
+            >
+              <span class="item-line">
+                <span class="state-dot" :class="row.state.toLowerCase()" />
+                <span class="kind-chip" :class="row.kind === 'FEAT' ? 'feat' : 'bug'">
+                  {{ kindLabel(row.kind) }}
+                </span>
+                <span class="task-title">{{ row.title }}</span>
+              </span>
+              <span class="item-meta">
+                <span class="task-remote mono" :class="{ local: !isBound(row) }">
+                  {{ remoteText(row) }}
+                </span>
+                <span
+                  v-if="isBound(row) || row.syncStatus === 'FAILED'"
+                  class="sync-pill" :class="row.syncStatus.toLowerCase()"
+                >
+                  {{ syncLabel(row) }}
+                </span>
+                <span class="item-labels">
+                  <span v-for="label in labelList(row.labels).slice(0, 2)" :key="label" class="mini-chip">
+                    {{ label }}
+                  </span>
+                </span>
+                <span class="task-time mono">{{ formatTime(row.updatedAt) }}</span>
+              </span>
+            </button>
+          </div>
+        </aside>
+
+        <!-- 右列：详情 / 编辑 / 空态 -->
+        <section class="issues-detail">
+          <!-- 新建 / 编辑：占据右列，不遮挡列表 -->
+          <div v-if="editorOpen" class="pane-scroll">
+            <div class="pane-head">
+              <div>
+                <h2 class="pane-title">{{ editingId ? '编辑任务' : '新建任务' }}</h2>
+                <p class="pane-desc">
+                  {{ editingId
+                    ? '修改后会同步到已绑定的 Git Issue；Agent 也能读取并操作这条任务。'
+                    : '保存后自动同步到项目托管的 Git 仓库；Agent 也能读取并操作这条任务。' }}
+                </p>
+              </div>
+              <button type="button" class="pane-close" @click="closeEditor">取消</button>
             </div>
             <div class="editor-body">
               <div class="editor-field">
@@ -833,7 +895,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
               <div class="editor-field">
                 <span class="editor-label">描述</span>
                 <el-input
-                  v-model="form.body" type="textarea" :rows="4" resize="none"
+                  v-model="form.body" type="textarea" :rows="5" resize="none"
                   placeholder="补充背景、复现步骤或期望结果（支持 Markdown）"
                 />
               </div>
@@ -859,16 +921,16 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                   <span class="editor-label">标签</span>
                   <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
                 </div>
-                <div class="editor-target">
-                  <span class="target-icon"><el-icon><Link /></el-icon></span>
-                  <span v-if="editorTarget.repo" class="target-text">
-                    同步到 {{ providerLabel(editorTarget.provider) }}
-                    <span class="mono target-repo">{{ editorTarget.repo }}</span>
-                  </span>
-                  <span v-else class="target-text muted">
-                    项目未关联 Git 仓库，任务仅保存在平台
-                  </span>
-                </div>
+              </div>
+              <div class="editor-target">
+                <span class="target-icon"><el-icon><Link /></el-icon></span>
+                <span v-if="editorTarget.repo" class="target-text">
+                  同步到 {{ providerLabel(editorTarget.provider) }}
+                  <span class="mono target-repo">{{ editorTarget.repo }}</span>
+                </span>
+                <span v-else class="target-text muted">
+                  项目未关联 Git 仓库，任务仅保存在平台
+                </span>
               </div>
             </div>
             <div class="editor-foot">
@@ -877,94 +939,82 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                 {{ editingId ? '保存' : '创建任务' }}
               </el-button>
             </div>
-          </section>
-
-          <div v-if="loading && !items.length" class="list-empty">加载中…</div>
-          <div v-else-if="error" class="list-empty error">{{ error }}</div>
-          <div v-else-if="!visibleItems.length" class="list-empty">
-            {{ items.length
-              ? '当前分类下没有任务，切换上面的分类看看。'
-              : '还没有任务。新建一个，或在 Git 上创建 Issue 自动同步过来。' }}
           </div>
 
-          <article
-            v-for="row in visibleItems" :key="row.id" class="task-row"
-            :class="{ open: expandedId === row.id, closed: row.state === 'CLOSED' }"
-          >
-            <button type="button" class="task-main" @click="toggleExpand(row)">
-              <span class="state-dot" :class="row.state.toLowerCase()" />
-              <span class="task-text">
-                <span class="kind-chip" :class="row.kind === 'FEAT' ? 'feat' : 'bug'">
-                  {{ kindLabel(row.kind) }}
-                </span>
-                <span class="task-title">{{ row.title }}</span>
-              </span>
-              <span class="task-labels">
-                <span v-for="label in labelList(row.labels).slice(0, 2)" :key="label" class="mini-chip">
-                  {{ label }}
-                </span>
-              </span>
-              <span class="task-remote mono" :class="{ local: !isBound(row) }">
-                {{ remoteText(row) }}
-              </span>
-              <span
-                v-if="isBound(row) || row.syncStatus === 'FAILED'"
-                class="sync-pill" :class="row.syncStatus.toLowerCase()"
-              >
-                {{ syncLabel(row) }}
-              </span>
-              <span v-else class="sync-pill spacer" aria-hidden="true" />
-              <span class="task-time mono">{{ formatTime(row.updatedAt) }}</span>
-              <el-icon class="chevron"><ArrowRight /></el-icon>
-            </button>
-
-            <div v-if="expandedId === row.id" class="task-detail">
-              <div v-if="row.syncError" class="sync-error">{{ row.syncError }}</div>
-
-              <div class="detail-block">
-                <div class="block-head">
-                  <span class="block-title">描述</span>
-                  <a
-                    v-if="isBound(row)" class="block-link mono"
-                    :href="row.url" target="_blank" rel="noreferrer"
+          <template v-else-if="selectedRow">
+            <header class="detail-head">
+              <div class="detail-head-main">
+                <div class="detail-kicker">
+                  <span class="kind-chip" :class="selectedRow.kind === 'FEAT' ? 'feat' : 'bug'">
+                    {{ kindLabel(selectedRow.kind) }}
+                  </span>
+                  <span class="state-pill" :class="selectedRow.state.toLowerCase()">
+                    {{ selectedRow.state === 'OPEN' ? '待处理' : '已完成' }}
+                  </span>
+                  <span
+                    v-if="isBound(selectedRow) || selectedRow.syncStatus === 'FAILED'"
+                    class="sync-pill" :class="selectedRow.syncStatus.toLowerCase()"
                   >
-                    <el-icon><Link /></el-icon> {{ row.repo }}#{{ row.number }}
-                  </a>
-                  <span class="block-sub mono">{{ row.id }}</span>
+                    {{ syncLabel(selectedRow) }}
+                  </span>
                 </div>
-                <div v-if="!row.body" class="block-empty">（无描述）</div>
-                <div v-else class="markdown-body">
-                  <MarkdownView :content="row.body" />
+                <h2 class="detail-title">{{ selectedRow.title }}</h2>
+                <div class="detail-meta">
+                  <a
+                    v-if="isBound(selectedRow)" class="block-link mono"
+                    :href="selectedRow.url" target="_blank" rel="noreferrer"
+                  >
+                    <el-icon><Link /></el-icon> {{ selectedRow.repo }}#{{ selectedRow.number }}
+                  </a>
+                  <span v-else class="meta-muted mono">仅本地</span>
+                  <span class="meta-sep">·</span>
+                  <span class="mono">{{ selectedRow.id }}</span>
+                  <span class="meta-sep">·</span>
+                  <span class="mono">更新 {{ formatTime(selectedRow.updatedAt) }}</span>
                 </div>
               </div>
-
-              <div class="task-actions">
-                <el-button size="small" @click="openEdit(row)">
+              <div class="detail-actions">
+                <el-button size="small" @click="openEdit(selectedRow)">
                   <el-icon><Edit /></el-icon> 编辑
                 </el-button>
                 <el-button
-                  size="small" :loading="actionBusy === 'state:' + row.id"
-                  @click="toggleState(row)"
+                  size="small" :loading="actionBusy === 'state:' + selectedRow.id"
+                  @click="toggleState(selectedRow)"
                 >
-                  <el-icon><component :is="row.state === 'OPEN' ? Close : RefreshRight" /></el-icon>
-                  {{ row.state === 'OPEN' ? '关闭' : '重开' }}
+                  <el-icon><component :is="selectedRow.state === 'OPEN' ? Close : RefreshRight" /></el-icon>
+                  {{ selectedRow.state === 'OPEN' ? '关闭' : '重开' }}
                 </el-button>
                 <el-button
-                  size="small" :loading="actionBusy === 'sync:' + row.id"
-                  :disabled="!isBound(row)" @click="resync(row)"
+                  size="small" :loading="actionBusy === 'sync:' + selectedRow.id"
+                  :disabled="!isBound(selectedRow)" @click="resync(selectedRow)"
                 >
                   <el-icon><Refresh /></el-icon> 同步
                 </el-button>
                 <el-button
                   size="small" type="danger" plain
-                  :loading="actionBusy === 'delete:' + row.id" @click="removeIssue(row)"
+                  :loading="actionBusy === 'delete:' + selectedRow.id" @click="removeIssue(selectedRow)"
                 >
                   <el-icon><Delete /></el-icon> 删除
                 </el-button>
               </div>
+            </header>
+
+            <div class="pane-scroll">
+              <div v-if="selectedRow.syncError" class="sync-error">{{ selectedRow.syncError }}</div>
+
+              <section class="detail-block">
+                <div class="block-head">
+                  <span class="block-title">描述</span>
+                  <span class="block-sub mono">{{ selectedRow.id }}</span>
+                </div>
+                <div v-if="!selectedRow.body" class="block-empty">（无描述）</div>
+                <div v-else class="markdown-body">
+                  <MarkdownView :content="selectedRow.body" />
+                </div>
+              </section>
 
               <!-- Bug 自动修复：阶段时间线 + 证据 + PR -->
-              <div v-if="row.kind === 'BUG'" class="fix-block">
+              <section v-if="selectedRow.kind === 'BUG'" class="fix-block">
                 <div class="block-head">
                   <span class="block-title">自动修复</span>
                   <span v-if="fixRun" class="fix-status" :class="fixRun.status.toLowerCase()">
@@ -982,7 +1032,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     <span>可按平台策略自动执行，也可以立即手动启动一次。</span>
                     <el-button
                       size="small" type="primary"
-                      :loading="fixBusy === 'start'" @click="startFix(row)"
+                      :loading="fixBusy === 'start'" @click="startFix(selectedRow)"
                     >
                       立即自动修复
                     </el-button>
@@ -1078,22 +1128,22 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     <span v-else class="fix-pr-hint">修复分支不会自动合并，PR 创建后等待人工确认。</span>
                     <el-button
                       v-if="fixActive" size="small"
-                      :loading="fixBusy === 'cancel'" @click="confirmCancelFix(row)"
+                      :loading="fixBusy === 'cancel'" @click="confirmCancelFix(selectedRow)"
                     >
                       取消
                     </el-button>
                     <el-button
                       v-else-if="['BLOCKED', 'FAILED', 'CANCELLED'].includes(fixRun.status)"
                       size="small" type="primary"
-                      :loading="fixBusy === 'retry'" @click="retryFix(row)"
+                      :loading="fixBusy === 'retry'" @click="retryFix(selectedRow)"
                     >
                       重试 / 继续
                     </el-button>
                   </div>
                 </template>
-              </div>
+              </section>
 
-              <div class="comment-block">
+              <section class="comment-block">
                 <div class="block-head">
                   <span class="block-title">评论</span>
                   <span class="block-sub">
@@ -1140,10 +1190,21 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     </el-button>
                   </div>
                 </div>
-              </div>
+              </section>
             </div>
-          </article>
-        </div>
+          </template>
+
+          <div v-else class="detail-empty">
+            <span class="empty-icon"><el-icon><Tickets /></el-icon></span>
+            <h3 class="empty-title">选择一个任务查看详情</h3>
+            <p class="empty-desc">
+              左侧任务与 Git 仓库双向同步；也可以新建任务，或让 Agent 在对话里直接创建。
+            </p>
+            <el-button size="small" type="primary" @click="openCreate">
+              <el-icon><Plus /></el-icon> 新建任务
+            </el-button>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -1154,7 +1215,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   display: flex;
   flex: 1 1 0;
   min-height: 0;
-  padding: 22px 26px 26px;
+  padding: 20px 26px 24px;
 }
 .issues-shell {
   display: flex;
@@ -1162,23 +1223,26 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   flex-direction: column;
   gap: 14px;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1200px;
   min-height: 0;
   margin: 0 auto;
 }
 
-/* 页头 */
+/* ---- 页头 ---- */
 .issues-head {
   display: flex;
   flex: none;
   align-items: flex-start;
   gap: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line-soft);
 }
 .issues-head-main {
   flex: 1;
   min-width: 0;
+}
+.issues-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 .issues-title {
   margin: 0;
@@ -1187,8 +1251,12 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   letter-spacing: -0.015em;
   color: var(--ink);
 }
+.issues-sub {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
 .issues-desc {
-  margin: 5px 0 0;
+  margin: 4px 0 0;
   font-size: 12px;
   line-height: 1.6;
   color: var(--ink-muted);
@@ -1221,25 +1289,65 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--accent);
   border-radius: 50%;
 }
-.issues-stat {
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--ink-muted);
+
+/* ---- 概览统计 ---- */
+.issues-stats {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  padding: 9px 14px 10px;
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-pill);
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
 }
-.issues-stat b {
-  font-size: 12px;
+.stat-label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.stat-label::before {
+  width: 6px;
+  height: 6px;
+  content: '';
+  border-radius: 50%;
+}
+.stat-card.open .stat-label::before { background: var(--warn); }
+.stat-card.closed .stat-label::before { background: var(--ok); }
+.stat-card.bug .stat-label::before { background: var(--danger); }
+.stat-card.feat .stat-label::before { background: var(--accent-ink); }
+.stat-value {
+  font-size: 20px;
   font-weight: 600;
+  line-height: 1.1;
   color: var(--ink);
 }
+.stat-card.open .stat-value { color: var(--warn); }
+.stat-card.closed .stat-value { color: var(--ok); }
+.stat-card.bug .stat-value { color: var(--danger); }
+.stat-card.feat .stat-value { color: var(--accent-ink); }
 
-/* 列表容器 */
-.issues-panel {
+/* ---- 左右分栏 ---- */
+.issues-body {
   display: flex;
   flex: 1;
+  gap: 14px;
+  min-height: 0;
+}
+.issues-side {
+  display: flex;
+  flex: none;
   flex-direction: column;
+  width: 340px;
   min-height: 0;
   overflow: hidden;
   background: var(--surface-raised);
@@ -1247,17 +1355,17 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-1);
 }
-.issues-toolbar {
+.side-toolbar {
   display: flex;
   flex: none;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
   background: var(--sidebar-background-color);
   border-bottom: 1px solid var(--line-soft);
 }
 .search {
-  max-width: 320px;
+  width: 100%;
 }
 .state-tabs {
   display: flex;
@@ -1267,7 +1375,8 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   border-radius: 8px;
 }
 .state-tab {
-  padding: 5px 12px;
+  flex: 1;
+  padding: 5px 10px;
   font-family: inherit;
   font-size: 11px;
   color: var(--ink-muted);
@@ -1294,20 +1403,22 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--accent-ink, #4a6cf7);
 }
 .toolbar-count {
-  margin-left: auto;
   font-size: 10px;
   color: var(--ink-faint);
 }
-.issues-list {
+.side-list {
   display: flex;
   flex: 1;
   flex-direction: column;
+  gap: 2px;
   min-height: 0;
+  padding: 6px;
   overflow-y: auto;
 }
 .list-empty {
-  padding: 28px 20px;
+  padding: 28px 16px;
   font-size: 11.5px;
+  line-height: 1.7;
   color: var(--ink-faint);
   text-align: center;
 }
@@ -1315,34 +1426,38 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--danger, #c45656);
 }
 
-/* 任务行 */
-.task-row {
-  border-bottom: 1px solid var(--line-soft);
-}
-.task-row:last-child {
-  border-bottom: 0;
-}
-.task-main {
-  display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto auto auto auto 14px;
-  gap: 12px;
-  align-items: center;
+/* 任务行：两行式列表项，选中后整行浅蓝底 */
+.task-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
   width: 100%;
-  padding: 12px 16px;
+  padding: 10px 11px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: none;
   border: 0;
+  border-radius: 9px;
   transition: background-color var(--dur-fast) var(--ease-out);
 }
-.task-main:hover {
+.task-item:hover {
   background: var(--surface-hover);
 }
-.task-row.open .task-main {
-  background: var(--surface-sunken);
+.task-item.active {
+  background: var(--accent-soft);
+}
+.task-item.active .task-title {
+  font-weight: 600;
+}
+.item-line {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
 }
 .state-dot {
+  flex: none;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -1354,6 +1469,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--ok);
 }
 .task-title {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   font-size: 12.5px;
@@ -1362,11 +1478,22 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.task-text {
+.task-item.closed .task-title {
+  color: var(--ink-muted);
+}
+.item-meta {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   min-width: 0;
+  padding-left: 13px;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.item-labels {
+  display: flex;
+  gap: 4px;
+  overflow: hidden;
 }
 .kind-chip {
   flex: none;
@@ -1385,25 +1512,20 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--accent-ink, #4a6cf7);
   background: rgb(74 108 247 / 12%);
 }
-.task-row.closed .task-title {
-  color: var(--ink-muted);
-}
-.task-labels {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
 .mini-chip {
+  overflow: hidden;
   padding: 0 6px;
   font-size: 9px;
-  line-height: 16px;
+  line-height: 15px;
   color: var(--ink-muted);
   white-space: nowrap;
+  text-overflow: ellipsis;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-pill);
 }
 .task-remote {
-  font-size: 10.5px;
+  flex: none;
+  font-size: 10px;
   color: var(--ink-muted);
   white-space: nowrap;
 }
@@ -1411,6 +1533,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--ink-faint);
 }
 .sync-pill {
+  flex: none;
   padding: 0 6px;
   font-size: 9px;
   line-height: 16px;
@@ -1430,30 +1553,98 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--ink-faint);
   background: var(--surface-sunken);
 }
-.sync-pill.spacer {
-  visibility: hidden;
-}
 .task-time {
-  font-size: 10px;
+  flex: none;
+  margin-left: auto;
+  font-size: 9.5px;
   color: var(--ink-faint);
   white-space: nowrap;
 }
-.chevron {
-  font-size: 11px;
-  color: var(--ink-faint);
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-.task-row.open .chevron {
-  color: var(--accent-ink);
-  transform: rotate(90deg);
-}
 
-/* 展开详情 */
-.task-detail {
+/* ---- 右列详情 ---- */
+.issues-detail {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 12px;
-  padding: 4px 20px 18px 36px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+.detail-head {
+  display: flex;
+  flex: none;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.detail-head-main {
+  flex: 1;
+  min-width: 0;
+}
+.detail-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.state-pill {
+  padding: 0 7px;
+  font-size: 9.5px;
+  line-height: 17px;
+  border-radius: var(--radius-pill);
+}
+.state-pill.open {
+  color: var(--warn-ink, #8a5a12);
+  background: var(--warn-soft);
+}
+.state-pill.closed {
+  color: var(--ok-ink, #1b7a4f);
+  background: var(--ok-soft);
+}
+.detail-title {
+  margin: 7px 0 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 7px;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.meta-sep {
+  color: var(--ink-faint);
+}
+.meta-muted {
+  color: var(--ink-faint);
+}
+.detail-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.pane-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 16px 20px 24px;
+  overflow-y: auto;
 }
 .sync-error {
   font-size: 11px;
@@ -1464,11 +1655,12 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
 .detail-block,
 .comment-block {
   display: flex;
+  flex: none;
   flex-direction: column;
   overflow: hidden;
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: 10px;
 }
 .block-head {
   display: flex;
@@ -1500,6 +1692,9 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--accent-ink);
   text-decoration: none;
 }
+.block-link:hover {
+  text-decoration: underline;
+}
 .block-empty {
   padding: 14px 13px;
   font-size: 11px;
@@ -1512,11 +1707,203 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   font-size: 12.5px;
   line-height: 1.75;
 }
-.task-actions {
+
+/* ---- 空态 ---- */
+.detail-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  text-align: center;
+}
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  font-size: 20px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-lg);
+}
+.empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.empty-desc {
+  max-width: 26rem;
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-muted);
+}
+
+/* ---- 编辑面板 ---- */
+.pane-head {
+  display: flex;
+  flex: none;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.pane-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.pane-desc {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+.pane-close {
+  flex: none;
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+.pane-close:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.editor-head {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.editor-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.editor-desc {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+.editor-body {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 12px;
+}
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.kind-field {
+  flex: none;
+}
+.kind-picker {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.kind-option {
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+}
+.kind-option.bug.active {
+  font-weight: 600;
+  color: #b54a4a;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+.kind-option.feat.active {
+  font-weight: 600;
+  color: var(--accent-ink, #4a6cf7);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+.editor-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.editor-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.editor-target {
+  display: flex;
+  flex: none;
+  gap: 7px;
+  align-items: center;
+  padding: 8px 11px;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.target-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink-faint);
+}
+.target-text {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
 }
+.target-text.muted {
+  color: var(--ink-faint);
+}
+.target-repo {
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+}
+.editor-foot {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+.policy-card .editor-foot {
+  padding: 10px 16px;
+  background: var(--surface-sunken);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
 .comment-list {
   display: flex;
   flex-direction: column;
@@ -1598,175 +1985,17 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--ink-faint);
 }
 
-/* 页内编辑卡片 */
-.editor-card {
-  margin: 12px;
-  background: var(--surface-raised);
-  border: 1px solid var(--accent-line, var(--line));
-  border-radius: 10px;
-  box-shadow: var(--shadow-1);
-}
-.editor-head {
-  padding: 14px 16px 12px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.editor-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--ink);
-}
-.editor-desc {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--ink-muted);
-}
-.editor-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
-}
-.editor-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.kind-field {
-  flex: none;
-}
-.kind-picker {
-  display: flex;
-  gap: 3px;
-  padding: 3px;
-  background: var(--surface-sunken);
-  border-radius: 8px;
-}
-.kind-option {
-  padding: 4px 12px;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: 6px;
-}
-.kind-option.bug.active {
-  font-weight: 600;
-  color: #b54a4a;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-1);
-}
-.kind-option.feat.active {
-  font-weight: 600;
-  color: var(--accent-ink, #4a6cf7);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-1);
-}
-.editor-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ink-muted);
-}
-.editor-row {
-  display: flex;
-  gap: 12px;
-  align-items: flex-end;
-}
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-.editor-target {
-  display: flex;
-  flex: none;
-  gap: 7px;
-  align-items: center;
-  max-width: 300px;
-  padding: 8px 11px;
-  font-size: 10.5px;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: 8px;
-}
-.target-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--ink-faint);
-}
-.target-text {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  min-width: 0;
-}
-.target-text.muted {
-  color: var(--ink-faint);
-}
-.target-repo {
-  padding: 1px 5px;
-  font-size: 10px;
-  color: var(--ink);
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: 4px;
-}
-.editor-foot {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  padding: 10px 16px;
-  background: var(--surface-sunken);
-  border-top: 1px solid var(--line-soft);
-  border-radius: 0 0 10px 10px;
-}
-
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-@media (max-width: 860px) {
-  .issues-view {
-    padding: 16px;
-  }
-  .task-main {
-    grid-template-columns: 8px minmax(0, 1fr) auto 14px;
-  }
-  .task-labels,
-  .sync-pill,
-  .task-time {
-    display: none;
-  }
-  .task-remote {
-    font-size: 10px;
-  }
-  .issues-head {
-    flex-direction: column;
-  }
-  .issues-head-side {
-    justify-content: flex-start;
-  }
-  .editor-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .editor-target {
-    max-width: none;
-  }
-  .task-detail {
-    padding: 4px 14px 16px 26px;
-  }
-}
-
-/* 自动修复策略卡片 */
+/* ---- 自动修复策略 ---- */
 .policy-card {
-  margin: 12px;
+  flex: none;
+  overflow: hidden;
   background: var(--surface-raised);
-  border: 1px solid var(--accent-line, var(--line));
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-1);
 }
 .policy-grid {
@@ -1793,19 +2022,21 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--ink-muted);
 }
 .policy-hint {
+  margin-right: auto;
   font-size: 10.5px;
   color: var(--ink-faint);
 }
 
-/* 自动修复时间线 */
+/* ---- 自动修复时间线 ---- */
 .fix-block {
   display: flex;
+  flex: none;
   flex-direction: column;
   gap: 10px;
   padding: 12px 13px;
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: 10px;
 }
 .fix-block .block-head {
   padding: 0 0 8px;
@@ -1888,6 +2119,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--line-soft);
 }
 .fix-dot {
+  z-index: 1;
   flex: none;
   width: 9px;
   height: 9px;
@@ -1895,7 +2127,6 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--surface-sunken);
   border: 1.5px solid var(--line);
   border-radius: 50%;
-  z-index: 1;
 }
 .fix-step.done .fix-dot {
   background: var(--ok);
@@ -1969,9 +2200,9 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--ink-muted);
 }
 .fix-fold summary {
-  cursor: pointer;
   font-size: 10.5px;
   color: var(--ink-muted);
+  cursor: pointer;
 }
 .fix-pre {
   max-height: 220px;
@@ -2040,5 +2271,71 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
 .fix-pr-hint {
   font-size: 10px;
   color: var(--ink-faint);
+}
+
+/* ---- 响应式 ---- */
+@media (max-width: 1080px) {
+  .issues-side {
+    width: 300px;
+  }
+}
+@media (max-width: 900px) {
+  .issues-view {
+    padding: 14px;
+    overflow-y: auto;
+  }
+  .issues-shell {
+    flex: none;
+    min-height: auto;
+  }
+  .issues-head {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .issues-head-side {
+    justify-content: flex-start;
+  }
+  .issues-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .issues-body {
+    flex: none;
+    flex-direction: column;
+    min-height: auto;
+  }
+  .issues-side {
+    width: auto;
+    max-height: 360px;
+  }
+  .side-toolbar .state-tabs {
+    max-width: 380px;
+  }
+  .issues-detail {
+    flex: none;
+    min-height: 520px;
+    max-height: 80vh;
+  }
+  .detail-head {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .detail-actions {
+    justify-content: flex-start;
+  }
+  .editor-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pane-scroll {
+    padding: 14px 16px 20px;
+  }
+}
+@media (max-width: 600px) {
+  .item-labels {
+    display: none;
+  }
+  .detail-meta {
+    font-size: 9.5px;
+  }
 }
 </style>

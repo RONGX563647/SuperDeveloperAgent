@@ -445,7 +445,7 @@ onMounted(() => {
 <style scoped>
 .status-strip {
   position: relative;
-  max-width: 45rem;
+  max-width: 56rem;
   margin: 0 auto;
 }
 .strip-row {
