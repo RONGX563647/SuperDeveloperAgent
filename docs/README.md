@@ -119,5 +119,5 @@ cd platform/web && npm run typecheck && npm run build
 | 外部参考链接 | 仅 `../RuoYi*`、`../agentscope-java`，已在对应文档标注「本地检出才可用」 |
 | 过期文档 | 0 |
 | 未登记文档 | 0（24 篇存量 + 14 篇子目录文档全部在本索引或子索引中可达） |
-| 代码-文档漂移 | 已修 4 处：工具数 33→61/12→18（本轮 61→62，新增 `workspace_dispatch`）、`confirm` 工具语义、`/projects/:id` 已重定向、配置键补 `agent.tools.cache.*` / `agent.context.*` |
+| 代码-文档漂移 | 已修：工具数 33→61/12→18（本轮 61→62，新增 `workspace_dispatch`）、`confirm` 工具语义、`/projects/:id` 已重定向、配置键补 `agent.tools.cache.*` / `agent.context.*` / `agent.workspace.dispatch.*` / `agent.chat.*timeout*`；模块类数按实际核对（tools 24 / runtime 13 / gateway 96） |
 | 建议下一步 | ① 迁移存量文档进子目录；② 接入 Gitee MCP 后开启自动建单；③ 引入 MkDocs 构建校验 |

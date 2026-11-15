@@ -257,7 +257,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `AppRuntimeInspector` | `RuntimeInspector` 实现（2026-11 新增）：按环境运行时分流——test/prod 用 `docker inspect` 读实例事实（状态/重启数/镜像 digest/端口映射/健康），dev 读平台进程日志尾部；只回答事实，不判失败原因 |
 | `JschSsh` / `SshExec` | 纯 Java SSH 实现（JSch）：连通性探测、远程命令、文件上传；`SshExec` 实现 domain 的 `SshAccess` 端口（探测 docker 版本用 `{{.Server.Version}}` 模板并兜底 `docker info`） |
 
-### 4.5 agent-tools —— 工具层（22 类，18 个 @Tool 类）
+### 4.5 agent-tools —— 工具层（24 类，18 个 @Tool 类 / 62 个工具方法）
 
 | 类 | 职责 |
 |---|---|
@@ -273,33 +273,44 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `DeployTools` | 部署 agent 专用：`deploy_env_status`、`deploy_run`、`deploy_save_recipe`——「把某个环境跑通并固化」；`deploy_run` 必须携带人工确认过的 `binding_id`（由 `env_mapping_draft` 生成，经 `EnvBindingPort.requireForRun` 校验，E-703） |
 | `EnvQueryTools` | 环境只读：`env_summary`（变量数/网络/端口/中间件健康，**不返回值**）、`env_var_probe`（变量指向的 host:port 属于本项目中间件/共享实例/外部地址，**不返回变量值**） |
 | `EnvCommandTools` | 环境写（L2）：`env_mapping_draft`（生成 DRAFT 绑定草案，prod 拒绝，须人工确认后才能 `deploy_run`）、`env_ensure`（确保中间件容器存在并运行，缺失按需创建并写回覆盖变量，经 `EnvProvisioner`，E-702） |
-| `WorkspaceSupervisorTools` | 工作区调度 Agent 专用（16 个）：`workspace_snapshot`、`conversation_list/search/create/rename/archive/pin/send/status/wait/cancel/summarize`、`task_create/update/complete/list`；**只能编排会话与任务，没有任何文件/命令写能力** |
+| `WorkspaceSupervisorTools` | 工作区调度 Agent 专用（17 个）：`workspace_snapshot`、`conversation_list/search/create/rename/archive/pin/send/status/wait/cancel/summarize`、`workspace_dispatch`（DAG 并行派发）、`task_create/update/complete/list`；**只能编排会话与任务，没有任何文件/命令写能力** |
+| `cache/ToolResultCache` | 只读工具结果的进程内语义缓存：scope + 归一化参数 + 词元相似度 ≥0.9 命中，TTL 90s / LRU 512；写工具成功后按 scope 失效；统计经 `workspace_snapshot` 暴露 |
+| `cache/CachingAgentTool` | `AgentTool` 装饰器：`ToolCatalog` 装配阶段原地包装四套 Toolkit（工具名/schema/只读标记不变），负责缓存查存、超长输出截断与调用 id 回填 |
 | `CapabilityMarketTools` | 能力市场（仅对话工具面）：`search_capabilities`、`install_capability`——查找并接入公开 MCP / Skill |
 | `OpsAgentTools` | `run_ops_agent`（L2）：把「把某环境真正跑通」委派给发布 Agent；发布 Agent 自身不注册（防递归） |
 | `GitIssueQueryTools` / `GitIssueCommandTools` | 任务页：`list_git_issues`/`get_git_issue` 只读；`create/update/comment/close/reopen/sync_git_issue` 写（与「任务」Tab 同一份数据） |
 | `ProjectTools` | 项目只读（L0）：`project_info`、`list_envs` |
 | `ConfigTools` | 配置解析（L0，2026-11 新增）：`config_resolve`——项目环境优先，其次仓库 `.env` 声明，最后全量扫描 README/docs/compose/application；缺失或候选冲突返回 `NEED_USER_INPUT` 摘要，**要求 Agent 停止执行并等待用户回答**；密钥类声明值一律 `****` |
 | `ConfigResolver` | 配置解析服务（非 @Tool）：优先级与全量扫描的唯一实现，工具与 `GET /projects/{id}/config/resolve` 共用；扫描候选带 `path:line` 与 envHint，不自动写环境 |
-| `ToolCatalog` | 工具装配：四套无状态 `Toolkit`（避免运行时改共享 Toolkit 激活集——会话状态 `activatedGroups` 会覆盖激活集，新会话写工具会整体消失）——`readOnlyToolkit`（生产会话：只读类，**不含任何写能力**）、`agentToolkit`（@Primary，非生产：只读 + 全部写工具，含 PatchTools/能力市场/任务写）、`deployToolkit`（发布 Agent：只读 + 环境/部署/变更/动作/补丁，不含任务写与能力市场）、`supervisorToolkit`（调度 Agent：`WorkspaceSupervisorTools` + 全部只读工具，无文件写/命令/补丁/部署） |
+| `ToolCatalog` | 工具装配：四套无状态 `Toolkit`（避免运行时改共享 Toolkit 激活集——会话状态 `activatedGroups` 会覆盖激活集，新会话写工具会整体消失）——`readOnlyToolkit`（生产会话：只读类，**不含任何写能力**）、`agentToolkit`（@Primary，非生产：只读 + 全部写工具，含 PatchTools/能力市场/任务写）、`deployToolkit`（发布 Agent：只读 + 环境/部署/变更/动作/补丁，不含任务写与能力市场）、`supervisorToolkit`（调度 Agent：`WorkspaceSupervisorTools` + 全部只读工具，无文件写/命令/补丁/部署）；四套 Toolkit 装配后统一经 `CachingAgentTool.install` 装饰（语义缓存 + 输出截断） |
 
-### 4.6 agent-runtime —— Agent 装配与对话（7 类）
+### 4.6 agent-runtime —— Agent 装配与对话（13 类）
 
 | 类 | 职责 |
 |---|---|
 | `AgentFactory` | 按 `ProjectContext` 构造 ReActAgent（注入 Toolkit、系统提示、RuntimeContext 传递项目上下文——模型无法伪造 projectId）。**权限模式（2026-11 修订）**：生产 `DEFAULT`（写必 ASK）、非生产 `BYPASS`（ACCEPT_EDITS 会让写工具停在无回传通道的 ASK 上；真正门禁在平台层：写工具拒绝生产、变更单人工确认、部署要 binding_id）；**不启用 meta 工具**（会话状态会覆盖工具组，新会话下写工具会整体消失）；会话状态经 `JsonFileAgentStateStore` 落 `data/agent-state`（按 userId+sessionId 续聊，重启不丢）；`systemPrompt` 改 public 供轨迹视图只读展示；发布 Agent 提示词闭环更新（先 `env_summary`、触发后 `wait_run` 等终态、根因在仓库配置用 `propose_patch`） |
 | `ChatService` | 对话服务：一次用户输入 → AgentScope 事件流 |
+| `ChatSessionRegistry` | 会话 ↔ 项目/环境/用户绑定：首次使用记录归属，后续不一致直接拒绝，防止复用 sessionId 把 A 项目上下文带进 B 项目 |
+| `OpsAgentRunner` | `OpsAgentPort` 实现：把一次运维目标委派给发布 Agent 并压缩结果；独立 sessionId、固定超时、生产直接拒绝（天然防递归） |
 | `ModelConfig` | 模型装配（OpenAI 兼容端点，默认 DashScope） |
 | `AgentProperties` | `agent.model.*` 配置绑定（max-iters=8、temperature=0.2） |
-| `DynamicModelProvider` | **动态模型提供者**：设置页保存后无需重启即可切换模型 |
+| `DynamicModelProvider` | **动态模型提供者**：设置页保存后无需重启即可切换模型；负责 `prefix-cache` 缓存控制开关 |
 | `SettingsModelRegistry` | `ModelRegistry` 实现：设置页（SQLite）配置优先，application.yml 兜底 |
 | `AgentPipelineDefAuthor` | 流水线定义的 agent 兜底：规则脚手架识别不出技术栈时，请模型按同一契约给候选定义（仍走人工预览落盘） |
+| `workspace/ConversationManager` | 工作区会话/运行/任务管理，实现 `WorkspaceSupervisorPort`；`dispatch` 用服务端上限收紧 DAG 计划后交给调度器 |
+| `workspace/WorkspaceDispatchScheduler` | **DAG 并行调度器**：Kahn 拓扑排序、虚拟线程并行等待、依赖成功才派发、失败熔断、必需节点完成后早停可选节点、单节点/整张 DAG 双超时 |
+| `workspace/WorkspaceRunExecutor` | 工作区异步运行执行器：每工作区固定线程池（默认 3），派发后立即返回；状态/结果/错误落盘 |
+| `workspace/WorkspaceEventBus` | 工作区事件总线（单实例内存）：把会话/运行实时变化推给 SSE 订阅者，事实仍以 SQLite 为准 |
 
-### 4.7 agent-gateway —— HTTP 边界与安全（37 类，Boot 入口）
+### 4.7 agent-gateway —— HTTP 边界与安全（96 类，Boot 入口）
 
 | 包 | 关键类 | 职责 |
 |---|---|---|
 | 根 | `AgentApplication` | Spring Boot 入口（`agent-gateway-0.1.0-SNAPSHOT-exec.jar`，classifier=exec 以保留普通 jar 供 ArchUnit 读取） |
-| `web` | `ChatController` | `POST /api/v1/chat`（SSE）；虚拟线程承载会话，身份来自 Sa-Token 会话；请求体 `role` 参数已移除（发布 Agent 走独立入口），新增 `worktree`（会话上下文提示） |
+| `web` | `ChatController` | `POST /api/v1/chat`（SSE）；虚拟线程承载会话，身份来自 Sa-Token 会话；请求体 `role` 参数已移除（发布 Agent 走独立入口），新增 `worktree`（会话上下文提示）；SSE 超时/心跳可配，发送统一加锁 |
+| | `WorkspaceSuperController` | `POST /workspaces/{projectId}/super/stream`（SSE）：工作区调度 Agent 对话；超时默认 10 分钟以覆盖整张 DAG |
+| | `WorkspaceEventController` | `GET /workspaces/{projectId}/events`（SSE）：工作区聚合事件流（会话/运行状态），前端事件驱动、断线才回退轮询 |
+| | `SseHeartbeat` | SSE 保活工具：daemon 调度器按 `agent.chat.heartbeat-seconds`（默认 15s）发送注释行，与业务事件共用发送锁，发送失败回调取消上游 |
 | | `AgentProfileController` | `GET /api/v1/agent/profile?projectId&env`（2026-11 新增）：返回当前生效的系统提示词与工具面，供轨迹视图只读核对"Agent 现在被怎么约束" |
 | | `AgentEventMapper` | AgentScope 事件 → 前端 DTO（骨架期用反射映射）；`ModelCallEndEvent` 的 payload 补当前模型名（前端据此本地算 DeepSeek 费用，仅展示用途） |
 | | `ActionController` | 动作 HTTP 接口（不经模型也能用）：list / plan / run / request；注释明确"不再接受请求头伪造身份" |
@@ -554,9 +565,9 @@ AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readO
 | `search_capabilities` / `install_capability` | L1/L2 | CapabilityMarketTools | 能力市场：查找并接入公开 MCP / Skill（仅对话工具面） |
 | `list_git_issues` / `get_git_issue` | L0 只读 | GitIssueQueryTools | 任务页只读（Issue 列表/详情） |
 | `create_git_issue` / `update_git_issue` / `comment_git_issue` / `close_git_issue` / `reopen_git_issue` / `sync_git_issue` | L2 | GitIssueCommandTools | 任务页写操作（与「任务」Tab 同一份数据） |
-| `workspace_snapshot` / `conversation_list` / `conversation_search` / `conversation_status` / `conversation_wait` / `conversation_summarize` | L0 只读 | WorkspaceSupervisorTools | 调度 Agent 的工作区视图：快照、会话检索、运行状态/等待、会话摘要 |
+| `workspace_snapshot` / `conversation_list` / `conversation_search` / `conversation_status` / `conversation_wait` / `conversation_summarize` | L0 只读 | WorkspaceSupervisorTools | 调度 Agent 的工作区视图：快照（含 `tool_cache` 命中统计）、会话检索、运行状态/等待、会话摘要 |
 | `conversation_create` / `conversation_rename` / `conversation_archive` / `conversation_pin` / `conversation_send` / `conversation_cancel` | L2 | WorkspaceSupervisorTools | 调度 Agent 的编排动作：建/改/归档/置顶会话，派发消息（建运行）与取消（仍无任何文件/命令写能力） |
-| `workspace_dispatch` | L2 | WorkspaceSupervisorTools | **DAG 并行派发**：节点数组（`depends_on/required/timeout_seconds`）一次派发、并行等待、失败熔断与提前终止；聚合结果有长度上限 |
+| `workspace_dispatch` | L2 | WorkspaceSupervisorTools | **DAG 并行派发**：节点数组（`depends_on/required/timeout_seconds`）一次派发、并行等待、失败熔断与提前终止；单节点与整张 DAG 双超时（服务端上限可再收紧）；聚合结果有长度上限 |
 | `task_create` / `task_update` / `task_complete` / `task_list` | L2 | WorkspaceSupervisorTools | 工作区任务管理 |
 
 ---
@@ -749,8 +760,9 @@ npm run typecheck
 | agent-domain | `ProjectEnvFilesTest`（受管块写入幂等/敏感值不落文件）、`StackAdapterTest`（宿主/容器网双地址映射） |
 | agent-executor | `ProcessActionRunnerTest`、`DockerActionRunnerTest`、`DockerSandboxTest`、`ProcessExecutorRedactTest`（脱敏）、`PipelineDefinition*Test`（含 GuardTest 多服务/非法定义拒绝、ResolverTest、PreviewRenderTest 命令级预览）、`DeployersTest`、`DeployRecipeFlowTest`、`JschSshTest`、`HostDeployerTest`、`DockerDeployerTest`、`DeployEnvPrecheckTest`（E-509/E-701 预检）、`DockerDeployerEnvTest`（env/network 注入与 sanitize）、`LocalDevHostDeployerTest`/`LocalDevHostDeployerLeaseTest`（dev 本机直跑与端口租约）、`DockerEnvProvisionerTest`/`DockerEnvProvisionerAddressingTest`/`DockerEnvProvisionerSeedTest`（E-702 供给/地址/种子）、`ServiceTopologyTest`（服务拓扑解析）、`RunHistoryStoreTest`（历史落盘与恢复） |
 | agent-governance | `ConfirmTokenServiceTest`（六重校验） |
-| agent-infra | `RecipeActionResolverTest`、`GitWorktreeManagerTest`、`IntakeScaffoldTest`、`RecipeCheckTest`、`IntakeProjectStoreTest`、`FileRecipeStoreTest`、`SecretBoxTest`、`SqliteSettingsStoreTest`、`SqliteProjectEnvVarStoreTest`、`RecipeScaffolderTest`（工程根识别/env-required）、`WorkspaceCodePatcherTest`（baseSha/白名单/独立分支三道校验） |
-| agent-runtime | `DynamicModelProviderTest` |
+| agent-infra | `RecipeActionResolverTest`、`GitWorktreeManagerTest`、`IntakeScaffoldTest`、`RecipeCheckTest`、`IntakeProjectStoreTest`、`FileRecipeStoreTest`、`SecretBoxTest`、`SqliteSettingsStoreTest`、`SqliteProjectEnvVarStoreTest`、`RecipeScaffolderTest`（工程根识别/env-required）、`WorkspaceCodePatcherTest`（baseSha/白名单/独立分支三道校验）、`ConversationContextTrimmerTest`（预算裁剪/保留 SYSTEM/不改运行态） |
+| agent-tools | `ToolResultCacheTest`（精确/相似命中、scope 隔离、写失效、TTL、实时工具排除、包装后 schema）、`DispatchNodeParamBindingTest`（嵌套 `List<DispatchNode>` 参数绑定） |
+| agent-runtime | `DynamicModelProviderTest`（含 prefix-cache 开关）、`WorkspaceDispatchSchedulerTest`（并行耗时/依赖顺序/失败跳过/早停可选/全可选不误停/循环依赖/全局超时/参数收敛）、`ConversationManagerTest` |
 | agent-gateway | `PipelineAcceptanceTest`、`DualStackPipelineTest`（Java+Vue 双栈）、`IntakeE2ETest`、`ActionUsabilityTest`、`ToolChainTest`（含断言：调度 Agent 只读面无写工具）、`DeployStageTest`、`DotEnvLoaderTest`、`GiteeWebhookControllerTest`、`SettingsControllerTest`、`ModelProbeTest`、`ChatRunRecoveryAdvisorFormatTest`（恢复建议格式）、`PatchApplierTest`（补丁四种匹配与结构化失败）、`DangerousActionPolicyTest`（破坏性动作识别与频次）、`AgentStreamLimiterTest`（内存/jdbc 两种租约）、`RunRecoveryServiceTest`（孤儿 RUNNING 判定）、`ToolEvalBaselineTest`/`LiveModelToolEvalTest`（需真实模型 Key，缺 Key 自动跳过） |
 | web | `state/agentEventReducer.test.ts` + `scripts/*.mjs` 无头浏览器回归 |
 
@@ -800,6 +812,10 @@ npm run typecheck
 | 破坏性动作策略 | `agent-domain/.../domain/policy/DangerousActionPolicy.java`、`agent-tools/src/main/java/top/rongx/agent/tools/ActionService.java` |
 | BugFix 补丁应用 | `agent-gateway/src/main/java/top/rongx/agent/gateway/bugfix/PatchApplier.java`、`.../bugfix/stage/FixStage.java` |
 | 工作区事件流 | `agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceEventController.java`、`web/src/composables/useWorkspaceEvents.ts` |
+| DAG 调度 | `agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchScheduler.java`、`ConversationManager.java`、`agent-domain/.../domain/conversation/DispatchPlan.java` |
+| 工具缓存/输出预算 | `agent-tools/src/main/java/top/rongx/agent/tools/cache/ToolResultCache.java`、`cache/CachingAgentTool.java` |
+| 上下文裁剪 | `agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java` |
+| SSE 保活 | `agent-gateway/src/main/java/top/rongx/agent/gateway/web/SseHeartbeat.java`、`WorkspaceSuperController.java` |
 | 轨迹与费用前端 | `web/src/components/chat/ChatTraceView.vue`、`web/src/utils/deepseekPricing.ts`、`web/src/state/sessionHistory.ts` |
 | 项目接入 | `agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java` |
 | Agent 工厂 | `agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java` |
