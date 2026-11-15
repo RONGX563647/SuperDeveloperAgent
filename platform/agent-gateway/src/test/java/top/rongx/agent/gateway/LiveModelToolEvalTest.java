@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 真实模型工具评测（PRD E4 的 LLM 实测版）。
  *
- * <p><b>跳过条件</b>：未设置 {@code AGENT_MODEL_API_KEY} 时整类跳过——
+ * <p><b>跳过条件</b>：需显式 {@code AGENT_LIVE_MODEL=true} 且设置 {@code AGENT_MODEL_API_KEY}——
  * 普通 CI / 本地无 key 时不会红，也不会消耗 token。
  *
  * <p><b>token 控制</b>：
@@ -46,8 +46,8 @@ class LiveModelToolEvalTest {
 
     @DynamicPropertySource
     static void props(DynamicPropertyRegistry registry) {
-        // AgentProperties 要求 api-key 必填（fail-closed）；无真实 key 时给占位值，
-        // 测试方法内用 assumeTrue 跳过——上下文能起，token 零消耗
+        // API Key 允许为空（启动不阻塞）；本类由 AGENT_LIVE_MODEL=true 显式开启，
+        // 无真实 key 时给占位值让注入的 Model Bean 可构造，测试方法内 assumeTrue 跳过，token 零消耗
         String key = System.getenv("AGENT_MODEL_API_KEY");
         registry.add("agent.model.api-key",
                 () -> key != null && !key.isBlank() ? key : "placeholder-no-key");

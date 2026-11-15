@@ -9,7 +9,7 @@
 | JDK | 21 及以上（当前开发环境 25，建议加 `--enable-native-access=ALL-UNNAMED` 消除 sqlite-jdbc 告警） |
 | 构建 | Maven 3.9+；前端 Node 20+ |
 | 容器 | Docker（`AGENT_SANDBOX_MODE=docker`）；无 Docker 时用 `process` 模式做本机验证 |
-| 变量 | `AGENT_MODEL_API_KEY`（必需）；`AGENT_MODEL_BASE_URL`/`AGENT_MODEL_NAME` 可覆盖 |
+| 变量 | `AGENT_MODEL_API_KEY`（**可选**；推荐在设置页「模型连接」配置）；`AGENT_MODEL_BASE_URL`/`AGENT_MODEL_NAME` 可覆盖 |
 | 数据目录 | `AGENT_WORKSPACE_ROOT`（默认 `./data/workspaces`；本地演示环境为 `/workspace/demo-workspaces`） |
 
 ## 2. 启动与停止
@@ -17,7 +17,7 @@
 ```bash
 # 后端（前台，便于看日志）
 cd platform/agent-gateway
-AGENT_SANDBOX_MODE=process AGENT_MODEL_API_KEY=sk-xxx \
+AGENT_SANDBOX_MODE=process \
   java --enable-native-access=ALL-UNNAMED \
   -jar target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
 
@@ -27,6 +27,10 @@ cd platform/web && npm install && npm run dev     # http://localhost:5173，代�
 # 健康检查
 curl -s http://localhost:8090/actuator/health    # {"status":"UP"}
 ```
+
+> 模型密钥不是启动前置：首次启动后进「设置 → 模型连接」新建连接并设为默认即可，
+> 也可用 `AGENT_MODEL_API_KEY`（或 `platform/.env`）兜底注入。两者都缺时服务仍为 UP，
+> 只有发起对话才会提示去配置密钥。
 
 停止：前台 `Ctrl+C`；后台按 PID `kill <pid>`，**不要**用 `pkill java`（会误杀同机其他 Java）。
 
@@ -67,7 +71,8 @@ add_header X-Accel-Buffering no;
 
 | 现象 | 先看 | 常见原因 |
 |---|---|---|
-| 启动即退出 | 控制台首段 `ERROR` | 缺 `AGENT_MODEL_API_KEY`；端口占用；Docker 模式但 daemon 未启动 |
+| 启动即退出 | 控制台首段 `ERROR` | 端口占用；Docker 模式但 daemon 未启动；其它 Bean 初始化失败（看 `Description`） |
+| 能启动但对话报「模型 API Key 未配置」 | 设置 → 模型连接 | 未建默认连接，且环境变量 / `.env` 也没注入密钥 |
 | 登录 401 | `/actuator/health`、users.db | 种子账号密码被改；令牌过期（30 天） |
 | 对话 429 | `agent.chat.max-concurrent` | 并发闸门打满；多实例未切 `limiter=jdbc` |
 | 运行一直 RUNNING | `run_ledger` 表、引擎日志 | 进程被杀；重启后 5 分钟内会被恢复任务标记 INTERRUPTED |

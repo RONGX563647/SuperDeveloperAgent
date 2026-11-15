@@ -28,7 +28,9 @@ sa-token:
   is-concurrent: true
   is-share: true
 
-  # 模型：API Key 必须由环境变量注入，代码与配置库中不得出现（规约 §8）
+  # 模型：API Key 不是启动前置。优先用设置页「模型连接」（加密落库、热切换），
+  # 未配置时回退环境变量 AGENT_MODEL_API_KEY；两者都没有也能启动，仅调用模型时提示去配置。
+  # 明文凭证不入配置库（规约 §8）。
 agent:
   # 账号初始化：仅首次启动（users 表为空）使用；格式 admin=xxx,devops=yyy,viewer=zzz。
   # 未提供的账号会生成随机密码并写入 <workspace>/_platform/seed-passwords.txt（600）。
@@ -105,7 +107,7 @@ agent:
     cache-volume-prefix: ${AGENT_SANDBOX_CACHE_VOLUME:agent-cache}
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-    api-key: ${AGENT_MODEL_API_KEY:}
+    api-key: ${AGENT_MODEL_API_KEY:}          # 可选：留空不阻塞启动，设置页可随时补配
     model: ${AGENT_MODEL_NAME:qwen-plus}
     max-iters: 8
     temperature: 0.2

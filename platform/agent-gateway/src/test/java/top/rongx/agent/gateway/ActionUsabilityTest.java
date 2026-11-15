@@ -36,7 +36,7 @@ class ActionUsabilityTest {
     @DynamicPropertySource
     static void props(DynamicPropertyRegistry registry) {
         registry.add("agent.workspace.root", () -> workspaceRoot.toString());
-        registry.add("agent.model.api-key", () -> "test-key-not-used");
+        // 故意不注入 agent.model.api-key：回归"无密钥也能启动，密钥在设置页配置"
         // 本测试固定宿主进程模式：验证治理链路，不依赖 Docker。
         registry.add("agent.sandbox.mode", () -> "process");
         // 宿主模式下 L3 发布被 fail-closed 拦截是**正确行为**；本用例只验证令牌链路，

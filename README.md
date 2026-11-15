@@ -69,8 +69,9 @@ llms.txt       给 LLM / RAG 的文档入口
 
 ```bash
 cd platform
-export AGENT_MODEL_API_KEY=sk-xxx      # Windows: $env:AGENT_MODEL_API_KEY="sk-xxx"
-# 或写入 platform/.env（应用启动时自动加载，真实环境变量优先）
+# 模型 API Key 不是启动前置：启动后进「设置 → 模型连接」配置即可（加密落库、热切换）。
+# 若想用环境变量兜底（或写入 platform/.env，启动自动加载、真实环境变量优先）：
+# export AGENT_MODEL_API_KEY=sk-xxx    # Windows: $env:AGENT_MODEL_API_KEY="sk-xxx"
 
 mvn -q verify                          # 编译 + 规约检查 + 单测
 java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
@@ -79,6 +80,8 @@ java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
 cd web && npm install && npm run dev    # http://localhost:5173
 ```
 
+> 首次启动无需任何模型密钥；未配置密钥时服务照常启动，只有发起对话才会提示「请在设置 → 模型连接中配置」。
+> 本机无 Docker 时需另设 `AGENT_SANDBOX_MODE=process`（沙箱默认 docker 且 fail-closed，与密钥无关）。
 > 登录种子账号：`admin / admin-2026`、`devops / devops-2026`、`viewer / viewer-2026`。
 > 前端只监听 `localhost`：用 `127.0.0.1` 打不开是正常的（Vite 默认绑 `::1`）。
 > 要让 IPv4 可达，用 `npm run dev -- --host 127.0.0.1`；回归脚本也按 `localhost` 取址。
@@ -130,7 +133,7 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | ✅ `docs/` 24 份 Markdown + 1 份汇报稿；`specs/` 3 份规格与任务清单 |
+| 设计文档 | ✅ `docs/` 24 份 Markdown + 1 份汇报稿；`docs/specs` 3 份规格与任务清单 |
 | 后端 | ✅ 8 个 Maven 模块（7 个运行时模块 + `spec-checks`），`mvn -B verify` 全绿 |
 | 前端 | ✅ Vue3 + Vite + Element Plus；7 个页面；`npm run build`（vue-tsc strict）通过 |
 | 认证与授权 | ✅ Sa-Token 会话、3 个种子账号、角色权限码；高危操作需二级密码 |

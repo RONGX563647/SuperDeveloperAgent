@@ -15,11 +15,17 @@ import top.rongx.agent.domain.port.ModelRegistry.ActiveModel;
  * <ul>
  *   <li>持有不可变快照 {@code {fingerprint, model}}；指纹 = id + baseUrl + model + apiKey 哈希；</li>
  *   <li>{@link #current()} 每次读取注册表指纹，变化时重建 {@link Model}（旧实例自然被回收）；</li>
+ *   <li>配置可缺失（设置页随时可配）：不阻塞启动，真正调用模型时才给出配置指引；
+ *       已建连接允许空密钥（本地免鉴权端点）；</li>
  *   <li>{@code volatile} + 局部变量赋值，避免并发读到半成品。</li>
  * </ul>
  */
 @Component
 public class DynamicModelProvider {
+
+    /** 没有任何可用模型配置时的统一指引（只在调用模型时抛出，不阻塞启动）。 */
+    private static final String NO_MODEL = "没有可用的模型配置：请在「设置 → 模型连接」中配置，"
+            + "或通过环境变量 AGENT_MODEL_API_KEY 注入（规约 §8）";
 
     private final ModelRegistry registry;
     private final boolean prefixCache;
@@ -38,7 +44,7 @@ public class DynamicModelProvider {
     /** 当前模型（线程安全；配置未变时复用实例）。 */
     public Model current() {
         ActiveModel config = registry.active().orElseThrow(
-                () -> new IllegalStateException("没有可用的模型配置"));
+                () -> new IllegalStateException(NO_MODEL));
         String fingerprint = fingerprint(config);
         Snapshot local = snapshot;
         if (local != null && local.fingerprint().equals(fingerprint)) {
@@ -58,7 +64,7 @@ public class DynamicModelProvider {
     /** 当前生效配置（供对话页展示模型名）。 */
     public ActiveModel activeConfig() {
         return registry.active().orElseThrow(
-                () -> new IllegalStateException("没有可用的模型配置"));
+                () -> new IllegalStateException(NO_MODEL));
     }
 
     private Model build(ActiveModel config) {

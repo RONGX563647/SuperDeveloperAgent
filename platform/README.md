@@ -34,9 +34,10 @@ platform/
 
 ```bash
 cd platform
-export AGENT_MODEL_API_KEY=sk-xxx          # Windows: $env:AGENT_MODEL_API_KEY="sk-xxx"
+# 模型 API Key 可选：推荐启动后在「设置 → 模型连接」配置（加密落库、改完免重启生效）。
+# 环境变量是兜底通道，也可写入 platform/.env（应用启动时自动加载，真实环境变量优先）：
+# export AGENT_MODEL_API_KEY=sk-xxx        # Windows: $env:AGENT_MODEL_API_KEY="sk-xxx"
 export AGENT_MODEL_NAME=qwen-plus          # 可选，默认 qwen-plus
-# 也可写入 platform/.env：应用启动时自动加载，真实环境变量优先
 
 mvn -q verify                              # 编译 + 规约检查 + 单测（推荐先跑）
 mvn -q -DskipTests package                 # 只打包

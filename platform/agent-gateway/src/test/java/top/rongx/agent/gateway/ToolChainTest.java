@@ -37,7 +37,7 @@ class ToolChainTest {
 
     @DynamicPropertySource
     static void props(DynamicPropertyRegistry registry) {
-        registry.add("agent.model.api-key", () -> "test-key-not-used");
+        // 故意不注入 agent.model.api-key：完整 Spring 上下文必须能在"密钥只在设置页配置"下启动
         registry.add("agent.sandbox.mode", () -> "process");
         // 预置项目清单已从 application.yml 移除：本用例固定使用项目 RY，在测试内声明
         ActionUsabilityTest.addTestProject(registry);

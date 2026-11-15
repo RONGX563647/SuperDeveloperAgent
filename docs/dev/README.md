@@ -10,8 +10,10 @@ cd platform && mvn -q verify
 
 # 只启动网关（热重启靠手动）
 mvn -q -pl agent-gateway -am -DskipTests package
-AGENT_SANDBOX_MODE=process AGENT_MODEL_API_KEY=sk-xxx \
+AGENT_SANDBOX_MODE=process \
   java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
+
+# 模型 API Key 无需在启动前注入：到「设置 → 模型连接」配置即可（或可选地注入 AGENT_MODEL_API_KEY）
 
 # 前端
 cd platform/web && npm install && npm run dev

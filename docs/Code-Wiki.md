@@ -1,13 +1,13 @@
 # Code Wiki：研发运维智能体平台（agentscope-ruoyi）
 
-> 基线：2026-11-14 当前主干代码（`platform/` 7 个运行时模块 + `spec-checks` 校验模块 + `web/` 前端 + `specs/` 3 份规格）。
+> 基线：2026-11-14 当前主干代码（`platform/` 7 个运行时模块 + `spec-checks` 校验模块 + `web/` 前端 + `specs` 3 份规格）。
 > 本文档面向新成员与代码评审，覆盖：整体架构、模块职责、关键类与函数、依赖关系、HTTP API、运行方式与质量门禁。
 > 配套规约：《项目规约-v1.0》《PRD-DevOps-Agent平台-v1.0》《规约-流水线执行器-v1.0》（均在 `docs/`）。
 > 文档索引与状态：[docs/README.md](README.md)（唯一索引）；架构决策：[ADR](adr/README.md)；运维：[运维手册](operation/README.md)；开发：[开发指南](dev/README.md)。
 > 机器可读入口：仓库根 `llms.txt`；断链巡检：`node scripts/docs/check-links.mjs`。
 > 环境子系统决策：《环境模板与中间件自动注入 v2》（`docs/环境变量与环境模板设计-v2.md`）。
 > 使用文档：《流水线工作台-使用指南-v1》（`docs/流水线工作台-使用指南-v1.md`，面向使用者的工作台操作说明）。
-> 功能规格：`specs/dev-local-deploy`（流水线体验 + dev 本机部署）、`specs/env-inject-health`（注入自检与中间件健康）、`specs/env-runtime-consistency`（环境一致性）。
+> 功能规格：`specs`（流水线体验 + dev 本机部署）、`specs`（注入自检与中间件健康）、`specs`（环境一致性）。
 
 ---
 
@@ -691,7 +691,7 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 
 | 变量 | 用途 |
 |---|---|
-| `AGENT_MODEL_API_KEY` / `AGENT_MODEL_BASE_URL` / `AGENT_MODEL_NAME` | 模型接入（OpenAI 兼容） |
+| `AGENT_MODEL_API_KEY` / `AGENT_MODEL_BASE_URL` / `AGENT_MODEL_NAME` | 模型接入（OpenAI 兼容）；**密钥可选**，推荐在设置页「模型连接」配置 |
 | `AGENT_WORKSPACE_ROOT` / `AGENT_SANDBOX_MODE` / `AGENT_SANDBOX_NETWORK` / `AGENT_SANDBOX_IMAGE` / `AGENT_SANDBOX_CACHE_VOLUME` / `AGENT_PIPELINE_IMAGE_PREFIX` | 工作区与沙箱覆盖 |
 | `AGENT_INTAKE_SHARED_ROOT` / `AGENT_GITEE_TOKEN` | 接入边界与兜底 token |
 | `GITEE_CLIENT_ID` / `GITEE_CLIENT_SECRET` / `GITEE_REDIRECT_URI` | Gitee OAuth |
@@ -699,6 +699,7 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 | ~~`RY_REPO_URL` 等预置 RY 覆盖~~ | 已随预置项目清单移除（2026-11） |
 
 > 规约 §8：凭证不入配置库；`spec-checks` 的 `ConfigCredentialScanTest` 会扫描决策面配置中的写凭证键。
+> `agent.model.api-key` 允许为空：`AgentProperties` 不在启动期校验；`SettingsModelRegistry` 在「设置页无连接 + 环境变量也无 key」时返回空配置，只在 `DynamicModelProvider.current()` 真正调用模型时给出配置指引——保证「设置页」这个配置入口始终可达。设置页显式建立的免鉴权连接（如本地 Ollama）允许空密钥。
 
 ---
 
@@ -712,7 +713,8 @@ JDK 21、Maven 3.9+、Node 20+、（可选）Docker（沙箱执行与镜像发�
 
 ```powershell
 cd platform
-$env:AGENT_MODEL_API_KEY="sk-xxx"    # 或依赖 platform/.env（AgentApplication 启动时 loadDotEnv 加载，真实环境变量优先）
+# 可选：模型密钥也可在启动后到「设置 → 模型连接」配置（推荐，免重启热切换）
+# $env:AGENT_MODEL_API_KEY="sk-xxx"  # 或依赖 platform/.env（AgentApplication 启动时 loadDotEnv 加载，真实环境变量优先）
 mvn -q verify                        # 编译 + 规约检查 + 单测（推荐先跑）
 mvn -q -DskipTests package           # 只打包
 java --enable-native-access=ALL-UNNAMED -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
