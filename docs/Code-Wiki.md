@@ -1,10 +1,10 @@
 # Code Wiki：研发运维智能体平台（agentscope-ruoyi）
 
-> 基线：2026-11-14 当前主干代码（`platform/` 7 个运行时模块 + `spec-checks` 校验模块 + `web/` 前端 + `specs` 3 份规格）。
+> 基线：2026-11-14 当前主干代码（`platform/` 7 个运行时模块 + `spec-checks` 校验模块 + `web/` 前端 + `docs/specs` 3 组规格）。
 > 本文档面向新成员与代码评审，覆盖：整体架构、模块职责、关键类与函数、依赖关系、HTTP API、运行方式与质量门禁。
 > 配套规约：《项目规约-v1.0》《PRD-DevOps-Agent平台-v1.0》《规约-流水线执行器-v1.0》（均在 `docs/`）。
 > 文档索引与状态：[docs/README.md](README.md)（唯一索引）；架构决策：[ADR](adr/README.md)；运维：[运维手册](operation/README.md)；开发：[开发指南](dev/README.md)。
-> 机器可读入口：仓库根 `llms.txt`；断链巡检：`node scripts/docs/check-links.mjs`。
+> 机器可读入口：仓库根 `llms.txt`；文档门禁：`check-links`（断链）+ `check-docs`（未登记）。
 > 环境子系统决策：《环境模板与中间件自动注入 v2》（`docs/环境变量与环境模板设计-v2.md`）。
 > 使用文档：《流水线工作台-使用指南-v1》（`docs/流水线工作台-使用指南-v1.md`，面向使用者的工作台操作说明）。
 > 功能规格：`specs`（流水线体验 + dev 本机部署）、`specs`（注入自检与中间件健康）、`specs`（环境一致性）。
@@ -62,7 +62,7 @@
 agentscope-ruoyi/
 ├── README.md              项目入口（阅读顺序、快速开始、提交规范）
 ├── docs/                  文档（唯一索引 docs/README.md；adr/ architecture/ api/ operation/ dev/ changelog/ deprecated/ governance/ + 15 篇主目录文档）
-├── specs/                 功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
+├── docs/specs/            功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 ├── platform/              平台代码（本文档主体）
 │   ├── pom.xml            父 POM（模块与依赖管理）
 │   ├── agent-domain/      领域模型 + 端口（零框架依赖）
@@ -76,8 +76,8 @@ agentscope-ruoyi/
 │   ├── web/               Vue3 前端
 │   ├── data/workspaces/   项目工作区（运行时生成：配方、历史、SQLite、HOST 部署状态、dev 进程日志）
 │   └── .env               本地凭证（已 gitignore，绝不入库；启动时自动加载）
-├── .workflow/build.yml    Gitee Go CI（本质：cd platform && mvn -B verify）
-└── _research/             市场调研与源码能力盘点
+├── .workflow/build.yml    Gitee Go CI（文档检查 + cd platform && mvn -B verify）
+└── docs/_research/        市场调研与源码能力盘点（只读证据）
 ```
 
 ---
@@ -741,7 +741,7 @@ npm run typecheck
 
 ### 11.4 CI
 
-`.workflow/build.yml`（Gitee Go）：本质一条 `cd platform && mvn -B verify`；分支保护 + verify 必须绿。
+`.workflow/build.yml`（Gitee Go）：文档检查（`check-links` + `check-docs`）+ `cd platform && mvn -B verify`；分支保护 + 两者必须绿。
 
 ---
 

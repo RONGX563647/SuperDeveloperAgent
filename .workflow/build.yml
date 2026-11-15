@@ -1,10 +1,11 @@
 # Gitee Go 流水线（Gitee 平台的官方 CI）
 #
 # ⚠️ 首次接入请对照 Gitee Go 文档核对字段：不同套餐/版本对 `triggers`、`step` 名称、
-#    `artifacts` 的支持略有差异。本文件只依赖两个稳定事实：
-#      1) 平台的 CI 就是跑一条命令：`mvn -B verify`（规约检查已并入，失败即中断）
-#      2) 产物目录固定：platform/agent-gateway/target/*-exec.jar
-#    如果 Gitee Go 不可用，把这两点搬到任意 CI（自建 runner / Jenkins / 云效）即可。
+#    `artifacts` 的支持略有差异。本文件只依赖三个稳定事实：
+#      1) 文档门禁：check-links + check-docs（任一失败即中断）
+#      2) 平台构建：`mvn -B verify`（规约检查已并入，失败即中断）
+#      3) 产物目录固定：platform/agent-gateway/target/*-exec.jar
+#    如果 Gitee Go 不可用，把这三点搬到任意 CI（自建 runner / Jenkins / 云效）即可。
 
 version: 1.0
 name: agent-platform
@@ -28,6 +29,14 @@ stages:
     strategy: naturally
     trigger: auto
     steps:
+      - step: build@nodejs
+        name: docs_check
+        displayName: 文档断链与登记检查
+        nodeVersion: "20"
+        commands:
+          - node scripts/docs/check-links.mjs
+          - node scripts/docs/check-docs.mjs
+
       - step: build@maven
         name: maven_verify
         displayName: mvn verify（编译 + 规约检查 + 单测）
