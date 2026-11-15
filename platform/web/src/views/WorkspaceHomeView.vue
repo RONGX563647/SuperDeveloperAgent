@@ -2,33 +2,36 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Promotion, Refresh, VideoPause, Search, Plus, Check, MoreFilled, Aim } from '@element-plus/icons-vue'
+import {
+  Aim, CaretRight, ChatDotRound, Check, Plus, Promotion, Refresh, Search,
+} from '@element-plus/icons-vue'
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
 import { listProjects, type ProjectRow } from '../api/project'
 import { useAgentChat } from '../composables/useAgentChat'
 import { useWorkspaceEvents, type WorkspaceEvent } from '../composables/useWorkspaceEvents'
 import { clearHistory, loadHistory, saveHistory } from '../state/sessionHistory'
-import type { ChatMessage } from '../types'
+import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
+import PageHeader from '../layouts/components/PageHeader.vue'
 import {
   cancelRun, createConversation, createTask, getSupervisor, listConversations, listRunLedger,
-  listRuns, listTasks, sendToConversation, syncConversations, updateConversation, updateTask,
+  listRuns, listTasks, sendToConversation, syncConversations, updateTask,
   type ConversationRow, type RunLedgerRow, type RunRow, type TaskRow,
 } from '../api/workspace'
 import { envLabel } from '../utils/pipelineLabels'
 
 /**
- * 工作区首页：左会话、中调度 Agent、右任务/运行。
+ * 工作区首页：中间调度 Agent + 右侧任务/运行。
  *
  * 工作区 = 项目；调度 Agent 只做编排（创建/派发/跟踪/汇总），没有任何写工具，
  * 真正执行落到子会话，生产写操作仍由人工确认。
+ * 消息区与对话页共用 ConversationTimeline / composer 样式，保持同一套阅读节奏。
  */
 const route = useRoute()
 const router = useRouter()
 const projectId = computed(() => String(route.params.projectId ?? appStore.projectId))
 const projectName = ref('')
 const projects = ref<ProjectRow[]>([])
-const initial = computed(() => (projectName.value || projectId.value).slice(0, 1).toUpperCase())
 
 const conversations = ref<ConversationRow[]>([])
 const supervisor = ref<ConversationRow | null>(null)
@@ -40,15 +43,9 @@ const lastRefreshed = ref(0)
 const messageListRef = ref<HTMLElement | null>(null)
 const composerRef = ref<HTMLTextAreaElement | null>(null)
 
-type ConvFilter = 'ALL' | 'ACTIVE' | 'FAILED' | 'CONFIRM'
-const convSearch = ref('')
-const convFilter = ref<ConvFilter>('ALL')
-const showArchived = ref(false)
-
 const sideTab = ref<'tasks' | 'runs'>('tasks')
 const runTab = ref<'active' | 'recent'>('active')
 const showDoneTasks = ref(false)
-const toolsOpen = ref(false)
 
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -67,17 +64,9 @@ const runDetail = ref<RunRow | null>(null)
 const ledgerRuns = ref<RunLedgerRow[]>([])
 
 const envOptions = ['dev', 'test', 'prod']
-const filters = [
-  { key: 'ALL', label: '全部' },
-  { key: 'ACTIVE', label: '活跃' },
-  { key: 'FAILED', label: '失败' },
-  { key: 'CONFIRM', label: '待确认' },
-] as const
 
-const allConversations = computed(() =>
-  conversations.value.filter((c) => c.kind !== 'SUPERVISOR'))
-const workerConversations = computed(() => allConversations.value.filter((c) => !c.archived))
-const archivedConversations = computed(() => allConversations.value.filter((c) => c.archived))
+const workerConversations = computed(() =>
+  conversations.value.filter((c) => c.kind !== 'SUPERVISOR' && !c.archived))
 
 const activeRuns = computed(() => runs.value.filter(
   (run) => run.status === 'QUEUED' || run.status === 'RUNNING'))
@@ -93,32 +82,6 @@ const recentLedgerRuns = computed(() => ledgerRuns.value
   .slice(0, 12))
 const ledgerFailures = computed(() => ledgerRuns.value
   .filter((run) => run.state === 'FAILED').length)
-
-const filterCounts = computed(() => ({
-  ALL: workerConversations.value.length,
-  ACTIVE: workerConversations.value.filter((c) => c.status === 'RUNNING').length,
-  FAILED: workerConversations.value.filter((c) => c.status === 'FAILED').length,
-  CONFIRM: workerConversations.value.filter((c) => c.status === 'NEEDS_CONFIRMATION').length,
-}))
-
-const filteredConversations = computed(() => {
-  const query = convSearch.value.trim().toLowerCase()
-  let list = showArchived.value ? archivedConversations.value : workerConversations.value
-  if (query) {
-    list = list.filter((c) =>
-      c.title.toLowerCase().includes(query)
-      || (c.summary ?? '').toLowerCase().includes(query)
-      || c.id.toLowerCase().includes(query))
-  }
-  if (!showArchived.value && convFilter.value !== 'ALL') {
-    const wanted = convFilter.value === 'ACTIVE'
-      ? 'RUNNING'
-      : convFilter.value === 'FAILED' ? 'FAILED' : 'NEEDS_CONFIRMATION'
-    list = list.filter((c) => c.status === wanted)
-  }
-  return [...list].sort((a, b) =>
-    Number(b.pinned) - Number(a.pinned) || b.lastActivityAt - a.lastActivityAt)
-})
 
 const openTasks = computed(() => tasks.value
   .filter((t) => t.status === 'TODO' || t.status === 'RUNNING' || t.status === 'BLOCKED')
@@ -145,43 +108,10 @@ const chat = useAgentChat({
   buildRequest: () => ({ sessionId: supervisor.value?.id, env: appStore.env }),
   getHeaders: () => ({ Authorization: `Bearer ${getToken()}` }),
 })
-const { projection, streaming, elapsedMs, error, send: sendChat, stop, hydrate, reset } = chat
+const { projection, streaming, elapsedMs, tokens, error, send: sendChat, stop, hydrate, reset, appendMessage } = chat
 
-const timeline = computed<ChatMessage[]>(() => {
-  const list = [...projection.value.messages]
-  if (projection.value.streamingTurn) {
-    list.push({
-      id: 'streaming',
-      role: 'assistant',
-      text: projection.value.streamingTurn.text || '…',
-      at: Date.now(),
-    })
-  }
-  return list
-})
-
-const recentTools = computed(() => Object.values(projection.value.tools ?? {}).slice(-6).reverse())
-const toolLabels: Record<string, string> = {
-  workspace_snapshot: '工作区快照',
-  conversation_list: '会话列表',
-  conversation_search: '搜索会话',
-  conversation_create: '新建会话',
-  conversation_rename: '重命名会话',
-  conversation_archive: '归档会话',
-  conversation_pin: '置顶会话',
-  conversation_send: '派发消息',
-  conversation_status: '查询运行',
-  conversation_wait: '等待运行',
-  conversation_cancel: '取消运行',
-  conversation_summarize: '汇总会话',
-  task_create: '新建任务',
-  task_update: '更新任务',
-  task_complete: '完成任务',
-  task_list: '任务列表',
-}
-function toolLabel(name: string): string {
-  return toolLabels[name] ?? name
-}
+const showWelcome = computed(() => !streaming.value && projection.value.messages.length === 0)
+const canSend = computed(() => input.value.trim().length > 0 && !streaming.value && !!supervisor.value)
 
 let timer: ReturnType<typeof setInterval> | null = null
 let reconcileTimer: ReturnType<typeof setTimeout> | null = null
@@ -260,9 +190,6 @@ async function loadAll(): Promise<void> {
 async function init(): Promise<void> {
   reset()
   input.value = ''
-  convSearch.value = ''
-  convFilter.value = 'ALL'
-  showArchived.value = false
   try {
     projects.value = await listProjects()
     projectName.value = projects.value.find((p) => p.id === projectId.value)?.name ?? projectId.value
@@ -323,67 +250,6 @@ async function createNew(): Promise<void> {
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '新建会话失败')
   }
-}
-
-async function renameConversation(row: ConversationRow): Promise<void> {
-  try {
-    const result = await ElMessageBox.prompt('新的会话标题', '重命名会话', {
-      inputValue: row.title,
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-      inputValidator: (value) => (String(value ?? '').trim() ? true : '标题不能为空'),
-    })
-    const title = String(result.value ?? '').trim()
-    if (!title) return
-    await updateConversation(row.id, { title })
-    await loadAll()
-  } catch (e) {
-    if (e instanceof Error) ElMessage.error(e.message)
-  }
-}
-
-async function togglePin(row: ConversationRow): Promise<void> {
-  try {
-    await updateConversation(row.id, { pinned: !row.pinned })
-    await loadAll()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '操作失败')
-  }
-}
-
-async function archiveConversation(row: ConversationRow): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      '归档后会话从列表隐藏，历史记录保留，可在「已归档」中恢复。',
-      '归档会话',
-      { type: 'warning', confirmButtonText: '归档', cancelButtonText: '取消' },
-    )
-    await updateConversation(row.id, { archived: true })
-    await loadAll()
-  } catch (e) {
-    if (e instanceof Error) ElMessage.error(e.message)
-  }
-}
-
-async function restoreConversation(row: ConversationRow): Promise<void> {
-  try {
-    await updateConversation(row.id, { archived: false })
-    await loadAll()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '恢复失败')
-  }
-}
-
-function onConvCommand(command: string, row: ConversationRow): void {
-  if (command === 'rename') void renameConversation(row)
-  if (command === 'pin') void togglePin(row)
-  if (command === 'archive') void archiveConversation(row)
-}
-
-function toggleArchived(): void {
-  showArchived.value = !showArchived.value
-  convSearch.value = ''
-  convFilter.value = 'ALL'
 }
 
 async function cancel(run: RunRow): Promise<void> {
@@ -463,6 +329,9 @@ async function submit(): Promise<void> {
   const text = input.value.trim()
   if (!text || streaming.value || !supervisor.value) return
   input.value = ''
+  appendMessage({ id: `u-${Date.now()}`, role: 'user', text, at: Date.now() })
+  await nextTick()
+  scrollToBottom()
   await sendChat(text)
   await loadAll()
 }
@@ -474,6 +343,16 @@ function onEnter(event: KeyboardEvent): void {
     void submit()
   }
 }
+
+/** 输入框随内容长高，最多 30vh 后内部滚动（与对话页一致）。 */
+function resizeInput(): void {
+  const el = composerRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.3))}px`
+}
+
+watch(input, () => void nextTick(resizeInput))
 
 function usePrompt(text: string): void {
   input.value = text
@@ -754,218 +633,115 @@ onUnmounted(() => {
 
 <template>
   <div class="workspace">
-    <header class="ws-top">
-      <div class="ws-ident">
-        <span class="ws-mark">{{ initial }}</span>
-        <div class="ws-name">
-          <h1>{{ projectName }}</h1>
-          <p>
-            <span class="mono">{{ projectId }}</span>
-            <i>·</i><span>{{ kpis.conversations }} 会话</span>
-            <i>·</i><span :class="{ hot: kpis.activeRuns > 0 }">{{ kpis.activeRuns }} 运行中</span>
-            <i>·</i><span>{{ kpis.openTasks }} 待办</span>
-            <i>·</i>
-            <span class="live" :class="{ on: liveConnected }">
-              <i class="live-dot"></i>{{ liveConnected ? '实时' : '轮询兜底' }}
-            </span>
-            <template v-if="lastRefreshed">
-              <i>·</i><span class="muted">更新于 {{ timeAgo(lastRefreshed) }}</span>
-            </template>
-          </p>
-        </div>
-      </div>
-      <div class="ws-actions">
-        <button type="button" class="btn ghost" title="一键诊断工作区" @click="diagnose">
-          <el-icon><Aim /></el-icon>诊断
-        </button>
+    <PageHeader title="工作区" context context-env>
+      <template #actions>
         <button type="button" class="icon-btn" title="命令面板（Ctrl/⌘ + K）" @click="openPalette">
           <el-icon><Search /></el-icon>
         </button>
-        <el-select v-model="appStore.env" size="small" class="env-select" aria-label="环境">
-          <el-option v-for="e in envOptions" :key="e" :label="envLabel(e)" :value="e" />
-        </el-select>
+        <button type="button" class="btn ghost" title="一键诊断工作区" @click="diagnose">
+          <el-icon><Aim /></el-icon>诊断
+        </button>
         <button type="button" class="icon-btn" title="刷新" :disabled="loading" @click="loadAll">
           <el-icon><Refresh /></el-icon>
         </button>
         <button type="button" class="btn primary" @click="openCreate">
           <el-icon><Plus /></el-icon>新建会话
         </button>
+      </template>
+    </PageHeader>
+
+    <div class="ws-bar">
+      <div class="ws-bar-left">
+        <h2>工作区助手</h2>
+        <span class="tag">只读 · 负责编排</span>
+        <span class="live" :class="{ on: liveConnected }">
+          <i class="live-dot"></i>{{ liveConnected ? '实时' : '轮询兜底' }}
+        </span>
       </div>
-    </header>
-
-    <div class="ws-grid">
-      <!-- 左：会话 -->
-      <aside class="col conv-col">
-        <div class="col-head">
-          <span class="col-title">{{ showArchived ? '已归档' : '会话' }}</span>
-          <span class="col-count">{{ showArchived ? archivedConversations.length : filterCounts.ALL }}</span>
-          <button
-            v-if="!showArchived" type="button" class="icon-btn sm"
-            title="新建会话" @click="openCreate"
-          >
-            <el-icon><Plus /></el-icon>
-          </button>
-        </div>
-
-        <label class="search-box">
-          <el-icon><Search /></el-icon>
-          <input v-model="convSearch" type="search" placeholder="搜索会话" />
-        </label>
-
-        <div v-if="!showArchived" class="seg">
-          <button
-            v-for="f in filters" :key="f.key" type="button"
-            :class="{ on: convFilter === f.key }" @click="convFilter = f.key"
-          >
-            {{ f.label }}<span v-if="filterCounts[f.key]" class="seg-count">{{ filterCounts[f.key] }}</span>
-          </button>
-        </div>
-
-        <div class="conv-list">
-          <div
-            v-for="row in filteredConversations" :key="row.id"
-            class="conv-item" @click="openConversation(row)"
-          >
-            <span class="conv-state" :data-s="row.status" :title="statusLabel(row.status)"></span>
-            <div class="item-main">
-              <span class="item-title">
-                <em v-if="row.pinned" class="pin">★</em>{{ row.title }}
-              </span>
-              <span class="item-meta">
-                {{ envLabel(row.env) }} · {{ timeAgo(row.lastActivityAt) }}
-                <template v-if="row.summary"> · {{ row.summary }}</template>
-              </span>
-            </div>
-            <button
-              v-if="showArchived" type="button" class="text-btn"
-              @click.stop="restoreConversation(row)"
-            >恢复</button>
-            <span v-else class="row-actions" @click.stop>
-              <el-dropdown trigger="click" @command="onConvCommand($event, row)">
-                <button type="button" class="more-btn" title="更多操作">
-                  <el-icon><MoreFilled /></el-icon>
-                </button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                    <el-dropdown-item command="pin">{{ row.pinned ? '取消置顶' : '置顶' }}</el-dropdown-item>
-                    <el-dropdown-item command="archive" divided>归档</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </span>
-          </div>
-          <p v-if="!filteredConversations.length" class="empty">
-            {{ convSearch || (!showArchived && convFilter !== 'ALL')
-              ? '没有匹配的会话'
-              : showArchived ? '没有已归档的会话' : '还没有会话，点右上角新建' }}
-          </p>
-        </div>
-
+      <div class="ws-bar-right">
+        <span class="ws-kpis">
+          {{ kpis.conversations }} 会话 · {{ kpis.activeRuns }} 运行中 · {{ kpis.openTasks }} 待办
+        </span>
+        <span v-if="lastRefreshed" class="ws-updated">更新于 {{ timeAgo(lastRefreshed) }}</span>
         <button
-          v-if="archivedConversations.length || showArchived"
-          type="button" class="archived-toggle" @click="toggleArchived"
-        >
-          {{ showArchived ? '← 返回会话' : `已归档 ${archivedConversations.length}` }}
-        </button>
-      </aside>
+          type="button" class="text-btn"
+          :disabled="streaming || !projection.messages.length" @click="clearChat"
+        >清空</button>
+      </div>
+    </div>
 
-      <!-- 中：工作区助手 -->
-      <section class="col chat-col">
-        <div class="chat-head">
-          <div class="chat-title">
-            <span>工作区助手</span>
-            <span class="tag">只读，不会直接改代码</span>
-          </div>
-          <div class="chat-head-actions">
-            <span v-if="supervisor" class="mono muted">{{ shortId(supervisor.id) }}</span>
-            <button
-              type="button" class="text-btn"
-              :disabled="streaming || !timeline.length" @click="clearChat"
-            >清空</button>
-          </div>
-        </div>
-
+    <div class="ws-body">
+      <!-- 中：工作区助手（与对话页共用时间线 / composer 视觉） -->
+      <section class="chat-pane">
         <div ref="messageListRef" class="chat-scroll">
-          <div v-if="!timeline.length" class="hero">
-            <h2>要做什么？</h2>
-            <p>可以直接问工作区状态，也可以让它创建会话、派发任务并跟踪到完成。</p>
-            <div class="action-grid">
+          <div v-if="showWelcome" class="welcome">
+            <span class="welcome-icon"><el-icon><ChatDotRound /></el-icon></span>
+            <h2 class="welcome-title">要做什么？</h2>
+            <p class="welcome-desc">
+              {{ projectName }} · 可以直接问工作区状态，也可以让它创建会话、派发任务并跟踪到完成。
+            </p>
+            <div class="welcome-suggestions">
               <button
                 v-for="a in actionCards" :key="a.title" type="button"
-                class="action-card" @click="usePrompt(a.prompt)"
+                class="suggestion" @click="usePrompt(a.prompt)"
               >
-                <span class="action-title">{{ a.title }}</span>
-                <span class="action-desc">{{ a.desc }}</span>
+                <span class="suggestion-main">
+                  <strong>{{ a.title }}</strong>
+                  <small>{{ a.desc }}</small>
+                </span>
+                <el-icon><CaretRight /></el-icon>
               </button>
             </div>
-            <p class="hero-note">生产写操作需要你在确认卡上确认。</p>
+            <p class="welcome-note">生产写操作需要你在确认卡上确认。</p>
           </div>
 
-          <div
-            v-for="m in timeline" :key="m.id" class="turn"
-            :class="m.role === 'user' ? 'user' : 'assistant'"
-          >
-            <template v-if="m.role === 'assistant'">
-              <span class="assistant-avatar">调</span>
-              <div class="turn-body">
-                <div class="turn-text">{{ m.text }}</div>
-                <button type="button" class="copy-btn" @click="copyText(m.text)">复制</button>
-              </div>
-            </template>
-            <div v-else class="user-bubble">{{ m.text }}</div>
-          </div>
-
-          <div v-if="streaming && !projection.streamingTurn" class="typing">
-            <span></span><span></span><span></span>
-          </div>
+          <ConversationTimeline
+            v-if="!showWelcome"
+            :projection="projection"
+            :streaming="streaming"
+            @copy="copyText"
+          />
           <p v-if="error" class="stream-error">{{ error }}</p>
         </div>
 
-        <div v-if="recentTools.length" class="activity">
-          <button type="button" class="activity-head" @click="toolsOpen = !toolsOpen">
-            <i class="activity-dot"></i>最近动作 · {{ recentTools.length }}
-            <span class="chev">{{ toolsOpen ? '收起' : '展开' }}</span>
-          </button>
-          <div v-if="toolsOpen" class="activity-list">
-            <div v-for="t in recentTools" :key="t.toolCallId" class="activity-row">
-              <i class="activity-dot" :data-s="t.status"></i>
-              <span class="activity-name">{{ toolLabel(t.toolName) }}</span>
-              <span class="activity-args">{{ t.arguments || t.resultText }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="composer">
-          <div class="composer-box">
+        <div class="composer-wrap">
+          <div class="composer">
             <textarea
-              ref="composerRef" v-model="input" rows="2"
-              placeholder="直接问工作区状态，或描述要做的事（Ctrl/⌘ + K 打开命令面板）"
+              ref="composerRef" v-model="input" rows="1" class="composer-input"
+              placeholder="直接问工作区状态，或描述要做的事"
               @keydown.enter="onEnter"
               @keydown.esc="onEscape"
             />
             <div class="composer-bar">
-              <span class="composer-hint">
-                {{ streaming
-                  ? `调度中 ${(elapsedMs / 1000).toFixed(1)}s · Esc 停止`
-                  : 'Enter 发送 · Shift + Enter 换行' }}
-              </span>
-              <button v-if="streaming" type="button" class="text-btn" @click="stop">
-                <el-icon><VideoPause /></el-icon> 停止
-              </button>
-              <button
-                type="button" class="send-btn" :disabled="streaming || !supervisor || !input.trim()"
-                title="发送" @click="submit"
-              >
-                <el-icon><Promotion /></el-icon>
-              </button>
+              <div class="bar-left">
+                <span class="bar-scope mono">
+                  工作区 · {{ envLabel(appStore.env) }}<template v-if="supervisor"> · {{ shortId(supervisor.id) }}</template>
+                </span>
+              </div>
+              <div class="bar-right">
+                <span v-if="streaming || elapsedMs" class="metric mono">
+                  {{ (elapsedMs / 1000).toFixed(1) }}s · {{ tokens }} ev
+                </span>
+                <button v-if="streaming" type="button" class="send-btn stop" @click="stop">
+                  停止
+                </button>
+                <button
+                  v-else type="button" class="send-btn" :class="{ ready: canSend }"
+                  :disabled="!canSend" title="发送" @click="submit"
+                >
+                  <el-icon><Promotion /></el-icon>
+                </button>
+              </div>
             </div>
           </div>
+          <p class="composer-hint">
+            {{ streaming ? 'Esc 停止' : 'Enter 发送 · Shift + Enter 换行 · Ctrl/⌘ + K 命令面板' }}
+          </p>
         </div>
       </section>
 
       <!-- 右：任务 / 运行 -->
-      <aside class="col side-col">
+      <aside class="side-col">
         <div class="side-head">
           <div class="seg inline">
             <button type="button" :class="{ on: sideTab === 'tasks' }" @click="sideTab = 'tasks'">
@@ -1208,61 +984,74 @@ onUnmounted(() => {
 
 <style scoped>
 .workspace {
+  position: relative;
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   height: 100%;
+  min-width: 0;
   min-height: 0;
-  background: #f6f7f9;
+  overflow: hidden;
+  background: var(--surface-raised);
 }
 .mono { font-variant-numeric: tabular-nums; }
 .muted { color: var(--ink-faint); }
-.hot { color: #b45309; }
 
-/* 顶栏 */
-.ws-top {
+/* 助手信息行：标题 + 只读说明 + 实时状态，弱于 Header 但比正文更轻 */
+.ws-bar {
   display: flex;
   flex: none;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
-  padding: 14px 20px;
+  min-height: 34px;
+  padding: 0 20px 6px;
 }
-.ws-ident { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; }
-.ws-mark {
-  display: grid;
-  flex: none;
-  width: 34px;
-  height: 34px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-radius: 10px;
-  place-items: center;
+.ws-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
-.ws-name { min-width: 0; }
-.ws-name h1 {
+.ws-bar-left h2 {
   margin: 0;
-  overflow: hidden;
-  font-size: 16px;
+  font-size: var(--text-sm);
   font-weight: 600;
-  letter-spacing: -0.01em;
   color: var(--ink);
   white-space: nowrap;
-  text-overflow: ellipsis;
 }
-.ws-name p {
+.tag {
+  padding: 1px 7px;
+  font-size: 10px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+.ws-bar-right {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 5px;
-  margin: 2px 0 0;
-  overflow: hidden;
-  font-size: 11.5px;
+  gap: 12px;
+  font-size: 11px;
   color: var(--ink-faint);
   white-space: nowrap;
 }
-.ws-name p i { font-style: normal; opacity: 0.5; }
-.ws-actions { display: flex; align-items: center; gap: 8px; }
-.env-select { width: 100px; }
+.ws-kpis { color: var(--ink-muted); }
+
+/* 正文：左对话 + 右任务栏，与对话页共用白纸画布 */
+.ws-body {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.chat-pane {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
 
 /* 通用控件 */
 .btn {
@@ -1308,87 +1097,35 @@ onUnmounted(() => {
 .text-btn:hover:not(:disabled) { color: var(--accent-ink); }
 .text-btn:disabled { cursor: not-allowed; opacity: 0.45; }
 
-/* 三栏 */
-.ws-grid {
-  display: grid;
-  flex: 1;
-  grid-template-columns: 264px minmax(0, 1fr) 320px;
-  gap: 14px;
-  min-height: 0;
-  padding: 0 20px 18px;
-}
-.col {
+/* 右栏：任务 / 运行，发丝线与对话区分开 */
+.side-col {
   display: flex;
+  flex: none;
   flex-direction: column;
+  width: 296px;
   min-height: 0;
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--line-soft);
 }
-.col-head,
-.side-head,
-.chat-head {
+.side-head {
   display: flex;
   flex: none;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--line-soft);
 }
-.side-head { justify-content: space-between; padding: 10px 12px 8px; border-bottom: 1px solid var(--line-soft); }
-.chat-head { justify-content: space-between; border-bottom: 1px solid var(--line-soft); }
-.col-title { font-size: 12px; font-weight: 600; color: var(--ink); }
-.col-count {
-  padding: 0 5px;
-  font-size: 10.5px;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: 999px;
-}
-.col-head .icon-btn.sm { margin-left: auto; }
-.chat-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--ink); }
-.chat-title .tag {
-  padding: 1px 7px;
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: 999px;
-}
-.chat-head-actions { display: flex; align-items: center; gap: 10px; font-size: 10.5px; }
 
-/* 左栏 */
-.search-box {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  margin: 0 12px 8px;
-  padding: 0 9px;
-  color: var(--ink-faint);
-  background: var(--surface-sunken);
-  border-radius: 8px;
-}
-.search-box input {
-  flex: 1;
-  min-width: 0;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--ink);
-  background: none;
-  border: 0;
-  outline: none;
-}
-.seg { display: flex; flex: none; gap: 2px; padding: 0 12px 8px; }
-.seg.inline { padding: 0; }
+/* 分段筛选 */
+.seg { display: flex; flex: none; gap: 2px; }
 .seg button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
+  padding: 4px 10px;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--ink-muted);
   cursor: pointer;
   background: none;
@@ -1398,8 +1135,8 @@ onUnmounted(() => {
 .seg button:hover { color: var(--ink); }
 .seg button.on { color: var(--ink); background: var(--surface-sunken); font-weight: 500; }
 .seg-count { font-size: 10px; opacity: 0.7; }
-.conv-list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 8px; }
-.conv-item,
+
+/* 列表行 */
 .list-item {
   display: flex;
   align-items: flex-start;
@@ -1408,14 +1145,7 @@ onUnmounted(() => {
   cursor: pointer;
   border-radius: 8px;
 }
-.conv-item { align-items: center; }
-.conv-item:hover,
 .list-item:hover { background: var(--surface-hover); }
-.conv-state { flex: none; width: 6px; height: 6px; background: #cbd5e1; border-radius: 50%; }
-.conv-state[data-s='RUNNING'] { background: #f59e0b; }
-.conv-state[data-s='NEEDS_CONFIRMATION'] { background: #8b5cf6; }
-.conv-state[data-s='SUCCEEDED'] { background: #10b981; }
-.conv-state[data-s='FAILED'] { background: #ef4444; }
 .item-main { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
 .item-title {
   display: flex;
@@ -1441,34 +1171,6 @@ onUnmounted(() => {
   background: var(--surface-sunken);
   border-radius: 3px;
 }
-.pin { font-style: normal; color: #f59e0b; }
-.row-actions { flex: none; opacity: 0; transition: opacity 0.12s ease; }
-.conv-item:hover .row-actions { opacity: 1; }
-.more-btn {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  color: var(--ink-faint);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: 6px;
-  place-items: center;
-}
-.more-btn:hover { color: var(--ink); background: var(--surface-sunken); }
-.archived-toggle {
-  flex: none;
-  padding: 8px 14px;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--ink-faint);
-  text-align: left;
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-top: 1px solid var(--line-soft);
-}
-.archived-toggle:hover { color: var(--accent-ink); }
 .empty {
   padding: 18px 10px;
   margin: 0;
@@ -1478,182 +1180,229 @@ onUnmounted(() => {
   text-align: center;
 }
 
-/* 中间 */
-.chat-scroll { flex: 1; min-height: 0; padding: 24px 28px; overflow-y: auto; }
-.hero { max-width: 600px; margin: 5vh auto 0; text-align: center; }
-.hero h2 {
-  margin: 0 0 6px;
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--ink);
+/* 对话区：与对话页同一套白纸画布 + 居中阅读列 */
+.chat-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 0 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.hero p { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ink-muted); }
-.action-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 22px;
-  text-align: left;
-}
-.action-card {
+.welcome {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  justify-content: center;
+  width: 100%;
+  max-width: 56rem;
+  min-height: 100%;
+  padding: 24px 0;
+  margin: 0 auto;
+}
+.welcome-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  font-size: 17px;
+  color: var(--ink-soft);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+}
+.welcome-title {
+  margin: 14px 0 6px;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.welcome-desc {
+  max-width: 34rem;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--ink-muted);
+}
+.welcome-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 22px;
+}
+.suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
   padding: 12px 14px;
   font-family: inherit;
+  font-size: 13px;
+  color: var(--ink-soft);
   text-align: left;
   cursor: pointer;
-  background: #fff;
+  background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
-.action-card:hover { border-color: var(--accent); box-shadow: var(--shadow-1); }
-.action-title { font-size: 12.5px; font-weight: 500; color: var(--ink); }
-.action-desc { font-size: 11px; color: var(--ink-faint); }
-.hero-note { margin-top: 16px; font-size: 11px; color: var(--ink-faint); }
-
-.turn { display: flex; gap: 10px; margin-bottom: 18px; }
-.turn.user { justify-content: flex-end; }
-.assistant-avatar {
-  display: grid;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-radius: 8px;
-  place-items: center;
-}
-.turn-body { max-width: min(680px, 82%); }
-.turn-text {
-  font-size: 13px;
-  line-height: 1.85;
+.suggestion:hover {
   color: var(--ink);
-  word-break: break-word;
-  white-space: pre-wrap;
+  border-color: var(--line);
+  box-shadow: var(--shadow-1);
 }
-.copy-btn {
-  margin-top: 3px;
-  padding: 0;
-  font-family: inherit;
-  font-size: 10.5px;
+.suggestion-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.suggestion-main strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.suggestion-main small {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.suggestion .el-icon {
+  flex: none;
+  font-size: 12px;
   color: var(--ink-faint);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  opacity: 0;
 }
-.turn:hover .copy-btn { opacity: 1; }
-.user-bubble {
-  max-width: 78%;
-  padding: 8px 12px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: #fff;
-  word-break: break-word;
-  white-space: pre-wrap;
-  background: var(--accent);
-  border-radius: 12px 12px 4px 12px;
+.welcome-note {
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--ink-faint);
 }
-.typing { display: flex; gap: 4px; padding: 4px 0 0 34px; }
-.typing span {
-  width: 5px;
-  height: 5px;
-  background: var(--ink-faint);
-  border-radius: 50%;
-  animation: blink 1.2s infinite ease-in-out;
+.stream-error {
+  max-width: 56rem;
+  margin: 10px auto;
+  font-size: 12px;
+  color: var(--danger);
 }
-.typing span:nth-child(2) { animation-delay: 0.15s; }
-.typing span:nth-child(3) { animation-delay: 0.3s; }
-@keyframes blink {
-  0%, 80%, 100% { opacity: 0.25; }
-  40% { opacity: 1; }
-}
-.stream-error { margin: 10px 0 0 34px; font-size: 12px; color: var(--danger); }
 
-.activity { flex: none; padding: 4px 16px 2px; border-top: 1px solid var(--line-soft); }
-.activity-head {
+/* 输入区：白底浮起的 composer，底部一行工具条（复用对话页视觉） */
+.composer-wrap {
+  flex: none;
+  padding: 0 24px 14px;
+}
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 56rem;
+  padding: 12px 12px 6px 14px;
+  margin: 0 auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 6px 20px rgb(16 24 40 / 6%);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.composer:focus-within {
+  border-color: rgb(77 130 247 / 52%);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 24px rgb(16 24 40 / 9%);
+}
+.composer-input {
+  width: 100%;
+  min-height: 46px;
+  padding: 2px;
+  overflow-y: auto;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink);
+  resize: none;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+.composer-input::placeholder {
+  color: var(--ink-faint);
+}
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.bar-left,
+.bar-right {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  padding: 4px 0;
-  font-family: inherit;
-  font-size: 10.5px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
+  min-width: 0;
 }
-.activity-head .chev { margin-left: auto; color: var(--ink-faint); }
-.activity-dot { width: 5px; height: 5px; background: var(--ink-faint); border-radius: 50%; }
-.activity-dot[data-s='RUNNING'] { background: #f59e0b; }
-.activity-dot[data-s='COMPLETED'] { background: #10b981; }
-.activity-dot[data-s='FAILED'] { background: #ef4444; }
-.activity-list { max-height: 118px; padding-bottom: 6px; overflow-y: auto; }
-.activity-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 11px;
-  color: var(--ink-muted);
-}
-.activity-name { flex: none; }
-.activity-args {
-  flex: 1;
+.bar-scope {
   overflow: hidden;
+  max-width: 190px;
+  padding: 0 4px;
+  font-size: 11px;
   color: var(--ink-faint);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-
-.composer { flex: none; padding: 10px 16px 14px; }
-.composer-box {
-  padding: 8px 10px;
-  background: var(--surface-sunken);
-  border: 1px solid transparent;
-  border-radius: 12px;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
-}
-.composer-box:focus-within { background: #fff; border-color: var(--accent); }
-.composer textarea {
-  width: 100%;
-  max-height: 160px;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.65;
-  color: var(--ink);
-  resize: none;
-  background: none;
-  border: 0;
-  outline: none;
-}
-.composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
-.composer-hint {
-  flex: 1;
+.metric {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 .send-btn {
-  display: grid;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
   width: 30px;
   height: 30px;
+  padding: 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  cursor: not-allowed;
+  background: var(--surface-hover);
+  border: 0;
+  border-radius: var(--radius-md);
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
+}
+.send-btn.ready {
   color: #fff;
   cursor: pointer;
   background: var(--accent);
-  border: 0;
-  border-radius: 8px;
-  place-items: center;
 }
-.send-btn:disabled { cursor: not-allowed; opacity: 0.4; }
+.send-btn.ready:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+.send-btn.ready:active {
+  transform: translateY(0);
+}
+.send-btn.stop {
+  width: auto;
+  padding: 0 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: var(--surface-active);
+}
+.send-btn.stop:hover {
+  color: var(--ink);
+}
+.composer-hint {
+  max-width: 54rem;
+  margin: 8px auto 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: center;
+}
 
 /* 右栏 */
 .side-body { flex: 1; min-height: 0; padding: 6px 8px 10px; overflow-y: auto; }
@@ -1785,14 +1534,25 @@ onUnmounted(() => {
 .detail-row .danger { color: var(--danger); }
 
 @media (max-width: 1180px) {
-  .ws-grid { grid-template-columns: 240px minmax(0, 1fr); }
   .side-col { display: none; }
 }
-@media (max-width: 820px) {
-  .ws-top { flex-wrap: wrap; padding: 12px; }
-  .ws-grid { grid-template-columns: 1fr; padding: 0 12px 12px; }
-  .conv-col { display: none; }
-  .chat-scroll { padding: 16px; }
-  .action-grid { grid-template-columns: 1fr; }
+@media (max-width: 720px) {
+  .ws-bar { padding: 0 14px 6px; }
+  .ws-bar-right { gap: 8px; }
+  .ws-kpis,
+  .ws-updated { display: none; }
+  .chat-scroll,
+  .composer-wrap {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+  .composer-wrap {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  .metric { display: none; }
+}
+@media (max-width: 480px) {
+  .bar-scope { display: none; }
+  .ws-bar-left .tag { display: none; }
 }
 </style>

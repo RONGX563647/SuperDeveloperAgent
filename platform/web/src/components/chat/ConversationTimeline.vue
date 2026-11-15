@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import type { AgentProjection, UsageCost } from '../../types'
 import { formatAmount, sumCost } from '../../utils/deepseekPricing'
 import MessageItem from './MessageItem.vue'
+import MarkdownView from './MarkdownView.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 
 /**
@@ -114,8 +115,13 @@ const rows = computed(() => items.value.map((message, index) => ({
           :content="streamingThinking"
           :active="!streamingText"
         />
-        <span v-if="streamingText" class="streaming-text">{{ streamingText }}</span>
-        <span class="caret" />
+        <!-- 流式正文同样走 Markdown 渲染：半截围栏/表格也能即时排版 -->
+        <MarkdownView
+          v-if="streamingText"
+          class="is-streaming"
+          :content="streamingText"
+        />
+        <span v-else class="caret" />
       </div>
     </div>
 
@@ -163,9 +169,6 @@ const rows = computed(() => items.value.map((message, index) => ({
   line-height: 1.9;
   color: var(--ink);
   word-break: break-word;
-}
-.streaming-text {
-  white-space: pre-wrap;
 }
 .caret {
   display: inline-block;

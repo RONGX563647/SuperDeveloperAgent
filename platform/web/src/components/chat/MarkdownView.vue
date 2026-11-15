@@ -173,4 +173,28 @@ function onRootClick(event: MouseEvent): void {
 .markdown-view .tok-str { color: var(--code-str); }
 .markdown-view .tok-comment { color: var(--code-comment); font-style: italic; }
 .markdown-view .tok-num { color: var(--code-num); }
+
+/* 流式输出光标：跟在最后一个正文块末尾，随 Markdown 一起实时刷新 */
+.markdown-view.is-streaming > *:last-child::after {
+  display: inline-block;
+  width: 6px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.14em;
+  content: '';
+  background: var(--accent);
+  border-radius: 1px;
+  animation: markdown-caret 1s step-end infinite;
+}
+/* 代码 / 表格 / 引用块内不放光标，避免破坏块内排版 */
+.markdown-view.is-streaming > pre:last-child::after,
+.markdown-view.is-streaming > .code-wrap:last-child::after,
+.markdown-view.is-streaming > .table-wrap:last-child::after,
+.markdown-view.is-streaming > blockquote:last-child::after,
+.markdown-view.is-streaming > hr:last-child::after {
+  display: none;
+}
+@keyframes markdown-caret {
+  50% { opacity: 0; }
+}
 </style>
