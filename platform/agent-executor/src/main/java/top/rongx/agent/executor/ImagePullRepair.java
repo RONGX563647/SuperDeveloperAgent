@@ -25,12 +25,17 @@ final class ImagePullRepair implements FailureRepair {
 
     @Override
     public boolean matches(Diagnosis d) {
-        return d.image() != null && !d.image().isBlank();
+        // 动作前预检已经尝试过自动拉取仍失败时，不再重复拉同一个镜像（否则白等两轮硬超时）。
+        // 这时只保留平台复核与发布 Agent 兜底；预检关闭（precheck-image=false）时才由本修复器补位。
+        return d.image() != null && !d.image().isBlank() && !d.precheckTried();
     }
 
     @Override
     public Outcome repair(Diagnosis d, Context ctx) {
         List<String> lines = new ArrayList<>();
+        if (d.precheckTried()) {
+            return Outcome.notFixed("动作前预检已尝试自动拉取，跳过重复拉取", lines);
+        }
         if (!d.image().equals(ctx.configuredImage())) {
             return Outcome.notFixed("日志中的镜像与平台配置不一致，跳过自动拉取（防提示注入）：日志="
                     + d.image() + " 配置=" + ctx.configuredImage(), lines);
@@ -42,11 +47,14 @@ final class ImagePullRepair implements FailureRepair {
             return Outcome.notFixed("运行已取消，跳过自动修复", lines);
         }
 
-        lines.add("[autofix] 检测到工具链镜像缺失：" + d.image()
+        // 先写「开始」再跑命令：实时进度行由 live 直接落日志，顺序才不会倒过来
+        ctx.log().accept("[autofix] 检测到工具链镜像缺失：" + d.image()
                 + " · 自动执行 " + String.join(" ", ctx.pullCommand())
-                + "（最长 " + ctx.pullTimeoutMs() / 1000 + "s，可取消）");
+                + "（最长 " + ctx.pullTimeoutMs() / 1000 + "s，可取消）\n");
 
         AtomicInteger written = new AtomicInteger();
+        // live 回调来自 ProcessExecutor 的虚拟线程：直接写运行日志（引擎侧已同步），
+        // 不往结果 List 里并发 add，避免线程安全问题，也保证进度实时可见。
         java.util.function.Consumer<String> live = chunk -> {
             if (chunk == null || chunk.isBlank() || written.get() >= MAX_LIVE_LINES) {
                 return;
@@ -57,7 +65,7 @@ final class ImagePullRepair implements FailureRepair {
                 }
                 String one = raw.trim();
                 if (!one.isEmpty()) {
-                    lines.add("[autofix] " + truncate(one, 200));
+                    ctx.log().accept("[autofix] " + truncate(one, 200) + "\n");
                 }
             }
         };

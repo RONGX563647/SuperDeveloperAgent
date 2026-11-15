@@ -96,6 +96,20 @@ class ImagePullRepairTest {
     }
 
     @Test
+    @DisplayName("动作前预检已自动拉取过且失败 → 不重复拉取同一个镜像")
+    void skipsWhenPrecheckAlreadyTriedPull() {
+        FailureRepair.Diagnosis tried = new FailureRepair.Diagnosis("run-1", "build", "E-209",
+                "构建镜像未就绪（" + CONFIGURED + "）：自动拉取失败（E-101）",
+                "[sandbox] 自动拉取失败", CONFIGURED, 1, true, true);
+        Recorder recorder = new Recorder();
+        ImagePullRepair repair = new ImagePullRepair();
+
+        assertFalse(repair.matches(tried));
+        assertFalse(repair.repair(tried, context(recorder, false, PULL, INSPECT)).verified());
+        assertTrue(recorder.commands.isEmpty(), "不得重复执行 docker pull");
+    }
+
+    @Test
     @DisplayName("pull 失败 / 已取消 / 非容器模式 → 都不续跑")
     void failureCancelAndNonDockerAreSafe() {
         Recorder failed = new Recorder();

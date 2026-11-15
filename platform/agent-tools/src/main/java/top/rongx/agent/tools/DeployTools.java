@@ -13,6 +13,7 @@ import top.rongx.agent.domain.deploy.RecipeRenderer;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.env.EnvNames;
+import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -38,11 +39,14 @@ public class DeployTools {
     private final RecipeStore recipes;
     private final PipelineEngine engine;
     private final EnvBindingPort bindings;
+    private final PipelineDefStore defStore;
 
-    public DeployTools(RecipeStore recipes, PipelineEngine engine, EnvBindingPort bindings) {
+    public DeployTools(RecipeStore recipes, PipelineEngine engine, EnvBindingPort bindings,
+                       PipelineDefStore defStore) {
         this.recipes = recipes;
         this.engine = engine;
         this.bindings = bindings;
+        this.defStore = defStore;
     }
 
     @Tool(name = "deploy_env_status",
@@ -70,6 +74,161 @@ public class DeployTools {
         }
         sb.append("versions: ").append(recipes.versions(ctx.projectId(), target).size()).append('\n');
         return sb.toString();
+    }
+
+    /**
+     * 平台侧流水线的部署段配置：端口 / 容器端口 / 健康检查。
+     *
+     * <p>这些值原先只能手改 {@code <workspace>/<project>/ci/pipeline.yml}，Agent 反而要用户
+     * 代为修改（"端口被占用"这类最常见的前置失败因此卡住自动化）。这里把改动收进受控工具：
+     * 只改 deploy 段与 health stage 的 url，动作与阶段顺序保持不变。
+     */
+    @Tool(name = "ci_configure_deploy",
+            description = """
+                    修改平台侧流水线定义的部署配置（写操作，仅 dev/test）：
+                    target（docker/host/server）、port、container_port、health_path、health_url。
+                    适用场景：部署端口被占用（例如 dev 实例占了 8090）需要换端口；
+                    健康检查路径与项目实际端点不一致（Spring Boot 通常是 /actuator/health）。
+                    修改后会重建 health stage 的 url（未显式给 health_url 时按 port + health_path 生成），
+                    并让该环境旧的固化脚本失效，避免旧脚本覆盖新配置。
+                    默认值：container_port 跟随 port；health_path 不传则保留原值。
+                    先调用 ci_definition 查看当前定义；若仓库根也有 ci/pipeline.yml，它优先于本定义。
+                    生产环境拒绝执行。""",
+            readOnly = false, concurrencySafe = false)
+    public String configureDeploy(@ToolParam(name = "target", required = false,
+                                     description = "部署目标：docker / host / server") String target,
+                                  @ToolParam(name = "port", required = false,
+                                          description = "对外端口（1-65535），例如 8180") Integer port,
+                                  @ToolParam(name = "container_port", required = false,
+                                          description = "容器内端口；缺省跟随 port") Integer containerPort,
+                                  @ToolParam(name = "health_path", required = false,
+                                          description = "健康检查路径，例如 /actuator/health") String healthPath,
+                                  @ToolParam(name = "health_url", required = false,
+                                          description = "完整健康检查 URL；缺省按 http://127.0.0.1:<port><health_path> 生成")
+                                  String healthUrl,
+                                  ProjectContext ctx) {
+        if (ctx.isProduction()) {
+            return "err: 生产环境不允许修改流水线配置；请先在 dev/test 验证";
+        }
+        String yaml = defStore.read(ctx.projectId()).orElse("");
+        if (yaml.isBlank()) {
+            return "err: 平台侧还没有 ci/pipeline.yml；请先生成流水线定义再改部署配置";
+        }
+        String wireTarget = target == null || target.isBlank() ? null : target.trim().toLowerCase();
+        if (wireTarget != null && !List.of("docker", "host", "server").contains(wireTarget)) {
+            return "err: target 只能是 docker / host / server，实际为 " + target;
+        }
+        if (port != null && (port <= 0 || port > 65535)) {
+            return "err: port 必须是 1-65535，实际为 " + port;
+        }
+        if (containerPort != null && (containerPort <= 0 || containerPort > 65535)) {
+            return "err: container_port 必须是 1-65535，实际为 " + containerPort;
+        }
+        String path = healthPath == null ? null : healthPath.trim();
+        if (path != null && !path.matches("/[A-Za-z0-9/._-]*")) {
+            return "err: health_path 必须以 / 开头且只含字母、数字、/ . _ -";
+        }
+        String url = healthUrl == null ? null : healthUrl.trim();
+        if (url != null && !url.matches("https?://[^\\s\"']+")) {
+            return "err: health_url 必须是以 http:// 或 https:// 开头的完整 URL";
+        }
+        if (wireTarget == null && port == null && containerPort == null
+                && path == null && url == null) {
+            return "err: 至少提供一个要修改的字段（target / port / container_port / health_path / health_url）";
+        }
+        String updated;
+        try {
+            updated = applyDeployConfig(yaml, wireTarget, port, containerPort, path, url);
+        } catch (IllegalArgumentException e) {
+            return "err: " + e.getMessage();
+        }
+        if (!defStore.write(ctx.projectId(), updated, null)) {
+            return "err: 流水线定义写入失败，请检查工作区目录权限：" + defStore.rootOf(ctx.projectId());
+        }
+        for (String env : List.of("dev", "test", "prod")) {
+            recipes.invalidate(ctx.projectId(), env);
+        }
+        Map<String, Object> deploy = deployOf(updated);
+        return """
+                saved: %s/ci/pipeline.yml
+                deploy: %s
+                next: 重新 ci_dry_run 确认定义已生效（旧的固化脚本已失效）
+                evidence: project:%s"""
+                .formatted(defStore.rootOf(ctx.projectId()), deploy, ctx.projectId());
+    }
+
+    /** 读-改-写 deploy 段与 health stage 的 url；动作与阶段顺序不变。 */
+    static String applyDeployConfig(String yaml, String target, Integer port,
+                                    Integer containerPort, String healthPath, String healthUrl) {
+        Object loaded;
+        try {
+            loaded = new org.yaml.snakeyaml.Yaml().load(yaml);
+        } catch (org.yaml.snakeyaml.error.YAMLException e) {
+            // ParserException / ScannerException 是 RuntimeException 但不是 IllegalArgumentException：
+            // 不包装就会绕过工具层 "err: ..." 契约，把原始堆栈抛给模型，且可能继续写坏定义。
+            throw new IllegalArgumentException(
+                    "现有流水线定义不是合法 YAML：" + e.getMessage(), e);
+        }
+        if (!(loaded instanceof Map<?, ?> rootRaw)) {
+            throw new IllegalArgumentException("现有流水线定义不是合法 YAML 映射");
+        }
+        Map<String, Object> root = copyMap(rootRaw);
+        Map<String, Object> deploy = root.get("deploy") instanceof Map<?, ?> deployRaw
+                ? copyMap(deployRaw) : new LinkedHashMap<>();
+        if (target != null) {
+            deploy.put("target", target);
+        }
+        if (port != null) {
+            deploy.put("port", port);
+            deploy.put("containerPort", containerPort == null ? port : containerPort);
+        } else if (containerPort != null) {
+            deploy.put("containerPort", containerPort);
+        }
+        if (healthPath != null) {
+            deploy.put("healthPath", healthPath);
+        }
+        root.put("deploy", deploy);
+
+        int effectivePort = port != null ? port : intOf(deploy.get("port"));
+        String effectivePath = healthPath != null ? healthPath : textOf(deploy.get("healthPath"));
+        // 只在端口/路径被改动时重建 URL；只改 target 时保留原 URL（可能指向远程服务器）
+        String effectiveUrl = healthUrl;
+        if (effectiveUrl == null && (port != null || healthPath != null)
+                && effectivePort > 0 && effectivePath != null && !effectivePath.isBlank()) {
+            effectiveUrl = "http://127.0.0.1:" + effectivePort + effectivePath;
+        }
+        if (effectiveUrl != null && root.get("stages") instanceof List<?> stages) {
+            for (Object stageRaw : stages) {
+                if (stageRaw instanceof Map<?, ?> stage && "health".equals(textOf(stage.get("type")))) {
+                    ((Map<String, Object>) stage).put("url", effectiveUrl);
+                }
+            }
+        }
+        return new org.yaml.snakeyaml.Yaml().dump(root);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> copyMap(Map<?, ?> raw) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        raw.forEach((key, value) -> out.put(String.valueOf(key), value));
+        return out;
+    }
+
+    private static int intOf(Object raw) {
+        return raw instanceof Number number ? number.intValue() : 0;
+    }
+
+    private static String textOf(Object raw) {
+        return raw == null ? null : String.valueOf(raw);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deployOf(String yaml) {
+        Object loaded = new org.yaml.snakeyaml.Yaml().load(yaml);
+        if (loaded instanceof Map<?, ?> root && root.get("deploy") instanceof Map<?, ?> deploy) {
+            return copyMap(deploy);
+        }
+        return Map.of();
     }
 
     @Tool(name = "deploy_run",

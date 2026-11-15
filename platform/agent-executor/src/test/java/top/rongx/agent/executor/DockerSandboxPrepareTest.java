@@ -111,20 +111,46 @@ class DockerSandboxPrepareTest {
     }
 
     @Test
-    @DisplayName("镜像未就绪：5s 内给出 pull / 换镜像的明确失败")
-    void imagePrecheckFailsFast() {
+    @DisplayName("镜像缺失：自动 pull 后 inspect 复核通过，不再要求人工 pull")
+    void imagePrecheckPullsAndVerifies() {
+        java.util.concurrent.atomic.AtomicInteger inspects = new java.util.concurrent.atomic.AtomicInteger();
+        Recorder recorder = new Recorder(cmd -> {
+            if (cmd.contains("inspect")) {
+                return inspects.getAndIncrement() == 0
+                        ? ProcessExecutor.StepOutcome.failed(1, "E-101", "no such image")
+                        : ok();
+            }
+            return ok();
+        });
+        DockerSandbox sandbox = sandbox(recorder);
+
+        sandbox.ensureImageReady(() -> false, null);
+
+        assertEquals(3, recorder.commands.size(), "inspect → pull → inspect");
+        assertEquals(List.of("docker", "image", "inspect", "maven:3.9-eclipse-temurin-21"),
+                recorder.commands.get(0));
+        assertEquals(5_000L, recorder.timeouts.get(0));
+        assertEquals(List.of("docker", "pull", "maven:3.9-eclipse-temurin-21"),
+                recorder.commands.get(1));
+        assertEquals(List.of("docker", "image", "inspect", "maven:3.9-eclipse-temurin-21"),
+                recorder.commands.get(2));
+    }
+
+    @Test
+    @DisplayName("自动拉取失败：给出 registry / 换镜像的可操作失败")
+    void imagePrecheckFailsWithPullError() {
         Recorder recorder = new Recorder(cmd -> ProcessExecutor.StepOutcome.failed(
                 1, "E-101", "命令失败（exit 1）"));
         DockerSandbox sandbox = sandbox(recorder);
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
                 () -> sandbox.ensureImageReady(() -> false, null));
-        assertTrue(error.getMessage().contains("docker pull maven:3.9-eclipse-temurin-21"),
-                error.getMessage());
+        assertTrue(error.getMessage().contains("构建镜像未就绪"), error.getMessage());
+        assertTrue(error.getMessage().contains("自动拉取失败"), error.getMessage());
         assertTrue(error.getMessage().contains("agent.sandbox.image"), error.getMessage());
-        assertEquals(List.of("docker", "image", "inspect", "maven:3.9-eclipse-temurin-21"),
-                recorder.commands.get(0));
-        assertEquals(5_000L, recorder.timeouts.get(0));
+        assertEquals(List.of("docker", "pull", "maven:3.9-eclipse-temurin-21"),
+                recorder.commands.get(1));
+        assertEquals(PREPARE_TIMEOUT * 6, recorder.timeouts.get(1), "默认拉取预算 180s");
     }
 
     @Test

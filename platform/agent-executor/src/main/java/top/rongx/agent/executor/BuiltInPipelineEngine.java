@@ -1733,10 +1733,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         String message = failed == null ? "运行失败"
                 : failed.errorSummary() == null ? code : failed.errorSummary();
         String tail = tailOfLog(state, 20_000);
+        // 动作前预检（DockerSandbox.ensureImageReady）已经自行 pull 过：
+        // 再拉一次只会把一次失败拖成两轮硬超时，交给 Agent 兜底/人工排查更合适。
+        boolean precheckTried = tail.contains("自动拉取失败")
+                || tail.contains("拉取后仍无法通过 docker image inspect");
         return new FailureRepair.Diagnosis(state.runId,
                 failed == null ? null : failed.stageId(), code, message, tail,
                 FailureRepair.Diagnosis.missingImage(message, tail), attempt,
-                autoRepairPolicy.agentFallback());
+                autoRepairPolicy.agentFallback(), precheckTried);
     }
 
     private static StageResult lastFailedStage(RunState state) {

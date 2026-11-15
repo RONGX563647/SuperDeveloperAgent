@@ -90,6 +90,50 @@ public class EnvQueryTools {
     }
 
     /**
+     * 变量清单：只列变量名、来源与是否敏感，<b>永不返回变量值</b>。
+     *
+     * <p>用于确认"我写的 SERVER_PORT 到底在不在""它是模板还是项目覆盖"，
+     * 不必为了看一眼变量而生成一份绑定草案。
+     */
+    @Tool(name = "env_vars",
+            description = """
+                    列出某环境部署时真正会注入的变量名、来源（模板/项目覆盖/资源）与是否敏感（只读）。
+                    不返回任何变量值。用于确认某个变量是否已经写入、是否被模板或项目覆盖。
+                    需要判断"变量指向哪个中间件"时再用 env_var_probe。""",
+            readOnly = true, concurrencySafe = true)
+    public String vars(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
+                       ProjectContext ctx) {
+        String target = normalize(env);
+        EffectiveEnvironment effective = envStore.effective(ctx.projectId(), target);
+        StringBuilder sb = new StringBuilder();
+        sb.append("project: ").append(ctx.projectId()).append('\n')
+                .append("env: ").append(target).append('\n')
+                .append("variables: ").append(effective.vars().size())
+                .append("（模板 ").append(effective.templateCount())
+                .append(" / 覆盖 ").append(effective.overrideCount()).append("）\n");
+        if (effective.vars().isEmpty()) {
+            sb.append("list: （该环境没有任何变量；可用 env_var_set 补齐）\n");
+        } else {
+            for (var v : effective.vars()) {
+                sb.append("- ").append(v.key())
+                        .append("  source=").append(v.source())
+                        .append("  secret=").append(v.secret() ? "true" : "false");
+                if (v.secretRef() != null) {
+                    sb.append("  ref=").append(v.secretRef());
+                }
+                sb.append('\n');
+            }
+        }
+        if (!effective.missingSecrets().isEmpty()) {
+            sb.append("missingSecrets: ")
+                    .append(String.join(", ", effective.missingSecrets())).append('\n');
+        }
+        sb.append("note: 只回变量名/来源，不返回任何变量值\n")
+                .append("evidence: project:").append(ctx.projectId()).append("/env:").append(target);
+        return sb.toString();
+    }
+
+    /**
      * 配置指向校验：只回答"变量指向的 host:port 属于谁"，<b>永不返回变量值</b>。
      *
      * <p>典型误配是"DB_HOST 指向了别的项目/公共实例"——中间件全绿但连错库。

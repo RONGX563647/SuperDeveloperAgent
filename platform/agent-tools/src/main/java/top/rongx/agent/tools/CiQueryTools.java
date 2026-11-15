@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.port.RepoInspector;
@@ -34,14 +35,17 @@ public class CiQueryTools {
     private final RecipeStore recipes;
     private final RuntimeInspector inspector;
     private final SecretRedactor redactor;
+    private final PipelineDefStore defStore;
 
     public CiQueryTools(PipelineEngine engine, RepoInspector repo, RecipeStore recipes,
-                        RuntimeInspector inspector, SecretRedactor redactor) {
+                        RuntimeInspector inspector, SecretRedactor redactor,
+                        PipelineDefStore defStore) {
         this.engine = engine;
         this.repo = repo;
         this.recipes = recipes;
         this.inspector = inspector;
         this.redactor = redactor;
+        this.defStore = defStore;
     }
 
     @Tool(name = "ci_list_pipelines",
@@ -53,6 +57,34 @@ public class CiQueryTools {
                 .collect(Collectors.joining("\n",
                         "pipelines(engine=" + engine.id() + "):\n",
                         "\nevidence: engine:" + engine.id()));
+    }
+
+    @Tool(name = "ci_definition",
+            description = """
+                    读取平台侧流水线定义原文（只读），用于确认 deploy.port / containerPort /
+                    healthPath 以及 health stage 的 url 实际值。
+                    生效顺序：环境固化脚本 > 仓库 ci/pipeline.yml > 平台侧定义（本工具读的最后一份）。
+                    如果仓库里也有 ci/pipeline.yml，它优先；可用 list_files/read_file 核对。""",
+            readOnly = true, concurrencySafe = true)
+    public String definition(ProjectContext ctx) {
+        String yaml = defStore.read(ctx.projectId()).orElse("");
+        if (yaml.isBlank()) {
+            return "definition: 无（平台侧还没有 ci/pipeline.yml；可先调用项目准备/脚手架生成）\n"
+                    + "note: 仓库根 ci/pipeline.yml 若存在则优先生效\n"
+                    + "evidence: project:" + ctx.projectId();
+        }
+        int max = 4000;
+        String body = yaml.length() > max
+                ? yaml.substring(0, max) + "\n…（已截断，完整内容见 "
+                + defStore.rootOf(ctx.projectId()) + "/ci/pipeline.yml）" : yaml;
+        return """
+                source: platform（仓库 ci/pipeline.yml 优先于本定义）
+                root: %s
+                ---
+                %s
+                ---
+                evidence: project:%s""".formatted(defStore.rootOf(ctx.projectId()), body,
+                ctx.projectId());
     }
 
     @Tool(name = "ci_status",

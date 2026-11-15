@@ -54,8 +54,10 @@ public class EnvBindingService implements EnvBindingPort {
         Set<String> required = declared.required();
         List<Map<String, Object>> keys = new ArrayList<>();
         List<String> missing = new ArrayList<>();
-        // 草案展示项目声明过的全部变量（含模板里的可选项），但只有必填项才计入 missing。
+        // 草案必须展示"部署时真正会注入的全部变量"：项目声明 + 环境模板/项目覆盖。
+        // 只看声明会让 keys 恒为 0，用户补了 SERVER_PORT 也看不到它已生效。
         Set<String> allKeys = new LinkedHashSet<>(declared.keys());
+        allKeys.addAll(known.keySet());
         allKeys.addAll(required);
         for (String key : allKeys) {
             EnvVariable v = known.get(key);

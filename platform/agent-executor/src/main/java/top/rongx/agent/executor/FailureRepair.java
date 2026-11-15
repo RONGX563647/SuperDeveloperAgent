@@ -23,7 +23,15 @@ interface FailureRepair {
 
     /** 一次失败的诊断快照（日志尾部已截断，供模型阅读）。 */
     record Diagnosis(String runId, String stageId, String errorCode, String message,
-                     String logTail, String image, int attempt, boolean agentEnabled) {
+                     String logTail, String image, int attempt, boolean agentEnabled,
+                     boolean precheckTried) {
+
+        /** 兼容构造：默认「预检没有尝试过自动拉取」。 */
+        Diagnosis(String runId, String stageId, String errorCode, String message,
+                  String logTail, String image, int attempt, boolean agentEnabled) {
+            this(runId, stageId, errorCode, message, logTail, image, attempt,
+                    agentEnabled, false);
+        }
 
         private static final Pattern IMAGE_ZH =
                 Pattern.compile("构建镜像未就绪[（(]([^）)]+)[）)]");

@@ -121,8 +121,10 @@ agent:
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:docker}        # docker | process
     # 工具链镜像：默认只是兜底，本机没有就换成已安装的镜像（或先 docker pull）。
-    # 平台在动作前做一次 docker image inspect 预检，缺镜像立即明确报错，不会静默等拉取。
+    # 平台在动作前做一次 docker image inspect 预检；缺镜像会自动 pull 并复核，失败才明确报错。
     image: ${AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
+    # 自动拉取的硬超时（秒）；网络慢的 registry 可调大，离线环境可关闭预检
+    pull-timeout-seconds: ${AGENT_SANDBOX_PULL_TIMEOUT_SECONDS:180}
     # 离线/自建 registry 场景可关闭预检（关闭后会回到 docker CLI 自行拉取的行为）
     precheck-image: ${AGENT_SANDBOX_PRECHECK_IMAGE:true}
     # 网络策略：bridge=能拉依赖（默认）；build-net=专用网络（生产建议，见文档）；

@@ -8,28 +8,34 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
+import top.rongx.agent.domain.env.EnvVariable;
+import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.project.ProjectContext;
 
 /**
- * 环境<b>写</b>工具：生成部署绑定草案、按需补齐中间件。
+ * 环境<b>写</b>工具：生成部署绑定草案、按需补齐中间件、维护项目环境变量。
  *
- * <p>与 {@link EnvQueryTools} 拆开后，生产环境（只读 Toolkit）不会看到这两个工具；
+ * <p>与 {@link EnvQueryTools} 拆开后，生产环境（只读 Toolkit）不会看到这些工具；
  * 非生产环境仍同时具备读与写。
  *
  * <p>注意：{@code env_mapping_draft} 只产生 DRAFT 记录，<b>不能自己确认</b>，
- * 必须由人在设置页确认后才能用于 {@code deploy_run}。
+ * 必须由人在设置页确认后才能用于 {@code deploy_run}。变量写操作会改变有效环境哈希，
+ * 因此旧绑定自动失效，需要重新生成草案并人工确认。
  */
 @Component
 public class EnvCommandTools {
 
     private final EnvBindingPort bindings;
     private final top.rongx.agent.domain.env.EnvProvisioner provisioner;
+    private final EnvironmentStore envStore;
     private final ObjectMapper json = new ObjectMapper();
 
     public EnvCommandTools(EnvBindingPort bindings,
-                           top.rongx.agent.domain.env.EnvProvisioner provisioner) {
+                           top.rongx.agent.domain.env.EnvProvisioner provisioner,
+                           EnvironmentStore envStore) {
         this.bindings = bindings;
         this.provisioner = provisioner;
+        this.envStore = envStore;
     }
 
     @Tool(name = "env_mapping_draft",
@@ -112,6 +118,85 @@ public class EnvCommandTools {
         }
         sb.append("note: ").append(kindHint).append("；连接信息只写入项目覆盖，不覆盖人工模板变量");
         return sb.toString();
+    }
+
+    /**
+     * 新增/修改项目环境变量（写入项目覆盖层，环境模板不变）。
+     *
+     * <p>这是部署前最常见的配置补齐：端口覆盖（SERVER_PORT）、工作区目录、
+     * 连接串等。值落库加密，工具结果不回显明文。
+     */
+    @Tool(name = "env_var_set",
+            description = """
+                    新增或修改项目在某环境的变量覆盖（写操作，仅 dev/test）。
+                    适合补齐部署必需变量，例如 SERVER_PORT=8180、AGENT_WORKSPACE_ROOT=./data/workspaces-test。
+                    值会加密落库且不会回显；变量名必须是合法环境变量名。
+                    写入后有效环境哈希变化，旧的环境绑定会失效：需要重新调用 env_mapping_draft
+                    并由人在设置页确认新草案后才能 deploy_run。
+                    生产环境拒绝执行（生产变量由运维在设置页维护）。""",
+            readOnly = false, concurrencySafe = false)
+    public String setVar(@ToolParam(name = "env", description = "环境：dev / test") String env,
+                         @ToolParam(name = "key", description = "变量名，例如 SERVER_PORT") String key,
+                         @ToolParam(name = "value", description = "变量值（不会回显）") String value,
+                         @ToolParam(name = "secret", required = false,
+                                 description = "是否敏感：true/false；缺省按变量名推断")
+                         String secret,
+                         ProjectContext ctx) {
+        String target = normalize(env);
+        if ("prod".equals(target)) {
+            return "err: 生产环境变量不允许由 Agent 写入；请在「设置 → 项目环境」由运维维护";
+        }
+        String name = key == null ? "" : key.trim();
+        if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            return "err: 变量名非法（需字母/下划线开头，仅含字母、数字、下划线）：" + key;
+        }
+        if (value == null || value.isEmpty()) {
+            return "err: value 不能为空；如需删除变量请调用 env_var_unset";
+        }
+        boolean sensitive = secret == null || secret.isBlank()
+                ? looksSecret(name) : Boolean.parseBoolean(secret.trim());
+        EnvVariable saved = envStore.saveOverride(ctx.projectId(), target, name, value, sensitive);
+        return """
+                saved: %s
+                env: %s
+                secret: %s
+                source: 项目覆盖（环境模板未改动）
+                next: 有效环境已变化 → 重新调用 env_mapping_draft，并请人在设置页确认新绑定后再 deploy_run
+                evidence: project:%s/env:%s""".formatted(saved.key(), target, sensitive,
+                ctx.projectId(), target);
+    }
+
+    /** 删除项目环境变量的覆盖项（回到环境模板/默认值）。 */
+    @Tool(name = "env_var_unset",
+            description = """
+                    删除项目在某环境的一个变量覆盖（写操作，仅 dev/test）。
+                    只删除项目覆盖，不影响环境模板；生产环境拒绝执行。
+                    删除后同样需要重新生成并人工确认环境绑定。""",
+            readOnly = false, concurrencySafe = false)
+    public String unsetVar(@ToolParam(name = "env", description = "环境：dev / test") String env,
+                           @ToolParam(name = "key", description = "变量名") String key,
+                           ProjectContext ctx) {
+        String target = normalize(env);
+        if ("prod".equals(target)) {
+            return "err: 生产环境变量不允许由 Agent 删除；请在「设置 → 项目环境」由运维维护";
+        }
+        String name = key == null ? "" : key.trim();
+        if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            return "err: 变量名非法：" + key;
+        }
+        envStore.deleteOverride(ctx.projectId(), target, name);
+        return """
+                deleted: %s
+                env: %s
+                next: 重新调用 env_mapping_draft 并请人确认新绑定
+                evidence: project:%s/env:%s""".formatted(name, target, ctx.projectId(), target);
+    }
+
+    /** 变量名是否像敏感信息（与设置页的掩码规则保持一致）。 */
+    private static boolean looksSecret(String key) {
+        String k = key.toUpperCase(java.util.Locale.ROOT);
+        return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
+                || k.endsWith("_KEY");
     }
 
     private Map<?, ?> parse(String mappingJson) {

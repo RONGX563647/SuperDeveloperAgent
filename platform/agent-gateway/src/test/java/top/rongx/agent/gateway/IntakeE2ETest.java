@@ -100,9 +100,9 @@ class IntakeE2ETest {
         git.fetchLocal("E2E", userDir);
 
         // 4. 引擎构建：verify 流水线（只构建，不部署）
-        // 工具链镜像可用 -Ddocker.test.image 覆盖。平台现在会在动作前预检镜像，
-        // 缺失即明确报 E-209 而不是静默拉取，因此 E2E 必须先把「本机已有该镜像」
-        // 作为环境前提；否则会把环境缺镜像误报成流水线回归。
+        // 工具链镜像可用 -Ddocker.test.image 覆盖。平台缺镜像时会自动 pull 并复核，
+        // 但 E2E 不应依赖外网/registry 可用：先把「本机已有该镜像」作为环境前提，
+        // 否则会把网络问题误报成流水线回归。
         String toolchainImage = System.getProperty("docker.test.image", "node:20-alpine");
         DockerSandbox sandbox = new DockerSandbox("docker", toolchainImage, "bridge",
                 "1g", "1", 256, "1000:1000");

@@ -40,6 +40,12 @@ public class DockerSandbox {
     /** 准备阶段单步预算：镜像未预热时拉镜像可能很慢，但不能无限等。 */
     private static final long PREPARE_TIMEOUT_MS = 30_000L;
 
+    /** 镜像预检预算：本机已有时秒级返回；缺镜像时不能把"没有"误判成"网络慢"。 */
+    private static final long IMAGE_INSPECT_TIMEOUT_MS = 5_000L;
+
+    /** 自动拉取工具链镜像的默认预算（可由 agent.sandbox.pull-timeout-seconds 覆盖）。 */
+    private static final long DEFAULT_IMAGE_PULL_TIMEOUT_MS = 180_000L;
+
     /** 外部命令执行器：抽出以便超时逻辑复用、也便于在不依赖 Docker 的情况下单测。 */
     @FunctionalInterface
     interface CommandExecutor {
@@ -63,6 +69,8 @@ public class DockerSandbox {
     private final CommandExecutor commandExecutor;
     /** 动作前是否预检工具链镜像（离线/自建 registry 场景可关闭）。 */
     private boolean precheckImage = true;
+    /** 缺镜像时自动拉取的硬超时。 */
+    private long imagePullTimeoutMs = DEFAULT_IMAGE_PULL_TIMEOUT_MS;
 
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user) {
@@ -209,25 +217,52 @@ public class DockerSandbox {
         return this;
     }
 
+    /** 设置缺镜像时自动拉取的硬超时（由 SandboxConfig 的配置注入）。 */
+    public DockerSandbox setImagePullTimeout(long millis) {
+        this.imagePullTimeoutMs = millis <= 0 ? DEFAULT_IMAGE_PULL_TIMEOUT_MS : millis;
+        return this;
+    }
+
     /**
-     * 动作前预检工具链镜像是否已在本机。
+     * 动作前确认工具链镜像已在本机；缺失时先自动拉取，再复核。
      *
-     * <p>镜像标签是可配置的选择，不是平台硬编码的前提；但缺镜像时 docker CLI 会去拉，
-     * 网络不通就是一次没有输出的长时间等待。预检把它变成 5 秒内、带两条可选路径的
-     * 明确失败：先 {@code docker pull}，或通过 {@code agent.sandbox.image} 换成本机已有镜像。
+     * <p>原先缺镜像直接失败、要求人工 {@code docker pull}，等于把确定性故障留给人；
+     * 现在由平台自己完成「pull → inspect 复核」，pull 有硬超时且可取消，失败才报错。
+     * 不复用日志/模型提供的镜像名：拉取命令只来自平台配置。
      */
     public void ensureImageReady(BooleanSupplier cancelled, Consumer<String> live) {
         if (!precheckImage) {
             return;
         }
-        List<String> cmd = List.of(dockerBinary, "image", "inspect", image);
-        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, 5_000L,
-                cancelled == null ? () -> false : cancelled, live);
-        if (outcome.errorCode() != null) {
-            throw new IllegalStateException("构建镜像未就绪（" + image + "）：请先执行 docker pull "
-                    + image + "，或用 agent.sandbox.image 指定本机已有的工具链镜像"
-                    + "（预检 " + outcome.errorCode() + "：" + outcome.summary() + "）");
+        BooleanSupplier abort = cancelled == null ? () -> false : cancelled;
+        List<String> inspect = List.of(dockerBinary, "image", "inspect", image);
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(inspect,
+                IMAGE_INSPECT_TIMEOUT_MS, abort, live);
+        if (outcome.errorCode() == null) {
+            return;
         }
+        if (abort.getAsBoolean()) {
+            throw new IllegalStateException("构建已取消：跳过自动拉取镜像 " + image);
+        }
+        notify(live, "[sandbox] 镜像 " + image + " 不在本机，自动执行 "
+                + String.join(" ", imagePullCommand()) + "（最长 "
+                + imagePullTimeoutMs / 1000 + "s，可取消）\n");
+        ProcessExecutor.StepOutcome pull = commandExecutor.run(imagePullCommand(),
+                imagePullTimeoutMs, abort, live);
+        if (pull.errorCode() != null) {
+            throw new IllegalStateException("构建镜像未就绪（" + image + "）：自动拉取失败（"
+                    + pull.errorCode() + "：" + pull.summary()
+                    + "）；请检查 Docker 网络/registry，或手动 docker pull " + image
+                    + "，或用 agent.sandbox.image 指定本机已有镜像");
+        }
+        // 只信平台自己执行的 inspect，不采信 pull 的退出码或输出文本
+        ProcessExecutor.StepOutcome verify = commandExecutor.run(inspect,
+                IMAGE_INSPECT_TIMEOUT_MS, abort, null);
+        if (verify.errorCode() != null) {
+            throw new IllegalStateException("构建镜像未就绪（" + image + "）：拉取后仍无法通过 docker image inspect"
+                    + "（" + verify.errorCode() + "：" + verify.summary() + "）");
+        }
+        notify(live, "[sandbox] ✅ 镜像已就绪：" + image + "\n");
     }
 
     /**
@@ -324,7 +359,7 @@ public class DockerSandbox {
     public DockerSandbox withImage(String newImage) {
         DockerSandbox copy = new DockerSandbox(dockerBinary, newImage, network, memory, cpus,
                 pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
-        return copy.setImagePrecheck(precheckImage);
+        return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs);
     }
 
     public String describe() {

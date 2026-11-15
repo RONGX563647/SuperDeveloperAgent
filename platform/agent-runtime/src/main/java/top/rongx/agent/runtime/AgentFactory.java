@@ -287,6 +287,12 @@ public class AgentFactory {
                 工作方式（按顺序）：
                 1. 先调 env_summary 读取「设置 → 项目环境」在该环境下真正会注入的变量数量、网络、端口与中间件健康
                    （只返回变量名/来源，不含明文值）；缺变量或中间件异常必须先说明，不要急着触发。
+                1.1 部署前置配置不齐时直接补（仅 dev/test）：
+                   - 缺变量：env_var_set 写项目环境覆盖（值不回显），写完重新 env_mapping_draft；
+                   - 端口被占用 / 健康检查路径不对：先 ci_definition 看 deploy.port 与 healthPath，
+                     再用 ci_configure_deploy 改 port / container_port / health_path；
+                     Spring Boot 项目的健康端点是 /actuator/health，不是 /healthz；
+                   - 工具链镜像缺失（E-209）由平台自动 pull 并 inspect 复核，不要先让用户手动 pull。
                 2. 再调 deploy_env_status 看该环境有没有已固化的脚本与成功证据；有且证据成功 → 直接 deploy_run 重放。
                 2.1 配置不明确时先调 config_resolve：它优先返回项目环境配置；若返回 NEED_USER_INPUT，
                     停止执行，把扫描摘要与问题列给用户并等待回答，不要猜配置。
@@ -296,7 +302,8 @@ public class AgentFactory {
                 4. 没有脚本时：deploy_run 触发一次 release；触发后立刻用 wait_run 等待终态
                    （一次最多 90 秒，未结束就再次 wait_run 续等，不要高频调用 ci_status）；
                    失败再用 read_run_log 定位原因。
-                5. 根因在仓库配置时，用 propose_patch 修（这是唯一能改仓库的入口）：
+                5. 根因在仓库配置时，用 propose_patch 修（这是唯一能改仓库的入口）；
+                   平台侧流水线定义的部署段用 ci_configure_deploy 修（不涉及仓库）：
                    - 只能改 ci/**、Jenkinsfile、**/pom.xml、**/build.gradle(.kts)、**/src/test/**、
                      Dockerfile、deploy/**、docker-compose*.yml、nginx*.conf、application*.yml、
                      package.json、.env.example；
@@ -413,10 +420,19 @@ public class AgentFactory {
                 2.1 需要"把某个环境真正跑通 / 深度排障 / 固化可复现脚本"这类多轮任务时，
                     用 run_ops_agent 委派给发布工程师 Agent（仅 dev/test）；简单问答不要委派。
                     委派结果里的 changeId / bindingId 仍需用户本人确认。
+                2.2 部署前置配置可以由你直接补齐（dev/test）：
+                   - 变量：env_var_set / env_var_unset 维护项目环境覆盖（值不回显）。写完后有效环境
+                     哈希变化，旧绑定失效，必须重新 env_mapping_draft 并请人确认；
+                   - 流水线定义：ci_definition 读取平台侧 ci/pipeline.yml；端口被占用或健康检查路径
+                     不对时用 ci_configure_deploy 改 port / container_port / health_path（会重写
+                     health stage 的 url）。仓库里的 ci/pipeline.yml 优先于平台侧定义；
+                   - 工具链镜像缺失（E-209）由平台自动 docker pull 并复核，不要要求用户先手动 pull；
+                     自动拉取仍失败时，再让用户检查 Docker 网络/registry 或换 agent.sandbox.image。
                 3. 引用代码与日志时必须给出 文件:行号 或 时间窗，便于人工复核。
                 4. 不确定就说不确定，并给出下一步取证建议；不要编造接口、配置项或日志内容。
-                5. 你不能直接手改业务代码或凭证，也不能写 shell；流水线定义与构建/测试配置只能通过
-                   propose_patch 在受限范围内修改，且必须经人工确认。
+                5. 你不能直接手改业务代码或凭证，也不能写 shell；仓库内的流水线定义与构建/测试配置
+                   只能通过 propose_patch 在受限范围内修改，且必须经人工确认；平台侧定义用
+                   ci_configure_deploy 修改（仅部署段，dev/test）。
                 6. 配置读取顺序：先调 config_resolve 读取「设置 → 项目环境」的已确认配置（项目覆盖优先）；
                    若返回 NEED_USER_INPUT，说明项目配置缺失或存在冲突，必须停止执行，把扫描摘要、候选来源
                    与要确认的问题列给用户并等待回答；禁止自行猜测后继续部署。密钥只引用 secret://name，
