@@ -50,6 +50,35 @@ public interface PipelineEngine {
     /** 各 stage 结果（按执行顺序）。 */
     List<StageResult> stages(String runId);
 
+    /**
+     * 运行中的阶段进度（已完成阶段数、当前阶段、总阶段数、耗时）。
+     *
+     * <p>{@link #stages} 只含已结束阶段，运行中阶段没有结果对象；工作台靠这个只读视图
+     * 渲染「build 运行中」占位，避免长时间构建时页面显示「1/1 完成」却又在 RUNNING。
+     * 不支持的实现返回 null。
+     */
+    default RunProgress progress(String runId) {
+        return null;
+    }
+
+    /** 运行进度快照（字段均为只读展示值）。 */
+    record RunProgress(String currentStageId, int stageTotal, int completedStages,
+                       long elapsedMs, long stageElapsedMs,
+                       boolean cancelRequested, boolean forceTerminated) {
+    }
+
+    /**
+     * 自动修复状态快照：工作台据此显示「平台已自动修复并续跑」，
+     * 用户不必从日志里猜到底有没有人介入。不支持的实现返回 null。
+     */
+    default AutoRepairView autoRepair(String runId) {
+        return null;
+    }
+
+    record AutoRepairView(boolean enabled, int attempts, int maxAttempts, boolean resumed,
+                          String lastAction, String lastResult) {
+    }
+
     /** 取消运行。 */
     void cancel(String runId);
 
