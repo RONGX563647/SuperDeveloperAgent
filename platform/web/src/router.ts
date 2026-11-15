@@ -49,7 +49,8 @@ router.beforeEach(async (to) => {
         userId: identity.userId,
         displayName: identity.displayName,
         role: identity.role,
-        permissions: identity.permissions
+        permissions: identity.permissions,
+        usingInitialPassword: identity.usingInitialPassword
       })
     } catch {
       appStore.clearIdentity()

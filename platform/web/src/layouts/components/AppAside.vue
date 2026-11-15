@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Delete, Document, Folder, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, Box, SwitchButton, ArrowRight, ArrowDown, FolderAdd } from '@element-plus/icons-vue'
+import { ChatDotRound, Delete, Document, Folder, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, Box, SwitchButton, ArrowRight, ArrowDown, FolderAdd, Warning } from '@element-plus/icons-vue'
 import { logout } from '../../api/auth'
 import { listProjects, type ProjectRow } from '../../api/project'
 import { appStore, type SessionItem } from '../../stores/app'
@@ -243,6 +243,11 @@ async function doLogout() {
   void router.push('/login')
 }
 
+/** 统一初始密码是公开的：未改密时常驻提示，直达设置页的「账号安全」分区。 */
+function goChangePassword(): void {
+  void router.push({ name: 'settings', query: { section: 'account' } })
+}
+
 const permissionHint = computed(() => {
   const list = identity.value.permissions
   if (list.includes('*')) return '全部权限'
@@ -418,6 +423,14 @@ watch(() => appStore.projectId, () => void loadServerSessions())
 
       <!-- 底部用户行 -->
       <div class="aside-bottom">
+        <button
+          v-if="identity.usingInitialPassword"
+          type="button" class="initial-password-tip"
+          @click="goChangePassword"
+        >
+          <el-icon><Warning /></el-icon>
+          <span>仍在使用初始密码，点此修改</span>
+        </button>
         <div class="user-chip">
           <span class="user-avatar" aria-hidden="true">{{ (identity.displayName || identity.userId).slice(0, 1).toUpperCase() }}</span>
           <div class="user-meta">
@@ -988,6 +1001,26 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   flex: none;
   padding: 8px;
   border-top: 1px solid var(--line-soft);
+}
+.initial-password-tip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ink-soft);
+  text-align: left;
+  cursor: pointer;
+  background: rgb(230 162 60 / 12%);
+  border: 1px solid rgb(230 162 60 / 28%);
+  border-radius: var(--radius-md);
+}
+.initial-password-tip:hover {
+  background: rgb(230 162 60 / 20%);
 }
 .user-chip {
   display: flex;

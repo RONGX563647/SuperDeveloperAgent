@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  Cpu, Connection, Files, Key, Lock, MagicStick, Monitor, Refresh, SetUp, Tools
+  Cpu, Connection, Files, Key, Lock, MagicStick, Monitor, Refresh, SetUp, Tools, User
 } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import ServerPanel from '../components/settings/ServerPanel.vue'
@@ -14,6 +14,7 @@ import ProjectEnvPanel from '../components/settings/ProjectEnvPanel.vue'
 import EnvTemplatePanel from '../components/settings/EnvTemplatePanel.vue'
 import SecretPanel from '../components/settings/SecretPanel.vue'
 import GitOauthAppsPanel from '../components/settings/GitOauthAppsPanel.vue'
+import AccountPanel from '../components/settings/AccountPanel.vue'
 
 /**
  * 设置页（布局对齐「云端工作台」式工作台）：
@@ -29,7 +30,7 @@ import GitOauthAppsPanel from '../components/settings/GitOauthAppsPanel.vue'
  * 纵向分组可扩展、也能承载每个分区的说明文字。
  */
 type Section = 'servers' | 'models' | 'repos' | 'mcp' | 'skills'
-  | 'envTemplates' | 'envs' | 'secrets' | 'gitOauth'
+  | 'envTemplates' | 'envs' | 'secrets' | 'gitOauth' | 'account'
 
 interface SectionMeta {
   key: Section
@@ -47,7 +48,8 @@ const SECTIONS: SectionMeta[] = [
   { key: 'envTemplates', label: '环境模板', desc: 'dev/test/prod 默认值', icon: Files },
   { key: 'envs', label: '项目环境', desc: '覆盖 · 注入变量 · 重新检测', icon: Key },
   { key: 'secrets', label: '密钥库', desc: 'secret:// 引用与轮换', icon: Lock },
-  { key: 'gitOauth', label: 'Git 应用授权', desc: 'OAuth 应用与回调地址', icon: Tools }
+  { key: 'gitOauth', label: 'Git 应用授权', desc: 'OAuth 应用与回调地址', icon: Tools },
+  { key: 'account', label: '账号安全', desc: '修改登录密码', icon: User }
 ]
 
 /** 高级分区：默认收起，避免首次进入就被六个入口劝退。 */
@@ -89,11 +91,19 @@ function reloadSection(value: Section): Promise<void> | undefined {
   if (value === 'envTemplates') return envTemplateRef.value?.load()
   if (value === 'envs') return envRef.value?.load()
   if (value === 'gitOauth') return gitOauthRef.value?.load()
+  if (value === 'account') return undefined
   return secretRef.value?.load()
 }
 
 watch(active, (value) => {
   void reloadSection(value)
+})
+
+/** 侧栏「仍在使用初始密码」提示会带 ?section=account 跳进来，已在设置页时也要切换。 */
+watch(() => route.query.section, (value) => {
+  if (typeof value === 'string' && SECTIONS.some((s) => s.key === value)) {
+    selectSection(value as Section)
+  }
 })
 
 async function refresh(): Promise<void> {
@@ -162,6 +172,7 @@ async function refresh(): Promise<void> {
           <ProjectEnvPanel v-else-if="active === 'envs'" ref="envRef" />
           <SecretPanel v-else-if="active === 'secrets'" ref="secretRef" />
           <GitOauthAppsPanel v-else-if="active === 'gitOauth'" ref="gitOauthRef" />
+          <AccountPanel v-else-if="active === 'account'" />
         </section>
       </div>
     </div>

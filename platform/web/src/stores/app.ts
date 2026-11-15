@@ -117,7 +117,9 @@ export const appStore = reactive({
     userId: '',
     displayName: '',
     role: '',
-    permissions: [] as string[]
+    permissions: [] as string[],
+    /** 仍在使用统一初始密码：侧栏持续提示去设置页修改。 */
+    usingInitialPassword: false
   },
 
   /** 写入登录身份。 */
@@ -126,13 +128,20 @@ export const appStore = reactive({
     displayName: string
     role: string
     permissions?: string[]
+    usingInitialPassword?: boolean
   }) {
-    appStore.identity = { ...identity, permissions: identity.permissions ?? [] }
+    appStore.identity = {
+      ...identity,
+      permissions: identity.permissions ?? [],
+      usingInitialPassword: identity.usingInitialPassword ?? false
+    }
   },
 
   /** 清除登录身份。 */
   clearIdentity() {
-    appStore.identity = { userId: '', displayName: '', role: '', permissions: [] }
+    appStore.identity = {
+      userId: '', displayName: '', role: '', permissions: [], usingInitialPassword: false
+    }
   },
 
   /** 切换执行策略。 */

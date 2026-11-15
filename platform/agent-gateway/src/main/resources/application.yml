@@ -32,8 +32,9 @@ sa-token:
   # 未配置时回退环境变量 AGENT_MODEL_API_KEY；两者都没有也能启动，仅调用模型时提示去配置。
   # 明文凭证不入配置库（规约 §8）。
 agent:
-  # 账号初始化：仅首次启动（users 表为空）使用；格式 admin=xxx,devops=yyy,viewer=zzz。
-  # 未提供的账号会生成随机密码并写入 <workspace>/_platform/seed-passwords.txt（600）。
+  # 账号初始化：仅首次启动（users 表为空）使用。三个账号默认共用固定初始密码（见 README），
+  # 登录后到「设置 → 账号安全」修改；可用 AGENT_SEED_PASSWORDS=admin=xxx,devops=yyy,viewer=zzz 覆盖。
+  # 这里只放环境变量占位，不写实际密码（规约 §8）。
   auth:
     seed-passwords: ${AGENT_SEED_PASSWORDS:}
   # 对话并发闸门：memory=进程内信号量（单实例）；jdbc=SQLite 租约（多实例共享配额）

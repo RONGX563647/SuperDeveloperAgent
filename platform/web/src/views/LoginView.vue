@@ -37,9 +37,14 @@ async function doLogin() {
       userId: result.userId,
       displayName: result.displayName,
       role: result.role,
-      permissions: result.permissions
+      permissions: result.permissions,
+      usingInitialPassword: result.usingInitialPassword
     })
-    ElMessage.success(`欢迎，${result.displayName}（${result.role}）`)
+    if (result.usingInitialPassword) {
+      ElMessage.warning('当前使用统一初始密码，请到「设置 → 账号安全」修改')
+    } else {
+      ElMessage.success(`欢迎，${result.displayName}（${result.role}）`)
+    }
     void router.push(redirect)
   } catch (error) {
     errorText.value = error instanceof Error ? error.message : '登录失败'
@@ -95,6 +100,11 @@ async function doLogin() {
           登 录
         </el-button>
       </el-form>
+
+      <p class="seed-hint">
+        首次使用：<code>admin</code> / <code>devops</code> / <code>viewer</code>，
+        初始密码统一为 <code>admin-2026</code>；登录后到「设置 → 账号安全」修改。
+      </p>
     </main>
   </div>
 </template>
@@ -164,6 +174,21 @@ async function doLogin() {
   width: 100%;
   margin-top: 6px;
   letter-spacing: 0.04em;
+}
+.seed-hint {
+  margin: 20px 0 0;
+  padding-top: 14px;
+  font-size: var(--text-xs);
+  line-height: 1.7;
+  color: var(--ink-muted);
+  border-top: 1px solid var(--line-soft);
+}
+.seed-hint code {
+  padding: 1px 5px;
+  font-family: var(--font-mono, monospace);
+  color: var(--ink);
+  background: var(--surface-hover);
+  border-radius: 4px;
 }
 @media (max-width: 420px) {
   .login-card {

@@ -8,6 +8,8 @@ export interface LoginResult {
   role: string
   permissions: string[]
   projects: string[]
+  /** 仍在使用公开的统一初始密码：前端提示去设置页修改。 */
+  usingInitialPassword: boolean
 }
 
 /** 当前身份（校验已存 token 是否仍有效）。 */
@@ -16,6 +18,7 @@ export interface MeResult {
   displayName: string
   role: string
   permissions: string[]
+  usingInitialPassword: boolean
 }
 
 const TOKEN_KEY = 'agent.token'
@@ -75,4 +78,12 @@ export async function logout(): Promise<void> {
 /** 用已存 token 换当前身份；token 失效会抛 ApiError(401)。 */
 export function me(): Promise<MeResult> {
   return apiFetch<MeResult>('/api/v1/auth/me', { method: 'POST' })
+}
+
+/** 修改当前账号密码（需带原密码）；成功后当前会话仍有效。 */
+export function changePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>('/api/v1/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword })
+  })
 }

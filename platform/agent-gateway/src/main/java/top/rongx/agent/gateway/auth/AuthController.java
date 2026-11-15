@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 登录/登出接口（唯一签发会话令牌的地方）。
+ * 登录/登出/改密接口（唯一签发会话令牌的地方）。
  */
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -36,7 +36,23 @@ public class AuthController {
                 "displayName", user.displayName(),
                 "role", user.role().code(),
                 "permissions", user.role().permissions(),
-                "projects", user.projects());
+                "projects", user.projects(),
+                "usingInitialPassword", users.isUsingInitialPassword(user.userId()));
+    }
+
+    /**
+     * 修改自己的密码：需已登录 + 原密码正确。
+     *
+     * <p>固定初始密码是公开的，设置页改密是这条链路的收口；当前会话继续有效，
+     * 不强制重新登录（本地单机工作台，避免打断正在进行的操作）。
+     */
+    @PostMapping("/change-password")
+    public Map<String, Object> changePassword(@RequestBody ChangePasswordRequest request) {
+        StpUtil.checkLogin();
+        users.changePassword(StpUtil.getLoginIdAsString(),
+                request == null ? null : request.currentPassword(),
+                request == null ? null : request.newPassword());
+        return Map.of("ok", true);
     }
 
     /** 登出：销毁当前会话。 */
@@ -56,10 +72,15 @@ public class AuthController {
                 "userId", userId,
                 "displayName", user == null ? userId : user.displayName(),
                 "role", user == null ? "?" : user.role().code(),
-                "permissions", user == null ? java.util.List.of() : user.role().permissions());
+                "permissions", user == null ? java.util.List.of() : user.role().permissions(),
+                "usingInitialPassword", user != null && users.isUsingInitialPassword(userId));
     }
 
     /** 登录请求体。 */
     public record LoginRequest(String username, String password) {
+    }
+
+    /** 改密请求体：必须带原密码，避免仅凭会话令牌就被改绑。 */
+    public record ChangePasswordRequest(String currentPassword, String newPassword) {
     }
 }

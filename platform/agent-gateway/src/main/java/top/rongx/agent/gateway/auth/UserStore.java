@@ -2,7 +2,6 @@ package top.rongx.agent.gateway.auth;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -22,13 +21,16 @@ import top.rongx.agent.domain.port.UserRolePort;
 /**
  * 用户仓库（SQLite 持久化）。
  *
- * <p>首次启动（users 表为空）时创建 3 个种子账号。种子密码<b>不写死在代码里</b>：
- * <ol>
- *   <li>优先读配置 {@code agent.auth.seed-passwords}（格式 {@code admin=xxx,devops=yyy,viewer=zzz}，
- *       通常由环境变量 {@code AGENT_SEED_PASSWORDS} 注入）；</li>
- *   <li>未提供的账号生成一次性随机密码，写入 {@code <workspace>/_platform/seed-passwords.txt}
- *       （权限 600）并在日志里<b>只提示文件位置</b>，不打印密码本身。</li>
- * </ol>
+ * <p>首次启动（users 表为空）时创建 3 个种子账号，三者<b>共用同一个固定初始密码</b>
+ * {@link #DEFAULT_INITIAL_PASSWORD}：本地/单机部署开箱即用，登录后到「设置 → 账号安全」
+ * 修改即可，不需要去文件里找随机密码。需要区分密码或用于共享环境时，用
+ * {@code agent.auth.seed-passwords}（环境变量 {@code AGENT_SEED_PASSWORDS}，格式
+ * {@code admin=xxx,devops=yyy,viewer=zzz}）覆盖，未指定的账号仍用统一默认值。
+ *
+ * <p>旧版本会为每个账号生成随机密码并写入 {@code <workspace>/_platform/seed-passwords.txt}。
+ * 为让已经生成过 users.db 的环境平滑升级：启动时若该文件里的明文仍能匹配库中哈希
+ * （说明账号从未改过密码），自动重置为统一初始密码；已自行改密的账号保持原样。
+ * 文件随后删除，避免明文凭据残留。
  *
  * <p>密码用 BCrypt 存哈希（spring-security-crypto），明文不落任何地方。
  */
@@ -39,6 +41,12 @@ public class UserStore implements UserRolePort {
 
     /** 项目成员列表里的通配符：可访问全部项目。 */
     public static final String ALL_PROJECTS = "*";
+
+    /** 三个种子账号共用的初始密码：公开常量，便于首次登录；登录后应立即修改。 */
+    public static final String DEFAULT_INITIAL_PASSWORD = "admin-2026";
+
+    /** 自定义密码的最小长度，避免改成一个比初始密码更弱的口令。 */
+    private static final int MIN_PASSWORD_LENGTH = 8;
 
     /** 一个平台账号。 */
     public record User(String userId, String displayName, String bcryptHash,
@@ -65,16 +73,22 @@ public class UserStore implements UserRolePort {
     }
 
     private final Path dbFile;
+    /** 旧版一次性密码文件；新版本不再生成，只在升级时读取并清理。 */
     private final Path seedFile;
+    /** userId → 该账号的初始密码（配置覆盖值或统一默认值），用于初始化与「是否仍未改密」判断。 */
+    private final Map<String, String> initialPasswords;
 
     public UserStore(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
                      @Value("${agent.auth.seed-passwords:}") String seedPasswords) {
         Path platformDir = Path.of(workspaceRoot).toAbsolutePath().normalize().resolve("_platform");
         this.dbFile = platformDir.resolve("users.db");
         this.seedFile = platformDir.resolve("seed-passwords.txt");
+        this.initialPasswords = initialPasswords(seedPasswords);
         initSchema();
         if (count() == 0) {
-            seed(seedPasswords);
+            seed();
+        } else {
+            migrateLegacySeedFile();
         }
     }
 
@@ -94,46 +108,59 @@ public class UserStore implements UserRolePort {
         return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
     }
 
-    /**
-     * 首次初始化：按配置的密码建账号；缺省则生成随机密码并落到 600 权限的文件里。
-     * 日志只提示文件路径，不输出任何凭据。
-     */
-    private void seed(String seedPasswords) {
-        Map<String, String> configured = parseSeedPasswords(seedPasswords);
-        Map<String, String> generated = new LinkedHashMap<>();
+    /** 首次初始化：所有账号用固定初始密码（配置可覆盖），日志不输出任何凭据。 */
+    private void seed() {
         for (SeedUser seed : SEEDS) {
-            String raw = configured.get(seed.userId());
-            if (raw == null || raw.isBlank()) {
-                raw = randomPassword();
-                generated.put(seed.userId(), raw);
-            }
             insert(new User(seed.userId(), seed.displayName(),
-                    BCrypt.hashpw(raw, BCrypt.gensalt()), seed.role(), seed.projects()));
+                    BCrypt.hashpw(initialPasswords.get(seed.userId()), BCrypt.gensalt()),
+                    seed.role(), seed.projects()));
         }
-        if (generated.isEmpty()) {
-            log.info("已按配置初始化种子账号：{}", configured.keySet());
-            return;
-        }
-        writeSeedFile(generated);
-        log.warn("已生成一次性初始密码并写入 {}（权限 600），请登录后尽快修改；"
-                + "也可通过 agent.auth.seed-passwords 配置项重新初始化", seedFile.toAbsolutePath());
+        log.info("已初始化 {} 个种子账号（统一初始密码，请登录后到设置页修改）", SEEDS.size());
     }
 
-    private void writeSeedFile(Map<String, String> generated) {
-        StringBuilder text = new StringBuilder("# 首次启动生成的账号密码（请登录后修改并删除本文件）\n");
-        generated.forEach((user, raw) -> text.append(user).append('=').append(raw).append('\n'));
-        try {
-            Files.createDirectories(seedFile.getParent());
-            Files.writeString(seedFile, text.toString());
-            try {
-                Files.setPosixFilePermissions(seedFile,
-                        java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
-            } catch (UnsupportedOperationException e) {
-                log.warn("无法收紧种子密码文件权限（非 POSIX 文件系统）：{}", seedFile);
-            }
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException("种子密码写入失败：" + e.getMessage(), e);
+    /**
+     * 旧版随机密码迁移：只有「库里仍是文件里那把初始密码」的账号才重置，
+     * 已经自行改密的账号不受影响。无论是否重置，明文文件都会被删除。
+     */
+    private void migrateLegacySeedFile() {
+        if (!Files.isRegularFile(seedFile)) {
+            return;
         }
+        try {
+            int migrated = 0;
+            for (String line : Files.readAllLines(seedFile)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                int eq = trimmed.indexOf('=');
+                if (eq <= 0) {
+                    continue;
+                }
+                String userId = trimmed.substring(0, eq).trim();
+                String legacy = trimmed.substring(eq + 1).trim();
+                User user = find(userId);
+                if (user != null && !legacy.isEmpty() && matches(user.bcryptHash(), legacy)
+                        && updateHash(userId, initialPasswords.getOrDefault(userId, DEFAULT_INITIAL_PASSWORD))) {
+                    migrated++;
+                }
+            }
+            Files.deleteIfExists(seedFile);
+            log.info("已把 {} 个旧版账号重置为统一初始密码，并清理历史明文文件", migrated);
+        } catch (java.io.IOException e) {
+            log.warn("历史凭据文件清理失败，可手动删除：{}", seedFile.toAbsolutePath());
+        }
+    }
+
+    /** 解析 {@code admin=xxx,devops=yyy}（空值跳过），并补齐未指定账号的默认值。 */
+    private static Map<String, String> initialPasswords(String spec) {
+        Map<String, String> configured = parseSeedPasswords(spec);
+        Map<String, String> out = new LinkedHashMap<>();
+        for (SeedUser seed : SEEDS) {
+            String raw = configured.get(seed.userId());
+            out.put(seed.userId(), raw == null || raw.isBlank() ? DEFAULT_INITIAL_PASSWORD : raw);
+        }
+        return out;
     }
 
     /** 解析 {@code admin=xxx,devops=yyy}（空值跳过）。 */
@@ -154,12 +181,6 @@ public class UserStore implements UserRolePort {
             }
         }
         return out;
-    }
-
-    private static String randomPassword() {
-        byte[] buf = new byte[18];
-        new SecureRandom().nextBytes(buf);
-        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
     }
 
     private int count() {
@@ -189,10 +210,59 @@ public class UserStore implements UserRolePort {
         }
     }
 
+    /** 写入新的 BCrypt 哈希；返回是否命中了账号。 */
+    private boolean updateHash(String userId, String raw) {
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "UPDATE users SET bcrypt_hash = ? WHERE user_id = ?")) {
+            st.setString(1, BCrypt.hashpw(raw, BCrypt.gensalt()));
+            st.setString(2, userId);
+            return st.executeUpdate() > 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("用户更新失败：" + e.getMessage(), e);
+        }
+    }
+
     /** 校验密码（常量时间比较由 BCrypt.checkpw 保证）。 */
     public boolean checkPassword(String userId, String raw) {
         User user = find(userId);
-        return user != null && BCrypt.checkpw(raw, user.bcryptHash());
+        return user != null && matches(user.bcryptHash(), raw == null ? "" : raw);
+    }
+
+    /** BCrypt 哈希损坏时不让登录/改密链路抛 500，按「不匹配」处理。 */
+    private static boolean matches(String hash, String raw) {
+        try {
+            return BCrypt.checkpw(raw, hash);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /** 当前密码是否仍是初始密码（用于前端提示「去设置页修改」）。 */
+    public boolean isUsingInitialPassword(String userId) {
+        User user = find(userId);
+        return user != null && matches(user.bcryptHash(),
+                initialPasswords.getOrDefault(userId, DEFAULT_INITIAL_PASSWORD));
+    }
+
+    /**
+     * 修改自己的密码：校验原密码，禁止把新密码设回初始密码或当前密码。
+     *
+     * @throws IllegalArgumentException 原密码错误 / 新密码不合规
+     */
+    public synchronized void changePassword(String userId, String current, String next) {
+        User user = find(userId);
+        if (user == null || !matches(user.bcryptHash(), current == null ? "" : current)) {
+            throw new IllegalArgumentException("原密码不正确");
+        }
+        if (next == null || next.length() < MIN_PASSWORD_LENGTH) {
+            throw new IllegalArgumentException("新密码至少 " + MIN_PASSWORD_LENGTH + " 位");
+        }
+        if (next.equals(initialPasswords.getOrDefault(userId, DEFAULT_INITIAL_PASSWORD))
+                || matches(user.bcryptHash(), next)) {
+            throw new IllegalArgumentException("新密码不能与初始密码或当前密码相同");
+        }
+        updateHash(userId, next);
     }
 
     /** 按登录名取用户；不存在返回 null。 */
