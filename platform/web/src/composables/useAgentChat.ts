@@ -26,6 +26,12 @@ interface UseAgentChatOptions {
   getHeaders?: () => Record<string, string>
   /** 发送前置检查（如 IME 组合中）；返回 false 则不发送。 */
   guard?: () => boolean
+  /**
+   * 是否在组件卸载时自动中止读流。
+   * 页面内会话保持默认 true；跨路由常驻的会话（工作区调度 Agent）传 false，
+   * 否则切换页面会把正在跑的流掐断。
+   */
+  autoDispose?: boolean
 }
 
 export function useAgentChat(options: UseAgentChatOptions) {
@@ -42,21 +48,60 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
   let controller: AbortController | null = null
   let timer: ReturnType<typeof setInterval> | null = null
+  /**
+   * 当前读流的代号：reset / stop / 新一次 send 都会自增。
+   * 在途的旧流结束时据此判断自己是否已经过期，避免把新一轮的 streaming 状态改坏。
+   */
+  let runToken = 0
+  /** 本次读流是否由用户主动停止（停止不应该报错，也不该显示「连接中断」）。 */
+  let userStopped = false
 
   const pendingChangeId = computed(() => projection.value.pendingChangeId)
   const streamingTurn = computed(() => projection.value.streamingTurn)
 
-  function resetProjection(): void {
-    if (controller) {
-      controller.abort()
-      controller = null
+  function isAbortError(value: unknown): boolean {
+    return value instanceof DOMException
+      ? value.name === 'AbortError'
+      : (value as Error | null)?.name === 'AbortError'
+  }
+
+  /** 把流式轮次落成一条正式消息：中断/停止时保留已产出的正文与思考。 */
+  function finalizeStreamingTurn(stopped: boolean): void {
+    const current = projection.value
+    const turn = current.streamingTurn
+    if (!turn) return
+    projection.value = {
+      ...current,
+      streamingTurn: null,
+      messages: [...current.messages, {
+        id: `seq-final-${current.messages.length}-${Date.now()}`,
+        role: 'assistant',
+        text: turn.text || (stopped ? '（已停止）' : '（连接中断）'),
+        thinking: turn.thinking || undefined,
+        cost: turn.cost,
+        at: Date.now(),
+      }],
     }
+  }
+
+  function clearRuntime(): void {
     if (timer) {
       clearInterval(timer)
       timer = null
     }
-    projection.value = emptyAgentProjection()
     streaming.value = false
+    connection.value = 'CLOSED'
+  }
+
+  function resetProjection(): void {
+    runToken += 1
+    userStopped = false
+    if (controller) {
+      controller.abort()
+      controller = null
+    }
+    clearRuntime()
+    projection.value = emptyAgentProjection()
     elapsedMs.value = 0
     tokens.value = 0
     connection.value = 'IDLE'
@@ -85,6 +130,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
     const trimmed = text.trim()
     if (!trimmed || streaming.value) return
     if (options.guard?.() === false) return
+    const token = ++runToken
+    userStopped = false
     streaming.value = true
     elapsedMs.value = 0
     tokens.value = 0
@@ -124,47 +171,38 @@ export function useAgentChat(options: UseAgentChatOptions) {
         controller.signal,
       )
     } catch (e) {
-      // 流中断且无正文时给出提示；其余错误直接上抛给视图展示
-      error.value = e instanceof Error ? e.message : String(e)
+      // 已被 stop / reset / 新一轮发送接管：旧流的收尾不再影响当前状态
+      if (token !== runToken) return
+      if (userStopped || isAbortError(e)) error.value = ''
+      else error.value = e instanceof Error ? e.message : String(e)
     } finally {
-      // 流结束后若有未落盘的流式轮次，落成一条 assistant 消息
-      const current = projection.value
-      if (current.streamingTurn) {
-        projection.value = {
-          ...current,
-          streamingTurn: null,
-          messages: [...current.messages, {
-            id: `seq-final-${current.messages.length}-${Date.now()}`,
-            role: 'assistant',
-            text: current.streamingTurn.text || '（连接中断）',
-            thinking: current.streamingTurn.thinking || undefined,
-            cost: current.streamingTurn.cost,
-            at: Date.now(),
-          }],
-        }
+      if (token === runToken) {
+        // 流结束后若有未落盘的流式轮次，落成一条 assistant 消息
+        finalizeStreamingTurn(userStopped)
+        controller = null
+        clearRuntime()
       }
-      streaming.value = false
-      controller = null
-      if (timer) {
-        clearInterval(timer)
-        timer = null
-      }
-      connection.value = 'CLOSED'
     }
   }
 
   function stop(): void {
+    if (!streaming.value && !controller) return
+    userStopped = true
+    // 先让在途读流过期，再中止：它的 catch/finally 不会覆盖这里已经收尾的状态
+    runToken += 1
     controller?.abort()
     controller = null
-    streaming.value = false
-    if (timer) {
-      clearInterval(timer)
-      timer = null
+    if (projection.value.streamingTurn) {
+      finalizeStreamingTurn(true)
+    } else {
+      // 模型还没吐出任何增量就被停掉：给一条明确提示，避免「点了停止但界面毫无变化」
+      appendMessage({ id: `stopped-${Date.now()}`, role: 'assistant', text: '（已停止）', at: Date.now() })
     }
-    connection.value = 'CLOSED'
+    clearRuntime()
+    error.value = ''
   }
 
-  onScopeDispose(stop)
+  if (options.autoDispose !== false) onScopeDispose(stop)
 
   return {
     // 状态（只读）

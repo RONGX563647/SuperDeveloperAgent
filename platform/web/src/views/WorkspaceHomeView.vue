@@ -8,13 +8,13 @@ import {
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
 import { listProjects, type ProjectRow } from '../api/project'
-import { useAgentChat } from '../composables/useAgentChat'
 import { useWorkspaceEvents, type WorkspaceEvent } from '../composables/useWorkspaceEvents'
-import { clearHistory, loadHistory, saveHistory } from '../state/sessionHistory'
+import { getWorkspaceChat } from '../state/workspaceChat'
+import { clearHistory } from '../state/sessionHistory'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import {
-  cancelRun, createConversation, createTask, getSupervisor, listConversations, listRunLedger,
+  cancelRun, createConversation, createTask, listConversations, listRunLedger,
   listRuns, listTasks, sendToConversation, syncConversations, updateTask,
   type ConversationRow, type RunLedgerRow, type RunRow, type TaskRow,
 } from '../api/workspace'
@@ -34,7 +34,17 @@ const projectName = ref('')
 const projects = ref<ProjectRow[]>([])
 
 const conversations = ref<ConversationRow[]>([])
-const supervisor = ref<ConversationRow | null>(null)
+/**
+ * 调度会话状态按项目常驻（state/workspaceChat）：切换页面/工作区只换视图，
+ * 在途的 SSE 读流不会被打断，回来时还能接着看到正在增长的回答。
+ */
+const entry = computed(() => getWorkspaceChat(projectId.value))
+const supervisor = computed(() => entry.value.supervisor.value)
+const projection = computed(() => entry.value.chat.projection.value)
+const streaming = computed(() => entry.value.chat.streaming.value)
+const elapsedMs = computed(() => entry.value.chat.elapsedMs.value)
+const tokens = computed(() => entry.value.chat.tokens.value)
+const error = computed(() => entry.value.chat.error.value)
 const tasks = ref<TaskRow[]>([])
 const runs = ref<RunRow[]>([])
 const input = ref('')
@@ -103,18 +113,32 @@ const actionCards = [
   { title: '登记待办任务', desc: '把问题沉淀成可跟踪任务', prompt: '汇总今天的运行，把待办登记成任务' },
 ]
 
-const chat = useAgentChat({
-  url: () => `/api/v1/workspaces/${projectId.value}/super/stream`,
-  buildRequest: () => ({ sessionId: supervisor.value?.id, env: appStore.env }),
-  getHeaders: () => ({ Authorization: `Bearer ${getToken()}` }),
-})
-const { projection, streaming, elapsedMs, tokens, error, send: sendChat, stop, hydrate, reset, appendMessage } = chat
+/** 调度 Agent 的发送/停止都落到常驻会话上，避免视图重建时重建连接。 */
+function sendChat(text: string): Promise<void> {
+  return entry.value.chat.send(text)
+}
+
+function appendUserMessage(text: string): void {
+  entry.value.chat.appendMessage({ id: `u-${Date.now()}`, role: 'user', text, at: Date.now() })
+}
+
+function stop(): void {
+  entry.value.chat.stop()
+}
+
+function reset(): void {
+  entry.value.chat.reset()
+}
 
 const showWelcome = computed(() => !streaming.value && projection.value.messages.length === 0)
 const canSend = computed(() => input.value.trim().length > 0 && !streaming.value && !!supervisor.value)
 
 let timer: ReturnType<typeof setInterval> | null = null
 let reconcileTimer: ReturnType<typeof setTimeout> | null = null
+/** 切工作区时旧项目的请求可能后到：只接受最后一次初始化/加载的结果。 */
+let loadToken = 0
+let initToken = 0
+let mounted = false
 
 const terminalRunStatuses = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED'])
 
@@ -166,56 +190,71 @@ function scheduleReconcile(): void {
 }
 
 async function loadAll(): Promise<void> {
+  const token = ++loadToken
+  const id = projectId.value
   loading.value = true
   try {
     const [list, taskList, runList, ledgerList] = await Promise.all([
-      listConversations(projectId.value, true),
-      listTasks(projectId.value),
-      listRuns(projectId.value, 30),
+      listConversations(id, true),
+      listTasks(id),
+      listRuns(id, 30),
       // 账本不可用时不影响主视图（例如后端版本较旧）
-      listRunLedger(projectId.value, 50).catch(() => [] as RunLedgerRow[]),
+      listRunLedger(id, 50).catch(() => [] as RunLedgerRow[]),
     ])
+    if (token !== loadToken) return
     conversations.value = list
     tasks.value = taskList
     runs.value = runList
     ledgerRuns.value = ledgerList
     lastRefreshed.value = Date.now()
   } catch (e) {
+    if (token !== loadToken) return
     ElMessage.error(e instanceof Error ? e.message : '工作区加载失败')
   } finally {
-    loading.value = false
+    if (token === loadToken) loading.value = false
   }
 }
 
 async function init(): Promise<void> {
-  reset()
+  const token = ++initToken
+  const id = projectId.value
+  const target = getWorkspaceChat(id)
   input.value = ''
   try {
     projects.value = await listProjects()
-    projectName.value = projects.value.find((p) => p.id === projectId.value)?.name ?? projectId.value
+    if (token !== initToken) return
+    projectName.value = projects.value.find((p) => p.id === id)?.name ?? id
   } catch {
-    projectName.value = projectId.value
+    if (token !== initToken) return
+    projectName.value = id
   }
-  appStore.projectId = projectId.value
+  appStore.projectId = id
   const local = appStore.sessions
-    .filter((s) => s.projectId === projectId.value)
+    .filter((s) => s.projectId === id)
     .map((s) => ({ id: s.id, title: s.title, at: s.at }))
   if (local.length) {
     try {
-      await syncConversations(projectId.value, local)
+      await syncConversations(id, local)
     } catch {
       // 同步失败不影响使用
     }
   }
+  if (token !== initToken) return
   try {
-    const sup = await getSupervisor(projectId.value)
-    supervisor.value = sup
-    const history = loadHistory(sup.id)
-    if (history) hydrate(history.messages, history.tools)
+    // 常驻会话已初始化过就直接复用：不 reset、不重新 hydrate，
+    // 正在输出的流与已有时间线都保留
+    await target.ensure()
   } catch (e) {
+    if (token !== initToken) return
     ElMessage.error(e instanceof Error ? e.message : '工作区助手初始化失败')
   }
+  if (token !== initToken) return
   await loadAll()
+  if (token !== initToken) return
+  await nextTick()
+  // 回到工作区时直接定位到最新输出（包括切走期间仍在增长的回答）
+  autoStick = true
+  scrollToBottom(true)
 }
 
 function openConversation(row: ConversationRow): void {
@@ -328,16 +367,28 @@ async function saveTask(): Promise<void> {
 async function submit(): Promise<void> {
   const text = input.value.trim()
   if (!text || streaming.value || !supervisor.value) return
+  // 连点发送 / 回车重复触发时不重复落同一条用户消息（后端也会重复收到）
+  const last = projection.value.messages[projection.value.messages.length - 1]
+  if (last?.role === 'user' && last.text === text && Date.now() - last.at < 2000) {
+    input.value = ''
+    return
+  }
   input.value = ''
-  appendMessage({ id: `u-${Date.now()}`, role: 'user', text, at: Date.now() })
+  appendUserMessage(text)
+  autoStick = true
   await nextTick()
-  scrollToBottom()
+  scrollToBottom(true)
   await sendChat(text)
+  // 发送期间可能已经切走：卸载后的视图不再刷新工作区数据
+  if (!mounted) return
   await loadAll()
 }
 
+/** 中文输入法组合标记：组合期间回车不应触发发送（避免把半截拼音/标点发出去）。 */
+const composing = ref(false)
+
 function onEnter(event: KeyboardEvent): void {
-  if (event.isComposing) return
+  if (event.isComposing || composing.value || event.keyCode === 229) return
   if (!event.shiftKey) {
     event.preventDefault()
     void submit()
@@ -361,6 +412,14 @@ function usePrompt(text: string): void {
 
 function onEscape(): void {
   if (streaming.value) stop()
+}
+
+/** 流式失败后重发上一条用户消息：不新增气泡，避免时间线出现重复提问。 */
+function retry(): void {
+  if (streaming.value) return
+  const lastUser = [...projection.value.messages].reverse().find((m) => m.role === 'user')
+  if (!lastUser) return
+  void sendChat(lastUser.text)
 }
 
 /** 一键诊断：把本地快照拼进提示词，让调度 Agent 用只读工具核对后给结论。 */
@@ -566,24 +625,26 @@ function shortId(id: string): string {
   return id.length > 14 ? `${id.slice(0, 14)}…` : id
 }
 
-// 工具调用会连续更新 tools，逐次写 localStorage 会让长会话卡顿；合并成 800ms 一次
-let historyTimer: ReturnType<typeof setTimeout> | null = null
-watch(() => [projection.value.messages, projection.value.tools], () => {
-  if (!supervisor.value) return
-  if (historyTimer) clearTimeout(historyTimer)
-  historyTimer = setTimeout(() => {
-    if (supervisor.value) {
-      saveHistory(supervisor.value.id, projection.value.messages, projection.value.tools)
-    }
-  }, 800)
-}, { deep: true })
-
 // 流式文本每个事件都会触发一次；合并到下一帧，避免每个 token 都强制布局
 let scrollFrame = 0
-function scrollToBottom(): void {
+/**
+ * 是否跟随输出自动贴底：用户主动向上翻看时不再强行拽回底部，
+ * 回到底部附近后自动恢复跟随。
+ */
+let autoStick = true
+
+function onChatScroll(): void {
+  const el = messageListRef.value
+  if (!el) return
+  autoStick = el.scrollHeight - el.scrollTop - el.clientHeight < 96
+}
+
+function scrollToBottom(force = false): void {
+  if (!force && !autoStick) return
   if (scrollFrame) return
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = 0
+    if (!force && !autoStick) return
     const el = messageListRef.value
     if (el) el.scrollTop = el.scrollHeight
   })
@@ -599,8 +660,16 @@ watch(() => projection.value.streamingTurn?.text, async () => {
   scrollToBottom()
 })
 
+/**
+ * 顶栏切换项目时 appStore.projectId 先变、路由还没变：
+ * 这里把路由对齐，工作区页面才能真正切到新项目（之前只改了 store，页面完全不动）。
+ */
+watch(() => appStore.projectId, (id) => {
+  if (!id || id === String(route.params.projectId ?? '')) return
+  void router.replace({ name: 'workspace', params: { projectId: id } })
+})
+
 watch(projectId, () => {
-  supervisor.value = null
   conversations.value = []
   tasks.value = []
   runs.value = []
@@ -610,6 +679,7 @@ watch(projectId, () => {
 })
 
 onMounted(async () => {
+  mounted = true
   document.addEventListener('keydown', onGlobalKeydown)
   document.addEventListener('visibilitychange', onVisibility)
   await init()
@@ -621,13 +691,15 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  mounted = false
   if (timer) clearInterval(timer)
   if (reconcileTimer) clearTimeout(reconcileTimer)
-  if (historyTimer) clearTimeout(historyTimer)
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
   document.removeEventListener('keydown', onGlobalKeydown)
   document.removeEventListener('visibilitychange', onVisibility)
   workspaceEvents.stop()
+  // 注意：不调用 stop()。调度会话是跨页常驻的，离开页面时读流继续；
+  // 用户要中断只能显式点「停止」或按 Esc。
 })
 </script>
 
@@ -673,7 +745,7 @@ onUnmounted(() => {
     <div class="ws-body">
       <!-- 中：工作区助手（与对话页共用时间线 / composer 视觉） -->
       <section class="chat-pane">
-        <div ref="messageListRef" class="chat-scroll">
+        <div ref="messageListRef" class="chat-scroll" @scroll.passive="onChatScroll">
           <div v-if="showWelcome" class="welcome">
             <span class="welcome-icon"><el-icon><ChatDotRound /></el-icon></span>
             <h2 class="welcome-title">要做什么？</h2>
@@ -701,16 +773,21 @@ onUnmounted(() => {
             :streaming="streaming"
             @copy="copyText"
           />
-          <p v-if="error" class="stream-error">{{ error }}</p>
+          <div v-if="error" class="stream-error">
+            <span class="stream-error-text">{{ error }}</span>
+            <button type="button" class="text-btn" :disabled="streaming" @click="retry">重试</button>
+          </div>
         </div>
 
         <div class="composer-wrap">
           <div class="composer">
             <textarea
               ref="composerRef" v-model="input" rows="1" class="composer-input"
-              placeholder="直接问工作区状态，或描述要做的事"
+              :placeholder="supervisor ? '直接问工作区状态，或描述要做的事' : '正在连接工作区助手…'"
               @keydown.enter="onEnter"
               @keydown.esc="onEscape"
+              @compositionstart="composing = true"
+              @compositionend="composing = false"
             />
             <div class="composer-bar">
               <div class="bar-left">
@@ -1277,8 +1354,25 @@ onUnmounted(() => {
   color: var(--ink-faint);
 }
 .stream-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   max-width: 56rem;
+  padding: 8px 12px;
   margin: 10px auto;
+  font-size: 12px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-left: 2px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+.stream-error-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.stream-error .text-btn {
+  flex: none;
   font-size: 12px;
   color: var(--danger);
 }
