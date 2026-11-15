@@ -1,25 +1,27 @@
 # 任务清单：流水线环境注入与中间件健康修复
 
+> 2026-11-15 按代码复核：T1–T6、T8–T13 与实现一致；**T7 未实现**（`env_summary` 仍按 `own` 统计）；T14/T15/T17 是历史验收记录，本轮未重跑。
+
 ## P0 共享解析器
 
-- [x] T1 新增 `../../../platform/agent-domain/src/main/java/top/rongx/agent/domain/env/ProjectEnvFiles.java`
-  - 有界扫描 `.env` / `.env.example`（深度 5，跳过构建/依赖目录）
-  - 排序固定：`.env` 优先于 `.env.example`，空值不占位、不覆盖非空值
-  - 解析 `entrypoint.sh` 的 `require VAR`（优先），其次 compose `${VAR:?`，最后回退空值+非可选
+- [x] T1 新增 `platform/agent-domain/src/main/java/top/rongx/agent/domain/env/ProjectEnvFiles.java`
+  - 有界扫描 `.env` / `.env.example` / `.env.sample` / `.env.template`（.env 深度 5，application 配置深度 8，跳过构建/依赖目录）
+  - 排序固定：`.env` 优先于 example，空值不占位、不覆盖非空值
+  - `required`：`entrypoint.sh` 的 `require VAR` **与** compose `${VAR:?` **取并集**；并集为空才回退“空值 + 未标注可选 + 无默认值”
   - 返回 `Declared(values, keys, required)`
-- [x] T2 新增单测 `../../../platform/agent-domain/src/test/java/top/rongx/agent/domain/env/ProjectEnvFilesTest.java`
+- [x] T2 新增单测 `platform/agent-domain/src/test/java/top/rongx/agent/domain/env/ProjectEnvFilesTest.java`
   - 用临时目录 fixture 覆盖：优先级、空值、可选注释、entrypoint 权威性
 
 ## P1 网关（自检 / 有效环境）
 
-- [x] T3 `EnvBindingService.scanRequiredKeys` 改为委托 `ProjectEnvFiles.scan(repo).required()`
-- [x] T4 `EnvBindingService.draft`：`keys` 用 `declared.keys()`，`missing` 只统计 required 且（有效环境+源码）均无值
+- [x] T3 `EnvBindingService.requiredKeys(projectId)`（不是 `scanRequiredKeys`）改为委托 `ProjectEnvFiles.scan(repo).required()`；新增 `sourceValues(projectId)`
+- [x] T4 `EnvBindingService.draft`：`keys` 用 `declared.keys() ∪ required`，`missing` 只统计 required 且（有效环境+源码）均无值
 - [x] T5 `EnvironmentController.envCheck`
   - 必填值判定加入源码 fallback，返回 `sourceProvidedVars`
   - 返回 `referencedCount` / `referencedRunningCount` / `middlewareHealthy`
-  - `problems` 不含"未启动"
+  - `problems` 不含“未启动”
 - [x] T6 `EnvironmentController.effective` + `resourceView` 增加资源 `referenced` 与顶层计数
-- [x] T7 `EnvTools.env_summary` 健康口径改为"被项目引用的资源"
+- [ ] T7 `EnvQueryTools.env_summary` 健康口径改为“被项目引用的资源”——**未完成**，当前 `healthy` 仍按 `own` 统计
 
 ## P2 执行层（注入）
 

@@ -1,8 +1,10 @@
 ﻿# 任务清单：流水线体验重构 + 开发环境本机部署
 
+> 勾选状态于 2026-11-15 按代码复核：代码类任务与实现一致；**实跑类验收（T17/T19/T27/T33/T41/T49 等）是历史运行记录，本轮未重跑**，仅保留原记录。T17/T33 仍未勾选。
+
 ## M1 前端精简与模式切换
 
-- [x] T1 `HistoryList.vue`：新增环境筛选（全部/开发/测试/生产），只展示匹配记录；保留环境标签。
+- [x] T1 `HistoryList.vue`：环境跟随左栏选择（`env` prop）过滤，不提供列表内环境筛选；列表内为状态 chips + 关键字搜索 + 分页；保留环境标签与 `#N` 序号。
 - [x] T2 `PipelineView.vue`：删除单步动作面板、动作结果区块、L3 变更确认对话框及其状态/函数/导入。
 - [x] T3 删除 `components/pipeline/ActionPanel.vue`（确认无其它引用）。
 - [x] T4 `TriggerBar.vue`：删除「高级选项」折叠区；新增「打包成镜像 / 直接部署」分段按钮（`modelValue` 双向绑定）。
@@ -23,7 +25,7 @@
 
 - [x] T14 平台 `mvn -q -DskipTests package` 通过；`DeployersTest` + 新增 `LocalDevHostDeployerTest` 通过。
 - [x] T15 重启后端（新 jar）→ `/actuator/health` UP。
-- [x] T16 前端页面检查（HMR）：无单步动作/高级选项；历史环境筛选；dev→直接部署、test→打包成镜像联动。
+- [x] T16 前端页面检查（HMR）：无单步动作/高级选项；历史随左栏环境切换；dev→固定本机、test→打包成镜像/直接部署联动。
 - [ ] T17 dev + 直接部署实跑：日志含 `[dev]` 阶段，前端 2xx，dev 无新增 docker 应用容器。
       实跑已触发（run-914304d0），平台正确执行 workspace→build；失败原因是目标仓库工作区当前有 403 个删除（`com.ruoyi.task`/`com.ruoyi.script` 被删但仍有引用），非平台问题。本机部署运行时链路已用独立验收验证：后端 jar 启动 200、`/prod-api` 反代 200、SPA fallback 200、停止后端口关闭。
 - [x] T18 停止本机服务后端口关闭（18701/18702 均无监听，连接被拒）；`POST /deploy/host/stop` 返回正确文案。
@@ -50,7 +52,7 @@
 - [x] T30 `PipelineEngine#deleteHistory` 默认实现 + `RunSummary` 增加 `seq`；`PipelineController` 历史返回 `seq`，新增 `DELETE /api/v1/ci/history/{runId}`。
 - [x] T31 前端：`HistoryItem.seq` 与 `deleteHistory` API；`HistoryList` 显示 `#N`、Pointer Events 左滑露出删除（运行中禁用）；`PipelineView` 确认删除 + 刷新 + 关掉被删详情；产物区展示镜像版本与本地镜像地址（点击复制）。
 - [x] T32 单测 `RunHistoryStoreTest`（旧文件补号并落盘 / 删除不改他人序号 / meta 往返）通过；`mvn -DskipTests compile` 与 `npm run typecheck` 通过。
-- [ ] T33 实跑验收（需重启后端）：历史出现从 `#1` 起的序号；左滑删除生效（运行中拒绝）；镜像产物出现 `test-vN` 与 `ci-test-vN-<sha7>`。
+- [ ] T33 实跑验收（尚未完成）：历史出现从 `#1` 起的序号；左滑删除生效（运行中拒绝）；镜像产物出现 `test-vN` 与 `ci-test-vN-<sha7>`。
 
 ## M6 P0/P1 流水线易用性
 

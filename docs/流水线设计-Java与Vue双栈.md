@@ -1,7 +1,7 @@
 # 自研流水线引擎 · Java + Vue 双栈设计
 
 > 日期：2026-11-07 ｜ 状态：**参考（早期设计稿，未按此实现）** ｜ 结论：**自研，但只锁定两栈**（Maven/Java + pnpm/npm/Vue），靠 **stage type 插件化**扩展
-> **现行实现差异（2026-11-15）**：运行时 `PipelineDefinition` 的 stage 类型是 `action` / `deploy` / `health` / `rollback`；本文的 `mvn` / `npm` / `docker-build` / `static-publish` 是目标能力设计，不是当前代码。现状见 [CODE-MAP](CODE-MAP.md) 与 `BuiltInPipelineEngine`。
+> **现行实现差异（2026-11-15）**：运行时 `PipelineDefinition` 的 stage 类型是 `action` / `deploy` / `health` / `rollback` / `git-checkout`（校验白名单见 `PipelineDefinitionResolver.java:265`）；本文的 `mvn` / `npm` / `docker-build` / `static-publish` 是目标能力设计，不是当前代码。现状见 [CODE-MAP](CODE-MAP.md) 与 `BuiltInPipelineEngine`。
 > 前置：[PRD v1.3](PRD-DevOps-Agent平台-v1.0.md) §4.7 ｜ [窄控制器](窄控制器设计-单机滚动部署器.md)
 
 ---

@@ -1,6 +1,6 @@
 ---
 type: plan
-status: plan
+status: current
 owner: docs
 lastVerified: 2026-11-15
 related: [../README.md, ../项目规约-v1.0.md, ../规约自动化检查-v1.0.md, ../adr/0005-安全边界放在平台层.md]
@@ -27,7 +27,7 @@ Agent 文档之乱，根源不是"生成得太多"，而是三处缺失：**写�
 | 能力 | 现状 | 位置 | 判断 |
 |---|---|---|---|
 | 唯一索引 | `docs/README.md` 是 single source of index，含登记表、状态、归属、复审日 | [docs/README.md](../README.md) | **保留**，作为登记与可达性的唯一判据 |
-| 状态与复审 | 稳定 / 现行 / 历史 / 规划，90 天复审 | [docs/README.md §3](../README.md) | **保留**，升级为可机械读取 |
+| 状态与复审 | 稳定 / 现行 / 历史 / 规划，90 天复审 | [docs/README.md §3](../README.md) | **保留**；机械读取需 front-matter，暂缓 |
 | 问题分级 | P0 / P1 / P2 + 禁止无验证删除 | [docs/README.md §4](../README.md) | **保留**，作为检查结果的处置语义 |
 | 废弃留痕 | 删除前登记原因与替代物，表永久保留 | [deprecated/README.md](../deprecated/README.md) | **保留**，暂由人工评审 |
 | 断链巡检 | 扫描全仓 Markdown 相对链接，非 0 退出 | [check-links.mjs](../../scripts/docs/check-links.mjs) | **保留**，CI 独立执行 |
@@ -45,13 +45,13 @@ Agent 文档之乱，根源不是"生成得太多"，而是三处缺失：**写�
 
 ## 2. 目标与不变量
 
-| # | 不变量 | 机械落点 |
-|---|---|---|
-| I1 | **先登记，后写入** | 新文档未出现在索引中即 CI 失败（D04） |
-| I2 | **先契约，后内容** | 6 种文档类型 + 每类必填章节（D01–D03） |
-| I3 | **变更即同步** | `covers` 指向代码路径，`lastVerified` 与最后一次提交比较（D06–D07） |
-| I4 | **单一事实源** | 同一事实只写一处，其余链接；重复段落进报告（D08） |
-| I5 | **人类审批不可绕过** | Agent 只写 `docs/_inbox/` 或 PR 分支，`main` 有分支保护 |
+| # | 不变量 | 机械落点 | 落地状态（2026-11-15） |
+|---|---|---|---|
+| I1 | **先登记，后写入** | 新文档未出现在索引中即 CI 失败（D04） | 已落地：`check-docs.mjs` |
+| I2 | **先契约，后内容** | 6 种文档类型 + 每类必填章节（D01–D03） | 暂缓：未强制 front-matter |
+| I3 | **变更即同步** | `covers` 指向代码路径，`lastVerified` 与最后一次提交比较（D06–D07） | 暂缓：仅 CODE-MAP 人工核对日 |
+| I4 | **单一事实源** | 同一事实只写一处，其余链接；重复段落进报告（D08） | 暂缓：未实现去重报告 |
+| I5 | **人类审批不可绕过** | Agent 只写 `docs/_inbox/` 或 PR 分支，`main` 有分支保护 | 暂缓：`_inbox` 未启用，依赖分支保护 |
 
 文档生命周期（与登记表状态一一对应）：
 
@@ -93,6 +93,8 @@ Agent 产出 ──▶ docs/_inbox/（不可直接合入）
 | **C 收敛** | 散落、重复、检索不到 | Wiki-Forge / loci-rag / RTFM | 唯一索引 + 去重/孤立报告 + `llms.txt` 一致性 |
 | **D 审批** | Agent 自写自审、覆盖丢失 | Libraryan 单一写入者、slashdocs 评审 | `_inbox` + 分支保护 + owner approve + 成品归档 |
 
+> **落地状态（2026-11-15）**：四道闸门目前只落地 **A 闸门的 D04（未登记）+ 断链检查（`check-links`）**，以及 `check-docs` 的 CODE-MAP 覆盖/代码锚点/日期格式；B 闸门（`covers`/漂移）、D01–D03 front-matter 契约、`_inbox`、成品归档均**暂缓**，图中为规划目标。
+
 ---
 
 ## 4. 闸门 A：文档契约
@@ -110,7 +112,7 @@ Agent 产出 ──▶ docs/_inbox/（不可直接合入）
 
 > 索引页（`docs/README.md`、`adr/README.md`、`deprecated/README.md`、`changelog/`）归 `reference`，只受 D04/D05 约束，不套用正文模板；用行内豁免声明（见 §4.4）。
 
-### 4.2 Front-matter（新文档强制，存量渐进）
+### 4.2 Front-matter（规划：新文档强制，存量渐进）
 
 ```yaml
 ---
@@ -125,7 +127,7 @@ related: [../adr/0002-不造CI-DSL用动作+仓库内配方.md]
 ---
 ```
 
-字段最小化到 7 个；`title` 取正文 H1，不重复填写。**存量 15 篇继续用文首引用块**，采用「touch-to-migrate」：文档下次被修改时补齐 front-matter，并把路径从 `docs/.docgov-legacy` 白名单中删除。白名单清空即迁移完成。
+字段最小化到 7 个；`title` 取正文 H1，不重复填写。**除本文外的 43 篇存量文档仍用文首引用块**（front-matter 未强制），采用「touch-to-migrate」：文档下次被修改时补齐 front-matter，并从白名单 `docs/.docgov-legacy`（**规划，尚未创建**）中删除路径。白名单清空即迁移完成。
 
 ### 4.3 准入规则（新增文档时必须回答）
 
@@ -137,22 +139,22 @@ related: [../adr/0002-不造CI-DSL用动作+仓库内配方.md]
 
 ### 4.4 机械检查 D01–D08
 
-新增 `scripts/docs/check-docs.mjs`，复用 `check-links.mjs` 的链接判定与遍历逻辑。
+已新增 `scripts/docs/check-docs.mjs`：复用 `check-links.mjs` 的链接判定与遍历逻辑，当前只实现 D04（未登记）与 CODE-MAP 覆盖/代码锚点存在/日期格式；D05 由 `check-links.mjs` 独立执行。
 
 | 规则 | 判定 | 阶段 1 | 处置 |
 |---|---|---|---|
-| **D01** front-matter 完整 | 非 legacy 文档缺 `type/status/owner/lastVerified` | **阻断** | 补元信息 |
-| **D02** 枚举合法 | `type` / `status` 不在允许集合 | **阻断** | 改值 |
-| **D03** 必填章节 | 对应类型的必备 H2 缺失 | 警告 | 补章节，或先标 `draft` / `plan` |
-| **D04** 已登记可达 | `docs/**/*.md` 未被 `docs/README.md` 或子索引链接 | **阻断** | 补登记 |
-| **D05** 相对链接 | 复用 `check-links`，存在失效目标 | **阻断** | 修链接 |
-| **D06** covers 有效 | glob 不匹配任何文件，或指向 `docs/` | 警告 | 修正覆盖范围 |
-| **D07** 复审与漂移 | `reviewBy` 过期，或 `covers` 在 `lastVerified` 后有提交 | 警告 | 人工复审并更新 |
-| **D08** 重复与孤立 | 规范化后同段落 >300 字出现在多篇；标题重复 | 报告 | 合并或改链接 |
+| **D01** front-matter 完整 | 非 legacy 文档缺 `type/status/owner/lastVerified` | **暂缓（未实现）** | 补元信息 |
+| **D02** 枚举合法 | `type` / `status` 不在允许集合 | **暂缓（未实现）** | 改值 |
+| **D03** 必填章节 | 对应类型的必备 H2 缺失 | 暂缓（未实现） | 补章节，或先标 `draft` / `plan` |
+| **D04** 已登记可达 | `docs/**/*.md` 未被 `docs/README.md` 或子索引链接 | **阻断（已实现）** | 补登记 |
+| **D05** 相对链接 | 复用 `check-links`，存在失效目标 | **阻断（已实现）** | 修链接 |
+| **D06** covers 有效 | glob 不匹配任何文件，或指向 `docs/` | 暂缓（未实现） | 修正覆盖范围 |
+| **D07** 复审与漂移 | `reviewBy` 过期，或 `covers` 在 `lastVerified` 后有提交 | 暂缓（未实现） | 人工复审并更新 |
+| **D08** 重复与孤立 | 规范化后同段落 >300 字出现在多篇；标题重复 | 暂缓（未实现） | 合并或改链接 |
 
-豁免沿用规约检查的做法：行内 `<!-- doc-ignore: D03 索引页无正文模板 -->`，必须带规则号与原因；同一规则全仓豁免 >5 次时，触发"是规则有问题还是文档有问题"的复审。豁免数量进健康看板。
+豁免沿用规约检查的做法：行内 `<!-- doc-ignore: D03 索引页无正文模板 -->`，必须带规则号与原因；同一规则全仓豁免 >5 次时，触发"是规则有问题还是文档有问题"的复审。豁免数量进健康看板。**当前 `check-docs.mjs` 尚未实现 `doc-ignore` 解析**，该机制随 D01–D03 一并暂缓。
 
-**阶段 1 只阻断 D01 / D02 / D04 / D05 四条**。理由与[规约自动化检查 §4](../规约自动化检查-v1.0.md)一致：一次上满规则会产生大量误报，最后团队会把检查整体关掉。
+**阶段 1 实际只阻断 D04 / D05 两条**，并以 CODE-MAP 的「代码锚点存在 + 日期格式」作为补充门禁；D01–D03、D06–D08 暂缓。理由与[规约自动化检查 §4](../规约自动化检查-v1.0.md)一致：一次上满规则会产生大量误报，最后团队会把检查整体关掉。
 
 ---
 
@@ -164,9 +166,9 @@ related: [../adr/0002-不造CI-DSL用动作+仓库内配方.md]
 - `lastVerified`：**最后一次由人确认"文档与这些代码一致"**的日期；
 - Agent **MUST NOT** 自行更新 `lastVerified`——它只能提出"建议复审"，由 owner 在 PR 中确认。
 
-### 5.2 漂移检测
+### 5.2 漂移检测（暂缓，脚本未实现）
 
-新增 `scripts/docs/check-drift.mjs`：
+规划中的 `scripts/docs/check-drift.mjs`（**当前仓库不存在**，见阶段 2）：
 
 ```bash
 node scripts/docs/check-drift.mjs            # 只出报告，退出码 0
@@ -246,6 +248,8 @@ PR 模板固定三问，缺一即评审驳回：
 
 ### 7.1 单一写入者（Libraryan 的本地化）
 
+> 状态（2026-11-15）：`docs/_inbox/` 未创建，CI 也未配置 `_inbox` 合入拦截；当前仅依赖项目规约 §12 的分支保护要求。下表为规划。
+
 不装 git hook（`--no-verify` 可绕过），改用**路径 + 分支保护**：
 
 | 主体 | 可写位置 | 约束 |
@@ -261,14 +265,16 @@ PR 模板固定三问，缺一即评审驳回：
 | 角色 | 谁 | 做什么 |
 |---|---|---|
 | 写作 | Agent / 文档作者 | 产出草案，只落到 `_inbox` 或 PR 分支 |
-| 校验 | `check-docs` / `check-drift` / `check-links` | 机械判定结构、登记、链接、漂移 |
+| 校验 | `check-docs` / `check-links`（`check-drift` 规划） | 机械判定结构、登记、链接、漂移 |
 | 审批 | 文档 owner | 确认事实、更新 `lastVerified`、合并 |
 
 - 文档 PR 至少 1 名 owner approve；修改本方案（契约本身）需 2 人；
 - 写规则的人不能给自己豁免；豁免必须出现在 PR diff 中；
 - `auto_fix=false` 保持不变：检查只出草案与报告，不自动提交。
 
-### 7.3 成品文档归档（slashdocs / tunc-mcp 的本地化）
+### 7.3 成品文档归档（slashdocs / tunc-mcp 的本地化，规划）
+
+> 状态（2026-11-15）：`docs/reports/` 与 `manifest.yml` **尚未创建**，本节为规划；当前成品仍按普通文档登记。
 
 Agent 生成的报告、验收、复盘属于"成品"，但**不引入逐句评论服务**：
 
@@ -291,9 +297,9 @@ docs/reports/YYYY-MM/<slug>/
 | 项目 | 核心机制 | 结论 | 原因 |
 |---|---|---|---|
 | **OttoDoc** | 6 类型契约、准入规则、lint、三权分立 | **借理念，不引入** | 独立服务 + 模型审稿；本仓可用 front-matter + Node 脚本覆盖 80% |
-| **Libraryan** | 单一写入者 + git hook | **改造引入** | 用 `_inbox` + 分支保护替代 hook，避免 `--no-verify` 绕过 |
-| **Ohara** | PR 联动文档更新、stale 标记 | **改造引入** | Gitee PR + `covers` 漂移报告，不引入 MCP 服务 |
-| **Dox** | `lastVerified` + `dox check --drift` | **自研等价物** | `check-drift.mjs`，约百行，无新依赖 |
+| **Libraryan** | 单一写入者 + git hook | **借理念（`_inbox` 暂缓）** | 用路径约束替代 hook，避免 `--no-verify` 绕过；当前未启用 |
+| **Ohara** | PR 联动文档更新、stale 标记 | **借理念（漂移暂缓）** | Gitee PR + `covers` 报告未实现 |
+| **Dox** | `lastVerified` + `dox check --drift` | **自研等价物（暂缓）** | `check-drift.mjs` 约百行，尚未实现 |
 | **Wiki-Forge** | 多格式索引、漂移检测、MCP | **暂缓** | 当前文档以 Markdown 为主，`llms.txt` 够用 |
 | **Docmancer / loci-rag** | 去重、审计、统一检索 | **暂缓** | 先做 D08 报告，达到触发条件再评估 |
 | **RTFM** | 多解析器 + MCP 切片 | **暂缓** | 检索面未稳定，过早接入会固化错误切分 |
@@ -317,7 +323,7 @@ docs/reports/YYYY-MM/<slug>/
 | CI | `verify` 前执行两条 Node 命令，任一失败即中断 |
 | `docs/README.md` | 命令、巡检项、健康看板同步 |
 
-**验收**：未登记文档、断链、代码锚点缺失时 CI 必红；当前 43 篇文档 0 未登记，22 篇现行文档 44 个锚点全部存在。
+**验收**：未登记文档、断链、代码锚点缺失时 CI 必红；当前 44 篇文档 0 未登记，CODE-MAP 22 篇、44 个代码锚点全部存在（2026-11-15 `check-docs` 实测）。
 
 **暂缓（触发条件出现前不做）**：
 
@@ -367,7 +373,7 @@ docs/reports/YYYY-MM/<slug>/
 ```bash
 node scripts/docs/check-docs.mjs
 node scripts/docs/check-links.mjs
-node scripts/docs/check-drift.mjs
+# 阶段 2（暂缓，脚本尚未实现）：node scripts/docs/check-drift.mjs
 ```
 
 ---
@@ -377,9 +383,9 @@ node scripts/docs/check-drift.mjs
 | 风险 | 触发条件 | 缓解 |
 |---|---|---|
 | 契约形式主义 | 字段多、模板重，作者开始复制空壳 | 7 个字段；索引页豁免；只对新建/改动文档强制 |
-| 误报导致检查被关 | 一次上满规则、大量历史文档不合规 | 阶段 1 只阻断 4 条；其余只报告；白名单显式可见 |
+| 误报导致检查被关 | 一次上满规则、大量历史文档不合规 | 阶段 1 只阻断 D04/D05 两条；其余只报告；白名单显式可见 |
 | Agent 绕过 | 直接改 `docs/` 或 `--no-verify` | 分支保护 + CI + 不给写凭证；不依赖本地 hook |
-| 迁移半途而废 | 24 篇存量长期挂白名单 | touch-to-migrate；白名单只减不增；健康看板公示 |
+| 迁移半途而废 | 存量长期挂白名单 | touch-to-migrate；白名单只减不增；健康看板公示 |
 | 双事实源 | 引入 Wiki / RAG 后双向覆盖 | 只做索引同步；RAG 只读；发现循环同步立即暂停 |
 | 工具蔓延 | 每个问题引入一个平台 | §8 四条门槛 + 触发条件；能脚本解决的不上服务 |
 
@@ -387,7 +393,7 @@ node scripts/docs/check-drift.mjs
 
 1. 不部署 OttoDoc / Wiki-Forge / slashdocs / tunc-mcp 等独立服务；
 2. 不让 Agent 自动改写、自动删除、自动更新 `lastVerified`；
-3. 不强制一次性迁移 24 篇存量文档；
+3. 不强制一次性迁移 43 篇存量文档；
 4. 不做 `docs/` 与外部 Wiki 的双向同步；
 5. 不把 RAG 索引当作事实源，事实源永远是仓库 Markdown；
 6. 不在阶段 1 引入逐句评论、协同编辑、制品存储等重能力。
