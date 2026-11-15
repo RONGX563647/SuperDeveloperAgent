@@ -1,7 +1,7 @@
 # docs/ 文档总览（Wikidoc）
 
 > 定位：**文档即代码**。代码仓库是唯一可信源，任何外部 Wiki / 知识库只是检索与协作视图。
-> 维护方式：本文档是唯一索引（single source of index），新增/删除文档必须同步这里；`docs/` 下的相对链接必须可通过 `node scripts/docs/check-links.mjs`。
+> 维护方式：本文档是唯一索引（single source of index），新增/删除文档必须同步这里；`docs/` 下的相对链接必须通过 `check-links`，每篇文档必须被任一 `README.md` 链接（`check-docs`）。
 > 最后巡检：2026-11-15 ｜ 结论：**内部断链 0 条，过期 0 篇，缺失 0 篇**（详见「健康看板」）。
 
 ## 1. 怎么找文档
@@ -15,7 +15,10 @@
 | 部署/运维这个平台本身 | [运维手册](operation/README.md) |
 | 本地开发与调试 | [开发指南](dev/README.md) |
 | 查某个决策为什么这么定 | [ADR 索引](adr/README.md) |
+| 查架构、数据流与模块边界 | [架构索引](architecture/README.md) |
 | 查接口 | [API 说明](api/README.md) |
+| 查功能规格与任务清单 | [规格索引](specs/README.md) |
+| 查调研证据（只读，不作结论） | [调研索引](_research/README.md) |
 | 想知道文档怎么写、怎么治理 | [Agent 文档治理方案 v1](governance/Agent文档治理方案-v1.md) |
 | 查某一版改了什么 | [变更记录](changelog/2026-11.md) |
 | 找已废弃/删除的文档 | [废弃登记](deprecated/README.md) |
@@ -33,6 +36,8 @@ docs/
 ├── api/                 接口索引（以控制器为准，不引 springdoc）
 ├── operation/           部署、排障、备份、回滚
 ├── dev/                 本地启动、调试、质量门禁
+├── specs/               功能规格与任务清单（spec.md + tasks.md）
+├── _research/           调研证据（只读，不作当前结论）
 ├── changelog/           按月的变更记录
 ├── deprecated/          废弃登记（含删除原因与替代物）
 └── *.md                 现行设计/规约/决策文档（待按类型迁移）
@@ -83,8 +88,9 @@ docs/
 ## 5. 巡检与校验
 
 ```bash
-# 1) 文档链接（本仓脚本，退出码非 0 即有断链）
-node scripts/docs/check-links.mjs
+# 1) 文档检查（任一退出码非 0 即失败）
+node scripts/docs/check-links.mjs   # 断链
+node scripts/docs/check-docs.mjs    # 未登记/孤立文档
 
 # 2) 代码侧约束与单测（同时校验文档引用的模块/路由是否还存在）
 mvn -q -f platform/pom.xml verify
@@ -93,7 +99,7 @@ mvn -q -f platform/pom.xml verify
 cd platform/web && npm run typecheck && npm run build
 ```
 
-巡检项：断链、过期复审日、代码-文档一致性（本轮人工比对：路由 / 工具数 / 配置键 / 模块数）、ADI 缺失（架构变更是否补 ADR）、重复段落、孤立文档（未被本索引引用）。
+巡检项：断链与未登记文档由 CI 强制；过期复审日、代码-文档一致性（路由 / 工具数 / 配置键 / 模块数）、ADI 缺失（架构变更是否补 ADR）、重复段落仍靠人工巡检。
 
 ## 6. 限制开关（当前配置）
 
@@ -113,6 +119,7 @@ cd platform/web && npm run typecheck && npm run build
 | 外部参考链接 | 仅 `../RuoYi*`、`../agentscope-java`，已在对应文档标注「本地检出才可用」 |
 | 过期文档 | 0 |
 | 已删除历史文档 | 9 篇（2026-11-15，逐条登记在 [废弃登记](deprecated/README.md)） |
-| 未登记文档 | 0（现行根目录 + 分类子目录全部可达） |
+| 未登记文档 | 0（`check-docs.mjs` 扫描 `docs/**/*.md`，未被任一 README 链接即失败） |
+| 自动门禁 | `check-links` + `check-docs`（CI 在 `mvn verify` 前执行） |
 | 代码-文档漂移 | 已修：工具数 33→61/12→18（本轮 61→62，新增 `workspace_dispatch`）、`confirm` 工具语义、`/projects/:id` 已重定向、配置键补 `agent.tools.cache.*` / `agent.context.*` / `agent.workspace.dispatch.*` / `agent.chat.*timeout*`；模块类数按实际核对（tools 24 / runtime 13 / gateway 96） |
 | 建议下一步 | ① 迁移剩余现行存量文档进子目录；② 接入 Gitee MCP 后开启自动建单；③ 引入 MkDocs 构建校验 |

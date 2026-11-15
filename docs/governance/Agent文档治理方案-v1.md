@@ -8,9 +8,9 @@ related: [../README.md, ../项目规约-v1.0.md, ../规约自动化检查-v1.0.m
 
 # Agent 文档治理方案 v1
 
-> 日期：2026-11-15 ｜ 状态：提议（阶段 1 未实施）
+> 日期：2026-11-15 ｜ 状态：部分实施（断链 + 未登记已进 CI；front-matter / drift / `_inbox` 暂缓）
 > 上游：[docs 总览](../README.md)（Wikidoc v0）、[项目规约 v1.0](../项目规约-v1.0.md)、[规约自动化检查 v1.0](../规约自动化检查-v1.0.md)
-> 结论：**不引入外部文档平台**。把 OttoDoc / Ohara / Dox / Wiki-Forge / slashdocs 中已被验证的四个机制，落成 2 个 Node 脚本 + 1 条 CI + 1 套 front-matter + 1 个 `_inbox` 闸门；阶段 1 只上 4 条硬规则。
+> 结论：**不引入外部文档平台**。本轮只落地「断链 + 未登记」两项机械检查；front-matter、`covers/lastVerified` 漂移、`_inbox` 闸门在触发条件出现前不实施。
 
 ---
 
@@ -29,17 +29,17 @@ Agent 文档之乱，根源不是"生成得太多"，而是三处缺失：**写�
 | 唯一索引 | `docs/README.md` 是 single source of index，含登记表、状态、归属、复审日 | [docs/README.md](../README.md) | **保留**，作为登记与可达性的唯一判据 |
 | 状态与复审 | 稳定 / 现行 / 历史 / 规划，90 天复审 | [docs/README.md §3](../README.md) | **保留**，升级为可机械读取 |
 | 问题分级 | P0 / P1 / P2 + 禁止无验证删除 | [docs/README.md §4](../README.md) | **保留**，作为检查结果的处置语义 |
-| 废弃留痕 | 删除前登记原因与替代物，表永久保留 | [deprecated/README.md](../deprecated/README.md) | **保留**，由 CI 校验 |
-| 断链巡检 | 扫描全仓 Markdown 相对链接，非 0 退出 | [check-links.mjs](../../scripts/docs/check-links.mjs) | **保留**，被新检查器复用 |
-| 检索入口 | `llms.txt` 给 LLM / RAG 的阅读顺序 | [llms.txt](../../llms.txt) | **保留**，与索引做一致性校验 |
+| 废弃留痕 | 删除前登记原因与替代物，表永久保留 | [deprecated/README.md](../deprecated/README.md) | **保留**，暂由人工评审 |
+| 断链巡检 | 扫描全仓 Markdown 相对链接，非 0 退出 | [check-links.mjs](../../scripts/docs/check-links.mjs) | **保留**，CI 独立执行 |
+| 检索入口 | `llms.txt` 给 LLM / RAG 的阅读顺序 | [llms.txt](../../llms.txt) | **保留**；一致性校验暂缓 |
 | 规约机械检查 | JUnit + ArchUnit 随 `mvn verify` 跑，违规即红 | [规约自动化检查](../规约自动化检查-v1.0.md)、`platform/spec-checks` | **借鉴其三条原则**：不引入新服务、能自动的自动、可豁免不可静默 |
 
 **真正缺的是四件事：**
 
 1. **契约没有落到单篇文档**：登记表只管元信息，正文结构仍然任意；Agent 可以继续产出"看似合理"的散文。
 2. **复审靠日历**：没有 `lastVerified` 与"本文覆盖哪些代码路径"，无法自动发现"代码已改、文档没改"。
-3. **检查没进 CI**：[build.yml](../../.workflow/build.yml) 只有 `mvn verify`；断链脚本只在人记得跑时执行。
-4. **写入没有闸门**："人类审批"只是原则，Agent 仍可直接在 `docs/` 新增或覆盖文件，没有机械约束。
+3. **契约与漂移检查没进 CI**：断链与未登记已接入；front-matter、`covers/lastVerified` 仍未落地。
+4. **写入没有闸门**："人类审批"只是原则，Agent 仍可直接在 `docs/` 新增或覆盖文件，没有机械约束（本轮暂缓）。
 
 ---
 
@@ -306,20 +306,25 @@ docs/reports/YYYY-MM/<slug>/
 
 ## 9. 落地路径
 
-### 阶段 1：止损（本轮可做）
+### 阶段 1：止损（已落地 2026-11-15）
 
 | 交付物 | 内容 |
 |---|---|
-| `scripts/docs/check-docs.mjs` | D01 / D02 / D04 / D05；复用 `check-links` |
-| `docs/.docgov-legacy` | 存量 15 篇路径白名单；修改时删一行 |
-| `docs/_inbox/README.md` | Agent 投递规则、提升流程 |
-| PR 模板 | §5.3 三问 + 文档检查勾选 |
-| CI | 在 `verify` 阶段增加一条 Node step：`node scripts/docs/check-docs.mjs` |
-| `docs/README.md` | 增加「文档契约」入口，链接本文 |
+| `scripts/docs/check-docs.mjs` | 仅 D04：`docs/**/*.md` 未被任一 README 链接即失败 |
+| `scripts/docs/check-links.mjs` | 复用现有断链检查 |
+| `docs/specs/README.md`、`docs/_research/README.md` | 子索引，消除规格/调研的未登记项 |
+| CI | `verify` 前执行两条 Node 命令，任一失败即中断 |
+| `docs/README.md` | 命令、巡检项、健康看板同步 |
 
-**验收**：新增文档缺 front-matter、未登记、断链时 CI 必红；`_inbox` 直接合入 `main` 必红；存量 15 篇通过白名单保持绿色。
+**验收**：未登记文档或断链时 CI 必红；当前 43 篇文档 0 未登记。
 
-### 阶段 2：同步
+**暂缓（触发条件出现前不做）**：
+
+- **front-matter / 6 类契约 / D01–D03**：正式文档（不含 `specs`、`_research`）超过 40 篇，或正文结构开始失控；
+- **`covers` + `lastVerified` 漂移**：代码高频变更，且出现"文档不可信"的实际投诉；
+- **`docs/_inbox` 闸门 / PR 模板**：多个 Agent 并发写 `docs/`，冲突或覆盖真实发生。
+
+### 阶段 2：同步（暂缓）
 
 | 交付物 | 内容 |
 |---|---|
@@ -330,7 +335,7 @@ docs/reports/YYYY-MM/<slug>/
 
 **验收**：能列出所有"覆盖代码已变、文档未复审"的页面；owner 能在报告里直接定位提交；无自动提交。
 
-### 阶段 3：收敛与审批
+### 阶段 3：收敛与审批（暂缓）
 
 | 交付物 | 内容 |
 |---|---|
@@ -348,13 +353,13 @@ docs/reports/YYYY-MM/<slug>/
 
 | 指标 | 目标 | 采集方式 |
 |---|---|---|
-| 新增文档契约合规率 | 100% | `check-docs` D01–D02 |
-| 未登记 / 孤立文档 | 0 | D04 |
-| 内部断链 | 0 | D05 / `check-links` |
-| `stable` / `current` 的 STALE 页面 | 每轮巡检清零 | D07 / `check-drift` |
+| 新增文档契约合规率 | 暂缓（未上 front-matter） | — |
+| 未登记 / 孤立文档 | 0 | D04 / `check-docs` |
+| 内部断链 | 0 | `check-links` |
+| `stable` / `current` 的 STALE 页面 | 暂缓（未上 drift） | — |
 | 删除未登记 | 0 | PR diff + [废弃登记](../deprecated/README.md) |
 | Agent 直写 `main` | 0 | 分支保护 + 审计 |
-| 重复段落 | 完成基线后不新增 | D08 报告 |
+| 重复段落 | 暂缓（未上 D08） | — |
 
 巡检命令（与[docs/README §5](../README.md)合并执行）：
 

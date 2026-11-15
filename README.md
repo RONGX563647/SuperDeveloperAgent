@@ -11,18 +11,18 @@
 
 ```
 docs/          文档（唯一索引 docs/README.md；子目录 adr/architecture/api/operation/dev/changelog/deprecated/governance + 15 篇主目录文档）
-specs/         功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
+docs/specs/    功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 platform/      后端 8 个 Maven 模块 + Vue3 前端
-_research/     市场调研与源码能力盘点（含采集脚本）
-scripts/       仓库级脚本（docs/check-links.mjs 文档断链巡检）
+docs/_research/ 市场调研与源码能力盘点（只读证据，含采集脚本）
+scripts/       仓库级脚本（docs 断链与未登记文档检查）
 llms.txt       给 LLM / RAG 的文档入口
-.workflow/     Gitee Go CI（本质：cd platform && mvn -B verify）
+.workflow/     Gitee Go CI（文档检查 + cd platform && mvn -B verify）
 ```
 
 ## 文档阅读顺序
 
 > 完整索引、文档状态（稳定/现行/历史/规划）、复审日期与 P0/P1/P2 处置规则：**[docs/README.md](docs/README.md)**。
-> 机器可读入口：**[llms.txt](llms.txt)**；断链巡检：`node scripts/docs/check-links.mjs`。
+> 机器可读入口：**[llms.txt](llms.txt)**；文档门禁：`check-links`（断链）+ `check-docs`（未登记）。
 
 ### 核心必读（先看这四篇）
 
@@ -90,8 +90,8 @@ cd web && npm install && npm run dev    # http://localhost:5173
 | 项 | 说明 |
 |---|---|
 | 代码托管 | **Gitee**（Maven groupId `top.rongx`，Java 根包 `top.rongx.agent`） |
-| 流水线 | [`.workflow/build.yml`](.workflow/build.yml)（Gitee Go）。本质只有一条：`cd platform && mvn -B verify` |
-| 门禁 | 分支保护 + `mvn verify` 必须绿（规约检查已并入构建） |
+| 流水线 | [`.workflow/build.yml`](.workflow/build.yml)（Gitee Go）：文档检查 + `cd platform && mvn -B verify` |
+| 门禁 | 分支保护 + 文档检查（断链/未登记）+ `mvn verify` 必须绿 |
 
 ```bash
 git remote add origin https://gitee.com/<你的账号>/agentscope-ruoyi.git
@@ -99,7 +99,7 @@ git push -u origin main --tags
 ```
 
 > Gitee Go 的字段名以平台文档为准（首次接入核对 `triggers` / `step` / `artifacts`）。
-> 若该套餐不含 Gitee Go，把上面那条命令接到任意 runner（自建 / 云效 / Jenkins）即可，效果一致。
+> 若该套餐不含 Gitee Go，把两条文档检查 + `mvn verify` 接到任意 runner（自建 / 云效 / Jenkins）即可，效果一致。
 
 ## 提交规范
 
@@ -130,7 +130,7 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | ✅ `docs/` 根目录 15 份（现行/规划）+ 1 份汇报稿；`docs/specs` 3 份规格与任务清单 |
+| 设计文档 | ✅ `docs/` 根目录 15 份（现行/规划）+ 1 份汇报稿；`docs/specs` 3 组规格与任务清单 |
 | 后端 | ✅ 8 个 Maven 模块（7 个运行时模块 + `spec-checks`），`mvn -B verify` 全绿 |
 | 前端 | ✅ Vue3 + Vite + Element Plus；7 个页面；`npm run build`（vue-tsc strict）通过 |
 | 认证与授权 | ✅ Sa-Token 会话、3 个种子账号、角色权限码；高危操作需二级密码 |
