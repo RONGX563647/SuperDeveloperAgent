@@ -8,7 +8,7 @@
 flowchart LR
   U[浏览器<br/>Vue3 工作台] -->|HTTP / SSE| GW[agent-gateway<br/>Sa-Token / 控制器]
   GW --> RT[agent-runtime<br/>Agent 装配 / 会话]
-  RT --> TL[agent-tools<br/>61 个 @Tool]
+  RT --> TL[agent-tools<br/>62 个 @Tool]
   TL --> EX[agent-executor<br/>流水线 / 阶段]
   EX --> DOCKER[(Docker / 宿主进程)]
   GW --> DOM[agent-domain<br/>模型与端口]
@@ -22,8 +22,8 @@ flowchart LR
 
 ## 2. 信任边界（最重要的四道线）
 
-1. **模型只读默认**：生产会话注入 `readOnlyToolkit`，无任何写工具；
-2. **写必经确认**：L2/L3 动作由平台层签发一次性令牌（见 [ADR-0005](../adr/0005-安全边界放在平台层.md)）；
+1. **生产会话只读**：prod 注入 `readOnlyToolkit`，无任何写工具；dev/test 才注入 `agentToolkit`；
+2. **生产写与 L3 必经确认**：非生产 L2 由沙箱/宿主直接执行；生产写与 L3 由平台层签发一次性令牌（见 [ADR-0005](../adr/0005-安全边界放在平台层.md)）；
 3. **密钥只以引用形式流动**：`secret://` 解密仅发生在注入时刻，接口与工具只返回 `****`（见 [ADR-0003](../adr/0003-环境配置三层与环境模板.md)）；
 4. **环境门控**：prod 的部署/配置变更需要更高确认等级，dev/test 的便利不延伸到生产。
 

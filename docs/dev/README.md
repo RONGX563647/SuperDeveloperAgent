@@ -25,8 +25,9 @@ cd platform/web && npm install && npm run dev
 |---|---|
 | 对话/工作区接口 | `agent-gateway/.../web/*Controller.java` |
 | 模型可调用的工具 | `agent-tools/.../tools/*Tools.java`（记得在 `ToolCatalog` 分组注册） |
-| 流水线阶段 | `agent-executor/.../stage/*` |
-| 部署语义 | `agent-executor/.../deploy/*` |
+| 流水线阶段 | `agent-executor/.../PipelineDefinition.java`、`BuiltInPipelineEngine.java`、`PipelineDefinitionResolver.java` |
+| 部署语义 | `agent-executor/.../Deployers.java`、`DockerDeployer.java`、`HostDeployer.java`、`ServerDeployer.java` |
+| 沙箱与执行 | `agent-executor/.../DockerSandbox.java`、`DockerActionRunner.java`、`ProcessActionRunner.java` |
 | 领域模型/端口 | `agent-domain/.../domain/**`（**禁止**引入 Spring） |
 | SQLite 实现 | `agent-infra/.../infra/**` |
 | 变更/令牌/补丁 | `agent-governance/**` |
@@ -40,7 +41,7 @@ cd platform/web && npm install && npm run dev
 | 单测 | 同上 | 失败即阻断；新增写工具需补门禁测试 |
 | 前端类型 | `npm run typecheck` | |
 | 前端构建 | `npm run build` | |
-| 文档链接 | `node scripts/docs/check-links.mjs` | 断链非 0 退出 |
+| 文档链接与锚点 | `node scripts/docs/check-links.mjs && node scripts/docs/check-docs.mjs` | 断链、未登记、CODE-MAP 锚点缺失均非 0 退出 |
 
 误报处理：行尾加 `// spec-ignore: R06 <原因>`，并在[项目规约 §13](../项目规约-v1.0.md)登记；**不允许**为了过检查改规则。
 

@@ -2,6 +2,7 @@
 
 - **状态**：通过
 - **日期**：2026-11-06
+- **后续修订（2026-11-15）**：动作已从 5 个扩为 7 个（`backend_build`/`backend_test`/`frontend_build`/`frontend_test`/`image_package`/`stack_deploy`/`stack_rollback`），配方来源为 `ci/actions.yml` → `Taskfile.yml` → `Makefile` → 内置默认。本文的决策（不造 DSL、动作 + 仓库配方）仍有效，原文保留以记录决策时点。
 - **关联**：[CICD 决策](../CICD方案替代与自创-决策-v1.md)（调研与验收原文已删除，Git 历史可追溯）
 
 ## 背景与痛点

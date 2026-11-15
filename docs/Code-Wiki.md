@@ -33,10 +33,17 @@
 
 **定位**：内网部署的独立 Agent 平台，面向开发者与运维，提供「读 Issue 改 Bug」「AI 自动化运维」「自动化部署」三类能力。
 
-**设计哲学（方案 D）**：**AI 只做决策与建议，不持有任何写凭证**。
-- 模型只能从固定词汇表（`ActionId`）中选择动作，**绝不拼接 shell 命令**；
-- 命令由人写在项目仓库的配方文件（`ci/actions.yml` 等）里，平台负责解析、审计、隔离、编排、门禁；
-- 所有改变环境的行为必须过：人工确认（门禁）→ 来源@commit（审计）→ Docker 沙箱（隔离）。
+**设计哲学（方案 D 的现行实现）**：**AI 负责决策，也负责在受控边界内执行**；边界不是“不写”，而是“不能越权写”。
+
+- **动作受限，不是自由命令**：动作层仍是 7 个固定 `ActionId`；命令 argv 来自仓库配方（`ci/actions.yml` → `Taskfile.yml` → `Makefile` → 内置默认），模型不拼接 shell。
+- **不是“单选一个动作”**：模型可以按目标编排多 stage 流水线、选择 runner / 部署目标 / 参数，并生成或修改 `ci/pipeline.yml`；受限的是 stage 只能引用白名单动作，不是只能选一个动作。
+- **编排可生成，但不能越出白名单**：`ci/pipeline.yml` 的 stage 类型为 `action` / `deploy` / `health` / `rollback`；校验失败回退规则骨架（`PipelineDefinitionResolver`）。
+- **执行面按环境装配**：dev/test 会话使用 `fullToolkit`，L2 动作可直接执行；prod 会话使用 `readOnlyToolkit`，写工具根本不在 schema 里（`ToolCatalog`）。
+- **L3 与破坏性 L2 必须人工确认**：`stack_deploy` / `stack_rollback` 走 `request → 用户 confirm(token) → apply`；agent 的 `confirm` 工具只推确认卡片，不签发令牌；令牌 5 分钟且绑定 `planHash`，配方改动会导致令牌失效（`ActionService` / `ChangeController`）。
+- **凭证不进入模型上下文**：生产写凭证只在执行面解析，模型只看到 `secret://` 引用。
+- **隔离不是“全 Docker”**：有 Docker 用 Docker；无 Docker 时 fail-closed，拒绝不可审计的 make/task 与 L3。部署目标为 Docker/HOST/SERVER，dev 本机另走 `LocalDevHostDeployer`。
+
+> 代码锚点：[ActionId.java](../platform/agent-domain/src/main/java/top/rongx/agent/domain/action/ActionId.java)、[ToolCatalog.java](../platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalog.java)、[ActionService.java](../platform/agent-tools/src/main/java/top/rongx/agent/tools/ActionService.java)、[PipelineDefinitionResolver.java](../platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineDefinitionResolver.java)、[ChangeController.java](../platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChangeController.java)、[Deployers.java](../platform/agent-executor/src/main/java/top/rongx/agent/executor/Deployers.java)。
 
 **技术栈**：
 
