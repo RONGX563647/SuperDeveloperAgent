@@ -1,0 +1,509 @@
+---
+type: reference
+summary: "项目接入流程与目录约定"
+code_refs:
+  - platform/agent-gateway/src/main/java/top/rongx/agent/gateway
+---
+# 项目接入设计：引入项目到平台（v2 · 直接引用本地目录 + git 工作树 · 含前端设计）
+
+> 日期：2026-11-08 ｜ 现行方案（v1 已过时删除） ｜ 前置：[多项目托管设计 v4](multi-project-hosting-v4.md)
+> 需求变更（用户决策）：
+> 1. **本地项目不再复制**——直接填写本地目录、平台原地读取；
+> 2. **git clone 也落到指定目录**（clone 与本地目录是同一套"仓库存储"概念）；
+> 3. **本地与远程要能对比**（本地改动 vs 远端新增）；
+> 4. **读取不同的工作树**（一次检出，多份并行工作副本，互不覆盖）。
+>
+> **实施现状（2026-11-15 复核）**：当前实现默认是 **DIRECT**（`storageMode` 缺省），MANAGED 才走 bare 收编。DIRECT 下：仓库留在用户目录、不建 bare、不收编；平台会在用户目录下写 `<local>/.agent/worktrees/wt-verify`（`ProjectIntakeService.java:208-221`），因此"平台永远不改用户目录"不成立（至少会创建 `.agent/`）。MANAGED 下：bare 在 `<工作区>/<id>/git`，用户目录仍保持独立仓库，**不会**被登记成 bare 的 worktree（`GitWorktreeManager.java:166-170`）。构建历史统一在 `<工作区>/_history`，不是每项目 `_history`。下文把"收编/用户目录作为第一个 worktree"视为 MANAGED 早期设计；实际字段/路由以本注和 §3.2/§4.2/§5 为准。
+
+---
+
+## 0. 一句话结论
+
+**项目 = 一个 git 仓库 + N 个 git worktree + 平台管理的工作树（构建/发布用）。现行默认 DIRECT：本地目录就地读取，不建 bare、不收编；MANAGED 可选：把用户目录 push 进平台 bare，但用户目录仍保持独立仓库。
+本地导入 = 登记用户目录（DIRECT）或 push 到 bare（MANAGED）；远程 clone = clone 到指定目录（DIRECT）或 clone --bare 到工作区（MANAGED）；
+对比 = 任意两个 ref 的提交区间（`from..to`）；
+多检出 = `git worktree add`，每次构建用独立 worktree，不污染任何人的工作副本。**
+
+---
+
+## 1. 为什么从"复制"改为"就地引用 + worktree"（v1→v2 变更理由）
+
+| v1 方案（复制到工作区） | 问题 | v2 方案（就地引用 + worktree） |
+|---|---|---|
+| 把用户目录复制到 `workspaces/<id>/repo` | 双份磁盘；用户在原目录的改动**不同步**，构建永远用旧代码 | DIRECT：直接读用户目录并在其 `.agent/worktrees` 建平台工作树；MANAGED：用户目录 push 到 bare 后由平台 fetch |
+| 复制时丢 git 历史风险 / 权限混乱 | 复制 `.git` 慢且易错 | DIRECT 完全不复制；MANAGED 不复制 `.git`，用 bare 做对象库 |
+| 无本地/远程对比能力 | 用户改了什么、远端有什么新提交，平台说不上来 | 一等公民功能：**提交区间 diff**（§4） |
+| 每次构建 clone 到 runs/ | 重复 clone，慢 | **worktree add（毫秒级）**，同一对象库零重复存储 |
+
+> 下表/命令块描述 MANAGED 的 bare 布局；DIRECT 没有 bare（`GitWorktreeManager.bareDir` 不参与），worktree 建在用户目录下。
+
+核心 git 机制（都是本地操作，无网络）：
+
+```
+bare 仓库（对象库，只有一个）:  workspaces/<id>/git          ← 所有提交对象都在这
+worktree（工作副本，可以有 N 个）:
+  ├── 用户本地原目录        （importLocal 时接入，用户继续在里面开发）
+  ├── workspaces/<id>/wt-build/<runId>   ← 每次流水线构建一个，用完可删
+  └── workspaces/<id>/wt-verify/         ← 配方自检/agent 代码检索用（常驻）
+```
+
+`git worktree add <path> <commit>` 只创建指向 bare 仓库的轻量工作副本（几十 ms、几乎零额外磁盘），
+删除 `git worktree remove` 同样干净——这是"读取不同的工作树"的底层支撑。
+
+---
+
+## 2. 两种来源，一个存储模型
+
+### 2.1 来源 A：本地目录导入（主路径，用户决策）
+
+**现行实现分两种 `storageMode`**：
+
+- **DIRECT（默认）**：校验目录存在、含 `.git`（或按勾选 `git init`），平台直接使用该目录；不建 bare、不 push、不登记 worktree；仅创建 `<local>/.agent/worktrees/wt-verify` 作为自检/构建工作树（`ProjectIntakeService.java:208-221`）。
+- **MANAGED**：在 `<工作区>/<id>/git` 建 bare，用户目录 `remote add agent` + `push agent HEAD`，随后在 `<工作区>/<id>/worktrees` 建 `wt-verify`。**不会**执行 `worktree add <用户目录>`——用户目录始终是独立仓库（`GitWorktreeManager.java:152-170`）。
+
+```bash
+# MANAGED 实际执行的命令（DIRECT 不执行）
+git init --bare <workspace>/AGT/git
+git -C <用户目录> remote add agent <workspace>/AGT/git   # 已有 agent 则跳过
+git -C <用户目录> push agent HEAD
+# 之后平台从用户目录 fetch 对象，构建在平台自己的 worktree 里
+```
+
+**语义（重要）**：
+- 用户目录的 `.git` 仍指向它原来的 remote（gitee 等）——用户继续正常 pull/push 自己的项目
+- MANAGED 平台通过 bare 仓库 + `fetch from 用户目录` 读到本地最新提交；DIRECT 直接读用户目录
+- 用户在原目录正常开发，平台每次构建前 `fetch` 一次用户目录（本地操作，快）即可拿到最新
+- **DIRECT 会写用户目录的 `.agent/`**（worktree）；除该目录外不改用户文件。MANAGED 的构建/写操作走平台 `worktrees/`。
+
+**无 `.git` 的纯目录**：勾选 `gitInitIfMissing=true` 后，DIRECT 在用户目录 `git init` + `git add -A` + 首次提交（只加 `.git`，会暂存现有文件）；MANAGED 之后按上面的收编命令 push 到 bare。向导里明确告知让用户确认。
+
+### 2.2 来源 B：远程 clone（Gitee/GitLab）
+
+- **DIRECT**：`git clone <url> <cloneTargetDir>`（落到用户指定目录，随后在目标目录 `.agent/worktrees` 建 `wt-verify`）。
+- **MANAGED**：
+
+```bash
+git clone --bare <url> <workspace>/<id>/git      # bare，省磁盘（不检出工作文件）
+git -C <workspace>/<id>/git worktree add worktrees/wt-verify HEAD --detach
+```
+
+- `--bare`：对象库不占双份磁盘
+- token 只用于 clone/fetch，经 askpass 环境变量注入，不落盘、不进 argv（`GitWorktreeManager.java:43-49`）
+- 用户后续如果也想在本地开发该项目：自行 `git clone <url> <本地路径>`；或接入同一目录（受"一个目录只能属于一个仓库"限制）
+
+### 2.3 统一存储模型
+
+```
+${AGENT_WORKSPACE_ROOT}/
+├── _history/                     # 构建历史 YAML（RunHistoryStore，全局一份）
+├── _platform/deploy/             # HOST 部署状态（<project>-<env>）
+├── AGT/                          # MANAGED 才有 <id> 目录
+│   ├── git/                      # bare 仓库（对象库，唯一）
+│   └── worktrees/                # 平台管理的 worktree
+│       ├── wt-verify/            # 常驻：配方自检、agent 代码检索
+│       └── wt-build-<runId>/     # 构建：流水线每次运行一个，终态后清理
+└── SHOP/
+```
+
+DIRECT 的仓库与 worktree 都在用户目录：`<local>/.agent/worktrees/{wt-verify,wt-build-<runId>}`，工作区下只有 `_history` / `_platform`。
+
+**与现有代码的兼容**：
+- `BuiltInPipelineEngine` 已按存储模式选择 DIRECT 用户目录或 MANAGED bare/worktree；构建目录名 `wt-build-<runId>`（`GitWorktreeManager.addWorktree`）。
+- `RecipeActionResolver.resolveCommit()` 已改为 `git rev-parse HEAD` 优先，手读 `.git/HEAD` 仅作回退。
+- 接入项落 SQLite（`IntakeProjectStore`），含 `source`（LOCAL/REMOTE）与 `storageMode`（DIRECT/MANAGED）。
+
+---
+
+## 3. 本地 vs 远程对比（新增能力）
+
+### 3.1 对比什么
+
+| 对比维度 | 命令 | 输出 |
+|---|---|---|
+| **本地领先远端**（待推送提交） | `git log --oneline <remoteBranch>..<localBranch>` | 提交列表 |
+| **远端领先本地**（待拉取提交） | `git log --oneline <localBranch>..<remoteBranch>` | 提交列表 |
+| **分叉**（两边都有新提交） | `git log --left-right --oneline <local>...<remote>` | 双侧提交 |
+| **本地未提交改动** | `git -C <用户目录> status --porcelain` | 修改/新增/删除文件列表 |
+| **文件级 diff 摘要** | `git diff --stat <local>..<remote>` | ±行数统计 |
+
+### 3.2 API 设计
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/projects/{id}/git/status` | 当前工作树状态：`initialized/storageMode/head/branch/branches/remotes/upstream/ahead/behind/uncommitted/worktrees/recentCommits` |
+| `GET /api/v1/projects/{id}/git/diff?from=<ref>&to=<ref>` | **提交区间**对比：`{commits,stat}`；两个参数均必填，缺参返回 400 |
+| `POST /api/v1/projects/{id}/git/sync` | DIRECT：在用户目录 fetch 已配置远端；MANAGED：在 bare 内 fetch origin |
+| `POST /api/v1/projects/{id}/git/checkout` | body `{branch, worktree?}`；DIRECT 直接在用户目录切分支，MANAGED 在平台 worktree 切分支 |
+| `GET /api/v1/projects/{id}/git/remotes` / `commits` | 远端列表 / 最近提交 |
+
+**agent 工具（供 LLM 调用，只读）**：
+- `git_project_status`：当前项目本地/远端差异摘要（"我的项目有没有没推送的提交？"）
+- `git_project_diff`：本地 vs 远端的文件级差异（±N 行、涉及文件列表）
+
+> 这两个 agent 工具在当前代码中未注册（只读 Toolkit 未包含），属规划。
+
+**安全边界**：对比全部只读；`sync` 只做 fetch（DIRECT 从用户目录的 origin、MANAGED 从 bare 的 origin），**平台绝不 push 到用户目录或远端**——推送永远是用户自己的动作。
+
+### 3.3 LOCAL 来源的对比语义
+
+LOCAL 项目的"远端"有两个：
+1. **用户目录自己的 origin**（如 gitee）——平台不碰，但可以在 status 里**只读展示** upstream 的 ahead/behind
+2. **平台 bare 仓库**（仅 MANAGED）——平台构建用的就是它
+
+实际 status 返回的是当前工作树的一个 upstream 视角（`upstream` + `ahead`/`behind`），不构造双远端对象；DIRECT 下就是用户目录的 origin。设计稿里的双远端结构未实现：
+```json
+// 设计态（未实现）
+{"localHead": "abc1234", "branch": "main",
+ "agentRemote": {"ahead": 0, "behind": 0},
+ "userOrigin": {"ahead": 2, "behind": 0, "note": "仅展示，平台不推送"}}
+```
+
+---
+
+## 4. 多工作树（worktree）管理
+
+### 4.1 用途与生命周期
+
+| worktree | 生命周期 | 用途 |
+|---|---|---|
+| `wt-verify` | 常驻 | 配方自检/agent 只读检索；DIRECT 建在用户目录 `.agent/worktrees/`，MANAGED 建在平台 `worktrees/` |
+| `wt-build-<runId>` | 构建开始 → 终态后清理 | 流水线检出（替代旧 runs/<runId> 的 clone） |
+| `<用户本地目录>`（仅 DIRECT/MANAGED 的 LOCAL） | 用户自主，永不删除 | 用户开发；MANAGED 下不是平台 worktree |
+
+### 4.2 API
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/projects/{id}/worktrees` | 列出平台管理的 worktree（名称、HEAD、创建时间）；DIRECT 列用户目录 `.agent/worktrees` |
+| `DELETE /api/v1/projects/{id}/worktrees/{name}` | 删除（仅允许 `wt-build-*`，常驻 `wt-verify` 不可删） |
+| `POST /api/v1/projects/{id}/worktrees` | **未实现**（设计预留：手动建隔离副本） |
+
+### 4.3 并发与一致性
+
+- 同一项目同时只允许一个活跃构建（TriggerScheduler 已保证项目级串行）→ worktree 不会互相踩
+- worktree 名带 runId，天然唯一
+- `git worktree prune` 定期清理失效登记（进程被杀留下的孤儿）
+
+---
+
+## 5. 接入流程（状态机，v2 修订）
+
+```
+INTAKE_FORM ─→ VALIDATING ─→ LINKING（收编/clone）─→ RECIPE_CHECK ─→ REGISTERED
+     │             │                │                    │
+     │             └→ 表单报错        └→ INTAKE_FAILED ──┘（重试 → LINKING）
+                                              │
+                              LOCAL: 校验用户目录 + git 收编（不动文件）
+                              REMOTE: git clone --bare
+```
+
+**API（v2 修订）**：
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/v1/projects/intake/validate` | POST | 表单轻校验；返回 `{ok:true}` 或 `{ok:false,error}` |
+| `/api/v1/projects/intake/local` | POST | `{projectId, localPath, type, gitInitIfMissing?, storageMode?}` |
+| `/api/v1/projects/intake/remote` | POST | `{projectId, repoUrl, type, storageMode?, cloneTargetDir?}`；凭据不从前端传，按 URL host 匹配设置页账号 |
+| `/api/v1/projects/intake/{projectId}/status` | GET | 接入进度 |
+| `/api/v1/projects/{id}/envs` | GET | 项目环境列表 |
+| `/api/v1/projects` | GET / DELETE | 列表 / 下线（仅删接入登记；bare、本地目录与平台侧 `ci/` 定义都保留；预置项目不可下线） |
+| `/api/v1/projects/{id}/git/status` | GET | §3.2 状态 |
+| `/api/v1/projects/{id}/git/diff` | GET | §3.2 提交区间（`from`/`to`） |
+| `/api/v1/projects/{id}/git/sync` | POST | fetch |
+| `/api/v1/projects/{id}/git/checkout` | POST | 切分支 |
+| `/api/v1/projects/{id}/worktrees` | GET / DELETE | §4.2；无 POST |
+
+**配方自检**（`ProjectIntakeService.recipeCheck`）：
+1. 只检查**流水线实际引用的动作**（加上 Makefile 显式 target），不是固定 7 个全量；输出 `actions` 映射与 `ACTION_MISSING` 阻塞项（`ProjectIntakeService.java:381-409`）
+2. `ci/pipeline.yml` 缺失 → 生成模板放进报告（`pipelineTemplate`），并可自动写平台侧定义（不写用户仓库）
+3. 类型必备项检查（Dockerfile 与 docker 目标不匹配 → `DOCKERFILE_MISSING`）
+
+---
+
+## 6. 现有代码改造点（读码确认）
+
+> 实施注（2026-11-15）：v2 已落地（`GitWorktreeManager`、`ProjectIntakeService` 等已存在）。下表保留设计时的改造清单，用于变更溯源，**不代表仍待办**；现状以代码和 `doc-marshal index` 为准。
+
+| 位置 | 改造前（设计时） | v2 改造（已实现部分） |
+|---|---|---|
+| `BuiltInPipelineEngine.checkout()` | `git clone <workspace>/<id>/repo → runs/<runId>` | `git worktree add worktrees/wt-build-<runId> <sha>`；run 终态后 remove（DIRECT 在用户目录 `.agent/worktrees`） |
+| `checkout()` 前置 fetch | `git fetch --all`（来源=repo 目录） | DIRECT：直接用用户目录；MANAGED：`git fetch <用户目录路径>` 进 bare，再 worktree add |
+| `RecipeActionResolver.resolveCommit()` | 手读 `<root>/.git/HEAD` + ref 文件 | 改 `git rev-parse HEAD`（worktree/bare 都正确）；保留手读作回退 |
+| `ActionService.workspace()` | `<workspace>/<projectId>` | 构建上下文改为 worktree 路径（由引擎传入，ActionService 不再自己拼） |
+| `ProjectsProperties.ProjectDef` | 无来源字段 | 已加 `source: LOCAL/REMOTE`、`localPath`（无 `linkedAt`；时间戳只在接入表 `intake_projects`） |
+| `ProcessExecutor` | 通用执行 | 不变（worktree 命令都是普通 argv） |
+| `ProcessActionRunner`（Windows PATHEXT） | 已支持 git.exe 解析 | 不变 |
+| 构建历史 | `<工作区>/_history/` 全局一份 | 不变 |
+
+**改造原则**：worktree 的创建/清理封装为 `GitWorktreeManager`（agent-infra 新类），
+引擎与 intake 都调它，不散落 git 命令。
+
+---
+
+## 7. 实施排期（v2）
+
+### P0：核心链路（2 天）
+
+1. **GitWorktreeManager**（agent-infra）：
+   - `bareInit(projectId)` / `linkLocal(projectId, localPath)`（收编三命令）/ `cloneRemote(projectId, url)`
+   - `addWorktree(projectId, name, ref)` / `removeWorktree(...)` / `listWorktrees(...)`
+   - `fetchLocal(projectId)`（LOCAL 来源构建前刷新）
+2. **PipelineEngine 改造**：checkout 从 clone 改为 worktree add + 构建后清理
+3. **resolveCommit 适配**：`git rev-parse HEAD` 优先
+4. **ProjectsProperties** 加 source/localPath 字段
+5. **IntakeController**：local / remote 两个接入端点 + status
+6. **单测**：本地 bare + 目录收编（临时目录模拟）、worktree add/remove、LOCAL fetch
+
+**P0 验收**：
+- [ ] 本地目录收编为项目 AGT：list_actions 能看到配方；用户在原目录加一个提交，构建能拿到新提交
+- [ ] remote clone（hutool）为项目 HUT：ci_run verify → SUCCEEDED
+- [ ] 构建后 wt-build-* 被清理；worktrees 列表干净
+
+### P1：对比与状态（1 天）
+
+1. git/status + git/diff + git/sync 三端点
+2. agent 工具：git_project_status / git_project_diff（只读，注册进只读 Toolkit）
+3. 单测：本地 bare 模拟"远端"对比 ahead/behind
+
+### P2：向导前端（2 天）
+
+前端设计详见 §9（新增），实施项：
+1. `api/project.ts`（新增）：intake / git / worktrees 三组接口的 TS 封装
+2. `views/ProjectIntakeView.vue`（新增）：接入向导（本地/远程双 tab + 状态轮询 + 自检报告）
+3. `views/ProjectDetailView.vue`（新增）：项目详情（git 状态卡 / diff 视图 / worktree 列表）
+4. `router.ts` + `AppAside.vue`：注册 `/projects` 与 `/projects/:id` 路由与导航入口
+
+---
+
+## 8. 风险与遗留问题（v2 更新）
+
+| # | 问题 | 影响 | 对策 |
+|---|---|---|---|
+| R1 | **用户目录被 git init 时误伤** | 纯目录收编会创建 .git | 向导二次确认 + 明确告知；含 .git 的目录不受影响 |
+| R2 | **用户目录的改动未 commit** | fetch 拿不到未提交内容 | status 报告显示未提交文件数；提示"构建只用已提交内容"（这是正确语义，不是缺陷） |
+| R3 | **用户目录 .git 指向平台 bare 后误操作 push** | 用户可能 push 到 agent remote | remote 命名用 `agent` 并在向导说明；平台 bare 设置 `receive.denyNonFastForwards`，推送冲突即失败（不静默） |
+| R4 | **Windows 路径空格/中文** | git 命令参数 | ProcessBuilder argv 数组传参天然安全（不经 shell）；文档记录 |
+| R5 | **worktree 泄漏**（进程被杀没清理） | 磁盘/登记残留 | 定时 `git worktree prune` + 构建终态钩子清理 |
+| R6 | **同一本地目录被两个项目收编** | 一个目录只能属于一个仓库（worktree 限制） | 收编前检查该目录 `.git` 是否已有 worktree 登记；冲突即报错 |
+| R7 | **本地目录被用户删除** | fetch/worktree 失效 | status 探测 localPath 不存在 → 项目标记 DEGRADED，构建报可读错误 |
+| R8 | **REMOTE 项目的"本地对比"** | clone 来的项目没有用户本地目录 | diff 只对 LOCAL 来源开放；REMOTE 只有 remote 分支间对比（PR 视角），status 里说明 |
+| R9 | **项目存储仍是内存+yml** | 重启丢接入 | 不变（v1 P1 结论）：接入项落 SQLite |
+| R10 | **runs/ → worktrees/ 命名迁移** | 历史构建目录残留 | 新构建写 worktrees/；旧 runs/ 保留只读，RunHistoryStore 不受影响 |
+
+---
+
+## 9. 决策点
+
+**已确认（按推荐执行）**：
+1. ✅ 无 `.git` 目录自动 `git init`：允许，向导二次确认（R1 对策）
+2. ✅ 构建 worktree 按 runId 建，终态清理，`git worktree prune` 兜底泄漏
+3. ✅ `wt-verify` 常驻 worktree P0 就建（配方自检在它上面跑）
+4. ✅ REMOTE 项目支持挂本地目录做对比（P1 实现，走同一收编流程）
+
+决策已定，P0 可直接开工；前端按 §10 设计随 P2 实施。
+
+---
+
+## 10. 前端设计（P2 · web 端）
+
+### 10.1 设计原则（对齐现有 ChatView 的 DSH 视觉语言）
+
+- **白底正文 + 白度差分层**：不做重卡片，层级靠 `--surface-sunken` / `--line-soft` 的微差
+- **14px/1.85 正文、46-54rem 最大行宽**、mono 字体只用于 ID/sha/路径
+- **状态即颜色**：`--ok` 绿 / `--warn` 黄 / `--danger` 红，配小圆点，不用大色块
+- **Element Plus 只用轻组件**（input/tag/dialog/alert），列表和表单自己排——避免 EP 的"后台系统感"
+- **异步任务一律轮询**：接入/clone 是长任务，表单提交后进入状态轮询视图，不转圈阻塞
+
+### 10.2 信息架构与路由
+
+> **实施现状（2026-11-15）**：已实现 `/projects`（ProjectListView）、`/projects/intake`（ProjectIntakeView）；**没有** `/projects/:id` 的 ProjectDetailView，详情能力放在 `components/project/ProjectOverview.vue`（git 状态/提交/worktree 清理）。
+
+```
+路由（router.ts 实际）：
+  /projects                    → ProjectListView
+  /projects/intake             → ProjectIntakeView
+  （无 ProjectDetailView 路由）
+```
+
+导航（AppAside.vue 实际）：
+  { to: '/projects', icon: FolderOpened, label: '项目' }   ← 插在「对话」与「流水线」之间
+
+页面关系：
+```
+项目列表 ──「接入项目」──→ 接入向导（表单 → 轮询 → 自检报告 → 完成）
+   │
+   └─ 点项目行 ──→ 项目详情（设计态；实际展开 ProjectOverview）
+                    ├── 头部：项目名 / 来源标（LOCAL 路径 | REMOTE url）/ 状态标
+                    ├── git 状态卡：分支、HEAD、本地改动数、领先/落后（设计为 origin 与 agent 双远端；实际为单 upstream）
+                    ├── diff 视图：提交列表 + 文件 ±stat（本地 vs 远端）
+                    ├── worktree 列表：常驻/构建/用户目录，终态构建的可清理
+                    └── 操作区：同步(fetch) / 构建验证(ci_run verify) / 下线(危险区)
+```
+
+### 10.3 页面逐个设计
+
+#### A. ProjectListView（项目列表）
+
+```
+┌────────────────────────────────────────────────────────┐
+│ PageHeader: 项目管理        [+ 接入项目]               │
+├────────────────────────────────────────────────────────┤
+│ ┌──────────────────────────────────────────────────┐   │
+│ │ ● RY  RuoYi-Vue-Plus          [LOCAL] 已托管     │   │
+│ │   E:\CODE\ruoyi-vue-plus · main · 领先 origin 2   │   │
+│ │                                    提交 →  详情 › │   │
+│ └──────────────────────────────────────────────────┘   │
+│ ┌──────────────────────────────────────────────────┐   │
+│ │ ● HUT  hutool                  [REMOTE] 已托管    │   │
+│ │   gitee.com/dromara/hutool · verify 就绪          │   │
+│ └──────────────────────────────────────────────────┘   │
+│ ┌──────────────────────────────────────────────────┐   │
+│ │ ⚠ SHOP  商城                    [LOCAL] 接入失败   │   │
+│ │   git fetch 失败：仓库已删除 · [重试] [删除]       │   │
+│ └──────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────┘
+```
+- 行卡片而非表格（对齐 aside 会话列表的气质）；状态点 + 来源 tag（`LOCAL`/`REMOTE` mono 小标）
+- `INTAKE_FAILED` 行黄色告警底 + 重试按钮
+- 预置（yml）与接入（DB）项目统一渲染，来源标区分
+
+#### B. ProjectIntakeView（接入向导 —— 核心 4 步）
+
+**Step 1 来源选择（双 tab）**：
+```
+┌─ 接入项目 ──────────────────────────────────────────┐
+│  [ 从本地目录 ] [ 从远程仓库 ]                        │
+│ ┌─ 本地 tab ─────────────────────────────────────┐  │
+│ │ 本地路径  [ E:\CODE\ruoyi-vue-plus        ] 📁  │  │
+│ │ 项目 ID   [ RY_ ]                              │  │
+│ │ 项目类型  [ ruoyi-plus ▾]                       │  │
+│ │ ☐ 该目录无 .git，允许平台自动 git init（只加   │  │
+│ │   .git，不改任何文件）                          │  │
+│ │                            [ 校验并接入 ]       │  │
+│ └────────────────────────────────────────────────┘  │
+│ ┌─ 远程 tab（同构：URL / token 可选 / 类型）────┐   │
+└─────────────────────────────────────────────────────┘
+```
+- 路径输入失焦即调 `POST intake/validate`（轻校验：目录存在/git 可用/是否已有 .git）
+- 无 `.git` 时自动勾出 init 确认框（R1 对策：明确告知"只加 .git 不改文件"）
+- projectId 前端先做正则预检（`[A-Z][A-Z0-9_]{1,15}`），后端为准
+
+**Step 2 收编/clone 进行中（轮询视图）**：
+```
+┌─ 正在接入 AGT ──────────────────────────────────────┐
+│  ● LINKING   正在收编本地目录到平台仓库…             │
+│  ┌──────────────────────────────────────────────┐   │
+│  │ ✓ VALIDATING  目录校验通过（git 2.45 可用）  │   │
+│  │ ● LINKING     git remote add agent …         │   │
+│  │ ○ RECIPE_CHECK                              │   │
+│  │ ○ REGISTERED                                │   │
+│  └──────────────────────────────────────────────┘   │
+│  大仓库可能需要 1-3 分钟，可安全离开此页。           │
+└─────────────────────────────────────────────────────┘
+```
+- 步骤时间线（对齐 PipelineView 的 stage 列表形态）；2s 轮询 status
+- 失败 → 步骤标红 + git 原始报错展开（等宽字体块）+ [重试]
+
+**Step 3 配方自检报告**：
+```
+┌─ 自检报告 ──────────────────────────────────────┐
+│  ready: ✓ 可以接入                              │
+│  动作配方：                                     │
+│    ✓ backend_build   ci/actions.yml#backend_build │
+│    ✓ frontend_build  ci/actions.yml             │
+│    ✗ backend_test    未声明 → verify 流水线会跳过 │
+│  流水线：ci/pipeline.yml ✓（release）            │
+│  警告：                                         │
+│    ⚠ backend_build 未声明 produce，产物不可记账  │
+│  [查看 actions.yml 全文] [完成接入]              │
+└─────────────────────────────────────────────────┘
+```
+- actions.yml 全文放 dialog（mono，可滚动）——用户 review 人写命令（R4 对策）
+- 未覆盖动作给"下一步怎么做"提示（写 actions.yml 的最小模板在报告里可复制）
+
+**Step 4 完成**：成功卡 + 直达详情 / 直接跑一次 verify 的双按钮。
+
+#### C. ProjectDetailView（项目详情）
+
+**头部区**：
+```
+RY  RuoYi-Vue-Plus            [LOCAL] ● 已托管
+E:\CODE\ruoyi-vue-plus  ·  main @ abc1234  ·  接入于 11-08
+```
+
+**git 状态卡（§3.2 status API 的可视化）**：
+```
+┌─ git 状态 ──────────────────────────────────────┐
+│ 分支 main @ abc1234（昨天 16:20）               │
+│ 本地未提交改动：3 个文件                [查看]  │
+│ vs 平台仓库(agent)：同步 ✓                      │
+│ vs 你的 origin：领先 2 提交，落后 0  ⚠仅展示    │
+│   └ pending: feat: 新增导出 / fix: 修正分页    │
+│              [同步到平台] (fetch)               │
+└─────────────────────────────────────────────────┘
+```
+- "未提交改动"点开是文件列表 dialog（porcelain 输出格式化）
+- origin 差异只展示不可操作（平台不 push 的边界在 UI 上也要可见）
+- [同步到平台] = `POST git/sync`（LOCAL→bare fetch），成功后刷新状态卡
+
+**diff 视图（§3.2 diff API）**：
+- 两个 tab：「本地 → 远端」（待推送视角）/「远端 → 本地」（待拉取视角）
+- 上半：提交列表（`--oneline` 逐行，mono）；下半：文件 stat 表（`+12 -3` 双色数字对齐）
+- 不做行内 diff（平台不做代码编辑器），只做摘要 + 跳转提示"在 IDE 里看"
+
+**worktree 列表**：
+```
+┌─ 工作树 ────────────────────────────────────────┐
+│ wt-verify    常驻  @ abc1234   （自检/检索用）   │
+│ wt-build-a1b2 构建 @ def5678   终态 11-08 15:00 [清理] │
+│ <你的本地目录>  用户持有 @ abc1234（平台只读）   │
+└─────────────────────────────────────────────────┘
+```
+- 用户本地目录行带"平台只读"标——把 §2.1 的边界承诺显性化
+- 构建残留可手动清理 + 自动清理开关说明
+
+**操作区（右侧栏或底部）**：
+- [同步 fetch]（次按钮）
+- [运行 verify]（主按钮 → 跳 PipelineView 并预选本项目；复用现有触发流）
+- 危险区（分隔线下，红色系）：[解除托管] —— dialog 二次确认，说明"本地目录与文件完全不动，只移除平台登记与 bare 仓库"；REMOTE 项目额外警示"bare 仓库将删除，历史不可恢复（远端仍在）"
+
+### 10.4 API 层（api/project.ts 新增，对齐现有 http.ts 封装）
+
+> **实施现状（2026-11-15）**：`api/project.ts` 已存在。实际签名与本设计有差异：`gitDiff(id, from, to)`（不是 `against: 'agent'|'origin'`），`removeWorktree` 只允许 `wt-build-*`，下线接口没有 `keepBare` 参数。以下为设计稿。
+
+```ts
+// 接入
+export function intakeLocal(p: { projectId: string; localPath: string; type: string; gitInitIfMissing: boolean })
+export function intakeRemote(p: { projectId: string; repoUrl: string; type: string; storageMode?: 'DIRECT' | 'MANAGED'; cloneTargetDir?: string })
+export function intakeStatus(projectId: string): Promise<IntakeStatus>
+// 列表与详情
+export function listProjects(): Promise<ProjectRow[]>        // 含 source/status/localPath|repoUrl/ahead/behind
+export function gitStatus(id: string): Promise<GitStatus>    // §3.2
+export function gitDiff(id: string, against: 'agent' | 'origin'): Promise<GitDiff>
+export function syncGit(id: string): Promise<void>
+// worktree
+export function listWorktrees(id: string): Promise<WorktreeRow[]>
+export function removeWorktree(id: string, name: string): Promise<void>
+// 下线
+export function decommission(id: string, keepBare: boolean): Promise<void>
+```
+
+类型定义追加进 `types.ts`（ProjectRow / IntakeStatus / GitStatus / GitDiff / WorktreeRow）。
+
+### 10.5 轮询与错误形态（复用既有约定）
+
+- 轮询：`setInterval` 2s + 组件卸载清理；连续 3 次失败降级为"暂停轮询 + 手动刷新按钮"
+- 错误：`ApiError`（http.ts）直接 `ElMessage.error`；git 原始报错一律 mono 块展开展示（不吞）
+- 空态：项目列表空时引导卡"还没有托管项目 → [接入第一个项目]"（直达向导）
+- loading：局部 skeleton（列表）/ 步骤时间线（接入中），不用全屏遮罩
+
+### 10.6 P2 实施清单（前端）
+
+| 产出 | 说明 |
+|---|---|
+| `api/project.ts` | ✅ 已实现（签名见 §10.4 实施注） |
+| `types.ts` 追加 | ✅ 已实现 |
+| `views/ProjectListView.vue` | ✅ 已实现 |
+| `views/ProjectIntakeView.vue` | ✅ 已实现四步向导 |
+| `views/ProjectDetailView.vue` | ❌ 未实现；详情拆到 `components/project/ProjectOverview.vue` |
+| `router.ts` / `AppAside.vue` | ✅ `/projects`、`/projects/intake` 已注册；无 `/:id` |

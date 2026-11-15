@@ -3,65 +3,64 @@
 一个**内网部署的独立 Agent 平台**：面向开发者与运维，提供「读 Issue 改 Bug」「AI 自动化运维」「自动化部署」三类能力。
 技术栈：**AgentScope Java 2.0** + Spring Boot 4 + JDK 21 + Vue 3 + 单机 Docker。
 
-> 设计原则：**AI 只做决策与建议，不持有任何写凭证**；所有写操作由确定性执行器在人工确认后执行。
+> 安全边界：AI 负责决策与受控执行——dev/test 的 L2 动作可直接执行，prod 会话只读；生产写操作与 L3 动作必须人工确认。模型不持有生产写凭证。
 
 ---
 
 ## 目录
 
 ```
-docs/          文档（唯一索引 docs/README.md；子目录 adr/architecture/api/operation/dev/changelog/deprecated/governance + 15 篇主目录文档）
+docs/          文档树（doc-marshal 管理；入口 docs/overview.md）
 docs/specs/    功能规格与任务清单（dev 本机部署 / 环境注入健康 / 环境一致性）
 platform/      后端 8 个 Maven 模块 + Vue3 前端
-docs/_research/ 市场调研与源码能力盘点（只读证据，含采集脚本）
-scripts/       仓库级脚本（docs 断链、未登记、代码锚点检查）
+docs/research/ 市场调研与源码能力盘点（只读证据，含采集脚本）
 llms.txt       给 LLM / RAG 的文档入口
-.workflow/     Gitee Go CI（文档检查 + cd platform && mvn -B verify）
+.workflow/     Gitee Go CI（doc-marshal check + cd platform && mvn -B verify）
 ```
 
 ## 文档阅读顺序
 
-> 完整索引、文档状态（稳定/现行/参考/历史/规划）、复审日期与 P0/P1/P2 处置规则：**[docs/README.md](docs/README.md)**。
-> 机器可读入口：**[llms.txt](llms.txt)**；文档门禁：`check-links`（断链）+ `check-docs`（未登记 + 代码锚点）。
-> 文档与代码的对应关系：**[docs/CODE-MAP.md](docs/CODE-MAP.md)**。
+> 文档类型、摘要、状态与代码锚点：`doc-marshal index`；人工导航入口：**[docs/overview.md](docs/overview.md)**。
+> 机器可读入口：**[llms.txt](llms.txt)**；文档门禁：`doc-marshal check --all`（类型、链接、代码锚点）。
+> 文档索引与代码对应关系：**`doc-marshal index`**；漂移检查：**`doc-marshal drifted`**。
 
 ### 核心必读（先看这四篇）
 
 | # | 文档 | 作用 |
 |---|---|---|
-| 1 | [PRD v1.6（Draft 产品稿）](docs/PRD-DevOps-Agent平台-v1.0.md) | 产品目标与边界；现状以 Code-Wiki / CODE-MAP 为准 |
-| 2 | [项目规约 v1.0](docs/项目规约-v1.0.md) | 代码与流程的强制约束（MUST / MUST NOT） |
-| 3 | [规约自动化检查](docs/规约自动化检查-v1.0.md) | 规约如何落到 `mvn verify` |
-| 4 | [Code Wiki](docs/Code-Wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
+| 1 | [PRD v1.6（Draft 产品稿）](docs/prd-devops-agent-v1.md) | 产品目标与边界；现状以 Code-Wiki / code_refs 为准 |
+| 2 | [项目规约 v1.0](docs/project-conventions-v1.md) | 代码与流程的强制约束（MUST / MUST NOT） |
+| 3 | [规约自动化检查](docs/convention-automation-checks-v1.md) | 规约如何落到 `mvn verify` |
+| 4 | [Code Wiki](docs/code-wiki.md) | 面向新成员与评审：模块、关键类、HTTP API、工具、前端 |
 
-> 为什么这么设计：见 [ADR 索引](docs/adr/README.md)（7 篇：独立平台、CI 形态、环境三层、运行账本、安全边界、事件驱动、DAG 并行调度）。
+> 为什么这么设计：见 [ADR 索引](docs/adr/overview.md)（7 篇：独立平台、CI 形态、环境三层、运行账本、安全边界、事件驱动、DAG 并行调度）。
 
 ### 设计与实现（按文档状态阅读）
 
 | # | 文档 | 作用 |
 |---|---|---|
-| 5 | [流水线设计 · Java+Vue 双栈](docs/流水线设计-Java与Vue双栈.md) | 双栈设计稿/参考，现行 stage 以 Code-Wiki 为准 |
-| 6 | [规约：流水线执行器](docs/规约-流水线执行器-v1.0.md) | stage 执行器契约（参考） |
-| 7 | [发布编排 + 平台部署器 v1](docs/发布编排与平台部署器-v1.md) | HOST / DOCKER / SERVER 三种部署语义 |
-| 8 | [项目接入设计 v2](docs/项目接入设计-v2.md) | DIRECT 本地引用 / MANAGED bare + worktree |
-| 9 | [环境模板与中间件自动注入 v2](docs/环境变量与环境模板设计-v2.md) | 环境变量 / 中间件 / 部署注入的现行决策 |
-| 10 | [环境配置事实层与分环境门控 · 方案 v1](docs/环境配置事实层与分环境门控-方案-v1.md) | 配置解析、`secret://`、分环境策略（部分落地，observe/草案审核未实现） |
-| 11 | [设置：服务器与模型连接 v1](docs/设置-服务器与模型连接-v1.md) | 设置页数据模型、密钥加密与连通性探测 |
-| 12 | [多项目托管 v4](docs/多项目托管设计-v4.md) | 项目作为作用域边界（部分实现：成员/Issue 桥/配额未落地） |
-| 13 | [流水线工作台 · 使用指南](docs/流水线工作台-使用指南-v1.md) | 接入项目、写配方、触发/重跑/回滚、看懂错误码 |
+| 5 | [流水线设计 · Java+Vue 双栈](docs/pipeline-design-java-vue.md) | 双栈设计稿/参考，现行 stage 以 Code-Wiki 为准 |
+| 6 | [规约：流水线执行器](docs/pipeline-executor-spec-v1.md) | stage 执行器契约（参考） |
+| 7 | [发布编排 + 平台部署器 v1](docs/release-orchestration-deployer.md) | HOST / DOCKER / SERVER 三种部署语义 |
+| 8 | [项目接入设计 v2](docs/project-intake-v2.md) | DIRECT 本地引用 / MANAGED bare + worktree |
+| 9 | [环境模板与中间件自动注入 v2](docs/env-template-design-v2.md) | 环境变量 / 中间件 / 部署注入的现行决策 |
+| 10 | [环境配置事实层与分环境门控 · 方案 v1](docs/env-config-facts-gating-v1.md) | 配置解析、`secret://`、分环境策略（部分落地，observe/草案审核未实现） |
+| 11 | [设置：服务器与模型连接 v1](docs/settings-server-model-v1.md) | 设置页数据模型、密钥加密与连通性探测 |
+| 12 | [多项目托管 v4](docs/multi-project-hosting-v4.md) | 项目作为作用域边界（部分实现：成员/Issue 桥/配额未落地） |
+| 13 | [流水线工作台 · 使用指南](docs/pipeline-workbench-guide-v1.md) | 接入项目、写配方、触发/重跑/回滚、看懂错误码 |
 
 ### 评估与决策（结论已定，代码可能只实现部分）
 
 | # | 文档 | 作用 |
 |---|---|---|
-| 14 | [CI/CD 方案替代与自创 · 决策](docs/CICD方案替代与自创-决策-v1.md) | 不造 DSL，改用「5 个动作 + 仓库内配方」 |
-| 15 | [窄控制器](docs/窄控制器设计-单机滚动部署器.md) | 单机 compose 滚动发布（**设计稿，未实施**） |
+| 14 | [CI/CD 方案替代与自创 · 决策](docs/cicd-decision-v1.md) | 不造 DSL，改用「7 个固定动作 + 仓库内配方」；决策时点为 5 个 |
+| 15 | [窄控制器](docs/narrow-controller-rolling-deployer.md) | 单机 compose 滚动发布（**设计稿，未实施**） |
 
-> 验收报告、Jenkins 规划、开源 CI 调研、执行面设计等历史文档已按废弃流程删除，原因与替代物见[废弃登记](docs/deprecated/README.md)。
+> 验收报告、Jenkins 规划、开源 CI 调研、执行面设计等历史文档已按废弃流程删除，原因与替代物见[废弃登记](docs/deprecated/registry.md)。
 
 ### 背景与推演（决策依据见 ADR）
 
-平台从若依嵌入式模块演进到独立多项目平台；现行方案见[多项目托管设计 v4](docs/多项目托管设计-v4.md)，为什么走独立平台见 [ADR-0001](docs/adr/0001-独立平台而非改造若依.md)。
+平台从若依嵌入式模块演进到独立多项目平台；现行方案见[多项目托管设计 v4](docs/multi-project-hosting-v4.md)，为什么走独立平台见 [ADR-0001](docs/adr/0001-independent-platform.md)。
 
 ## 快速开始
 
@@ -93,8 +92,8 @@ cd web && npm install && npm run dev    # http://localhost:5173
 | 项 | 说明 |
 |---|---|
 | 代码托管 | **Gitee**（Maven groupId `top.rongx`，Java 根包 `top.rongx.agent`） |
-| 流水线 | [`.workflow/build.yml`](.workflow/build.yml)（Gitee Go）：文档检查 + `cd platform && mvn -B verify` |
-| 门禁 | 分支保护 + 文档检查（断链/未登记/代码锚点）+ `mvn verify` 必须绿 |
+| 流水线 | [`.workflow/build.yml`](.workflow/build.yml)（Gitee Go）：`doc-marshal check --all` + `cd platform && mvn -B verify` |
+| 门禁 | 分支保护 + doc-marshal（类型/链接/代码锚点）+ `mvn verify` 必须绿 |
 
 ```bash
 git remote add origin https://gitee.com/<你的账号>/agentscope-ruoyi.git
@@ -102,11 +101,11 @@ git push -u origin main --tags
 ```
 
 > Gitee Go 的字段名以平台文档为准（首次接入核对 `triggers` / `step` / `artifacts`）。
-> 若该套餐不含 Gitee Go，把两条文档检查 + `mvn verify` 接到任意 runner（自建 / 云效 / Jenkins）即可，效果一致。
+> 若该套餐不含 Gitee Go，把 `doc-marshal check --all` + `mvn verify` 接到任意 runner（自建 / 云效 / Jenkins）即可，效果一致。
 
 ## 提交规范
 
-遵循 [项目规约 §12](docs/项目规约-v1.0.md)：
+遵循 [项目规约 §12](docs/project-conventions-v1.md)：
 
 | 项 | 约定 |
 |---|---|
@@ -126,14 +125,14 @@ test(platform): 接入规约自动化检查（ArchUnit + 扫描）
 
 ## 关于外部源码引用
 
-`docs/` 中 v1、v2 两份报告的「证据索引」引用了 `../RuoYi/`、`../agentscope-java/`、`../RuoYi-Vue-Plus/` 下的源码路径。
+`docs/research/` 中的调研文档引用了 `../RuoYi/`、`../agentscope-java/`、`../RuoYi-Vue-Plus/` 下的源码路径。
 这些是**分析当时的源码快照，已从本仓库移除**（见 [.gitignore](.gitignore) 中的克隆命令），因此那些链接不可点击，但结论与引用的类名/行号仍可对照上游仓库复核。
 
 ## 当前状态
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | ✅ `docs/` 根目录 15 份（现行/规划）+ 1 份汇报稿；`docs/specs` 3 组规格与任务清单 |
+| 设计文档 | ✅ `docs/` 由 doc-marshal 管理，根目录 15 份（现行/规划）；`docs/specs` 3 组规格与任务清单 |
 | 后端 | ✅ 8 个 Maven 模块（7 个运行时模块 + `spec-checks`），`mvn -B verify` 全绿 |
 | 前端 | ✅ Vue3 + Vite + Element Plus；7 个页面；`npm run build`（vue-tsc strict）通过 |
 | 认证与授权 | ✅ Sa-Token 会话、3 个种子账号、角色权限码；高危操作需二级密码 |

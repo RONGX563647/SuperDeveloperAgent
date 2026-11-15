@@ -1,0 +1,5 @@
+repos:
+  - repo: https://github.com/rootdrew27/doc-marshal
+    rev: v0.6.1
+    hooks:
+      - id: doc-marshal-check

@@ -1,0 +1,29 @@
+---
+type: reference
+summary: "ADR 索引与状态"
+source:
+  - docs/adr/0001-independent-platform.md
+---
+# ADR 索引
+
+> 架构决策记录（Architecture Decision Record）。规则：**架构级变更必须先有 ADR 或同期补 ADR**（`adr_enforce: true`）。
+> 模板见 [_template.md](template.md)；状态取值：`提议` / `通过` / `废弃`；被替代的 ADR 不删除，状态改 `废弃` 并注明后继。
+
+| 编号 | 标题 | 状态 | 日期 | 关联实现 |
+|---|---|---|---|---|
+| [0001](0001-independent-platform.md) | 独立平台，而非改造若依 | 通过 | 2026-11-02 | 全仓库结构 |
+| [0002](0002-actions-not-ci-dsl.md) | 不造 CI DSL：动作 + 仓库内配方（当时 5 个，现行 7 个） | 通过 | 2026-11-06 | `ActionId`、`RecipeActionResolver`、`ci/**` 配方 |
+| [0003](0003-env-config-three-layers.md) | 环境配置三层：环境模板 + 项目差异 + `secret://` | 通过 | 2026-11-08 | `EnvProvisioner`、`ConfigResolver` |
+| [0004](0004-unified-run-ledger.md) | 统一运行账本，而非重写三套编排 | 通过 | 2026-11-12 | `run_ledger`、`RunRecoveryService` |
+| [0005](0005-security-boundary-platform.md) | 安全边界放在平台层：工具不可自我批准 | 通过 | 2026-11-12 | `DangerousActionPolicy`、`ConfirmTokenService`、`EnvPolicyService` |
+| [0006](0006-workspace-events.md) | 工作区事件驱动优先，轮询只做降级 | 通过 | 2026-11-13 | `WorkspaceEventBus`、`useWorkspaceEvents` |
+| [0007](0007-dag-context-governance.md) | 调度改 DAG 并行 + 三级上下文治理 | 通过 | 2026-11-15 | `WorkspaceDispatchScheduler`、`ToolResultCache`、`ConversationContextTrimmer` |
+
+## 何时需要写 ADR
+
+- 新增/替换 Portal 入口、编排引擎、存储方案、鉴权模型；
+- 改动「谁能写、写到哪、如何确认」这类安全边界；
+- 引入外部依赖并影响部署形态（MCP、容器运行时、向量库、Wiki 同步）；
+- 明确决定「不做某件事」且后人容易反复提议的（同样值得记录）。
+
+不需要 ADR：纯重构、文案/样式、局部性能优化（写进 Code Wiki 即可）。

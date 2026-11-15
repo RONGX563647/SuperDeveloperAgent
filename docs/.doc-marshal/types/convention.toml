@@ -1,0 +1,11 @@
+enabled = true
+serves = "someone about to write code or docs that must follow it"
+voice = "normative, one convention, states its scope"
+mutability = "mutable -- rewritten in place as the convention changes"
+code_refs = true
+source = false
+numbered = false
+root_required = false
+additive = false
+append_only = false
+required_sections = []

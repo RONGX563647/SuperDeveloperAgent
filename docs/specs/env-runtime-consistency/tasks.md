@@ -1,3 +1,10 @@
+---
+type: plan
+summary: "环境运行时一致性任务清单"
+status: in-progress
+code_refs:
+  - platform/agent-executor/src/main/java/top/rongx/agent/executor
+---
 # 环境一致性修复任务
 
 > 2026-11-15 按代码复核：T1–T4 与实现一致；T5 未执行；T6 只完成了“端点幂等收敛”，原“已有非空覆盖不强制覆盖”未实现；实跑验收（T7 等）是历史记录，本轮未重跑。

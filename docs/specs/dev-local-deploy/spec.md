@@ -1,3 +1,10 @@
+---
+type: spec
+summary: "开发环境本机部署规格"
+status: in-progress
+code_refs:
+  - platform/agent-executor/src/main/java/top/rongx/agent/executor
+---
 # 流水线体验重构 + 开发环境本机部署 规格说明
 
 ## 1. 背景

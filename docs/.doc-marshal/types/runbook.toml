@@ -1,0 +1,11 @@
+enabled = false
+serves = "someone running a procedure"
+voice = "imperative, literal, copy-pasteable"
+mutability = "mutable -- rewritten in place"
+code_refs = true
+source = false
+numbered = false
+root_required = false
+additive = false
+append_only = false
+required_sections = []

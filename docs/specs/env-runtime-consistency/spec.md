@@ -1,3 +1,10 @@
+---
+type: spec
+summary: "环境运行时一致性规格"
+status: in-progress
+code_refs:
+  - platform/agent-executor/src/main/java/top/rongx/agent/executor
+---
 # 环境一致性修复（dev 视角）规格
 
 > 状态：**P0 全部落地，P1 按既定规则不修改，P2-1 未按原意实现（2026-11-15 核对）**。

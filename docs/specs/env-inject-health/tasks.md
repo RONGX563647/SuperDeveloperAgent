@@ -1,3 +1,10 @@
+---
+type: plan
+summary: "环境注入与中间件健康任务清单"
+status: in-progress
+code_refs:
+  - platform/agent-executor/src/main/java/top/rongx/agent/executor
+---
 # 任务清单：流水线环境注入与中间件健康修复
 
 > 2026-11-15 按代码复核：T1–T6、T8–T13 与实现一致；**T7 未实现**（`env_summary` 仍按 `own` 统计）；T14/T15/T17 是历史验收记录，本轮未重跑。

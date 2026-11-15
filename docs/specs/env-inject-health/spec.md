@@ -1,3 +1,10 @@
+---
+type: spec
+summary: "环境注入与中间件健康规格"
+status: in-progress
+code_refs:
+  - platform/agent-executor/src/main/java/top/rongx/agent/executor
+---
 # 流水线环境注入与中间件健康修复
 
 ## 背景与问题

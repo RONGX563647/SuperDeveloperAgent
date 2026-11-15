@@ -1,0 +1,11 @@
+enabled = true
+serves = "a historical or generated record that is not current guidance"
+voice = "flat, dated, never rewritten"
+mutability = "append-only -- corrected by a newer record"
+code_refs = false
+source = false
+numbered = false
+root_required = false
+additive = false
+append_only = false
+required_sections = []

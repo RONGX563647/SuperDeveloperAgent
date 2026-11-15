@@ -38,6 +38,12 @@ that stop matching.
 5. One line? One line.
 6. Otherwise: the minimum code that works.
 
+## Docs
+`docs/` is a doc-marshal tree: ASCII kebab-case names, no `README.md`, every note
+has `type`/`summary` front-matter. New docs: `doc-marshal new <type> <path>`.
+After changing code, run `doc-marshal drifted` and update the affected `code_refs`;
+before commit run `doc-marshal check --all`.
+
 ## Rules
 - No unrequested abstractions. Java: no single-impl interface without a port, no
   Factory for one product, no `@ConfigurationProperties` for a constant, no Builder

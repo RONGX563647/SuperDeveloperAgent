@@ -1,0 +1,23 @@
+enabled = true
+serves = "someone about to reopen a settled choice"
+voice = "terse, one decision"
+mutability = "append-only -- never edited after acceptance"
+code_refs = true
+source = false
+statuses = ["accepted", "superseded"]
+default_status = "accepted"
+folder = "adr"
+numbered = false
+root_required = false
+additive = false
+append_only = true
+template = [
+    "## 决策",
+    "",
+    "<!-- 已经定下的选择，主动语态。 -->",
+    "",
+    "## 后果",
+    "",
+    "<!-- 它让什么变容易、让什么变难、承诺了什么。 -->",
+]
+required_sections = ["决策", "后果"]

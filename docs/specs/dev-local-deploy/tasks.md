@@ -1,4 +1,11 @@
-﻿# 任务清单：流水线体验重构 + 开发环境本机部署
+---
+type: plan
+summary: "开发环境本机部署任务清单"
+status: in-progress
+code_refs:
+  - platform/agent-executor/src/main/java/top/rongx/agent/executor
+---
+# 任务清单：流水线体验重构 + 开发环境本机部署
 
 > 勾选状态于 2026-11-15 按代码复核：代码类任务与实现一致；**实跑类验收（T17/T19/T27/T33/T41/T49 等）是历史运行记录，本轮未重跑**，仅保留原记录。T17/T33 仍未勾选。
 

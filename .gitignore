@@ -56,7 +56,7 @@ tsconfig.tsbuildinfo
 .agent/
 .screenshots/
 .playwright-cli/
-_research/*.png
+docs/research/*.png
 
 # 本地登录配置（可能含凭据）与临时校验脚本
 login.yaml
