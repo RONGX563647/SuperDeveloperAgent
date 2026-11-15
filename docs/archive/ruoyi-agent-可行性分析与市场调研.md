@@ -1044,9 +1044,9 @@ agent:
 - [Stripe 案例](https://claude.com/customers/stripe)、[Nokia Core Networks 案例](https://cursor.com/blog/nokia)
 
 **配套调研子报告（本工作区，均为一手直取 + 标注缺口）**
-- [`ai-coding-agent-pipeline-research-2026-11-07.md`](_research/ai-coding-agent-pipeline-research-2026-11-07.md) —— AI 编程 Agent 与「人审 + CI/CD」市场调研（产品对比矩阵、定价、基准、供应链事件、RuoYi 生态盘点）
-- [`企业级AI-Agent平台市场调研-2026-11.md`](_research/企业级AI-Agent平台市场调研-2026-11.md) —— 企业级 Agent 平台调研（12 家厂商对照、L1–L4 成熟度、开源星数、法规原文、客单价锚点）
-- [`AGENTSCOPE_JAVA_能力盘点_RuoYi接入评估.md`](_research/AGENTSCOPE_JAVA_能力盘点_RuoYi接入评估.md) —— AgentScope Java × RuoYi 接入评估（1492 行，逐条标注 `文件:行号`，含 14 个 starter 的 AutoConfiguration 清单与接入依赖表）
+- [`ai-coding-agent-pipeline-research-2026-11-07.md`](../_research/ai-coding-agent-pipeline-research-2026-11-07.md) —— AI 编程 Agent 与「人审 + CI/CD」市场调研（产品对比矩阵、定价、基准、供应链事件、RuoYi 生态盘点）
+- [`企业级AI-Agent平台市场调研-2026-11.md`](../_research/企业级AI-Agent平台市场调研-2026-11.md) —— 企业级 Agent 平台调研（12 家厂商对照、L1–L4 成熟度、开源星数、法规原文、客单价锚点）
+- [`AGENTSCOPE_JAVA_能力盘点_RuoYi接入评估.md`](../_research/AGENTSCOPE_JAVA_能力盘点_RuoYi接入评估.md) —— AgentScope Java × RuoYi 接入评估（1492 行，逐条标注 `文件:行号`，含 14 个 starter 的 AutoConfiguration 清单与接入依赖表）
 
 **法规与定价原始页**
 - [《生成式人工智能服务管理暂行办法》](https://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)（2023-08-15 施行，第二条界定「企业自用不适用」）

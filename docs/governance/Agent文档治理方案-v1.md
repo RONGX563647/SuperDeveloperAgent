@@ -125,7 +125,7 @@ related: [../adr/0002-不造CI-DSL用动作+仓库内配方.md]
 ---
 ```
 
-字段最小化到 7 个；`title` 取正文 H1，不重复填写。**存量 24 篇继续用文首引用块**，采用「touch-to-migrate」：文档下次被修改时补齐 front-matter，并把路径从 `docs/.docgov-legacy` 白名单中删除。白名单清空即迁移完成。
+字段最小化到 7 个；`title` 取正文 H1，不重复填写。**存量 15 篇继续用文首引用块**，采用「touch-to-migrate」：文档下次被修改时补齐 front-matter，并把路径从 `docs/.docgov-legacy` 白名单中删除。白名单清空即迁移完成。
 
 ### 4.3 准入规则（新增文档时必须回答）
 
@@ -311,13 +311,13 @@ docs/reports/YYYY-MM/<slug>/
 | 交付物 | 内容 |
 |---|---|
 | `scripts/docs/check-docs.mjs` | D01 / D02 / D04 / D05；复用 `check-links` |
-| `docs/.docgov-legacy` | 存量 24 篇路径白名单；修改时删一行 |
+| `docs/.docgov-legacy` | 存量 15 篇路径白名单；修改时删一行 |
 | `docs/_inbox/README.md` | Agent 投递规则、提升流程 |
 | PR 模板 | §5.3 三问 + 文档检查勾选 |
 | CI | 在 `verify` 阶段增加一条 Node step：`node scripts/docs/check-docs.mjs` |
 | `docs/README.md` | 增加「文档契约」入口，链接本文 |
 
-**验收**：新增文档缺 front-matter、未登记、断链时 CI 必红；`_inbox` 直接合入 `main` 必红；存量 24 篇通过白名单保持绿色。
+**验收**：新增文档缺 front-matter、未登记、断链时 CI 必红；`_inbox` 直接合入 `main` 必红；存量 15 篇通过白名单保持绿色。
 
 ### 阶段 2：同步
 

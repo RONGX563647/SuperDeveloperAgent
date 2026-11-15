@@ -18,6 +18,7 @@
 | 查接口 | [API 说明](api/README.md) |
 | 想知道文档怎么写、怎么治理 | [Agent 文档治理方案 v1](governance/Agent文档治理方案-v1.md) |
 | 查某一版改了什么 | [变更记录](changelog/2026-11.md) |
+| 查历史版本、决策链与调研证据 | [历史归档](archive/README.md) |
 | 找已废弃/删除的文档 | [废弃登记](deprecated/README.md) |
 
 ## 2. 目录规范与迁移状态
@@ -35,10 +36,11 @@ docs/
 ├── dev/                 本地启动、调试、质量门禁
 ├── changelog/           按月的变更记录
 ├── deprecated/          废弃登记（含删除原因与替代物）
-└── *.md                 存量设计/规约/决策文档（保持原位，暂不搬动）
+├── archive/             历史归档（status=history，只读，勿作当前结论）
+└── *.md                 现行设计/规约/决策文档（待按类型迁移）
 ```
 
-**迁移策略**：存量 24 篇仍留在 `docs/` 根目录，避免一次性移动导致全仓链接失效；新文档写入对应子目录。目录里出现的「存量」条目即待迁移项，迁移时须同步本索引、根 README、Code Wiki 三处链接。
+**迁移策略**：历史文档已统一移入 `archive/`，不再留在主阅读路径；剩余现行存量文档逐步按类型迁入子目录（迁移时同步本索引、根 README、Code Wiki 三处链接）；新文档一律写入对应子目录。
 
 ## 3. 文档登记表（元信息）
 
@@ -62,16 +64,11 @@ docs/
 | [Agent文档治理方案-v1.md](governance/Agent文档治理方案-v1.md) | 设计 | 规划 | 文档治理 | — |
 | [流水线工作台-使用指南-v1.md](流水线工作台-使用指南-v1.md) | 使用 | 现行 | 使用者 | 2027-02-14 |
 | [CICD方案替代与自创-决策-v1.md](CICD方案替代与自创-决策-v1.md) | 决策 | 稳定 | 架构组 | — |
-| [CICD验收报告-v1.md](CICD验收报告-v1.md) | 验收 | 历史 | 架构组 | — |
-| [Jenkins能力复刻与复用-规划-v1.md](Jenkins能力复刻与复用-规划-v1.md) | 规划 | 历史 | 架构组 | — |
-| [开源CI集成复用-调研-v1.md](开源CI集成复用-调研-v1.md) | 调研 | 历史 | 架构组 | — |
-| [devops-agent-执行面设计-k8s-jenkins-flyway.md](devops-agent-执行面设计-k8s-jenkins-flyway.md) | 设计 | 历史 | 架构组 | — |
 | [窄控制器设计-单机滚动部署器.md](窄控制器设计-单机滚动部署器.md) | 设计 | 规划 | 架构组 | — |
-| [devops-agent-独立平台-可行性分析-v3.md](devops-agent-独立平台-可行性分析-v3.md) | 决策 | 历史 | 架构组 | — |
-| [ruoyi-vue-plus-agent-可行性分析-v2.md](ruoyi-vue-plus-agent-可行性分析-v2.md) | 背景 | 历史 | 架构组 | — |
-| [ruoyi-agent-可行性分析与市场调研.md](ruoyi-agent-可行性分析与市场调研.md) | 背景 | 历史 | 架构组 | — |
-| [ruoyi-ai-编程助手拆解.md](ruoyi-ai-编程助手拆解.md) | 背景 | 历史 | 架构组 | — |
-| [架构分析-agentscope-ruoyi-platform-v1.md](架构分析-agentscope-ruoyi-platform-v1.md) | 背景 | 历史 | 架构组 | — |
+
+### 3.1 历史归档
+
+`status=history` 的文档统一移入 [archive/](archive/README.md)，不在此表逐条维护，避免同一元信息写两处。归档原因、替代物与选入标准见[归档索引](archive/README.md)。归档文档只读，可被链接引用，但**不得作为当前实现或结论**。
 
 ## 4. 问题分级与处置（禁止无验证删除）
 
@@ -121,6 +118,7 @@ cd platform/web && npm run typecheck && npm run build
 | 内部断链 | 0（脚本扫描全仓 Markdown） |
 | 外部参考链接 | 仅 `../RuoYi*`、`../agentscope-java`，已在对应文档标注「本地检出才可用」 |
 | 过期文档 | 0 |
-| 未登记文档 | 0（24 篇存量 + 分类子目录文档全部在本索引或子索引中可达） |
+| 历史归档 | 9 篇（`docs/archive/`，已从主阅读路径移出） |
+| 未登记文档 | 0（现行根目录 + 分类子目录 + `archive/` 清单全部可达） |
 | 代码-文档漂移 | 已修：工具数 33→61/12→18（本轮 61→62，新增 `workspace_dispatch`）、`confirm` 工具语义、`/projects/:id` 已重定向、配置键补 `agent.tools.cache.*` / `agent.context.*` / `agent.workspace.dispatch.*` / `agent.chat.*timeout*`；模块类数按实际核对（tools 24 / runtime 13 / gateway 96） |
-| 建议下一步 | ① 迁移存量文档进子目录；② 接入 Gitee MCP 后开启自动建单；③ 引入 MkDocs 构建校验 |
+| 建议下一步 | ① 迁移剩余现行存量文档进子目录；② 接入 Gitee MCP 后开启自动建单；③ 引入 MkDocs 构建校验 |
