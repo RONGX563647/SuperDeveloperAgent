@@ -695,7 +695,8 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 | `agent.intake.shared-root` | 空（全盘） | 目录浏览边界 |
 | `agent.intake.gitee-token` | 空 | 平台兜底 Gitee token（私有库 clone） |
 | `agent.gitee.client-id/secret/redirect-uri` | 空 | Gitee OAuth 应用 |
-| `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | `docker` / `maven:3.9-eclipse-temurin-21`（仅默认兜底，可覆盖）/ bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache` | 执行沙箱（默认 fail-closed；缓存卷按项目隔离挂 Maven/npm 依赖）。动作前 `docker image inspect` 预检，缺镜像立即给出「pull 或换镜像」的明确失败，不会静默等拉取 |
+| `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | `docker` / `maven:3.9-eclipse-temurin-21`（仅默认兜底，可覆盖）/ bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache` | 执行沙箱（默认 fail-closed；缓存卷按项目隔离挂 Maven/npm 依赖）。动作前 `docker image inspect` 预检，缺镜像先自动 `docker pull` 并 inspect 复核，仍失败才明确报错 |
+| `agent.sandbox.pull-timeout-seconds` | 180 | 缺镜像自动拉取的硬超时（可取消）；网络慢的 registry 可调大 |
 | `agent.sandbox.precheck-image` | true | 关闭后回到 docker CLI 自行拉取的行为（离线 / 自建 registry 场景） |
 | `agent.env.middleware-images` / `agent.env.precheck-images` | 空 / true | 中间件镜像覆盖 `<kind>=<image>,...`；创建容器前预检，缺失即明确失败 |
 | `agent.scaffold.node-image` | `node:20-bookworm`（可覆盖） | 项目接入时生成的 `ci/pipeline.yml` 前端工具链镜像 |
