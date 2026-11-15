@@ -16,6 +16,7 @@
 | 本地开发与调试 | [开发指南](dev/README.md) |
 | 查某个决策为什么这么定 | [ADR 索引](adr/README.md) |
 | 查接口 | [API 说明](api/README.md) |
+| 想知道文档怎么写、怎么治理 | [Agent 文档治理方案 v1](governance/Agent文档治理方案-v1.md) |
 | 查某一版改了什么 | [变更记录](changelog/2026-11.md) |
 | 找已废弃/删除的文档 | [废弃登记](deprecated/README.md) |
 
@@ -28,6 +29,7 @@ docs/
 ├── README.md            本索引（唯一入口）
 ├── adr/                 架构决策记录（ADR-000x）
 ├── architecture/        架构图、数据流、模块边界
+├── governance/          文档治理：契约、同步、收敛与审批规则
 ├── api/                 接口索引（以控制器为准，不引 springdoc）
 ├── operation/           部署、排障、备份、回滚
 ├── dev/                 本地启动、调试、质量门禁
@@ -57,6 +59,7 @@ docs/
 | [环境变量与环境模板设计-v2.md](环境变量与环境模板设计-v2.md) | 设计 | 现行 | runtime/env | 2027-02-14 |
 | [环境配置事实层与分环境门控-方案-v1.md](环境配置事实层与分环境门控-方案-v1.md) | 设计 | 现行 | tools/config | 2027-02-14 |
 | [设置-服务器与模型连接-v1.md](设置-服务器与模型连接-v1.md) | 设计 | 现行 | gateway/settings | 2027-02-14 |
+| [Agent文档治理方案-v1.md](governance/Agent文档治理方案-v1.md) | 设计 | 规划 | 文档治理 | — |
 | [流水线工作台-使用指南-v1.md](流水线工作台-使用指南-v1.md) | 使用 | 现行 | 使用者 | 2027-02-14 |
 | [CICD方案替代与自创-决策-v1.md](CICD方案替代与自创-决策-v1.md) | 决策 | 稳定 | 架构组 | — |
 | [CICD验收报告-v1.md](CICD验收报告-v1.md) | 验收 | 历史 | 架构组 | — |
@@ -118,6 +121,6 @@ cd platform/web && npm run typecheck && npm run build
 | 内部断链 | 0（脚本扫描全仓 Markdown） |
 | 外部参考链接 | 仅 `../RuoYi*`、`../agentscope-java`，已在对应文档标注「本地检出才可用」 |
 | 过期文档 | 0 |
-| 未登记文档 | 0（24 篇存量 + 14 篇子目录文档全部在本索引或子索引中可达） |
+| 未登记文档 | 0（24 篇存量 + 分类子目录文档全部在本索引或子索引中可达） |
 | 代码-文档漂移 | 已修：工具数 33→61/12→18（本轮 61→62，新增 `workspace_dispatch`）、`confirm` 工具语义、`/projects/:id` 已重定向、配置键补 `agent.tools.cache.*` / `agent.context.*` / `agent.workspace.dispatch.*` / `agent.chat.*timeout*`；模块类数按实际核对（tools 24 / runtime 13 / gateway 96） |
 | 建议下一步 | ① 迁移存量文档进子目录；② 接入 Gitee MCP 后开启自动建单；③ 引入 MkDocs 构建校验 |

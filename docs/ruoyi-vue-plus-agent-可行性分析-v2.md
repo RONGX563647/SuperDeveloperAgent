@@ -447,7 +447,7 @@ gantt
 
 - 汇报稿（9 页）：[`ruoyi-vue-plus-agent-汇报-v2.pptx`](ruoyi-vue-plus-agent-汇报-v2.pptx)
 - 上一版报告（RuoYi 4.8.3 基线，仍可作对照）：[`ruoyi-agent-可行性分析与市场调研.md`](ruoyi-agent-可行性分析与市场调研.md)
-- 市场调研（两版通用，未变）：[编程 Agent 调研](../_research/ai-coding-agent-pipeline-research-2026-11-07.md) ｜ [平台市场调研](../_research/企业级AI-Agent平台市场调研-2026-11.md)
+- 市场调研（两版通用，未变）：[编程 Agent 调研](_research/ai-coding-agent-pipeline-research-2026-11-07.md) ｜ [平台市场调研](_research/企业级AI-Agent平台市场调研-2026-11.md)
 
 ## 附录 C：证据索引
 
@@ -466,7 +466,7 @@ gantt
 - AI 编码规范：[`.codex/skills/ruoyi-plus-ai-coding/SKILL.md`](../RuoYi-Vue-Plus/.codex/skills/ruoyi-plus-ai-coding/SKILL.md)、[`.claude/agents/`](../RuoYi-Vue-Plus/.claude/agents/)
 
 **B 级（AgentScope 侧，同上一版）**
-- [能力盘点（1492 行，逐条 `文件:行号`）](../_research/AGENTSCOPE_JAVA_能力盘点_RuoYi接入评估.md)
+- [能力盘点（1492 行，逐条 `文件:行号`）](_research/AGENTSCOPE_JAVA_能力盘点_RuoYi接入评估.md)
 - [Tool / Permission 官方文档](../agentscope-java/docs/v2/zh/docs/building-blocks/permission-system.md)
 
 **免责**：本次克隆为 Gitee 最新 `6.1.0`（2026-11-07），未验证与贵方实际使用的分支/版本差异；若实际版本低于 6.1.0，§2 的「已有 AI」与 §3.1 的「无写盘」都需要重新核对。
