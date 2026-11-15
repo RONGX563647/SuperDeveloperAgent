@@ -7,11 +7,13 @@ import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -41,9 +43,6 @@ import top.rongx.agent.runtime.workspace.ConversationManager;
 @RequestMapping("/api/v1")
 public class ChatController {
 
-    /** 单次会话最长 3 分钟。 */
-    private static final long TIMEOUT_MS = 180_000L;
-
     /** 变更相关工具：只有它们的返回会被翻译成确认卡事件（委派结果里也可能带 changeId）。 */
     private static final java.util.Set<String> CHANGE_TOOLS =
             java.util.Set.of("request_confirmation", "confirm", "run_ops_agent");
@@ -58,6 +57,9 @@ public class ChatController {
     private final AgentStreamLimiter limiter;
     private final AgentMetrics metrics;
     private final ConversationManager conversations;
+    /** 单次会话的 SSE 生命周期上限（默认 3 分钟，可按部署调整）。 */
+    private final long streamTimeoutMillis;
+    private final long heartbeatMillis;
 
     public ChatController(ChatService chatService,
                           ProjectContextResolver contextResolver,
@@ -66,7 +68,9 @@ public class ChatController {
                           ChangeRegistry changes,
                           AgentStreamLimiter limiter,
                           AgentMetrics metrics,
-                          ConversationManager conversations) {
+                          ConversationManager conversations,
+                          @Value("${agent.chat.timeout-ms:180000}") long streamTimeoutMillis,
+                          @Value("${agent.chat.heartbeat-seconds:15}") long heartbeatSeconds) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
@@ -75,6 +79,8 @@ public class ChatController {
         this.limiter = limiter;
         this.metrics = metrics;
         this.conversations = conversations;
+        this.streamTimeoutMillis = Math.max(30_000L, streamTimeoutMillis);
+        this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
     }
 
     /**
@@ -95,8 +101,10 @@ public class ChatController {
         // 3. 并发闸门：拿不到许可直接 429，不构建 Agent、不拉起 MCP
         AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
-        SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
+        SseEmitter emitter = new SseEmitter(streamTimeoutMillis);
+        Object sendLock = new Object();
         AtomicReference<Disposable> subscription = new AtomicReference<>();
+        AtomicReference<ScheduledFuture<?>> heartbeat = new AtomicReference<>();
         AtomicBoolean closed = new AtomicBoolean();
         AtomicLong seq = new AtomicLong();
         AtomicBoolean failed = new AtomicBoolean();
@@ -104,6 +112,7 @@ public class ChatController {
         io.micrometer.core.instrument.Timer.Sample sample = metrics.start();
         Runnable cancel = () -> {
             if (closed.compareAndSet(false, true)) {
+                SseHeartbeat.stop(heartbeat.get());
                 Disposable current = subscription.get();
                 if (current != null) {
                     current.dispose();
@@ -117,12 +126,15 @@ public class ChatController {
         };
         // 客户端断开 / 超时 / 派发错误都要取消上游，否则 Agent 与 MCP 会继续跑
         emitter.onTimeout(() -> {
-            log.warn("对话流超时，已取消 project={} session={}", ctx.projectId(), request.sessionId());
+            log.warn("对话流超时，已取消 project={} session={} timeout={}ms",
+                    ctx.projectId(), request.sessionId(), streamTimeoutMillis);
             cancel.run();
             emitter.complete();
         });
         emitter.onCompletion(cancel);
         emitter.onError(error -> cancel.run());
+        // 工具执行/模型思考期间没有事件时靠心跳保活，避免代理按空闲超时断流
+        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, cancel));
 
         try {
             Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
@@ -131,11 +143,12 @@ public class ChatController {
             Map<String, String> toolNames = new HashMap<>();
             Map<String, StringBuilder> toolResults = new HashMap<>();
             Disposable disposable = events.subscribe(
-                    event -> onEvent(event, emitter, ctx, toolNames, toolResults, seq, cancel),
+                    event -> onEvent(event, emitter, ctx, toolNames, toolResults, seq, cancel,
+                            sendLock),
                     error -> {
                         failed.set(true);
                         log.error("对话流异常 project={} env={}", ctx.projectId(), ctx.env(), error);
-                        sendError(emitter, error);
+                        sendError(emitter, error, sendLock);
                         cancel.run();
                         emitter.complete();
                     },
@@ -151,7 +164,7 @@ public class ChatController {
         } catch (RuntimeException error) {
             failed.set(true);
             log.error("对话启动失败 project={} env={}", ctx.projectId(), ctx.env(), error);
-            sendError(emitter, error);
+            sendError(emitter, error, sendLock);
             cancel.run();
             emitter.complete();
         }
@@ -160,7 +173,7 @@ public class ChatController {
 
     private void onEvent(AgentEvent event, SseEmitter emitter, ProjectContext ctx,
                          Map<String, String> toolNames, Map<String, StringBuilder> toolResults,
-                         AtomicLong seq, Runnable cancel) {
+                         AtomicLong seq, Runnable cancel, Object sendLock) {
         try {
             if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
                 toolNames.put(call.getToolCallId(), call.getToolCallName());
@@ -175,10 +188,12 @@ public class ChatController {
                 }
             }
             Map<String, Object> dto = eventMapper.toDto(event);
-            emitter.send(SseEmitter.event()
-                    .id(String.valueOf(seq.incrementAndGet()))
-                    .name("agent")
-                    .data(dto, MediaType.APPLICATION_JSON));
+            synchronized (sendLock) {
+                emitter.send(SseEmitter.event()
+                        .id(String.valueOf(seq.incrementAndGet()))
+                        .name("agent")
+                        .data(dto, MediaType.APPLICATION_JSON));
+            }
             // 变更单是"给人确认"的对象：在工具结果后补一条 change.created，
             // 前端据此展开确认卡片（原先只在正文里写单号，卡片永远不弹）
             if (event instanceof ToolResultEndEvent end) {
@@ -189,12 +204,14 @@ public class ChatController {
                 String changeId = toolName != null && CHANGE_TOOLS.contains(toolName)
                         && result != null ? changeIdOf(result.toString(), ctx) : null;
                 if (changeId != null) {
-                    emitter.send(SseEmitter.event()
-                            .id(String.valueOf(seq.incrementAndGet()))
-                            .name("agent")
-                            .data(Map.of("type", "change.created",
-                                    "payload", Map.of("changeId", changeId)),
-                                    MediaType.APPLICATION_JSON));
+                    synchronized (sendLock) {
+                        emitter.send(SseEmitter.event()
+                                .id(String.valueOf(seq.incrementAndGet()))
+                                .name("agent")
+                                .data(Map.of("type", "change.created",
+                                        "payload", Map.of("changeId", changeId)),
+                                        MediaType.APPLICATION_JSON));
+                    }
                 }
             }
         } catch (IOException clientGone) {
@@ -203,16 +220,18 @@ public class ChatController {
             emitter.complete();
         } catch (RuntimeException error) {
             log.error("对话事件推送失败 project={} env={}", ctx.projectId(), ctx.env(), error);
-            sendError(emitter, error);
+            sendError(emitter, error, sendLock);
             cancel.run();
             emitter.complete();
         }
     }
 
-    private void sendError(SseEmitter emitter, Throwable error) {
+    private void sendError(SseEmitter emitter, Throwable error, Object sendLock) {
         try {
-            emitter.send(SseEmitter.event().name("error")
-                    .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
+            synchronized (sendLock) {
+                emitter.send(SseEmitter.event().name("error")
+                        .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
+            }
         } catch (IOException | IllegalStateException ignored) {
             // 客户端已断开，无需再写
         }

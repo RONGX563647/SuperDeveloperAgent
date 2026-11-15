@@ -454,10 +454,12 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 - **性能**：SQLite 每库连接池 4→8（WAL 并发读）；`UserStore`/`GiteeAccountStore` 复用连接池；事件总线改用 `directBestEffort`（慢订阅者丢弃而非无界缓冲）；前端历史写 localStorage 合并为 800ms、流式滚动合并到 `requestAnimationFrame`。
 
 ### 5.18 DAG 并行调度与上下文治理（2026-11 新增，见 [ADR-0007](adr/0007-DAG并行调度与三级上下文治理.md)）
-- **`workspace_dispatch`（DAG 并行）**：调度 Agent 一次传入节点数组（`id/message/depends_on/required/timeout_seconds`），`WorkspaceDispatchScheduler` 把无依赖节点在 `max_parallel`（默认 4，上限 8）内同时派发；每个节点在自己的虚拟线程上等待，主循环只等「任意一个完成」，N 个互不依赖的目标总耗时≈最慢节点。依赖全部成功后才会派发后继；任一对必需节点的依赖失败，整条链路标记 `SKIPPED`（不占运行配额）。派发前用 Kahn 拓扑排序拒绝循环依赖，单节点超时会 cancel 对应 run。
+- **`workspace_dispatch`（DAG 并行）**：调度 Agent 一次传入节点数组（`id/message/depends_on/required/timeout_seconds`），`WorkspaceDispatchScheduler` 把无依赖节点在 `max_parallel`（默认 4，上限 8）内同时派发；每个节点在自己的虚拟线程上等待，主循环只等「任意一个完成」，N 个互不依赖的目标总耗时≈最慢节点。依赖全部成功后才会派发后继；任一对必需节点的依赖失败，整条链路标记 `SKIPPED`（不占运行配额）。派发前用 Kahn 拓扑排序拒绝循环依赖，单节点超时会 cancel 对应 run；整张 DAG 还有总时长上限（`max_duration_seconds`，默认 600，上限 1800），到点取消在跑节点并返回已完成的部分结果。
+- **服务端兜底**：`ConversationManager.dispatch` 用 `agent.workspace.dispatch.max-parallel` / `max-duration-seconds` 收紧模型传入的并行度与总时长——只能变小，不能放大，避免一次派发吃满工作区运行配额。
+- **SSE 保活**：调度入口默认 10 分钟（`agent.chat.super-timeout-ms`，覆盖整张 DAG），普通对话 3 分钟（`agent.chat.timeout-ms`）；`SseHeartbeat` 每 15 秒（`agent.chat.heartbeat-seconds`）发送注释行保活，并与业务事件共用同一把发送锁（`SseEmitter.send` 非线程安全）。
 - **提前终止**：`required=true` 的节点失败且 `abort_on_failure`（默认 true）时，停止派发未开始节点；`required` 节点全部成功后，未开始的可选节点不再派发，已在跑的可选节点直接取消并标记 `SKIPPED`。必需节点始终允许跑完，避免误杀有用结果。
 - **前缀缓存**：`GenerateOptions.cacheControl(true)`（`agent.model.prefix-cache`，默认开）。每轮的系统提示与工具 schema 保持稳定（装配顺序固定、提示词无时间戳/随机值），由服务端复用前缀 KV；不支持 `cache_control` 的兼容服务会忽略该字段。
-- **语义缓存**：`cache/ToolResultCache` 对只读工具结果做进程内缓存——key 为 `project|env|worktree|user + 工具名 + 归一化参数`，参数词元 Jaccard ≥ 0.9 视为同一问题；TTL 90 秒 + LRU 512 条。任何写工具成功执行后清空同 scope 缓存。`CachingAgentTool.install` 在 `ToolCatalog` 装配阶段原地包装四套 Toolkit，工具名与 schema 不变。
+- **语义缓存**：`cache/ToolResultCache` 对只读工具结果做进程内缓存——key 为 `project|env|worktree|user + 工具名 + 归一化参数`，参数词元 Jaccard ≥ 0.9 视为同一问题；TTL 90 秒 + LRU 512 条。任何写工具成功执行后清空同 scope 缓存。`CachingAgentTool.install` 在 `ToolCatalog` 装配阶段原地包装四套 Toolkit，工具名与 schema 不变。命中率通过 `workspace_snapshot` 末尾的 `tool_cache: hits/misses/hitRate/invalidations/size` 暴露。
 - **上下文精益（三层）**：① `CachingAgentTool` 统一截断超过 `agent.tools.max-output-chars`（默认 12000）的工具输出；② `ConversationContextTrimmer` 在状态落盘前按 `agent.context.max-chars`（默认 60000）/`keep-messages`（默认 24）裁剪最早的历史，保留开头 SYSTEM 提示且窗口不以 TOOL 开头（不破坏 tool_use/tool_result 配对），构造新状态而不修改运行中实例；③ 提示词要求「拿到足够信息立即回答、不复述长日志」。
 
 ---
@@ -667,6 +669,10 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 | `agent.tools.cache.enabled/ttl-seconds/max-entries/similarity` | true / 90 / 512 / 0.9 | 只读工具结果语义缓存（写操作成功即失效） |
 | `agent.tools.cache.exclude` | `conversation_wait,conversation_status,conversation_summarize,workspace_snapshot,ci_status` | 结果随时间变化、缓存会误导决策的工具，不缓存 |
 | `agent.context.max-chars/keep-messages` | 60000 / 24 | 会话历史落盘前的预算与最少保留条数（SYSTEM 提示不占预算） |
+| `agent.workspace.dispatch.max-parallel/max-duration-seconds` | 4 / 600 | DAG 派发的服务端上限：模型传入值只能被收紧 |
+| `agent.chat.timeout-ms` | 180000 | 普通对话 SSE 流的最长生命周期 |
+| `agent.chat.super-timeout-ms` | 600000 | 调度对话 SSE 流的最长生命周期（需覆盖整张 DAG） |
+| `agent.chat.heartbeat-seconds` | 15 | SSE 空闲心跳间隔（注释行保活） |
 | `agent.chat.max-concurrent` | 8 | 单实例同时进行的 Agent 轮次上限（超限 429） |
 | `agent.chat.limiter` | `memory` | `memory`=进程内信号量；`jdbc`=SQLite 租约（`_platform/rate_limit.db`），多实例部署时使用 |
 

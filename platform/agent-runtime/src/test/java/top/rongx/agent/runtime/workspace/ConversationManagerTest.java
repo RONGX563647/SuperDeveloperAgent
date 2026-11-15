@@ -25,6 +25,7 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
@@ -53,7 +54,8 @@ class ConversationManagerTest {
         WorkspaceRunExecutor executor = new WorkspaceRunExecutor(provider(() -> chat), store, store,
                 new WorkspaceEventBus(), top.rongx.agent.domain.run.RunLedgerRepository.noop(),
                 concurrency);
-        return new ConversationManager(store, store, store, projects, executor, userId -> false);
+        return new ConversationManager(store, store, store, projects, executor, userId -> false,
+                DispatchPlan.DEFAULT_MAX_PARALLEL, DispatchPlan.DEFAULT_MAX_DURATION_SECONDS);
     }
 
     private static <T> ObjectProvider<T> provider(Supplier<T> supplier) {

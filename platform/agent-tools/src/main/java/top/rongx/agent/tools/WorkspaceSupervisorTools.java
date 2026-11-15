@@ -15,6 +15,7 @@ import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.tools.cache.ToolResultCache;
 
 /**
  * 工作区调度 Agent 的工具面。
@@ -35,16 +36,19 @@ public class WorkspaceSupervisorTools {
     private static final long MAX_WAIT_SECONDS = 60L;
 
     private final WorkspaceSupervisorPort supervisor;
+    private final ToolResultCache cache;
 
-    public WorkspaceSupervisorTools(WorkspaceSupervisorPort supervisor) {
+    public WorkspaceSupervisorTools(WorkspaceSupervisorPort supervisor, ToolResultCache cache) {
         this.supervisor = supervisor;
+        this.cache = cache;
     }
 
     @Tool(name = "workspace_snapshot",
             description = "工作区总览：会话数量、运行中/失败数、任务统计与活动运行。只读。先看这个再决定下一步。",
             readOnly = true, concurrencySafe = true)
     public String snapshot(ProjectContext ctx) {
-        return guard(() -> supervisor.snapshot(ctx.projectId(), ctx.userId()));
+        return guard(() -> supervisor.snapshot(ctx.projectId(), ctx.userId())
+                + "\ntool_cache: " + cache.stats());
     }
 
     @Tool(name = "conversation_list",

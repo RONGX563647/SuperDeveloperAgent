@@ -3,11 +3,13 @@ package top.rongx.agent.gateway.web;
 import io.agentscope.core.event.AgentEvent;
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,7 +36,6 @@ import top.rongx.agent.runtime.workspace.ConversationManager;
 @RequestMapping("/api/v1")
 public class WorkspaceSuperController {
 
-    private static final long TIMEOUT_MS = 180_000L;
     private static final Logger log = LoggerFactory.getLogger(WorkspaceSuperController.class);
 
     private final ChatService chatService;
@@ -43,19 +44,28 @@ public class WorkspaceSuperController {
     private final CurrentUser currentUser;
     private final AgentStreamLimiter limiter;
     private final ConversationManager conversations;
+    /** 调度会话可能要等整张 DAG 跑完，默认 10 分钟（可按部署调整）。 */
+    private final long streamTimeoutMillis;
+    private final long heartbeatMillis;
 
     public WorkspaceSuperController(ChatService chatService,
                                     ProjectContextResolver contextResolver,
                                     AgentEventMapper eventMapper,
                                     CurrentUser currentUser,
                                     AgentStreamLimiter limiter,
-                                    ConversationManager conversations) {
+                                    ConversationManager conversations,
+                                    @Value("${agent.chat.super-timeout-ms:600000}")
+                                    long streamTimeoutMillis,
+                                    @Value("${agent.chat.heartbeat-seconds:15}")
+                                    long heartbeatSeconds) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
         this.currentUser = currentUser;
         this.limiter = limiter;
         this.conversations = conversations;
+        this.streamTimeoutMillis = Math.max(30_000L, streamTimeoutMillis);
+        this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
     }
 
     @PostMapping(value = "/workspaces/{projectId}/super/stream",
@@ -76,12 +86,15 @@ public class WorkspaceSuperController {
         }
         AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
-        SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
+        SseEmitter emitter = new SseEmitter(streamTimeoutMillis);
+        Object sendLock = new Object();
         AtomicReference<Disposable> subscription = new AtomicReference<>();
+        AtomicReference<ScheduledFuture<?>> heartbeat = new AtomicReference<>();
         AtomicBoolean closed = new AtomicBoolean();
         AtomicLong seq = new AtomicLong();
         Runnable cancel = () -> {
             if (closed.compareAndSet(false, true)) {
+                SseHeartbeat.stop(heartbeat.get());
                 Disposable current = subscription.get();
                 if (current != null) {
                     current.dispose();
@@ -90,21 +103,23 @@ public class WorkspaceSuperController {
             }
         };
         emitter.onTimeout(() -> {
-            log.warn("调度对话超时 project={}", projectId);
+            log.warn("调度对话超时 project={} timeout={}ms", projectId, streamTimeoutMillis);
             cancel.run();
             emitter.complete();
         });
         emitter.onCompletion(cancel);
         emitter.onError(error -> cancel.run());
+        // 长任务期间没有业务事件时靠心跳保活；发送失败会走 cancel 释放配额
+        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, cancel));
 
         try {
             Disposable disposable = chatService
                     .streamSupervisor(ctx, supervisor.id(), request.message())
                     .subscribe(
-                            event -> send(emitter, event, seq, cancel),
+                            event -> send(emitter, event, seq, cancel, sendLock),
                             error -> {
                                 log.error("调度对话异常 project={}", projectId, error);
-                                sendError(emitter, error);
+                                sendError(emitter, error, sendLock);
                                 cancel.run();
                                 emitter.complete();
                             },
@@ -118,36 +133,41 @@ public class WorkspaceSuperController {
             }
         } catch (RuntimeException error) {
             log.error("调度对话启动失败 project={}", projectId, error);
-            sendError(emitter, error);
+            sendError(emitter, error, sendLock);
             cancel.run();
             emitter.complete();
         }
         return emitter;
     }
 
-    private void send(SseEmitter emitter, AgentEvent event, AtomicLong seq, Runnable cancel) {
+    private void send(SseEmitter emitter, AgentEvent event, AtomicLong seq, Runnable cancel,
+                      Object sendLock) {
         try {
-            emitter.send(SseEmitter.event()
-                    .id(String.valueOf(seq.incrementAndGet()))
-                    .name("agent")
-                    .data(eventMapper.toDto(event), MediaType.APPLICATION_JSON));
+            synchronized (sendLock) {
+                emitter.send(SseEmitter.event()
+                        .id(String.valueOf(seq.incrementAndGet()))
+                        .name("agent")
+                        .data(eventMapper.toDto(event), MediaType.APPLICATION_JSON));
+            }
         } catch (IOException clientGone) {
             cancel.run();
             emitter.complete();
         } catch (RuntimeException error) {
-            sendError(emitter, error);
+            sendError(emitter, error, sendLock);
             cancel.run();
             emitter.complete();
         }
     }
 
-    private void sendError(SseEmitter emitter, Throwable error) {
+    private void sendError(SseEmitter emitter, Throwable error, Object sendLock) {
         String message = error.getMessage();
         try {
-            emitter.send(SseEmitter.event().name("error")
-                    .data(Map.of("message", message == null || message.isBlank()
-                            ? error.getClass().getSimpleName() : message),
-                            MediaType.APPLICATION_JSON));
+            synchronized (sendLock) {
+                emitter.send(SseEmitter.event().name("error")
+                        .data(Map.of("message", message == null || message.isBlank()
+                                ? error.getClass().getSimpleName() : message),
+                                MediaType.APPLICATION_JSON));
+            }
         } catch (IOException | IllegalStateException ignored) {
             // 客户端已断开，无需再写
         }

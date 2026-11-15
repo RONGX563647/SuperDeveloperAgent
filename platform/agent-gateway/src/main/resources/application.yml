@@ -39,9 +39,18 @@ agent:
     limiter: ${AGENT_CHAT_LIMITER:memory}
     max-concurrent: ${AGENT_CHAT_MAX_CONCURRENT:8}
     lease-ttl-seconds: ${AGENT_CHAT_LEASE_TTL:600}
+    # 单条 SSE 流的最长生命周期；调度入口要等整张 DAG，默认给到 10 分钟
+    timeout-ms: ${AGENT_CHAT_TIMEOUT_MS:180000}
+    super-timeout-ms: ${AGENT_CHAT_SUPER_TIMEOUT_MS:600000}
+    # 空闲心跳间隔：没有业务事件时发注释行保活，避免代理按空闲超时断流
+    heartbeat-seconds: ${AGENT_CHAT_HEARTBEAT_SECONDS:15}
   # 项目工作区根目录：每个项目一个子目录（方案 D 从这里读 ci/actions.yml / Makefile）
   workspace:
     root: ${AGENT_WORKSPACE_ROOT:./data/workspaces}
+    # DAG 派发的服务端上限：模型只能收紧，不能放大
+    dispatch:
+      max-parallel: ${AGENT_WORKSPACE_DISPATCH_MAX_PARALLEL:4}
+      max-duration-seconds: ${AGENT_WORKSPACE_DISPATCH_MAX_DURATION:600}
   # 流水线：项目与环境来自配置/接入，不在代码里写死
   pipeline:
     # 构建历史落盘（重启可恢复）

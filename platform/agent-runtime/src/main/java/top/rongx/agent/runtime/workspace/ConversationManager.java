@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +55,9 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     private final ProjectRepository projects;
     private final WorkspaceRunExecutor executor;
     private final UserRolePort userRoles;
+    /** 服务端上限：模型传入的并行度/总时长只能被收紧，不能放大。 */
+    private final int dispatchMaxParallel;
+    private final int dispatchMaxDurationSeconds;
     private final WorkspaceDispatchScheduler dispatcher = new WorkspaceDispatchScheduler();
 
     public ConversationManager(ConversationRepository conversations,
@@ -61,13 +65,19 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                                WorkspaceTaskRepository tasks,
                                ProjectRepository projects,
                                WorkspaceRunExecutor executor,
-                               UserRolePort userRoles) {
+                               UserRolePort userRoles,
+                               @Value("${agent.workspace.dispatch.max-parallel:4}")
+                               int dispatchMaxParallel,
+                               @Value("${agent.workspace.dispatch.max-duration-seconds:600}")
+                               int dispatchMaxDurationSeconds) {
         this.conversations = conversations;
         this.runs = runs;
         this.tasks = tasks;
         this.projects = projects;
         this.executor = executor;
         this.userRoles = userRoles;
+        this.dispatchMaxParallel = Math.max(1, dispatchMaxParallel);
+        this.dispatchMaxDurationSeconds = Math.max(1, dispatchMaxDurationSeconds);
     }
 
     /** 每个工作区（按用户）一个调度会话；不存在时创建。 */
@@ -378,7 +388,11 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 return ConversationManager.this.cancelRun(runId, ownerUserId);
             }
         };
-        return dispatcher.execute(plan, backend);
+        // 服务端配置兜底：收紧模型给的并行度与总时长，避免一次派发把工作区配额吃满
+        DispatchPlan capped = new DispatchPlan(plan.nodes(), plan.abortOnFailure(),
+                Math.min(plan.maxParallel(), dispatchMaxParallel),
+                Math.min(plan.maxDurationSeconds(), dispatchMaxDurationSeconds));
+        return dispatcher.execute(capped, backend);
     }
 
     @Override

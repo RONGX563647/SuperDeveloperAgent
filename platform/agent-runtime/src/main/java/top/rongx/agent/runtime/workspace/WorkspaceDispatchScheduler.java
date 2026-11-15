@@ -10,8 +10,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.conversation.ConversationRun;
@@ -31,7 +34,8 @@ import top.rongx.agent.domain.conversation.DispatchResult;
  *       不再占用工作区运行配额；</li>
  *   <li><b>提前终止</b>：必需节点失败（abortOnFailure）或必需节点已全部成功时，
  *       不再派发未开始的可选节点，并取消在跑的可选节点；</li>
- *   <li><b>有界</b>：单节点超时会 cancel 对应 run；同时在跑节点数受 maxParallel 限制。</li>
+ *   <li><b>有界</b>：单节点超时会 cancel 对应 run；同时在跑节点数受 maxParallel 限制；
+ *       整张 DAG 还有总时长上限，超时取消在跑节点并如实返回部分结果。</li>
  * </ul>
  *
  * <p>不依赖 Spring：通过 {@link Backend} 注入会话创建 / 派发 / 等待 / 取消，便于单测。
@@ -62,6 +66,7 @@ public final class WorkspaceDispatchScheduler {
 
     public DispatchResult execute(DispatchPlan plan, Backend backend) {
         long startedAt = System.currentTimeMillis();
+        long globalDeadline = startedAt + plan.maxDurationSeconds() * 1000L;
         Map<String, DispatchNode> nodes = new LinkedHashMap<>();
         plan.nodes().forEach(node -> nodes.put(node.id(), node));
         detectCycles(nodes);
@@ -74,6 +79,14 @@ public final class WorkspaceDispatchScheduler {
         ExecutorService waiters = Executors.newVirtualThreadPerTaskExecutor();
         try {
             while (true) {
+                // 0. 全局时长上限：到点后取消在跑节点，避免整张 DAG 无限拖长
+                if (!earlyStopped && System.currentTimeMillis() >= globalDeadline
+                        && results.size() < nodes.size()) {
+                    earlyStopped = true;
+                    reason = "DAG 总时长超过 " + plan.maxDurationSeconds() + "s，已取消在跑节点";
+                    abortAll(active, backend, results, reason, startedAt);
+                }
+
                 // 1. 就绪即派发（受并发上限约束）
                 if (!earlyStopped) {
                     for (DispatchNode node : nodes.values()) {
@@ -100,7 +113,8 @@ public final class WorkspaceDispatchScheduler {
                 }
 
                 // 2. 只等"任意一个"完成：互不依赖的节点是并行等待，而不是逐个串行
-                waitAny(active);
+                // 切片同时受全局 deadline 约束，超时后回到循环顶部统一收尾
+                waitAny(active, globalDeadline);
 
                 // 3. 收割已完成节点
                 for (Iterator<Map.Entry<String, Active>> it = active.entrySet().iterator();
@@ -261,14 +275,35 @@ public final class WorkspaceDispatchScheduler {
         }
     }
 
-    private static void waitAny(Map<String, Active> active) {
+    private static void waitAny(Map<String, Active> active, long globalDeadline) {
         CompletableFuture<?>[] futures = active.values().stream()
                 .map(Active::future).toArray(CompletableFuture[]::new);
+        long remaining = globalDeadline - System.currentTimeMillis();
+        long slice = Math.max(1L, Math.min(WAIT_SLICE_MILLIS, remaining));
         try {
-            CompletableFuture.anyOf(futures).join();
-        } catch (RuntimeException e) {
+            CompletableFuture.anyOf(futures).get(slice, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            // 切片到期：回到主循环检查全局 deadline / 收割已完成节点
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
             // 单个 future 内部已兜底成结果；这里不应中断主循环
             log.debug("等待 DAG 节点时出现异常：{}", e.getMessage());
+        }
+    }
+
+    /** 全局超时：在跑节点（含必需节点）一并取消，结果如实标记为 TIMEOUT。 */
+    private static void abortAll(Map<String, Active> active, Backend backend,
+                                 Map<String, DispatchNodeResult> results, String reason,
+                                 long startedAt) {
+        long elapsed = System.currentTimeMillis() - startedAt;
+        for (Iterator<Map.Entry<String, Active>> it = active.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, Active> entry = it.next();
+            Active running = entry.getValue();
+            cancelQuietly(backend, running.runId());
+            results.put(entry.getKey(), new DispatchNodeResult(entry.getKey(),
+                    running.conversationId(), running.runId(), "TIMEOUT", true, "", reason, elapsed));
+            it.remove();
         }
     }
 

@@ -147,6 +147,38 @@ class WorkspaceDispatchSchedulerTest {
         assertTrue(result.find("good").orElseThrow().skipped());
     }
 
+    @Test
+    @DisplayName("DAG 总时长超限：取消在跑节点并返回部分结果")
+    void globalTimeoutCancelsInFlightNodes() {
+        FakeBackend backend = new FakeBackend();
+        backend.delayMillis = 10_000;
+        DispatchPlan plan = new DispatchPlan(List.of(
+                node("a", 60, true),
+                node("b", 60, true)), true, 4, 1);
+
+        long start = System.currentTimeMillis();
+        DispatchResult result = scheduler.execute(plan, backend);
+        long elapsed = System.currentTimeMillis() - start;
+
+        assertTrue(result.earlyStopped());
+        assertTrue(result.reason().contains("总时长"), "原因应说明全局超时：" + result.reason());
+        assertEquals(2, result.nodes().stream()
+                .filter(node -> "TIMEOUT".equals(node.status())).count());
+        assertTrue(elapsed < 5_000, "全局超时未生效：" + elapsed + "ms");
+        assertEquals(2, backend.cancelled.size(), "在跑节点都应被取消");
+    }
+
+    @Test
+    @DisplayName("计划参数越界时收敛到安全默认值")
+    void planValuesAreClamped() {
+        DispatchPlan plan = new DispatchPlan(List.of(node("a", 60, true)), true, 0, 99_999);
+
+        assertEquals(DispatchPlan.DEFAULT_MAX_PARALLEL, plan.maxParallel());
+        assertEquals(DispatchPlan.MAX_MAX_DURATION_SECONDS, plan.maxDurationSeconds());
+        assertEquals(DispatchPlan.DEFAULT_MAX_DURATION_SECONDS,
+                new DispatchPlan(List.of(node("a", 60, true)), true, 4).maxDurationSeconds());
+    }
+
     private static DispatchNode node(String id, int timeoutSeconds, boolean required) {
         return new DispatchNode(id, null, null, null, null, "目标-" + id, List.of(), required,
                 timeoutSeconds);
