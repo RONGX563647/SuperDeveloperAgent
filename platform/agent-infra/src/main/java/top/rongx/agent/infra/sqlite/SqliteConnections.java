@@ -40,14 +40,38 @@ public final class SqliteConnections {
         return POOLS.computeIfAbsent(key, ignored -> new Pool(key)).borrow();
     }
 
+    /**
+     * 释放某个库的全部空闲连接并移除连接池。
+     *
+     * <p>连接池会一直持有 SQLite 文件句柄；Windows 上这会让临时目录（测试 @TempDir、
+     * 或已下线的工作区）无法删除。销毁工作区、或测试收尾时显式调用即可。
+     * 仅关闭空闲连接：仍在借出中的连接由其 close() 归还后自行关闭真实连接。
+     */
+    public static void closePool(Path dbFile) {
+        Pool pool = POOLS.remove(dbFile.toAbsolutePath().normalize().toString());
+        if (pool != null) {
+            pool.shutdownPool();
+        }
+    }
+
     private static final class Pool {
 
         private final String url;
         private final LinkedBlockingQueue<Connection> idle = new LinkedBlockingQueue<>();
         private final Semaphore permits = new Semaphore(MAX_CONNECTIONS_PER_DB);
+        private final AtomicBoolean shutdown = new AtomicBoolean();
 
         private Pool(String absolutePath) {
             this.url = "jdbc:sqlite:" + absolutePath;
+        }
+
+        /** 关闭池：标志置位后归还的连接直接真关闭，避免句柄留在已移除的池里。 */
+        private void shutdownPool() {
+            shutdown.set(true);
+            Connection idleConnection;
+            while ((idleConnection = idle.poll()) != null) {
+                closeQuietly(idleConnection);
+            }
         }
 
         private Connection borrow() throws SQLException {
@@ -136,7 +160,7 @@ public final class SqliteConnections {
                 permits.release();
                 return;
             }
-            if (!idle.offer(connection)) {
+            if (shutdown.get() || !idle.offer(connection)) {
                 closeQuietly(connection);
             }
             permits.release();
