@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档版本 | v1.6（现行基线） |
-| 日期 | 2026-11-07 |
-| 状态 | 现行（产品基线；代码现状以 [Code-Wiki](Code-Wiki.md) 为准） |
+| 文档版本 | v1.6（产品稿） |
+| 日期 | 2026-11-15（现状核对） |
+| 状态 | **Draft（产品稿，现状以 [Code-Wiki](Code-Wiki.md) / [CODE-MAP](CODE-MAP.md) 为准）** |
 | 产品形态 | **独立部署的 Agent 平台**（AgentScope Java），内网运行，与业务服务器分离 |
 | 服务对象 | 开发人员 / 运维（SRE） / 项目负责人 |
 | 覆盖能力 | ① 读取 Issue 改 Bug　② AI 自动化运维　③ 自动化部署项目 |
@@ -15,6 +15,14 @@
 | **v1.5 变更** | ① **构建固定在平台服务器**（P10）→ 引出镜像跨机传递方案（§4.7.11）；② **取消用户角色**（P11）→ 改为「按动作设门禁 + 双人规则」（§2.1、§4.2、§4.10） |
 | **v1.6 变更** | 取消"第二人确认"，改为**本人确认 + agent 提请**（§4.10 确认模型与四道技术守卫）；明确 **agent 不能自我批准**：`confirm` 工具只把变更单推给用户确认，不签发令牌、不执行；残余风险与补偿控制（自动回滚、限速、高危二次密码） |
 | 关联文档 | [多项目托管 v4](多项目托管设计-v4.md) ｜ [窄控制器](窄控制器设计-单机滚动部署器.md) ｜ [Code Wiki](Code-Wiki.md) |
+
+> **状态与现状核对（2026-11-15）**：本稿是产品目标与历史决策记录，**不是当前实现说明**。与源码不一致处按 Code-Wiki 为准：
+> - **认证/角色**：现行 Sa-Token Bearer（30 天）+ `ADMIN/DEVOPS/VIEWER` 三角色与权限码（`Role.java`/`UserStore.java`）；非 JWT、非“无角色”。§2.1、§4.10、P11 为 v1.5 产品目标。
+> - **持久化**：SQLite（users/projects/governance/automation/run_ledger/rate_limit），非 PG/MySQL；§4.4、§4.8 的 `project_member`/`project_credential`/`identity_source` 未实现。
+> - **CI**：自研引擎，无 Jenkins/SSO/镜像仓库；§4.1 图与 §4.3 的 Jenkins 适配器为历史设计。
+> - **工具面**：现行 62 个 `@Tool`（Code-Wiki §7）；§3.1、§4.7.6 的多数工具名（`issue_read`、`ci_log_digest`、`ci_artifacts`、`k8s_status`、`db_query`、`runbook_run` 等）**未实现**。
+> - **执行面**：非生产完整 Toolkit bean 名为 `agentToolkit`（源码字段 `fullToolkit`）；破坏性 L2 与 L3 均需一次性确认令牌。
+> - **stage**：现行 `action/deploy/health/rollback` 四类 + 内部 `git-checkout`；`mvn/npm/docker-build/static-publish` 未实现。
 
 ---
 
@@ -36,7 +44,7 @@
 | P8 | **暂无 Vault 或等价密钥管理**，凭证由平台自身加密存储 |
 | P9 | **暂不做 SSO**，平台使用本地账号 + 角色 |
 | P10 | **构建在平台服务器执行**（不在业务宿主机）；构建机需具备 Docker 能力与构建缓存 |
-| P11 | **不区分用户角色**：所有成员权限相同，改为**按动作设门禁**（action-gated），不再使用 RBAC 角色矩阵 |
+| P11 | **不区分用户角色**（v1.5 产品目标；**现状代码已实现** `ADMIN/DEVOPS/VIEWER` 三角色与权限码，见 Code-Wiki §5.9，故本前提已过时） |
 
 ### 0.2 假设（⚠️ 若不成立需重估）
 
@@ -93,7 +101,7 @@
 - **C2 AI 自动化运维**：巡检、告警归因、根因假设与验证、Runbook 受限执行；
 - **C3 自动化部署项目**：面板内构建与测试（引擎可插拔）、滚动部署、健康门禁、回滚、数据库迁移治理、变更编排。
 
-**核心设计约束（贯穿全文）**：AI 负责决策与受控执行；**生产写凭证只存在执行面，模型上下文不持有**。非生产 L2 动作可由 `fullToolkit` 直接执行；L3/生产/破坏性动作必须人工确认（`request → confirm → apply`），令牌绑 `planHash`。
+**核心设计约束（贯穿全文）**：AI 负责决策与受控执行；**生产写凭证只存在执行面，模型上下文不持有**。非生产 L2 动作由完整 Toolkit（bean `agentToolkit`，源码字段 `fullToolkit`）直接执行；L3/生产/**破坏性 L2** 动作必须人工确认（`request → confirm → apply`），令牌绑 `planHash`、5 分钟有效。
 
 ### 1.3 成功指标（首期 6 个月）
 
@@ -111,7 +119,9 @@
 
 ## 2. User Experience & Functionality
 
-### 2.1 用户角色：只有一种（全员同权）
+### 2.1 用户角色：产品目标“全员同权”（现状已实现三角色）
+
+> **现状提示（2026-11-15）**：代码已实现 `ADMIN/DEVOPS/VIEWER` 三角色与权限码（`Role.java`、`SaPermissionSource`），本节“无角色”是 v1.5 产品目标，**不是当前实现**；现行门禁为“角色权限码 + 分环境策略 + 动作确认”三层。
 
 **决策（v1.5）：不区分角色。所有人都是「平台成员」，权限相同。**
 
@@ -269,7 +279,7 @@ AC：
 
 ### 3.1 工具需求（Tool Surface）
 
-> 原则：**agent 没有 shell、没有 kubectl、没有 psql**。所有能力都是强类型工具。
+> ⚠️ **本节为早期规划工具面，多数未实现**：`issue_read`/`issue_comment`/`code_symbols`/`git_blame`/`metrics_query`/`log_query`/`k8s_status`/`db_query`/`runbook_run`/`ci_log_digest`/`ci_artifacts`/`db_plan_migration` 等**均不在现行 62 个 `@Tool` 中**。现行工具以 Code-Wiki §7 为准（`list_actions`/`plan_action`/`run_action`/`ci_run`/`ci_status`/`read_run_log`/`ci_dry_run`/`request_confirmation` 等）。下表保留为能力目标。
 
 **C1 代码与工单**
 
@@ -329,23 +339,25 @@ AC：
 
 ### 4.1 架构总览
 
+> 图为 v1.3 目标架构示意；**现行实现无 SSO、无 Jenkins、持久化用 SQLite**（见 Code-Wiki §3/§5.9/§5.11）。
+
 ```mermaid
 flowchart TB
     subgraph U["使用者"]
         DEV["开发者"]; SRE["SRE"]; OWNER["负责人"]
     end
     subgraph P["Agent 平台（独立服务器）"]
-        GW["网关：SSO / SSE / 审计入口"]
+        GW["网关：Sa-Token / SSE / 审计入口"]
         RT["运行时：Agent 编排 / 模型路由 / 预算"]
         TOOLS["工具层：代码/工单/日志/指标/CI/部署"]
         GOV["治理：审批 / 策略 / 风险分级"]
         EXE["执行面（确定性，持写凭证）<br/>Deployer · Migrator · Dispatcher"]
         SBX["沙箱：Docker（每任务隔离）"]
-        DB[("PG/MySQL：项目/任务/审计")]
+        DB[("SQLite：项目/任务/审计")]
         KB["知识：Skill / Runbook / 复盘"]
     end
     subgraph B["被管环境（单机 Docker）"]
-        GIT["Gitee/GitLab"]; JEN["Jenkins"]
+        GIT["Gitee/GitLab"]
         APP["ruoyi-server ×2 + nginx"]
         DBM[("MySQL")]; LOGS["日志/actuator"]
     end
@@ -355,7 +367,7 @@ flowchart TB
     RT --> SBX
     TOOLS --> KB; TOOLS --> DB
     TOOLS -.只读.-> GIT; TOOLS -.只读.-> LOGS; TOOLS -.只读.-> DBM
-    EXE --> GIT; EXE --> JEN; EXE --> APP; EXE --> DBM
+    EXE --> GIT; EXE --> APP; EXE --> DBM
 
     style RT fill:#FDEBE4,stroke:#E06C2A
     style EXE fill:#E8F3EC,stroke:#1E7D4F
@@ -382,7 +394,7 @@ flowchart TB
 |---|---|---|---|
 | Gitee / GitLab | REST API + Webhook | 按项目 token | webhook 用 `delivery_id` 幂等；回写限流 |
 | 代码仓库 | clone（浅）+ `git worktree` | 按项目 token（走 `GIT_ASKPASS`） | **禁止 `ext::` / `file://` 协议** |
-| **CI 引擎** | 适配器（`PipelineEngine`）；平台侧统一门面 | 按引擎（GitLab token / Jenkins 账号） | 见 §4.7；**不用 iframe 嵌第三方 UI**；参数只允许枚举 |
+| **CI 引擎** | 自研 `PipelineEngine`（早期曾评估适配 Jenkins/GitLab CI，现行不接外部引擎） | 平台内部 | 见 §4.7；**不用 iframe 嵌第三方 UI**；参数只允许枚举 |
 | 日志 | **文件读取**（SFTP/SSH 只读 或 共享卷），增量 tail + 轮转感知 | 只读账号 | 见 §4.9 |
 | 密钥 | **平台内加密存储**（AES-GCM，主密钥来自环境/keystore） | 平台主密钥 | 见 §4.8；无 Vault |
 | 业务服务 | `/actuator/**` | Basic Auth（**建议单建只读账号**） | 健康判定与只读诊断 |
@@ -399,17 +411,17 @@ release / change（变更单）/ migration_plan                    ← 部署与
 knowledge（skill/runbook/postmortem）/ quota                  ← 知识与配额
 ```
 
-> 工单正文**不落库**，只存 `issue_external_id` + 执行态 + 证据快照。
+> **概念模型，非现行表结构**：现行 SQLite 表为 `projects`、`env_templates/env_resources/env_vars/project_env_overrides/env_bindings`、`secrets`、`change_plans`、`code_patches`、`run_ledger` 等（Code-Wiki §5.11/§5.15）；`project_member`、`project_credential`、`approval`、`quota` 未建表。
 
 ### 4.5 安全与隐私
 
 | 要求 | 措施 |
 |---|---|
-| 身份与鉴权 | 平台本地账号（暂不做 SSO，见 §4.10）；平台身份 ≠ 业务身份；**门禁按动作而非角色**（§2.1） |
+| 身份与鉴权 | 平台本地账号（暂不做 SSO）；平台身份 ≠ 业务身份；**现行实现为角色权限码 + 按动作/分环境门禁**（`Role.java`；§2.1 的“无角色”为目标） |
 | 确认机制 | 生产变更需**本人在结构化确认卡上确认**；agent 只能提请、**不能确认**（四道守卫见 §4.10） |
 | 越权防护 | projectId 服务端绑定；凭证按 (project, env, capability) 切片 |
 | 提示注入 | 日志/工单/代码注释视为**不可信数据**；先结构化再入上下文；能力集由配置决定 |
-| 命令执行 | 沙箱镜像**按 digest 钉死**、非 root（65532）、pids/内存/CPU/tmpfs 限额、docker.sock 权限校验 |
+| 命令执行 | 沙箱镜像按 digest 钉死（建议）、非 root（现行 `1000:1000`）、pids/内存/CPU/tmpfs 限额、docker.sock 权限校验 |
 | 审计 | 三件套：操作审计（谁让 AI 做了什么）、变更审计（PR + 发布记录 + 配置 diff）、决策审计（事件流回放） |
 | 留存 | 审计日志 **≥ 6 个月**；不满足导出标识要求时须留痕（对齐《AI 生成合成内容标识办法》） |
 | 数据出境 | 模型必须私有化或境内合规；关闭供应商训练/留存 |
@@ -449,7 +461,7 @@ knowledge（skill/runbook/postmortem）/ quota                  ← 知识与配
 | Java：Maven + JDK（版本来自 `pom.xml`） | Gradle / 多模块矩阵构建 |
 | Vue：pnpm/npm/yarn（按锁文件自动识别）+ Vite | 其他前端框架的特殊构建链 |
 | 7 个动作 + 4 种 stage type | 插件体系 / 共享库 / DSL 脚本 |
-| 单机串行、单阶段顺序执行 | 分布式 agent / 并行矩阵 / 多分支自动发现 |
+| 项目级串行；不同项目可并行；DAG 节点可并行（上限 8） | 分布式 agent / 并行矩阵 / 多分支自动发现 |
 | 两种交付物：容器镜像 + 静态站点 | 制品仓库（除非已有 Harbor/Nexus） |
 
 > 任何"能不能支持 X 语言/加个插件"的提案**一律走评审，默认拒绝**。这条是防止自研引擎失控的唯一屏障。
@@ -466,6 +478,8 @@ knowledge（skill/runbook/postmortem）/ quota                  ← 知识与配
 > 一句话：**「数据」能被治理，「代码」不能。** 这也是为什么"复刻 Jenkins"不现实，"复刻它的 20%"很现实。
 
 #### 4.7.3 PipelineSpec v2（双栈示意）
+
+> ⚠️ **未实现的历史设计稿**：现行解析器只接受 `action/deploy/health/rollback`（及内部 `git-checkout`），**不接受**下列 `mvn/npm/docker-build/static-publish`。现行 schema 见 Code-Wiki §5.2/§5.5。
 
 ```yaml
 # 后端：产出容器镜像
@@ -491,11 +505,12 @@ deliverable: static
 #### 4.7.4 执行模型
 
 ```
-① Run 调度     项目级串行（concurrency=1）+ 全局并发上限 + 队列可见
-② Stage 执行   每 stage 一个一次性容器：镜像按 digest 钉死、非 root、内存/CPU/pids 限额
-              （**运行在平台机**；Docker 由执行器组件持有，经 socket proxy 白名单）
-③ 产物         docker-build 由执行器执行（不经沙箱）；static-publish 由 publisher 执行
-④ 日志         容器 stdout/stderr 逐行 → SSE 推送 + 落库（头尾保留、中间折叠）
+① Run 调度     项目级串行（同一项目 concurrency=1）+ 全局并发上限 + 队列可见
+② Stage 执行   每个 action 命令一次 docker run（同 run 共用工作区与依赖缓存卷）：
+              非 root（1000:1000）、内存/CPU/pids 限额
+              （**运行在平台机**；Docker 由执行器组件持有）
+③ 产物         image_package 由执行器执行；静态产物由 deploy 阶段发布
+④ 日志         容器 stdout/stderr 逐行 → SSE 推送 + 落盘（脱敏后保留）
 ```
 
 **网络**：构建网络 `build-net` 只允许访问 Nexus / npm 镜像 / 私有 registry，**禁止公网**（防供应链拉取与外传）。
@@ -513,9 +528,11 @@ deliverable: static
 
 > **未来若改接外部引擎**（GitLab CI 等），只需实现同样的 stage 映射（action/deploy/health/rollback），工具面与 `PipelineSpec` 不变——这是 v1.2 留下的可逆性。
 
-#### 4.7.6 工具面（agent 看见的只有这些）
+#### 4.7.6 工具面（早期规划；现行工具见 Code-Wiki §7）
 
-| 工具 | 入参 | 级别 | 说明 |
+> ⚠️ 下表为 v1.3 规划。**现行未实现** `ci_pipeline_schema`/`ci_log_digest`/`ci_artifacts`；现行对应能力为 `ci_list_pipelines`、`ci_status`、`read_run_log`、`wait_run`、`ci_history`、`release_trace`、`ci_cancel`、`ci_dry_run`（不含产物列表工具）。
+
+| 工具（规划） | 入参 | 级别 | 现行替代/说明 |
 |---|---|---|---|
 | `ci_list_pipelines` | — | L0 | 当前项目可用流水线（**平台语义**：build / test / package / deploy） |
 | `ci_pipeline_schema` | `pipelineId` | L0 | 参数 schema（枚举值），供模型填写 |
@@ -541,6 +558,8 @@ deliverable: static
 > ⚠️ **如果没有 Maven 镜像（T7）**，每次构建 5–10 分钟，工程师等两次就不用了。这条是"必需项"，不是优化项。
 
 #### 4.7.8 与部署的衔接（两种交付物、两种语义）
+
+> ⚠️ **窄控制器未实现**：本节的“摘流 → 换容器”滚动发布仍在设计中；现行部署由 `DockerDeployer`/`ServerDeployer`/仓库配方完成（Code-Wiki §4.4/§5.7）。
 
 | 交付物 | 发布方式 | 回滚方式 | 时长 |
 |---|---|---|---|
@@ -641,7 +660,7 @@ ACQUIRE_IMAGE:
 
 ### 4.9 日志接入（文件日志方案）
 
-**现状（A 级核实）**：`/docker/server1/logs` 与 `/docker/server2/logs` 挂载到容器内 `./logs`，文件为 `sys-console.log` / `sys-info.log` / `sys-error.log`（滚动 + 异步 appender），**双副本各一份**。
+**首期现场假设（未在本仓库代码中体现，需现场核实）**：`/docker/server1/logs` 与 `/docker/server2/logs` 挂载到容器内 `./logs`，文件为 `sys-console.log` / `sys-info.log` / `sys-error.log`（滚动 + 异步 appender），**双副本各一份**。现行平台的 `app_logs`/`read_run_log` 读取的是运行日志与平台托管进程日志，尚未接入该 RuoYi 文件日志栈。
 
 | 方案 | 做法 | 评价 |
 |---|---|---|
@@ -662,16 +681,18 @@ ACQUIRE_IMAGE:
 
 ---
 
-### 4.10 登录、账号与门禁（无 SSO、无角色）
+### 4.10 登录、账号与门禁（无 SSO；角色为现行实现）
+
+> **现状提示（2026-11-15）**：现行是 **Sa-Token Bearer（30 天）+ BCrypt + `ADMIN/DEVOPS/VIEWER` 三角色**，不是 JWT/刷新令牌，也不是“无角色”；`identity_source`/`is_service`/密码锁定策略**未实现**。下表“设计”列保留为产品目标，现状见 Code-Wiki §5.9。
 
 | 项 | 设计 |
 |---|---|
-| 账号 | 本地账号：用户名 + 密码（**BCrypt**）；**无角色，全员同权** |
-| 扩展位 | `user.identity_source`（`local`/`oidc`/`ldap`）+ `user.is_service`（服务账号标记，供执行器使用，**不可登录 UI**） |
-| 会话 | JWT（短期）+ 刷新令牌；登出即失效；支持多端 |
-| 门禁 | 按**动作**配置（§2.1），存 DB 且变更需审计；不走 RBAC |
+| 账号 | 本地账号：用户名 + 密码（**BCrypt**）；**现状已区分三角色**（v1.5 的“全员同权”为目标） |
+| 扩展位 | `user.identity_source`（`local`/`oidc`/`ldap`）+ `user.is_service`（服务账号标记，供执行器使用，**不可登录 UI**）——未实现 |
+| 会话 | 规划 JWT（短期）+ 刷新令牌；**现行 Sa-Token Bearer，30 天有效**，登出即失效 |
+| 门禁 | 按**动作**配置（§2.1），存 DB 且变更需审计；不走 RBAC——**现状为角色权限码 + 分环境策略 + 动作确认** |
 | 审计 | 记录 `operator`（人）+ `action` + `confirmed_by`（本人）+ `presented_by`（agent）+ `plan_hash` |
-| 密码策略 | ≥12 位、复杂度校验、失败 5 次锁定 15 分钟 |
+| 密码策略 | 规划 ≥12 位、复杂度校验、失败 5 次锁定 15 分钟；**未实现** |
 
 **确认模型（v1.6：单人确认 + agent 提请）**
 
@@ -680,8 +701,9 @@ Agent 产出 ChangePlan（planHash / 镜像 digest / 影响实例 / 回滚方式
   ↓  tool: request_confirmation(changeId)          ← agent 只能"请求"
 UI 弹结构化确认卡（展示字段，不是 agent 的措辞）
   ↓  POST /changes/{id}/confirm（需登录态；高危要求二次密码）
-服务端签发 confirmToken{ changeId, planHash, userId, exp=5min, nonce }
-  ↓  tool: apply_change(changeId, confirmToken)    ← 执行器校验后执行
+服务端签发 confirmToken{ changeId, planHash, userId, exp=5min, nonce }   ← 用户会话经 HTTP 触发
+  ↓  HTTP: POST /changes/{id}/apply（带 confirmToken）  ← 执行器校验后执行
+（工具侧无 apply_change；agent 只能 request_confirmation / confirm 提醒）
 Deployer → 观察窗 → 成功 / 自动回滚
 ```
 
@@ -733,7 +755,7 @@ gantt
 
 | 里程碑 | 交付范围 | 出口条件 |
 |---|---|---|
-| **M0** | 项目/环境/成员/凭证、审计、SSE、SSO | 跨项目请求 100% 被拒 |
+| **M0** | 项目/环境/凭证、审计、SSE、本地账号 + 角色（SSO 不在范围） | 跨项目请求 100% 被拒 |
 | **M1** | US-C1-1/2：Issue 接入、定位报告、去重 | E1 ≥ 70%；10 人周活 ≥ 60% |
 | **M2** | US-C3-1/2/**5**：双栈流水线（Java+Vue）、滚动部署、前端原子发布、健康门禁、成对回滚 | 后端发布 0 个 5xx；**前端发布 0 个 404、回滚 ≤10s**；二次构建 ≤ 首次 40% |
 | **M3** | US-C1-3/4/5：失败测试、PR、风险分级 | E2 ≥ 60%；PR 接受率 ≥ 40% |
@@ -750,7 +772,7 @@ gantt
 | R-04 | 双副本滚动时单副本扛不住 | 中 | 高 | 发布期间 P99 抬升 | 压测确认；不足则加第 3 副本位（T5） |
 | R-05 | 镜像 tag 复用导致回滚失效 | 中 | 高 | 回滚后仍是新 bug | CI 改打 `版本-sha`；控制器按 digest 回滚 |
 | R-06 | 凭证爆炸/泄露 | 中 | 高 | 无法定位泄露源 | 三维切片 + 引用存储 + 单条吊销 |
-| R-07 | Jenkins 参数注入（RCE） | 低 | 致命 | 审计出现异常命令 | 参数枚举/正则；禁拼 shell |
+| R-07 | 外部 CI 参数注入（若未来接入 Jenkins/GitLab CI） | 低 | 致命 | 审计出现异常命令 | 参数枚举/正则；禁拼 shell；现行自研引擎不受此影响 |
 | R-08 | docker.sock = 宿主 root | 中 | 致命 | — | socket proxy 白名单 + 仅内网 + mTLS |
 | R-09 | 成本失控 | 中 | 中 | 月账单超预算 | 模型分级 + 预算熔断 + 结果缓存 |
 | R-10 | 需求未验证（开发者不愿用） | 中 | 致命 | M1 后周活 < 40% | 首场景选"高频+只读"；周活为硬门槛 |

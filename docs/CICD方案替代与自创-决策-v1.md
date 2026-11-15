@@ -1,7 +1,7 @@
 # CI/CD 方案替代与自创 · 决策文档 v1
 
 > 日期：2026-11-07 ｜ 回答三个问题：必须做吗 / 有没有替代 / 能不能自创一套给 agent 用的
-> **实施更新（2026-11-15）**：动作目录已从 5 个扩到 7 个（新增 `frontend_test`，前后端构建/测试拆分）；本文的“方案 D”结论仍有效，动作数量以 [Code-Wiki](Code-Wiki.md) 和代码为准。
+> **实施更新（2026-11-15）**：动作目录已从 5 个扩到 7 个（新增 `backend_test`、`frontend_test`，构建与测试拆分）；本文的“方案 D”结论仍有效，动作数量与默认配方以代码为准（见 §4.2 后续变更注）。
 > 前置：[流水线设计](流水线设计-Java与Vue双栈.md)（Jenkins 规划与开源 CI 调研已删除，见[废弃登记](deprecated/README.md)）
 
 ---
@@ -93,7 +93,7 @@
 
 ```mermaid
 flowchart TB
-    A["Agent（只看见「动作」）<br/>build_backend / deploy / rollback"] --> B["动作契约（平台）<br/>5 个动作 + 参数枚举 + 权限级别"]
+    A["Agent（只看见「动作」）<br/>build_backend / deploy / rollback"] --> B["动作契约（平台）<br/>7 个动作（决策时为 5 个）+ 参数枚举 + 权限级别"]
     B --> C["配方解析（平台）<br/>找仓库里的 make/task target<br/>找不到 → 用内置默认配方"]
     C --> D["执行面（确定性）<br/>沙箱 + 超时 + 日志 + 产物识别"]
     D --> E["治理<br/>门禁 + 确认令牌 + 审计 + 回滚锚点"]
@@ -102,7 +102,9 @@ flowchart TB
     style D fill:#E8F3EC,stroke:#1E7D4F
 ```
 
-### 4.2 动作目录（平台侧只有 5 个）
+### 4.2 动作目录（平台侧只有 5 个；现行 7 个）
+
+> **后续变更（2026-11-15）**：现行动作是 **7 个**——原 5 个之外新增 `backend_test`、`frontend_test`（见 `ActionId.java`）。下表保留决策时的 5 动作版本；现行默认配方：`backend_build`=`mvn -B -q -DskipTests package`、`backend_test`=`mvn -B -q test`、`frontend_build`=`pnpm install --frozen-lockfile --ignore-scripts` + `pnpm build`、`frontend_test`=`pnpm test`；`image_package` / `stack_deploy` / `stack_rollback` **无内置默认**，必须在 `ci/actions.yml`/Taskfile/Makefile 中提供（`RecipeActionResolver.java:57-86`）。另：现行部署已由平台部署器执行，不再走“窄控制器 8 步”（窄控制器仍是未实现规划）。
 
 | 动作 | 参数（枚举） | 级别 | 默认配方（仓库无覆盖时） |
 |---|---|---|---|
@@ -112,7 +114,7 @@ flowchart TB
 | `stack_deploy` | `env ∈ {test,staging,prod}` | **L3** | 窄控制器 8 步（摘流→换容器→健康→回填） |
 | `stack_rollback` | `env`、`to_digest` | **L3** | 按 digest 重建 |
 
-> **agent 永远只说这五个词**，不需要知道 `mvn` 还是 `gradle`，也不需要知道是 compose 还是 K8s。
+> **agent 永远只说这五个词**（现行为七个：增加 `backend_test`、`frontend_test`），不需要知道 `mvn` 还是 `gradle`，也不需要知道是 compose 还是 K8s。
 
 ### 4.3 配方住在仓库里（关键设计）
 
@@ -134,6 +136,8 @@ actions:
     dockerfile: Dockerfile
     tagPattern: "${version}-${gitSha7}"
 ```
+
+> **实施注（2026-11-15）**：`image_package` 的现行配方只认 `run`（argv 数组），不认 `type: docker-build` / `dockerfile` / `tagPattern` 这些字段；`${tag}`、`${gitSha}`、`${gitSha7}` 是平台注入变量。脚手架会生成 `run: ["docker", "build", ..., "-t", "${tag}", ...]`。
 
 或者更省事——**直接用 Makefile**（开发者本来就会写）：
 
@@ -176,7 +180,7 @@ agent:  跑
 | 文档 | 原内容 | 改为 |
 |---|---|---|
 | PRD §4.7 | 自研 `PipelineSpec`、agent 可提议 YAML | **动作契约 + 配方解析**；`PipelineSpec` 降级为"配方的内部表示" |
-| 流水线设计 §1–§3 | 4 种 stage type 由人写 YAML | stage type 保留（执行层不变），但**入口从"写 YAML"变成"选动作"** |
+| 流水线设计 §1–§3 | 4 种 stage type 由人写 YAML（现行 5 种，多 `git-checkout`） | stage type 保留（执行层不变），但**入口从"写 YAML"变成"选动作"** |
 | 执行器契约 | 不变 | 不变（它约束的是 stage 执行，不是作者体验） |
 | Jenkins 复刻规划 | 复刻 21.5 人日 | 降到 **≈10 人日**（不做 DSL 编辑器、不做 schema 演进、不做参数表单） |
 
@@ -184,7 +188,7 @@ agent:  跑
 
 | 原计划 | 人日 | 新方案 | 人日 |
 |---|---|---|---|
-| PipelineSpec 设计与校验 UX | 4 | 动作目录（5 个动作 + 枚举） | 2 |
+| PipelineSpec 设计与校验 UX | 4 | 动作目录（5 个动作 + 枚举；现行 7 个） | 2 |
 | 参数表单/枚举生成 | 2 | 配方探测（4 种文件 → 动作） | 2 |
 | 模板与文档 | 2 | 内置默认配方（4 个） | 2 |
 | 执行器内核（不变） | 12 | 执行器内核（不变） | 12 |
@@ -206,7 +210,7 @@ agent:  跑
 
 | 阶段 | 内容 | 人日 | 出口条件 |
 |---|---|---|---|
-| **D0** | 动作目录 + 配方解析（4 种来源）+ 内置默认配方 | 4 | 对现有仓库能正确识别出 5 个动作，并展示"来源文件@commit" |
+| **D0** | 动作目录 + 配方解析（4 种来源）+ 内置默认配方 | 4 | 对现有仓库能正确识别出动作（决策时 5 个，现行 7 个），并展示"来源文件@commit" |
 | **D1** | 复用执行器内核（沙箱/超时/日志/产物） | 8 | 与 Jenkins 同提交产出相同 jar 校验和 |
 | **D2** | 门禁与确认（复用 `confirmToken`）+ 回滚锚点 | 4 | 生产部署必须过人确认，回滚 ≤60s |
 | **D3** | 前端面板（动作列表 + 实时日志 + 历史） | 3 | 无 CLI 也能完成一次构建与发布 |
@@ -239,6 +243,6 @@ agent:  跑
 | 必须自研 CI 吗 | **不必须**。它是治理的载体，不是目的 |
 | 自创一套可以吗 | **可以，但自创的是「动作契约 + 配方载体」**，不是新语言 |
 | 用自然语言写流水线 | **不可行**：不可复现、不可审计、不可授权 |
-| 推荐 | **方案 D**：5 个动作 + 仓库内配方（`ci/actions.yml` / `Makefile`）+ 内置兜底 + 复用现有执行器 |
-| 对 agent 的收益 | 它只需说 5 个词，不用学 DSL；平台侧少维护一门语言与一堆提示词 |
+| 推荐 | **方案 D**：5 个动作（现行 7 个）+ 仓库内配方（`ci/actions.yml` / `Makefile`）+ 内置兜底 + 复用现有执行器 |
+| 对 agent 的收益 | 它只需说 5 个词（现行 7 个），不用学 DSL；平台侧少维护一门语言与一堆提示词 |
 | 真正的成本 | 执行层一点没省（18 人日里 12 个在执行层）——**这才是 CI 的本体** |

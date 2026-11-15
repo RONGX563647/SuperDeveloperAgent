@@ -24,9 +24,9 @@
 ## 3. 需求
 
 ### R1 构建历史按环境区分
-- 历史列表顶部新增环境筛选：`全部 / 开发 / 测试 / 生产`（单选，默认全部）。
-- 每条记录始终显示环境标签（已有则保持），筛选后仅显示该环境记录。
-- 环境取值：`dev`→开发、`test`→测试、`prod`→生产、其它→原样。
+- 环境不做列表内二次筛选：历史列表跟随左栏环境选择（`HistoryList` 的 `env` prop），只展示当前环境的运行；切换环境即切换列表。
+- 列表内提供**状态筛选** chips（`全部 / 成功 / 失败 / 进行中`）、提交/序号/流水线关键字搜索与「加载更多」分页。
+- 每条记录始终显示构建序号 `#N` 与环境标签；环境取值：`dev`→开发、`test`→测试、`prod`→生产、其它→原样。
 
 ### R2 删除「单步动作」
 - 移除流水线页面的：单步动作面板、动作执行结果区块、L3 变更二次确认对话框，以及支撑它们的状态、函数、API 调用。
@@ -40,14 +40,16 @@
 - 运行卡片新增二选一分段按钮：`打包成镜像` / `直接部署`。
 - 选择结果通过现有触发参数 `deployTarget` 传给后端：`docker` / `host`。
 - 默认值：`dev` → `host`；`test` / `prod` → `docker`。
-- 主按钮文案随模式变化：
-  - dev + 直接部署 → `本机部署`
-  - docker → `打包并部署`
-  - 环境为 test/prod 时仍显示 `发布到测试环境` / `发布到生产环境`。
+- 主按钮文案随模式/环境变化（`PipelineView.primaryLabel`）：
+  - dev → `启动本机前后端`
+  - prod → `发布到生产`
+  - test + host → `本机部署`；test + 已有配方 → `重放到测试环境`；test + docker → `打包并部署到测试环境`。
+- 模式切换只在 `test` 显示（`showModeSwitch = env==='test'`）；dev 固定本机、prod 固定服务器。
 - 「检查构建」按钮保留不动。
 
 ### R5 开发环境本机部署（后端 + 前端 dist）
-触发条件：`env=dev` 且 `deployTarget != docker`（含未显式指定）。
+
+触发条件（v2 现行）：`env=dev` 且流水线不是 `verify`，**不再看 `deployTarget`**；显式传 `docker` 会被忽略并记录日志。
 
 执行位置：项目本地仓库根 `repoLocator.repoDir(projectId)`（不建 worktree）。
 
@@ -55,21 +57,21 @@
 | 阶段 id | 内容 | 失败码 |
 | --- | --- | --- |
 | `workspace` | 合成成功阶段，日志 `[dev] 本机模式：直接使用工作区 <path>（不检出提交）` | — |
-| `build` | `mvn -q -DskipTests package`（工作目录 = 检测到的后端根） | E-601 |
-| `frontend` | `npm run build:prod`（工作目录 = 检测到的前端根；`NODE_OPTIONS=--openssl-legacy-provider` 兼容 webpack4 + Node 新版本）；未检测到前端根 → 阶段成功但日志说明「无前端模块，跳过」 | E-602 |
+| `build` | 优先 `./mvnw`，否则 `mvn -q -DskipTests package`（工作目录 = 检测到的后端根；Windows 经 `cmd /c`） | E-601 |
+| `frontend` | 有 `build:prod` 脚本用 `npm run build:prod`，否则 `npm run build`（工作目录 = 检测到的前端根；`NODE_OPTIONS=--openssl-legacy-provider`）；未检测到前端根 → 阶段成功但日志说明「无前端模块，跳过」 | E-602 |
 | `deploy` | 启动本机后端 jar + 前端静态服务器（见 R6） | E-601/E-603 |
 | `health` | `GET http://127.0.0.1:<frontendPort>/` 期望 2xx；无前端时改为后端 `GET /` | E-604 |
 
-目录检测（仅这两种规则，避免过度设计）：
-- 后端根：仓库根有 `pom.xml` → 仓库根；否则一级子目录中存在 `RuoYi-Vue/ruoyi-admin/pom.xml` 形式（子目录下含 `ruoyi-admin/pom.xml` 或 `<sub>/src/main/java`）→ 该子目录。
-- 前端根：仓库根有 `package.json` → 仓库根；否则一级子目录中 `*/ui`、`*/web`、`*/ruoyi-ui` 之一含 `package.json` → 该子目录。
+目录检测（现行实现）：
+- 后端根：仓库根有 `pom.xml` → 仓库根；否则一级子目录中满足 `pom.xml`、`ruoyi-admin/pom.xml` 或 `src/main/java` 之一 → 该子目录。
+- 前端根：仓库根有 `package.json` → 仓库根；否则一层子目录含 `package.json` → 该子目录；再否则两层中名为 `ui`/`web`/`frontend`/`client`/`ruoyi-ui` 且含 `package.json` 的目录。
 
-jar 定位：后端根下 `**/target/*.jar`，优先非 `*-sources.jar`，多个时取修改时间最新。
+jar 定位：后端根下 4 层内 `target/*.jar`，排除 `*-sources.jar`、`*-javadoc.jar`，**必须是含 `BOOT-INF/` 的可执行 Spring Boot 包**，多个取修改时间最新。
 dist 定位：前端根 `dist/index.html`；构建前若 `dist/index.html` 已存在且新于 `src` 目录则不重复构建（日志 `[dev] 前端产物较新，跳过构建`）。
 
 端口：
 - 后端：`allocateHostPort(state, HOST, 8688, 8688)`
-- 前端：`allocateHostPort(state, HOST, 8687, 8687)`（最后分配，保证 `state.deployHostPort` 为对外地址）
+- 前端：`allocateDistinctHostPort(state, 8689, 8689, backendPort)`（分配后写入 `state.deployHostPort`，保证对外地址指向前端）
 
 ### R6 本机进程托管与停止
 新增执行器 `LocalDevHostDeployer`（`agent-executor`），状态目录 `<repo>/.agent/deploy/<projectId>-<env>/`：
@@ -78,12 +80,12 @@ dist 定位：前端根 `dist/index.html`；构建前若 `dist/index.html` 已�
 | --- | --- |
 | `backend.pid` / `frontend.pid` | 子进程 pid |
 | `backend.log` / `frontend.log` | 进程 stdout+stderr |
-| `static-server.mjs` | 平台生成的静态服务器脚本 |
+| `static-server.cjs` | 平台生成的静态服务器脚本 |
 
-- 启动顺序：先停旧（读 pid → `taskkill /T /F`，Windows；其它系统 `kill -9`）→ 起后端 → 轮询后端就绪（≤90s）→ 起前端静态服务器 → 轮询前端 2xx（≤30s）。
+- 启动顺序：先停旧（读 pid → `taskkill /T /F`，Windows；其它系统 `kill -9`）→ 起后端 → 轮询后端就绪（≤180s）→ 起前端静态服务器 → 轮询前端 2xx（≤60s）。
 - 后端命令：`java -jar <jar> --server.port=<backendPort>`，环境变量注入 `effective env`（与 Docker 部署同一来源）。
-- 前端命令：`node static-server.mjs <distDir> <frontendPort> <backendPort>`。
-- `static-server.mjs` 行为：静态文件 + SPA fallback（未命中路径回 `index.html`）；`/prod-api/*`、`/dev-api/*` 反代到 `http://127.0.0.1:<backendPort>/*`（去掉前缀）；其余 404。
+- 前端命令：`node static-server.cjs <distDir> <frontendPort> <backendPort>`（注意启动日志里仍写成 `.mjs`，是既有文案瑕疵，实际文件为 `.cjs`）。
+- `static-server.cjs` 行为：静态文件 + SPA fallback（未命中路径回 `index.html`）；`/prod-api/*`、`/dev-api/*` 反代到 `http://127.0.0.1:<backendPort>/*`（去掉前缀）；其余 404。
 - 停止 API：`POST /api/v1/ci/deploy/host/stop?projectId=<id>&env=dev` → `{ "stopped": true|false, "message": "..." }`。
 - 停止能力同时用于：部署前清旧、页面「停止本机服务」按钮。
 - 失败时把 `backend.log` / `frontend.log` 尾部（各 ≤60 行）写进流水线日志，便于 Agent 自愈。
@@ -105,9 +107,9 @@ dist 定位：前端根 `dist/index.html`；构建前若 `dist/index.html` 已�
 ## 5. 验收标准
 
 1. 流水线页面不再出现「单步动作」「高级选项」；无 `ActionPanel` 挂载与相关请求。
-2. 历史列表可按环境筛选（全部/开发/测试/生产），筛选结果正确。
-3. 模式切换按钮在两态间切换，触发请求体 `deployTarget` 分别为 `host` / `docker`。
-4. dev + 直接部署实跑成功：阶段为 workspace/build/frontend/deploy/health；`http://127.0.0.1:<frontendPort>/` 返回 2xx；`docker ps` 中该项目**没有新增** dev 应用容器。
+2. 切换左栏环境时，历史列表只显示该环境记录；列表内状态 chips、关键字搜索、分页可用（**没有**“全部/开发/测试/生产”的环境筛选控件）。
+3. test 的模式切换按钮在两态间切换，触发请求体 `deployTarget` 分别为 `host` / `docker`；dev 不显示切换且始终走本机。
+4. dev 实跑成功：阶段为 workspace/build/frontend/deploy/health；`http://127.0.0.1:<frontendPort>/` 返回 2xx；`docker ps` 中该项目**没有新增** dev 应用容器。
 5. 停止本机服务后，前后端端口均不再监听；随后可用 IDE/命令行重新启动。
 6. test 环境 + 打包成镜像仍成功（`agent-deploy-ruoyiwnz-test` healthy），不受本轮改动影响。
 7. 平台单测 `DeployersTest`、新增 `LocalDevHostDeployerTest` 通过；后端打包成功。
@@ -136,7 +138,7 @@ dist 定位：前端根 `dist/index.html`；构建前若 `dist/index.html` 已�
 | --- | --- |
 | dev 部署目标 | **强制 host**。`env=dev` 时忽略任何 `deployTarget=docker`（含 replay / 历史重跑 / Agent 触发），并在日志显式说明忽略原因 |
 | dev 是否还提供「打包成镜像」开关 | **不提供**。dev 只显示本机运行说明；`test` 保留「打包成镜像 / 直接部署」切换；`prod` 固定远程服务器 |
-| dev 重放路径 | 已有固化脚本时仍可重放，但 `isLocalDev` 优先命中，**不会**走镜像/容器 |
+| dev 重放路径 | **不进入重放**：`doPrimary()` 对 dev 一律 `triggerSelected`，按当前工作区代码走本机分支；固化脚本重放只用于 test/prod |
 | 端口冲突 | 本机启动前先清理同项目 dev 的遗留 Docker 容器（`agent-deploy-<project>-dev` 与旧命名 `agent-deploy-<project>`），释放端口 |
 | 停止后交还 IDE | 「停止本机服务」在 dev 环境**始终可见**（不再依赖 deployTarget），停止后 PID 文件清除、端口释放，IDE 可直接启动 |
 | 与设置页「本地服务」的关系 | 保持两套并存但语义一致：设置页用于单独启停（`npm run dev` + 后端进程，端口 18080+/15173+），流水线用于「构建后一键本机运行」（端口 8688/8689）。两者都停平台托管的进程，不动 IDE 进程 |

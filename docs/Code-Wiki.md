@@ -38,7 +38,7 @@
 - **动作受限，不是自由命令**：动作层仍是 7 个固定 `ActionId`；命令 argv 来自仓库配方（`ci/actions.yml` → `Taskfile.yml` → `Makefile` → 内置默认），模型不拼接 shell。
 - **不是“单选一个动作”**：模型可以按目标编排多 stage 流水线、选择 runner / 部署目标 / 参数，并生成或修改 `ci/pipeline.yml`；受限的是 stage 只能引用白名单动作，不是只能选一个动作。
 - **编排可生成，但不能越出白名单**：`ci/pipeline.yml` 的 stage 类型为 `action` / `deploy` / `health` / `rollback`；校验失败回退规则骨架（`PipelineDefinitionResolver`）。
-- **执行面按环境装配**：dev/test 会话使用 `fullToolkit`，L2 动作可直接执行；prod 会话使用 `readOnlyToolkit`，写工具根本不在 schema 里（`ToolCatalog`）。
+- **执行面按环境装配**：dev/test 会话使用完整 Toolkit（bean 名 `agentToolkit`，源码字段名 `fullToolkit`），L2 动作可直接执行；prod 会话使用 `readOnlyToolkit`，写工具根本不在 schema 里（`ToolCatalog`）。
 - **L3 与破坏性 L2 必须人工确认**：`stack_deploy` / `stack_rollback` 走 `request → 用户 confirm(token) → apply`；agent 的 `confirm` 工具只推确认卡片，不签发令牌；令牌 5 分钟且绑定 `planHash`，配方改动会导致令牌失效（`ActionService` / `ChangeController`）。
 - **凭证不进入模型上下文**：生产写凭证只在执行面解析，模型只看到 `secret://` 引用。
 - **隔离不是“全 Docker”**：有 Docker 用 Docker；无 Docker 时 fail-closed，拒绝不可审计的 make/task 与 L3。部署目标为 Docker/HOST/SERVER，dev 本机另走 `LocalDevHostDeployer`。
@@ -123,7 +123,7 @@ agentscope-ruoyi/
 - **Docker/运行时客户端只能在执行面**（A4：决策面禁 docker-java/fabric8）；
 - 端口接口（`ActionRunner`/`ActionResolver`/`PipelineEngine`/`Deployer` 等）定义在 domain，实现分布在 executor/infra，运行时由 Spring 注入——上层只持有端口引用。
 
-> 注：`agent-tools` 的 pom 虽声明了 `agent-executor`（供运行期装配注入实现），但 tools 源码不 import 任何 executor 类型——A1 规则（`consideringOnlyDependenciesInLayers`）保证 tools 层代码只访问 domain 端口。
+> 注：`agent-tools` 的 pom 只声明 `agent-domain` 与 `agent-governance`（另加 AgentScope/Spring Boot starter），**不依赖 executor**；执行器实现由 gateway 组合根装配后按 domain 端口注入——A1 规则（`consideringOnlyDependenciesInLayers`）保证 tools 层代码只访问 domain 端口。
 
 ### 3.2 请求主流程（一图流）
 
@@ -145,7 +145,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 
 ## 4. 后端模块详解
 
-### 4.1 agent-domain —— 领域模型与端口（62 类，零框架）
+### 4.1 agent-domain —— 领域模型与端口（130 个主源码类，零框架）
 
 包 `top.rongx.agent.domain.*`，按业务概念分包（禁 util 包，A6）。
 
@@ -192,7 +192,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | | `ProjectEnvFiles` | 项目环境文件受管写入（2026-11 新增）：`write`（部署前写 `.env`/`application-local-dev.yml`，只动受管标记块、幂等）/ `syncFromOverrides` / `managedKeys`；敏感值不落文件（由进程环境注入），`ENV_FILE_DISABLED` 可整体关闭 |
 | `tool` | `ToolLevel` | 工具能力分级（规约 §1.2）：L0 只读 / L1 计划 / L2 隔离执行 / L3 生产 |
 
-### 4.2 agent-infra —— 端口适配实现（21 类，仅依赖 domain）
+### 4.2 agent-infra —— 端口适配实现（34 个主源码类，仅依赖 domain）
 
 | 包 | 关键类 | 职责 |
 |---|---|---|
@@ -215,18 +215,19 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `settings` | `SqliteModelConnectionStore` / `SqliteDeployServerStore` | 模型连接/服务器配置 SQLite 存储，密钥加密落库、接口只回掩码 |
 | | `SqliteProjectEnvVarStore` | 旧表 `project_env_vars` 上的 `ProjectEnvVarRepository` 实现（兼容旧链路） |
 
-### 4.3 agent-governance —— 变更确认守门（6 类，仅依赖 domain）
+### 4.3 agent-governance —— 变更确认守门（8 个主源码类，仅依赖 domain）
 
 | 类 | 职责 |
 |---|---|
 | `ConfirmTokenService` | 确认令牌服务（PRD §4.10 四道守卫中的第 2、3 道）：`issue` 绑定 `userId+changeId+planHash`、5 分钟 TTL；`consume` 六重校验（存在/未用/未过期/changeId 一致/planHash 一致/标记已用） |
 | `ConfirmToken` | 一次性确认令牌（record） |
-| `ChangeRegistry` | 变更单存储（内存实现，`ChangeStore` 端口） |
-| `PatchRegistry` | 待确认补丁存储（内存实现 `PatchStore`，2026-11 新增）：只保存与查询，签发确认令牌仍只能由登录用户经 `/changes/{id}/confirm` 完成 |
+| `ChangeRegistry` | 变更单存储（SQLite 实现 `ChangeStore`，`_platform/governance.db` 的 `change_plans` 表） |
+| `PatchRegistry` | 待确认补丁存储（SQLite 实现 `PatchStore`，`governance.db` 的 `code_patches`/`code_patch_edits` 表，2026-11 新增）：只保存与查询，签发确认令牌仍只能由登录用户经 `/changes/{id}/confirm` 完成 |
+| `GovernanceDb` | `governance.db` 连接约定（`busy_timeout=5000` + WAL） |
 | `EnvPolicyService` | `PolicyPort` 实现（2026-11 新增）：dev/test/prod × L0–L3 默认矩阵（dev L3 DENY、test L3 CONFIRM、prod L2 DENY/L3 CONFIRM，prod L3 禁止 ALLOW），未知环境按 prod fail-closed；`requireNotDenied` 抛 E-707 |
 | `ActionGate` | 历史空壳，已废弃（勿引用） |
 
-### 4.4 agent-executor —— 执行面（23 类，仅依赖 domain，无 LLM）
+### 4.4 agent-executor —— 执行面（25 个主源码类，仅依赖 domain，无 LLM）
 
 **动作执行器**：
 
@@ -237,7 +238,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `DockerActionRunner` | 容器内执行模式（`isolated()=true`，生产用） |
 | `DockerSandbox` | 把业务命令包成 `docker run`：`--entrypoint=` 清空入口、`--user 1000:1000`、`--cap-drop ALL --security-opt no-new-privileges`、`--memory/--cpus/--pids-limit`、网络三档（bridge/build-net/none）、工作区挂 `/ws`；`withImage` 支持 stage 级专属工具链镜像；**依赖缓存卷**（`cache-volume-prefix`，按项目隔离挂 Maven `~/.m2` 与 npm cache，避免冷下载撞 10 分钟构建超时） |
 | `ProcessExecutor` | 单条命令执行内核（宿主/容器共用）：`redact` 日志脱敏（Bearer/token/secret/password/api_key/64位hex/PEM 私钥块；64 位 hex 规则用负向后顾保留 `sha256:`/`sha512:` 镜像指纹）、`tail` 输出截断 |
-| `SandboxConfig` | 执行模式装配（auto/docker/process 探测） |
+| `SandboxConfig` | 执行模式装配：`docker`（默认，Docker 不可用则启动失败）或 `process`（显式宿主模式）；历史值 `auto` 仍接受，但同样 fail-closed，不再静默降级 |
 
 **流水线引擎**：
 
@@ -264,7 +265,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `AppRuntimeInspector` | `RuntimeInspector` 实现（2026-11 新增）：按环境运行时分流——test/prod 用 `docker inspect` 读实例事实（状态/重启数/镜像 digest/端口映射/健康），dev 读平台进程日志尾部；只回答事实，不判失败原因 |
 | `JschSsh` / `SshExec` | 纯 Java SSH 实现（JSch）：连通性探测、远程命令、文件上传；`SshExec` 实现 domain 的 `SshAccess` 端口（探测 docker 版本用 `{{.Server.Version}}` 模板并兜底 `docker info`） |
 
-### 4.5 agent-tools —— 工具层（24 类，18 个 @Tool 类 / 62 个工具方法）
+### 4.5 agent-tools —— 工具层（24 个主源码类，18 个 @Tool 类 / 62 个工具方法）
 
 | 类 | 职责 |
 |---|---|
@@ -309,7 +310,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `workspace/WorkspaceRunExecutor` | 工作区异步运行执行器：每工作区固定线程池（默认 3），派发后立即返回；状态/结果/错误落盘 |
 | `workspace/WorkspaceEventBus` | 工作区事件总线（单实例内存）：把会话/运行实时变化推给 SSE 订阅者，事实仍以 SQLite 为准 |
 
-### 4.7 agent-gateway —— HTTP 边界与安全（96 类，Boot 入口）
+### 4.7 agent-gateway —— HTTP 边界与安全（96 个主源码类，Boot 入口）
 
 | 包 | 关键类 | 职责 |
 |---|---|---|
@@ -335,12 +336,12 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | | `PolicyController` | **分环境策略只读视图（2026-11 新增）**：`GET /api/v1/policies` 返回 dev/test/prod × L0–L3 的 ALLOW/CONFIRM/DENY 矩阵 |
 | | `GiteeBrowserController` | Gitee OAuth（start/callback，state 防 CSRF）+ PAT 绑定（AES-GCM 加密落库，接口永不回明文）+ 仓库列表；上游鉴权失败回 400/502（401 专指本平台会话失效，避免前端误清登录态） |
 | | `GiteeWebhookController` | push 事件自动触发 verify 流水线；Token/HMAC-SHA256 校验（未配置密钥即拒）；同 commit 幂等去重 |
-| | `FsBrowserController` | 本地目录浏览（供前端选文件夹）：ls / probe / roots |
+| | `FsBrowserController` | 本地目录浏览（供前端选文件夹）：ls / probe / roots / read |
 | | `ProjectContextResolver` | 请求参数 projectId → `ProjectContext`（服务端绑定） |
 | | `GlobalExceptionHandler` | 统一错误响应 `{code, message, traceId}` |
 | `auth` | `AuthController` | 登录/登出/me（唯一签发会话令牌处） |
 | | `SaTokenConfig` | Sa-Token 装配与路由保护 |
-| | `CurrentUser` / `Role` / `UserStore` / `SaPermissionSource` | 当前身份出口 / 角色最小集合（DEVOPS 新增 `settings:read`/`settings:reveal`，可查明文并留审计） / 用户仓库（内存版）/ 权限码数据源 |
+| | `CurrentUser` / `Role` / `UserStore` / `SaPermissionSource` | 当前身份出口 / 角色最小集合（ADMIN/DEVOPS/VIEWER；DEVOPS 含 `settings:read`/`settings:reveal`，可查明文并留审计） / 用户仓库（SQLite `_platform/users.db`，BCrypt）/ 权限码数据源 |
 | `security` | `PasswordVerifier` / `SessionPasswordVerifier` | 高危变更二级密码校验（早期 `FailClosedPasswordVerifier` 已被会话版替代） |
 | `deploy` | `DeployGate` | **服务器操作双重前置**（两条入口共用，防"换个 URL 绕过"）：测试环境成功案例 + 一次人工确认 |
 | | `ChatRunRecoveryAdvisor` | `RunRecoveryAdvisor` 实现（2026-11 新增）：按失败阶段类型 + 日志尾部关键词规则化判定根因（编译错/缺依赖/端口占用/健康检查不过/镜像缺失…），给出候选动作与"可否用 propose_patch 修"的提示；纯建议不改仓库、不产令牌 |
@@ -531,16 +532,21 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 | PipelineController | POST `/ci/pipelines/{pipelineId}/dry-run` | **部署预检（只读，零变更）：blockers/warnings/reportHash/fingerprint/stages** |
 | GiteeBrowserController | GET `/gitee/oauth/start` `/oauth/callback`、POST/DELETE/GET `/gitee/bind`、GET `/bind/status`、GET `/repos` | OAuth 授权、PAT 绑定（永不回明文）、仓库浏览 |
 | GiteeWebhookController | POST `/webhooks/gitee/push`、GET `/webhooks/gitee/history` | push 自动触发 verify（Token/HMAC + 幂等） |
-| FsBrowserController | GET `/fs/ls` `/fs/probe` `/fs/roots` | 服务端目录浏览（受 shared-root 边界约束） |
-| Actuator | GET `/actuator/health` | 健康检查（8090） |
+| FsBrowserController | GET `/fs/ls` `/fs/probe` `/fs/roots` `/fs/read` | 服务端目录浏览与文件预览（`/fs/read` 为 2026-11 实现，受 shared-root 边界、`.git` 与敏感文件规则约束） |
+| BugFixController | GET/POST `/bug-fix/runs`、GET `/bug-fix/runs/{id}`、POST `…/runs/{id}/retry` `…/cancel`、GET/PUT `/bug-fix/policy` | Bug 自动修复运行时间线、启动/重试/取消与策略 |
+| GitIssueController | GET/POST `/git-issues`、GET/PUT/DELETE `/git-issues/{id}`、POST `…/close` `…/reopen` `…/sync`、GET/POST `…/comments` | 任务页 Issue CRUD、评论与同步 |
+| GitIssueWebhookController | POST `/webhooks/git/{provider}/issues` | 外部 Issue webhook 接入 |
+| GitHostingController / GitOauthAppSettingsController / GitIssueIntegrationController | `/settings/git-hosts`、`/settings/git-oauth-apps`、`/settings/git-integration` | 多代码托管账号、OAuth 应用与 Issue 集成配置 |
+| McpSettingsController / SkillSettingsController / CapabilityMarketController | `/settings/mcp-servers`、`/settings/skills`、`/settings/capabilities/market` | MCP / Skill / 能力市场管理 |
+| Actuator | GET `/actuator/health` `/actuator/metrics` | 健康检查与指标（8090；`application.yml` 仅暴露 health,info,metrics） |
 
-> ⚠️ 前端 `web/src/api/project.ts` 调用了 `GET /api/v1/fs/read`，当前后端 `FsBrowserController` 未实现该端点（文件预览的已知缺口）。
+> 上表按主要 Controller 归并，非逐端点穷举；`/fs/read` 已实现（前端 `project.ts` 的 `fsRead` 有对应后端），文件预览受 `agent.intake.shared-root` 边界与敏感文件规则约束。
 
 ---
 
 ## 7. 模型工具（@Tool）一览 —— 62 个方法 / 18 个工具类
 
-AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 24 个类，其中 18 个是 @Tool 类（合计 62 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver`、`cache/ToolResultCache`、`cache/CachingAgentTool` 等非工具类）：
+AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 24 个主源码类，其中 18 个是 @Tool 类（合计 62 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver`、`cache/ToolResultCache`、`cache/CachingAgentTool` 等非工具类）：
 
 > `supervisorToolkit` = `WorkspaceSupervisorTools`（会话/运行/任务管理）+ 全部只读工具；**不含**任何文件写、命令、补丁、部署工具，保证调度 Agent 只能编排与只读取证。
 
@@ -626,7 +632,6 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 | `interaction-check.mjs` | 对话交互 |
 | `pipeline-ux-check.mjs` / `pipeline-def-check.mjs` | 流水线交互 / 定义展示 |
 | `intake-id-check.mjs` / `project-id-check.mjs` | 项目接入 ID 规则 |
-| `_tmp-env-status-check.mjs` | 对话页环境状态条回归（临时脚本，2026-11） |
 
 ---
 
@@ -635,16 +640,18 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 ### 9.1 Maven 模块图（编译期，源自各 pom.xml）
 
 ```
-agent-domain   ← 无依赖（仅父 POM）
+agent-domain   ← 无模块依赖（仅父 POM）
 agent-infra    ← domain + sqlite-jdbc
 agent-governance ← domain
 agent-executor ← domain + jsch
-agent-tools    ← domain + governance + executor + agentscope-core
-agent-runtime  ← domain + governance + tools + agentscope-core + agentscope-extensions-model-openai
-agent-gateway  ← runtime + infra + executor + spring-boot-starter-webmvc/actuator/validation
+agent-tools    ← domain + governance + agentscope-core + spring-boot-starter
+agent-runtime  ← domain + agentscope-core + agentscope-extensions-model-openai + spring-boot-starter
+agent-gateway  ← runtime + infra + executor + tools + governance + spring-boot-starter-webmvc/actuator/validation
                   + sa-token-spring-boot4-starter + spring-security-crypto + jackson-databind
 spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 ```
+
+> 运行时装配在 `agent-gateway` 的组合根：controller 依赖 domain 端口，executor/infra 实现由 Spring 注入；`agent-tools` 与 `agent-runtime` 的 pom 都不依赖 `agent-executor`。
 
 ### 9.2 版本管理要点（父 pom）
 
@@ -680,7 +687,7 @@ spec-checks    ← 仅 test（archunit），分析 top.rongx.agent 全包
 | `agent.intake.shared-root` | 空（全盘） | 目录浏览边界 |
 | `agent.intake.gitee-token` | 空 | 平台兜底 Gitee token（私有库 clone） |
 | `agent.gitee.client-id/secret/redirect-uri` | 空 | Gitee OAuth 应用 |
-| `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | auto / `maven:3.9-eclipse-temurin-21` / bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache-` | 执行沙箱（缓存卷按项目隔离挂 Maven/npm 依赖） |
+| `agent.sandbox.mode/image/network/memory/cpus/pids-limit/user/cache-volume-prefix` | `docker` / `maven:3.9-eclipse-temurin-21` / bridge / 2g / 2 / 512 / 1000:1000 / `agent-cache` | 执行沙箱（默认 fail-closed；缓存卷按项目隔离挂 Maven/npm 依赖） |
 | `agent.model.base-url/api-key/model/max-iters/temperature` | DashScope 兼容端点 / 空 / qwen-plus / 8 / 0.2 | 模型兜底（设置页优先） |
 | `agent.model.prefix-cache` | true | 前缀缓存：系统提示 + 工具 schema 交给服务端复用（`cache_control`） |
 | `agent.tools.max-output-chars` | 12000 | 单次工具输出字符上限（超出截断并提示缩小查询） |
@@ -758,7 +765,7 @@ npm run typecheck
 
 | 测试类 | 内容 |
 |---|---|
-| `ArchitectureRulesTest`（ArchUnit） | **A1** 分层单向（Gateway→Runtime→Tools/Governance→Domain←Executor/Infra）；**A2** domain 零框架；**A3** executor 无 LLM；**A4** 决策面无 docker-java/fabric8；**A6** 禁 util/common/helper 包；**A7** tools 禁 ProcessBuilder；**A9** 禁字段注入 |
+| `ArchitectureRulesTest`（ArchUnit） | **A1** 分层单向（Gateway → {Runtime, Tools, Governance, Executor, Infra} → Domain；Tools 额外允许 Governance）；**A2** domain 零框架；**A3** executor 无 LLM；**A4** 决策面无 docker-java/fabric8；**A6** 禁 util/common/helper 包；**A7** tools 禁 ProcessBuilder；**A9** 禁字段注入 |
 | `ForbiddenPatternScanTest` | R01 禁 Runtime.exec、R02 禁 shell 解释器、R03 禁 MyBatis `${}`、R04 禁 new Thread、R05 禁字段注入、R06 金额禁 double、R07 日志禁打印凭证、R08 禁 SELECT *、R09 禁 java.util.Date、R10 禁空 catch、R11 禁 System.out、R12 禁动态脚本、R13 软删用 deleted_at。误报豁免：`// spec-ignore: R06 <原因>`（原因不足 3 字视为无效；现登记豁免仅 `LocalDevHostDeployer` 两处 R02——Windows 的 mvn/npm 是 .cmd 批处理须经 `cmd /c`，参数全常量无拼接，已写入规约 §13）。扫描已剪枝（跳过 target/.git/node_modules/dist/data），避免误扫产物 |
 | `ConfigCredentialScanTest` | 决策面（gateway/runtime/tools/governance）配置不得含写凭证键 |
 | `MigrationGuardTest` | 已发布迁移文件不得修改（基线 `spec-checks/migration-baseline.txt`） |
@@ -769,11 +776,11 @@ npm run typecheck
 |---|---|
 | agent-domain | `ProjectEnvFilesTest`（受管块写入幂等/敏感值不落文件）、`StackAdapterTest`（宿主/容器网双地址映射） |
 | agent-executor | `ProcessActionRunnerTest`、`DockerActionRunnerTest`、`DockerSandboxTest`、`ProcessExecutorRedactTest`（脱敏）、`PipelineDefinition*Test`（含 GuardTest 多服务/非法定义拒绝、ResolverTest、PreviewRenderTest 命令级预览）、`DeployersTest`、`DeployRecipeFlowTest`、`JschSshTest`、`HostDeployerTest`、`DockerDeployerTest`、`DeployEnvPrecheckTest`（E-509/E-701 预检）、`DockerDeployerEnvTest`（env/network 注入与 sanitize）、`LocalDevHostDeployerTest`/`LocalDevHostDeployerLeaseTest`（dev 本机直跑与端口租约）、`DockerEnvProvisionerTest`/`DockerEnvProvisionerAddressingTest`/`DockerEnvProvisionerSeedTest`（E-702 供给/地址/种子）、`ServiceTopologyTest`（服务拓扑解析）、`RunHistoryStoreTest`（历史落盘与恢复） |
-| agent-governance | `ConfirmTokenServiceTest`（六重校验） |
+| agent-governance | `ConfirmTokenServiceTest`（六重校验）、`DangerousActionPolicyTest`（破坏性动作识别与频次） |
 | agent-infra | `RecipeActionResolverTest`、`GitWorktreeManagerTest`、`IntakeScaffoldTest`、`RecipeCheckTest`、`IntakeProjectStoreTest`、`FileRecipeStoreTest`、`SecretBoxTest`、`SqliteSettingsStoreTest`、`SqliteProjectEnvVarStoreTest`、`RecipeScaffolderTest`（工程根识别/env-required）、`WorkspaceCodePatcherTest`（baseSha/白名单/独立分支三道校验）、`ConversationContextTrimmerTest`（预算裁剪/保留 SYSTEM/不改运行态） |
 | agent-tools | `ToolResultCacheTest`（精确/相似命中、scope 隔离、写失效、TTL、实时工具排除、包装后 schema）、`DispatchNodeParamBindingTest`（嵌套 `List<DispatchNode>` 参数绑定） |
 | agent-runtime | `DynamicModelProviderTest`（含 prefix-cache 开关）、`WorkspaceDispatchSchedulerTest`（并行耗时/依赖顺序/失败跳过/早停可选/全可选不误停/循环依赖/全局超时/参数收敛）、`ConversationManagerTest` |
-| agent-gateway | `PipelineAcceptanceTest`、`DualStackPipelineTest`（Java+Vue 双栈）、`IntakeE2ETest`、`ActionUsabilityTest`、`ToolChainTest`（含断言：调度 Agent 只读面无写工具）、`DeployStageTest`、`DotEnvLoaderTest`、`GiteeWebhookControllerTest`、`SettingsControllerTest`、`ModelProbeTest`、`ChatRunRecoveryAdvisorFormatTest`（恢复建议格式）、`PatchApplierTest`（补丁四种匹配与结构化失败）、`DangerousActionPolicyTest`（破坏性动作识别与频次）、`AgentStreamLimiterTest`（内存/jdbc 两种租约）、`RunRecoveryServiceTest`（孤儿 RUNNING 判定）、`ToolEvalBaselineTest`/`LiveModelToolEvalTest`（需真实模型 Key，缺 Key 自动跳过） |
+| agent-gateway | `PipelineAcceptanceTest`、`DualStackPipelineTest`（Java+Vue 双栈）、`IntakeE2ETest`、`ActionUsabilityTest`、`ToolChainTest`（含断言：调度 Agent 只读面无写工具）、`DeployStageTest`、`DotEnvLoaderTest`、`GiteeWebhookControllerTest`、`SettingsControllerTest`、`ModelProbeTest`、`ChatRunRecoveryAdvisorFormatTest`（恢复建议格式）、`PatchApplierTest`（补丁四种匹配与结构化失败）、`AgentStreamLimiterTest`（内存/jdbc 两种租约）、`ToolEvalBaselineTest`/`LiveModelToolEvalTest`（需真实模型 Key，缺 Key 自动跳过） |
 | web | `state/agentEventReducer.test.ts` + `scripts/*.mjs` 无头浏览器回归 |
 
 ---
@@ -781,7 +788,7 @@ npm run typecheck
 ## 13. 已知边界与留白
 
 1. **会话持久化已部分落地（2026-11）**——模型上下文经 `JsonFileAgentStateStore` 按 userId+sessionId 落 `data/agent-state`（重启续聊）；前端时间线存 localStorage（`sessionHistory.ts`，每会话 200 条上限）；但**轨迹视图数据仅本地会话**（刷新前不落服务端）、多租户未做。
-2. **`GET /api/v1/fs/read` 未实现**——前端文件预览调用该端点，后端 `FsBrowserController` 只有 ls/probe/roots。
+2. **文件预览边界**——`GET /api/v1/fs/read` 已实现（`FsBrowserController`，2026-11）；但仅受 `agent.intake.shared-root` 约束，留空时可浏览全盘，生产部署应显式收紧该边界。
 3. **用户体系已落 SQLite**（`UserStore` → `_platform/users.db`，口令散列 + 角色），高危二级密码走 `SessionPasswordVerifier`；尚无组织/多租户隔离。
 4. **事件映射用反射**（`AgentEventMapper`）——正式版应把 32 类 AgentScope 事件映射成稳定枚举。
 5. **`changeId` 由前端正则从文本提取**——应由后端发专用 SSE `change` 事件。
@@ -795,6 +802,23 @@ npm run typecheck
 13. **运行账本只做统一观测，不改引擎语义**——流水线恢复仍由 `RunHistoryStore` 负责（非终态标 CANCELLED），账本只补一条终态记录；工作区的取消/重试也只作用于工作区运行，不跨引擎操作。
 14. **限流默认按进程计数**——单实例够用；多实例必须 `agent.chat.limiter=jdbc` 并在网关层加用户级限流，否则 N 个实例的总并发是 N×`max-concurrent`。
 15. **破坏性动作识别是关键词兜底**——`DangerousActionPolicy` 按动作名/命令关键词判断，不能覆盖语义级破坏（如自定义脚本内部删除数据）；配方在流水线内部直接执行时也不经过该策略。
+
+---
+
+## 14. 代码锚点（关键路径，2026-11-15 核对）
+
+| # | 关注点 | 代码锚点 |
+|---|---|---|
+| 1 | 动作词汇表（仅 7 个） | [`ActionId.java`](../platform/agent-domain/src/main/java/top/rongx/agent/domain/action/ActionId.java) |
+| 2 | Toolkit 按环境装配 | [`ToolCatalog.java`](../platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalog.java)、[`AgentFactory.java`](../platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java) |
+| 3 | L2/L3 门禁与 argv 校验 | [`ActionService.java`](../platform/agent-tools/src/main/java/top/rongx/agent/tools/ActionService.java) |
+| 4 | 确认令牌（5 分钟、绑 planHash） | [`ConfirmTokenService.java`](../platform/agent-governance/src/main/java/top/rongx/agent/governance/ConfirmTokenService.java)、[`ChangeController.java`](../platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChangeController.java) |
+| 5 | 分环境策略矩阵 | [`EnvPolicyService.java`](../platform/agent-governance/src/main/java/top/rongx/agent/governance/EnvPolicyService.java) |
+| 6 | stage 解析与执行（4 类 + 内部 git-checkout） | [`PipelineDefinitionResolver.java`](../platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineDefinitionResolver.java)、[`BuiltInPipelineEngine.java`](../platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java) |
+| 7 | 隔离与 fail-closed | [`SandboxConfig.java`](../platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxConfig.java)、[`DockerSandbox.java`](../platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java) |
+| 8 | 部署门禁与执行 | [`DeployGate.java`](../platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java)、[`DockerDeployer.java`](../platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java) |
+| 9 | HTTP 入口与运行配置 | [`ActionController.java`](../platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ActionController.java)、[`application.yml`](../platform/agent-gateway/src/main/resources/application.yml) |
+| 10 | 分层规则 | [`ArchitectureRulesTest.java`](../platform/spec-checks/src/test/java/top/rongx/agent/arch/ArchitectureRulesTest.java) |
 
 ---
 

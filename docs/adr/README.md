@@ -6,10 +6,10 @@
 | 编号 | 标题 | 状态 | 日期 | 关联实现 |
 |---|---|---|---|---|
 | [0001](0001-独立平台而非改造若依.md) | 独立平台，而非改造若依 | 通过 | 2026-11-02 | 全仓库结构 |
-| [0002](0002-不造CI-DSL用动作+仓库内配方.md) | 不造 CI DSL：动作 + 仓库内配方（当时 5 个，现行 7 个） | 通过 | 2026-11-06 | `agent-executor`、`ci/**` 配方 |
+| [0002](0002-不造CI-DSL用动作+仓库内配方.md) | 不造 CI DSL：动作 + 仓库内配方（当时 5 个，现行 7 个） | 通过 | 2026-11-06 | `ActionId`、`RecipeActionResolver`、`ci/**` 配方 |
 | [0003](0003-环境配置三层与环境模板.md) | 环境配置三层：环境模板 + 项目差异 + `secret://` | 通过 | 2026-11-08 | `EnvProvisioner`、`ConfigResolver` |
 | [0004](0004-统一运行账本而非重写编排.md) | 统一运行账本，而非重写三套编排 | 通过 | 2026-11-12 | `run_ledger`、`RunRecoveryService` |
-| [0005](0005-安全边界放在平台层.md) | 安全边界放在平台层：工具不可自我批准 | 通过 | 2026-11-12 | `DangerousActionPolicy`、`ConfirmTokenService` |
+| [0005](0005-安全边界放在平台层.md) | 安全边界放在平台层：工具不可自我批准 | 通过 | 2026-11-12 | `DangerousActionPolicy`、`ConfirmTokenService`、`EnvPolicyService` |
 | [0006](0006-工作区事件驱动与降级.md) | 工作区事件驱动优先，轮询只做降级 | 通过 | 2026-11-13 | `WorkspaceEventBus`、`useWorkspaceEvents` |
 | [0007](0007-DAG并行调度与三级上下文治理.md) | 调度改 DAG 并行 + 三级上下文治理 | 通过 | 2026-11-15 | `WorkspaceDispatchScheduler`、`ToolResultCache`、`ConversationContextTrimmer` |
 

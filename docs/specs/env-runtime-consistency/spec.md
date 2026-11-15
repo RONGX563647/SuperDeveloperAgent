@@ -1,5 +1,9 @@
 # 环境一致性修复（dev 视角）规格
 
+> 状态：**P0 全部落地，P1 按既定规则不修改，P2-1 未按原意实现（2026-11-15 核对）**。
+> §2 是当时的审计证据快照（含 run-id），不是今天的待办；§4 中未标明“未实现”的 P0 条目均已落地。
+> 剩余差异：`applyOverrides(forceEndpoint=true)` 仍会覆盖 dev 已有非空 endpoint，`seedDeclared` 只能补非 endpoint 的缺失键。
+
 ## 1. 背景
 
 上一轮 `../env-inject-health` 修复了「注入前自检误报」「健康检查只算引用中间件」。
@@ -24,9 +28,9 @@
 | 10 | **G. 改动全在工作区未提交** | **成立** | `git status` 大量未提交；dev 用工作区、test/prod 用 sha，所以修复只对 dev 生效 |
 | 11 | 失败后被自动 release agent 调 `env_ensure` 覆盖环境 | **成立（机制存在）** | 平台自动诊断会改写环境覆盖值，掩盖构建侧真实失败 |
 
-**额外发现（审计未列）**：`seedDeclared`（按项目 `.env` 补变量）实际是**静默无效**的。
-它只补"缺失"的键，而 `applyOverrides(forceEndpoint=true)` 已先把 `DB_HOST/REDIS_HOST` 写成容器名，
-源码 `.env` 永远赢不了，也不会打印 `[env] 已按项目 .env 注入变量`。这解释了 `run-3a65beea` 日志里没有该行。
+**额外发现（审计未列，历史）**：当时 `seedDeclared` 静默无效：它只补“缺失”的键，而 `applyOverrides(forceEndpoint=true)` 已先把 `DB_HOST/REDIS_HOST` 写成端点。
+现行已由 T2 的 `syncEndpoints` 修复到“dev 端点统一为 127.0.0.1 + 发布端口”，日志也会出现 `[env] 已按项目 .env 注入变量`；
+但**源码 `.env` 的 DB_HOST/REDIS_HOST 仍赢不了平台端点覆盖**，这是设计取舍，不是再回退到旧行为。
 
 ## 3. 根因
 
@@ -116,10 +120,9 @@ dev 启动时由已有环境变量提供值，health 200。
 
 验收：`git status --porcelain` 只剩构建产物/临时文件；test 用 sha 构建时包含本次配置修复。
 
-### P2-1 dev 不被自动补救覆盖（修第 11 条）
+### P2-1 dev 不被自动补救覆盖（未按原意实现）
 
-`DockerEnvProvisioner.applyOverrides` 在 dev 且已有非空覆盖值时，不再强制覆盖 endpoint
-（改为只在缺失时补）；自动诊断 agent 对 dev 只读不建议写。失败根因仍以运行日志为准。
+> 现行实现是“端点幂等收敛”：dev 下无论谁触发 `env_ensure`，`syncEndpoints` 都会把 endpoint 重写为 `127.0.0.1 + 发布端口`，值稳定不变，但**不是**“已有非空覆盖就不强制覆盖”。自动诊断 agent 对 dev 的写建议也未加只读闸门。原方案（只在缺失时补）**未实现**。
 
 ## 5. 非目标
 
@@ -129,13 +132,12 @@ dev 启动时由已有环境变量提供值，health 200。
 
 ## 6. 验收总清单
 
-1. 单测：`StackAdapter` 新增引用判定用例；`DockerEnvProvisioner` dev/test 派生用例；
-   `LocalDevHostDeployer` 登记/释放 lease 用例。
-2. `mvn -q -pl agent-domain,agent-executor,agent-infra,agent-tools -am test` 通过。
-3. 重启平台后 `env_runtime_status dev`、`app_logs dev`、`env_summary dev`、`effective/reveal` 四项符合上述断言。
-4. 跑一次干净 dev release：后端就绪、`[health] 200`、无 Redis 相关报错。
+1. 单测（已存在）：`StackAdapterTest`（6 例）、`DockerEnvProvisionerAddressingTest`（2 例）、`LocalDevHostDeployerLeaseTest`（1 例）。
+2. `mvn -q -pl agent-domain,agent-executor,agent-infra,agent-tools -am test` 通过（历史记录，2026-11-15 未重跑）。
+3. 重启平台后 `env_runtime_status dev`、`app_logs dev`、`env_summary dev`、`effective/reveal` 四项符合上述断言（历史实跑 run-6f208d46）。
+4. 跑一次干净 dev release：后端就绪、`[health] 200`、无 Redis 相关报错（历史实跑）。
 
-## 7. 需要用户决策
+## 7. 需要用户决策（已决）
 
-1. 是否允许修改并提交用户仓库 `ruoyi-wnz` 的明文凭证（P1-1）？
-2. 是否允许我代为提交平台仓库改动（P1-2），还是只给命令由用户执行？
+1. 明文凭证（P1-1）：**不修改**。按用户仓库 `docs/standards/RULES.md` §10，运行/部署配置允许直写凭据，视为既定规则。
+2. 平台仓库提交（P1-2）：**未执行**；只给命令，需用户明确授权后再提交。
