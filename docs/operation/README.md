@@ -88,6 +88,7 @@ add_header X-Accel-Buffering no;
 ## 7. 安全运维
 
 - 密钥只存于密钥库（AES-GCM 加密），接口只回掩码；**不要**把密钥写进 `.env` 提交；
-- 种子账号（admin/devops/viewer）上线前必须改密；
+- 种子账号（admin/devops/viewer）初始密码统一为 `admin-2026`，上线前必须在「设置 → 账号安全」改密；
+  共享环境还应通过 `AGENT_SEED_PASSWORDS` 覆盖初始值；
 - 高危操作（`settings:reveal`、生产部署）需二级密码；
 - 变更确认令牌一次性、与配方哈希绑定，泄漏窗口有限，但仍应在审计日志中核对确认人。

@@ -719,7 +719,8 @@ mvn -q verify                        # 编译 + 规约检查 + 单测（推荐�
 mvn -q -DskipTests package           # 只打包
 java --enable-native-access=ALL-UNNAMED -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
 # 健康检查: http://127.0.0.1:8090/actuator/health
-# 登录种子账号: admin/admin-2026、devops/devops-2026、viewer/viewer-2026
+# 登录种子账号: admin / devops / viewer；初始密码统一 admin-2026
+# 登录后到「设置 → 账号安全」修改；AGENT_SEED_PASSWORDS=admin=xxx,... 可覆盖初始值
 ```
 
 > `--enable-native-access=ALL-UNNAMED` 用于消除 JDK 24+ 对 `System.load`（sqlite-jdbc）的受限方法告警；JDK 21 上可省略。

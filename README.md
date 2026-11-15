@@ -79,7 +79,9 @@ cd web && npm install && npm run dev    # http://localhost:5173
 
 > 首次启动无需任何模型密钥；未配置密钥时服务照常启动，只有发起对话才会提示「请在设置 → 模型连接中配置」。
 > 本机无 Docker 时需另设 `AGENT_SANDBOX_MODE=process`（沙箱默认 docker 且 fail-closed，与密钥无关）。
-> 登录种子账号：`admin / admin-2026`、`devops / devops-2026`、`viewer / viewer-2026`。
+> 登录种子账号：`admin` / `devops` / `viewer`，**三者初始密码统一为 `admin-2026`**（固定值，每次启动都一样）；
+> 登录后到「设置 → 账号安全」改成自己的密码。共享/生产部署可用
+> `AGENT_SEED_PASSWORDS=admin=xxx,devops=yyy,viewer=zzz` 覆盖初始值（未指定的账号仍用默认值）。
 > 前端只监听 `localhost`：用 `127.0.0.1` 打不开是正常的（Vite 默认绑 `::1`）。
 > 要让 IPv4 可达，用 `npm run dev -- --host 127.0.0.1`；回归脚本也按 `localhost` 取址。
 

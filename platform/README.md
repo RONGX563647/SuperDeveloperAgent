@@ -61,9 +61,11 @@ npm run build      # vue-tsc strict + 产物
 
 > Vite 默认绑 `::1`，用 `127.0.0.1` 打不开属正常；需 IPv4 用 `npm run dev -- --host 127.0.0.1`。
 
-种子账号：`admin`（管理员）、`devops`（运维开发）、`viewer`（只读）。密码不再写死在代码/前端：
-首次启动时按环境变量 `AGENT_SEED_PASSWORDS=admin=...,devops=...,viewer=...` 初始化；
-未提供的账号会生成随机密码并写入 `_platform/seed-passwords.txt`（600），登录后请尽快修改。
+种子账号：`admin`（管理员）、`devops`（运维开发）、`viewer`（只读），三者共用固定初始密码
+`admin-2026`；登录后请到「设置 → 账号安全」修改。需要区分账号或用于共享环境时，用
+`AGENT_SEED_PASSWORDS=admin=...,devops=...,viewer=...` 覆盖初始值（未指定的账号仍用默认值）。
+旧版生成的 `_platform/seed-passwords.txt` 在升级时自动清理：其中从未改密的账号自动切到统一初始密码，
+已自行改密的账号保持不变。
 
 ### 运行数据
 
