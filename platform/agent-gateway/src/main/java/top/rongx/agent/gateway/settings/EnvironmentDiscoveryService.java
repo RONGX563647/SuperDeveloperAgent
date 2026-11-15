@@ -1,7 +1,5 @@
 package top.rongx.agent.gateway.settings;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -9,10 +7,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvTemplate;
+import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
@@ -271,23 +269,18 @@ public class EnvironmentDiscoveryService {
     // ---------------------------------------------------------------- 命令
 
     private List<String> runLocal(String... argv) {
-        try {
-            Process p = new ProcessBuilder(argv).redirectErrorStream(true).start();
-            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            if (!p.waitFor(15, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
-                throw new IllegalArgumentException("命令超时：" + String.join(" ", argv));
-            }
-            if (p.exitValue() != 0) {
-                throw new IllegalArgumentException("Docker 不可用或命令失败：" + out.trim());
-            }
-            return List.of(out.split("\\R"));
-        } catch (IOException e) {
-            throw new IllegalArgumentException("无法执行 docker：" + e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("发现被中断");
+        // 有界探测：原先 readAllBytes() 在 waitFor 之前，设置页「自动发现」遇 docker CLI
+        // 不退出会永久转圈且没有任何错误。现在 15s 硬超时 + 明确原因。
+        BoundedCommand.Outcome outcome = BoundedCommand.run(List.of(argv), 15_000L);
+        if (outcome.timedOut()) {
+            throw new IllegalArgumentException(outcome.detail());
         }
+        if (!outcome.ok()) {
+            String reason = outcome.failure() == null ? "" : outcome.failure() + "：";
+            throw new IllegalArgumentException(
+                    "Docker 不可用或命令失败：" + reason + outcome.output().trim());
+        }
+        return List.of(outcome.output().split("\\R"));
     }
 
     private String sshRun(DeployServer server, String secret, String command) {

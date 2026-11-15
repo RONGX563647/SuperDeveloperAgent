@@ -62,7 +62,7 @@ public class ProjectIntakeService {
     public ProjectIntakeService(GitWorktreeManager git,
                                 IntakeProjectStore store,
                                 String workspaceRoot) {
-        this(git, store, workspaceRoot, new RecipeScaffolder(),
+        this(git, store, workspaceRoot, new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE),
                 new top.rongx.agent.infra.pipeline.FilePipelineDefStore(workspaceRoot));
     }
 

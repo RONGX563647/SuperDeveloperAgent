@@ -5,13 +5,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.concurrent.TimeUnit;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.artifact.ArtifactRef;
+import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.process.CommandShell;
 
 /**
  * git 仓库托管：bare 对象库 + N 个 worktree（v2 接入设计的底层执行器）。
@@ -25,8 +28,9 @@ import top.rongx.agent.domain.artifact.ArtifactRef;
  *   <li>LOCAL 来源构建前 fetch（从用户目录拉最新对象）。</li>
  * </ul>
  *
- * <p>分层：infra 只依赖 domain——git 命令直接用 ProcessBuilder（argv、不经 shell、
- * 不走 executor 的 ActionRunner 语义：git 管理命令不需要预算/产物/沙箱）。
+ * <p>分层：infra 只依赖 domain——git 命令经 {@link BoundedCommand} 走 ProcessBuilder
+ * （argv、不经 shell、有硬超时与进程树清理），不走 executor 的 ActionRunner 语义：
+ * git 管理命令不需要产物/沙箱。
  * 命令失败抛 {@link GitIntakeException}，原始报错原样带出（向导 UI 展示）。
  */
 public class GitWorktreeManager {
@@ -46,6 +50,25 @@ public class GitWorktreeManager {
               *sername*) printf '%s\\n' "$AGENT_GIT_USERNAME" ;;
               *) printf '%s\\n' "$AGENT_GIT_TOKEN" ;;
             esac
+            """;
+
+    /**
+     * Windows 版 askpass：原生 git.exe 不解析 {@code #!/bin/sh} shebang，
+     * NTFS 也设不了 POSIX 执行位，写死 .sh 会让私有仓库 HTTPS 认证静默失效。
+     * 这里生成 .cmd，并用延迟展开 + {@code echo(} 输出环境变量：token 里的
+     * {@code & ^ !} 等字符不会在解析阶段被当成命令元字符（凭据属不可信输入）。
+     */
+    private static final String ASKPASS_SCRIPT_WINDOWS = """
+            @echo off
+            setlocal EnableDelayedExpansion
+            set "askprompt=%~1"
+            echo(!askprompt! | findstr /I /C:"sername" >nul
+            if not errorlevel 1 (
+              echo(!AGENT_GIT_USERNAME!
+              exit /b 0
+            )
+            echo(!AGENT_GIT_TOKEN!
+            exit /b 0
             """;
 
     public GitWorktreeManager(Path workspaceRoot) {
@@ -663,18 +686,23 @@ public class GitWorktreeManager {
     private record Raw(int exit, String output) {
     }
 
-    /** askpass 脚本（700，内容不含密钥）；首次调用时写入，之后复用。 */
+    /** askpass 脚本（POSIX 上 700，内容不含密钥）；按 OS 生成，首次调用时写入，之后复用。 */
     private synchronized Path askpassFile() {
-        Path file = workspaceRoot.resolve("_platform").resolve("git-askpass.sh");
+        boolean windows = CommandShell.isWindows();
+        Path file = workspaceRoot.resolve("_platform")
+                .resolve(windows ? "git-askpass.cmd" : "git-askpass.sh");
         try {
             Files.createDirectories(file.getParent());
             if (!Files.isRegularFile(file)) {
-                Files.writeString(file, ASKPASS_SCRIPT, StandardCharsets.UTF_8);
-                try {
-                    Files.setPosixFilePermissions(file,
-                            java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
-                } catch (UnsupportedOperationException ignored) {
-                    // 非 POSIX 文件系统：尽力而为
+                Files.writeString(file, windows ? ASKPASS_SCRIPT_WINDOWS : ASKPASS_SCRIPT,
+                        StandardCharsets.UTF_8);
+                if (!windows) {
+                    try {
+                        Files.setPosixFilePermissions(file,
+                                java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+                    } catch (UnsupportedOperationException ignored) {
+                        // 非 POSIX 文件系统：尽力而为
+                    }
                 }
             }
             return file;
@@ -690,49 +718,41 @@ public class GitWorktreeManager {
             throw new GitIntakeException(
                     what + " 失败：git 仓库目录不存在（" + dir + "）。该项目尚未完成接入，请先在「项目接入」页完成 clone 或本地登记。");
         }
-        try {
-            ProcessBuilder pb = new ProcessBuilder(argv)
-                    .directory(dir.toFile())
-                    .redirectErrorStream(true);
-            // 远端不可达时 git 可能会等待凭据输入：禁止交互，让它尽快失败而不是挂住
-            pb.environment().put("GIT_TERMINAL_PROMPT", "0");
-            if (auth != null && auth.usable()) {
-                // 凭据只经环境变量传给 askpass 脚本，不进 argv（ps 可见）也不落盘明文
-                pb.environment().put("GIT_ASKPASS", askpassFile().toString());
-                pb.environment().put("AGENT_GIT_USERNAME",
-                        auth.username() == null || auth.username().isBlank() ? "git" : auth.username());
-                pb.environment().put("AGENT_GIT_TOKEN", auth.token());
-            }
-            Process p = pb.start();
-            // 输出必须与等待并行读取：先 readAllBytes 会一直阻塞到进程退出，
-            // 超时参数就形同虚设（远端 hang 住时整条运行永远是"进行中"）。
-            StringBuilder out = new StringBuilder();
-            Thread pump = Thread.ofVirtual().start(() -> {
-                try (var in = p.getInputStream()) {
-                    out.append(new String(in.readAllBytes(), StandardCharsets.UTF_8));
-                } catch (IOException ignored) {
-                    // 进程被强杀时流会提前关闭，属预期
-                }
-            });
-            boolean finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
-            if (!finished) {
-                p.destroyForcibly();
-                p.waitFor(10, TimeUnit.SECONDS);
-            }
-            pump.join(TimeUnit.SECONDS.toMillis(10));
-            String output = out.toString();
-            if (!finished) {
-                log.warn("git 命令超时 [{}]：{}", what, output);
-                throw new GitIntakeException(what + " 超时（" + timeoutSeconds + "s）："
-                        + "远端不可达或网络过慢，请检查仓库地址/网络后重试");
-            }
-            return new Raw(p.exitValue(), output);
-        } catch (IOException e) {
-            throw new GitIntakeException(what + " 失败（无法启动 git）：" + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        // 凭据只经环境变量传给 askpass 脚本，不进 argv（ps 可见）也不落盘明文
+        Map<String, String> env = new HashMap<>();
+        // 远端不可达时 git 可能会等待凭据输入：禁止交互，让它尽快失败而不是挂住
+        env.put("GIT_TERMINAL_PROMPT", "0");
+        if (auth != null && auth.usable()) {
+            env.put("GIT_ASKPASS", askpassFile().toString());
+            env.put("AGENT_GIT_USERNAME",
+                    auth.username() == null || auth.username().isBlank() ? "git" : auth.username());
+            env.put("AGENT_GIT_TOKEN", auth.token());
+            // 平台自己注入 token 时必须屏蔽系统 credential.helper（Windows 常见 Git
+            // Credential Manager）：它会抢在 askpass 之前弹窗/等待，让 token 注入静默
+            // 失效并把命令拖到超时。用 GIT_CONFIG_* 只影响本次子进程，不改用户全局
+            // gitconfig，也不把配置拼进 argv。
+            env.put("GIT_CONFIG_COUNT", "1");
+            env.put("GIT_CONFIG_KEY_0", "credential.helper");
+            env.put("GIT_CONFIG_VALUE_0", "");
+        }
+        // 统一走有界执行原语：并行排空输出、硬超时、超时杀整棵进程树。
+        // 原实现只 destroyForcibly 主进程，git 拉起的 git-remote-https / ssh 子进程
+        // 会残留并继续持有管道写端，与「缺镜像静默卡住」是同根问题。
+        BoundedCommand.Outcome outcome = BoundedCommand.run(argv, dir,
+                TimeUnit.SECONDS.toMillis(timeoutSeconds), env);
+        String output = outcome.output();
+        if (Thread.currentThread().isInterrupted()) {
             throw new GitIntakeException(what + " 被中断");
         }
+        if (outcome.timedOut()) {
+            log.warn("git 命令超时 [{}]：{}", what, output);
+            throw new GitIntakeException(what + " 超时（" + timeoutSeconds + "s）："
+                    + "远端不可达或网络过慢，请检查仓库地址/网络后重试");
+        }
+        if (outcome.failure() != null && outcome.exitCode() == 127) {
+            throw new GitIntakeException(what + " 失败（无法启动 git）：" + outcome.failure());
+        }
+        return new Raw(outcome.exitCode(), output);
     }
 
     /** 列出挂在指定仓库目录（DIRECT 用户目录）下的 worktree。 */

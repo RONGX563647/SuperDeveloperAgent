@@ -1,9 +1,7 @@
 package top.rongx.agent.gateway.web;
 
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -35,6 +33,7 @@ import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
@@ -683,21 +682,18 @@ public class EnvironmentController {
         String command = "docker inspect --format '{{.State.Running}}' " + container;
         try {
             if (server == null) {
-                Process p = new ProcessBuilder("docker", "inspect", "--format",
-                        "{{.State.Running}}", container).redirectErrorStream(true).start();
-                String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-                if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                    p.destroyForcibly();
-                    return null;
-                }
-                return p.exitValue() == 0 ? "true".equalsIgnoreCase(out.trim()) : null;
+                // 有界探测：环境面板刷新时 docker CLI 不退出会永久卡住，
+                // 原先的 waitFor(10s) 排在无界 readAllBytes() 之后根本不会生效。
+                BoundedCommand.Outcome outcome = BoundedCommand.run(
+                        List.of("docker", "inspect", "--format", "{{.State.Running}}", container),
+                        10_000L);
+                return outcome.ok()
+                        ? "true".equalsIgnoreCase(outcome.output().trim()) : null;
             }
             SshAccess.Result result = ssh.run(server, secret, command, 10_000);
             return result.ok() ? "true".equalsIgnoreCase(result.output().trim()) : null;
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
+        } catch (RuntimeException e) {
+            log.debug("容器状态探测失败：{} — {}", container, e.getMessage());
             return null;
         }
     }

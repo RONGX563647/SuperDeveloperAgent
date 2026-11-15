@@ -54,6 +54,24 @@ public final class SqliteConnections {
         }
     }
 
+    /**
+     * 关闭全部连接池（测试收尾 / 优雅退出用）。
+     *
+     * <p>每个 Store 按自己的 db 文件建池，指望二十多个测试类各自记得调用
+     * {@link #closePool(Path)} 不现实；Windows 上只要残留一个池，{@code @TempDir}
+     * 就删不掉 {@code .db/-shm/-wal}，表现为一整批
+     * {@code JUnit Failed to close extension context}。统一入口由测试扩展在每个
+     * 用例结束后调用，无需改动各测试类。
+     */
+    public static void closeAllPools() {
+        for (String key : POOLS.keySet().toArray(new String[0])) {
+            Pool pool = POOLS.remove(key);
+            if (pool != null) {
+                pool.shutdownPool();
+            }
+        }
+    }
+
     private static final class Pool {
 
         private final String url;

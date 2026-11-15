@@ -43,14 +43,31 @@ public class RecipeScaffolder implements ProjectScaffolder {
 
     private static final Logger log = LoggerFactory.getLogger(RecipeScaffolder.class);
 
+    /** 生成配方时写入的前端工具链镜像；由配置注入，本机没有对应镜像时可直接换掉。 */
+    private final String nodeImage;
+
+    /**
+     * 单构造器由 Spring 隐式注入（不加 {@code @Autowired}：规约 R05/A9 禁止）。
+     * 手工装配传 {@link #DEFAULT_NODE_IMAGE} 即可。
+     */
+    public RecipeScaffolder(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.scaffold.node-image:" + DEFAULT_NODE_IMAGE + "}") String nodeImage) {
+        this.nodeImage = nodeImage == null || nodeImage.isBlank()
+                ? DEFAULT_NODE_IMAGE : nodeImage.trim();
+    }
+
     /** 生成目标：只允许 ci/ 下的固定文件名。 */
     private static final String PIPELINE_FILE = "ci/pipeline.yml";
     private static final String ACTIONS_FILE = "ci/actions.yml";
 
     private static final String DEFAULT_PORT_NOTE = "默认值（未探测到 server.port，请确认）";
     private static final String DEFAULT_HEALTH_NOTE = "默认值（未探测到健康端点，请确认）";
-    /** 前端构建镜像：默认 Maven 镜像里没有 Node，必须显式指定。 */
-    private static final String NODE_IMAGE = "node:20-bookworm";
+    /**
+     * 前端构建镜像默认值：默认沙箱镜像是 Maven，里面没有 node/npm，必须显式指定。
+     * 只是生成配方时的兜底，可用 {@code agent.scaffold.node-image} 覆盖为本机已有镜像。
+     */
+    public static final String DEFAULT_NODE_IMAGE = "node:20-bookworm";
     /** Dockerfile 探测顺序：根目录优先，其次是常见的前后端分离目录。 */
     private static final List<String> DOCKERFILE_DIRS = List.of(
             "", "backend", "frontend", "deploy", "docker");
@@ -103,11 +120,11 @@ public class RecipeScaffolder implements ProjectScaffolder {
                     }
                     // 前端必须用 Node 工具链镜像：默认沙箱镜像是 Maven，里面没有 node/npm。
                     stages.add(new StageSpec("frontend", "frontend_build", "container",
-                            workdirOf(nodeDir), NODE_IMAGE, null));
+                            workdirOf(nodeDir), nodeImage, null));
                     actions.put("frontend_build", frontendBuildCommand(nodeRoot, pm, lock));
                     if (hasRealTestScript(nodeRoot)) {
                         stages.add(new StageSpec("frontend-test", "frontend_test", "container",
-                                workdirOf(nodeDir), NODE_IMAGE, null));
+                                workdirOf(nodeDir), nodeImage, null));
                         actions.put("frontend_test", pm + " test");
                     } else {
                         diags.add(Diag.info("NO_FRONTEND_TEST",

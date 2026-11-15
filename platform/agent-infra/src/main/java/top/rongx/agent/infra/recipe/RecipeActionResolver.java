@@ -2,7 +2,6 @@ package top.rongx.agent.infra.recipe;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -24,6 +23,7 @@ import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionSource;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.port.ActionResolver;
+import top.rongx.agent.domain.process.BoundedCommand;
 
 /**
  * 配方解析（方案 D）。
@@ -327,18 +327,16 @@ public class RecipeActionResolver implements ActionResolver {
 
     /** 读取仓库当前 HEAD 的 commit（用于审计@commit）。非 git 仓库或损坏时返回 null。 */
     private String resolveCommit(Path repoRoot) {
-        // 先走 git 命令（对 bare/worktree/普通仓库都正确）
-        try {
-            Process p = new ProcessBuilder("git", "rev-parse", "HEAD")
-                    .directory(repoRoot.toFile()).redirectErrorStream(true).start();
-            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-            if (p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) == false || p.exitValue() != 0) {
-                return fallbackCommit(repoRoot);
-            }
-            return out.length() >= 40 ? out.substring(0, 40) : out;
-        } catch (Exception e) {
+        // 先走 git 命令（对 bare/worktree/普通仓库都正确）。
+        // 有界探测：钩子/凭据交互让 git 挂住时，5s 后强杀并回退到 .git/HEAD，
+        // 而不是让预览请求永久卡住。
+        BoundedCommand.Outcome outcome = BoundedCommand.run(
+                List.of("git", "rev-parse", "HEAD"), repoRoot, 5_000L);
+        if (!outcome.ok()) {
             return fallbackCommit(repoRoot);
         }
+        String out = outcome.output().trim();
+        return out.length() >= 40 ? out.substring(0, 40) : out;
     }
 
     /** git 不可用时的手读回退（普通仓库 .git/HEAD）。 */

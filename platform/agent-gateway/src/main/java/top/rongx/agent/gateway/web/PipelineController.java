@@ -386,6 +386,30 @@ public class PipelineController {
         view.put("status", status);
         view.put("stages", engine.stages(runId).stream().map(this::stageView).toList());
         view.put("artifacts", engine.artifacts(runId).stream().map(this::artifactView).toList());
+        // 运行中阶段没有 StageResult，进度单独下发：工作台据此渲染「build 运行中」占位，
+        // 避免阶段列表只剩已完成的 checkout、却仍显示运行中。
+        var progress = engine.progress(runId);
+        if (progress != null) {
+            view.put("progress", Map.of(
+                    "currentStageId", progress.currentStageId() == null ? "" : progress.currentStageId(),
+                    "stageTotal", progress.stageTotal(),
+                    "completedStages", progress.completedStages(),
+                    "elapsedMs", progress.elapsedMs(),
+                    "stageElapsedMs", progress.stageElapsedMs(),
+                    "cancelRequested", progress.cancelRequested(),
+                    "forceTerminated", progress.forceTerminated()));
+        }
+        // 自动修复状态：让用户直接看到「平台已自动修复并续跑」，不必翻日志
+        var repair = engine.autoRepair(runId);
+        if (repair != null) {
+            view.put("autoRepair", Map.of(
+                    "enabled", repair.enabled(),
+                    "attempts", repair.attempts(),
+                    "maxAttempts", repair.maxAttempts(),
+                    "resumed", repair.resumed(),
+                    "lastAction", repair.lastAction(),
+                    "lastResult", repair.lastResult()));
+        }
         // 增量日志模式下（withLog=false）不重复传输整段日志
         view.put("log", withLog ? engine.logTail(runId) : "");
         // 运行元信息：触发者 / 环境绑定 / 定义来源（Agent 固化脚本时可直接看出）

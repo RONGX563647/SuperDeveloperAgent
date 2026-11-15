@@ -21,6 +21,8 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
+import top.rongx.agent.domain.process.CommandShell;
+import top.rongx.agent.domain.process.JavaRuntime;
 
 /**
  * 本机进程服务运行时（dev 专用）：平台负责把项目前后端拉起来 / 停掉 / 探活。
@@ -301,17 +303,13 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
         return stateRoot.resolve(projectId).resolve(service + ".log");
     }
 
+    /** 与当前 JVM 一致的 java，不回退到 PATH 上可能是另一个版本的 {@code "java"}。 */
     private static String javaBin() {
-        String home = System.getProperty("java.home");
-        if (home == null || home.isBlank()) {
-            return "java";
-        }
-        Path bin = Path.of(home, "bin", isWindows() ? "java.exe" : "java");
-        return Files.isRegularFile(bin) ? bin.toString() : "java";
+        return JavaRuntime.javaBinary();
     }
 
     private static boolean isWindows() {
-        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+        return CommandShell.isWindows();
     }
 
     // ---------------------------------------------------------------- 目录

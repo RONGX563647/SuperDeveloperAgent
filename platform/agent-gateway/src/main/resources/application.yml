@@ -60,6 +60,15 @@ agent:
     history: true
     # 发布镜像 tag 前缀（正式发布建议改为项目名，如 ruoyi）
     image-prefix: ${AGENT_PIPELINE_IMAGE_PREFIX:ci}
+    # 失败自动修复：确定性故障（工具链镜像缺失）由平台自己 pull → 复核 → 从失败阶段续跑。
+    # 只有平台自己执行 inspect 验证通过才重跑；发布 Agent 只作兜底，其「已修复」自述不作为证据。
+    # 关闭 auto-resume 后只诊断不重跑；离线环境可关 agent-fallback 避免等待模型。
+    auto-repair:
+      enabled: ${AGENT_PIPELINE_AUTO_REPAIR:true}
+      max-attempts: ${AGENT_PIPELINE_AUTO_REPAIR_ATTEMPTS:2}
+      pull-timeout-seconds: ${AGENT_PIPELINE_AUTO_REPAIR_PULL_TIMEOUT:180}
+      agent-fallback: ${AGENT_PIPELINE_AUTO_REPAIR_AGENT:true}
+      auto-resume: ${AGENT_PIPELINE_AUTO_RESUME:true}
   # 预置项目清单（agent.projects.items）已移除：项目统一走下面的「项目接入」，
   # 由项目页接入后落库（data/workspaces/_platform/projects.db）。
   # 项目接入
@@ -69,6 +78,10 @@ agent:
     shared-root: ${AGENT_INTAKE_SHARED_ROOT:}
     # 平台兜底 Gitee token（私有库 clone；用户绑定 token 优先）
     gitee-token: ${AGENT_GITEE_TOKEN:}
+  # 生成配方时写入的前端工具链镜像：本机已有对应镜像时直接换成它，
+  # 否则 stage 启动前会做 docker image inspect 预检并给出明确失败。
+  scaffold:
+    node-image: ${AGENT_SCAFFOLD_NODE_IMAGE:node:20-bookworm}
   # Gitee OAuth 网页授权（推荐）：gitee.com → 设置 → 第三方应用 创建应用，
   # 回调地址填 http://localhost:8090/api/v1/gitee/oauth/callback
   gitee:
@@ -92,10 +105,26 @@ agent:
   # 统一运行账本：RUNNING 超过该秒数未更新视为进程中断留下的孤儿（多实例安全）
   run:
     stale-seconds: ${AGENT_RUN_STALE_SECONDS:300}
+  # 环境自愈：中间件容器镜像的本地覆盖。默认标签只是兜底，本机没有时不要静默拉取：
+  # 平台会在 docker run 前预检，缺失立即给出「pull 或换镜像」的明确失败。
+  # 格式 <kind>=<image>,...；kind 见 mysql/mariadb/postgres/redis/rabbitmq/minio/mongo
+  env:
+    middleware-images: ${AGENT_ENV_MIDDLEWARE_IMAGES:}
+    precheck-images: ${AGENT_ENV_PRECHECK_IMAGES:true}
+  # 自动修复的确定性构建/测试命令解释器：留空按操作系统自适应
+  #（Windows → cmd.exe /c；其余 → /bin/sh -c），离线/特殊环境可显式覆盖，
+  # 例如 AGENT_BUGFIX_SHELL="/bin/bash -c"，或换成自定义 bash / PowerShell 的可执行文件。
+  # 命令是设置页显式保存的策略输入，作为单个整体参数交给解释器，不拼字符串。
+  bugfix:
+    shell: ${AGENT_BUGFIX_SHELL:}
   # 动作执行沙箱：默认 fail-closed（Docker 不可用则启动失败）；仅本地开发显式设为 process
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:docker}        # docker | process
+    # 工具链镜像：默认只是兜底，本机没有就换成已安装的镜像（或先 docker pull）。
+    # 平台在动作前做一次 docker image inspect 预检，缺镜像立即明确报错，不会静默等拉取。
     image: ${AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
+    # 离线/自建 registry 场景可关闭预检（关闭后会回到 docker CLI 自行拉取的行为）
+    precheck-image: ${AGENT_SANDBOX_PRECHECK_IMAGE:true}
     # 网络策略：bridge=能拉依赖（默认）；build-net=专用网络（生产建议，见文档）；
     #          none=完全断网，仅用于"缓存已预热"的发布构建或构建不可信代码
     network: ${AGENT_SANDBOX_NETWORK:bridge}

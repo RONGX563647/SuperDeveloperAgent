@@ -5,20 +5,21 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.bugfix.BugFixCheckPort;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
+import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.process.CommandShell;
 import top.rongx.agent.infra.git.GitWorktreeManager;
 
 /**
@@ -36,10 +37,14 @@ public class WorkspaceBugFixCheck implements BugFixCheckPort {
 
     private final GitWorktreeManager git;
     private final ProjectRepoLocator locator;
+    /** 原始配置值；解析推迟到实际执行，配置写错不能阻塞应用启动。 */
+    private final String shellConfig;
 
-    public WorkspaceBugFixCheck(GitWorktreeManager git, ProjectRepoLocator locator) {
+    public WorkspaceBugFixCheck(GitWorktreeManager git, ProjectRepoLocator locator,
+                                @Value("${agent.bugfix.shell:}") String shellConfig) {
         this.git = git;
         this.locator = locator;
+        this.shellConfig = shellConfig;
     }
 
     @Override
@@ -131,43 +136,36 @@ public class WorkspaceBugFixCheck implements BugFixCheckPort {
         }
     }
 
+    /**
+     * 走共用的有界执行原语：并行排空输出、硬超时、超时杀进程树。
+     *
+     * <p>原实现写死 {@code /bin/sh -c}（Windows 直接失败），且超时只
+     * {@code destroyForcibly} 主进程：构建工具拉起的子进程会残留并持有管道写端，
+     * 与「缺镜像静默卡住」同根。解释器前缀改由 {@link CommandShell} 按 OS 自适应
+     * 或配置覆盖，执行预算与进程树清理统一交给 {@link BoundedCommand}。
+     */
     private CommandResult execute(Path worktree, String command) {
-        try {
-            Process process = new ProcessBuilder("/bin/sh", "-c", command)
-                    .directory(worktree.toFile())
-                    .redirectErrorStream(true)
-                    .start();
-            StringBuffer output = new StringBuffer();
-            Thread reader = Thread.ofVirtual().start(() -> {
-                try (var stream = process.getInputStream()) {
-                    byte[] buffer = new byte[8192];
-                    int read;
-                    while ((read = stream.read(buffer)) != -1) {
-                        if (output.length() < MAX_OUTPUT_CHARS) {
-                            output.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
-                        }
-                    }
-                } catch (IOException ignored) {
-                    // 进程退出时流关闭属于正常情况
-                }
-            });
-            boolean finished = process.waitFor(COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                reader.join(Duration.ofSeconds(2));
-                return new CommandResult(false, -1,
-                        clip("命令超时（" + (COMMAND_TIMEOUT_MS / 1000) + " 秒）：" + command
-                                + "\n" + output));
-            }
-            reader.join(Duration.ofSeconds(2));
-            return new CommandResult(process.exitValue() == 0, process.exitValue(),
-                    clip(output.toString()));
-        } catch (IOException e) {
-            return new CommandResult(false, -1, "命令无法执行：" + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return new CommandResult(false, -1, "命令执行被中断");
+        // 策略输入只允许单行：换行会把一条配置变成多条命令，属于配置注入面
+        if (command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0) {
+            return new CommandResult(false, -1,
+                    "构建/测试命令不允许包含换行：请在设置页改成单行命令，复合命令请写成项目内脚本");
         }
+        List<String> shellPrefix;
+        try {
+            shellPrefix = CommandShell.prefix(shellConfig);
+        } catch (IllegalArgumentException e) {
+            return new CommandResult(false, -1, e.getMessage());
+        }
+        BoundedCommand.Outcome outcome = BoundedCommand.run(
+                CommandShell.argv(shellPrefix, command), worktree, COMMAND_TIMEOUT_MS);
+        String output = clip(outcome.output());
+        if (outcome.ok()) {
+            return new CommandResult(true, outcome.exitCode(), output);
+        }
+        String reason = outcome.timedOut()
+                ? "命令超时（" + (COMMAND_TIMEOUT_MS / 1000) + " 秒），已终止进程树"
+                : outcome.detail();
+        return new CommandResult(false, outcome.exitCode(), clip(reason + "\n" + output));
     }
 
     private static String clip(String value) {
