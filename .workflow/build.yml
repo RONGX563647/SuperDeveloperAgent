@@ -39,6 +39,15 @@ stages:
           # 变更漂移报告：只提示本次改动的文件影响了哪些文档，不阻断构建
           - doc-marshal drifted --format text || echo "（doc-marshal drifted 仅提示，不阻断）"
 
+      - step: build@nodejs
+        name: api_contract_audit
+        displayName: 前端契约审计（OpenAPI vs src/api）
+        nodeVersion: "20"
+        commands:
+          - npm ci --prefix tools/api-docs-mcp
+          - node --test tools/api-docs-mcp/audit.test.mjs tools/api-docs-mcp/mock.test.mjs
+          - node tools/api-docs-mcp/audit.mjs --strict
+
       - step: build@maven
         name: maven_verify
         displayName: mvn verify（编译 + 规约检查 + 单测）

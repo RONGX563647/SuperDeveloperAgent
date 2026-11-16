@@ -12,6 +12,7 @@
  *   node server.js --file ./openapi.json [--tools ./agent-tools.json]
  *   node server.js --url http://127.0.0.1:8090/v3/api-docs [--token <token>]
  *   API_DOCS_FILE / API_DOCS_URL / API_DOCS_TOKEN / AGENT_TOOLS_FILE 环境变量等价。
+ *   --frontend <dir> / AGENT_FRONTEND_DIR 指定前端 src/api 目录（契约审计用）。
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -20,13 +21,17 @@ import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_FRONTEND, auditFrontend, formatReport, searchFrontendApi,
+} from "./audit.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const METHODS = ["get", "post", "put", "patch", "delete", "head", "options", "trace"];
 
 function parseArgs(argv) {
   const args = { file: process.env.API_DOCS_FILE, url: process.env.API_DOCS_URL,
-    token: process.env.API_DOCS_TOKEN, tools: process.env.AGENT_TOOLS_FILE };
+    token: process.env.API_DOCS_TOKEN, tools: process.env.AGENT_TOOLS_FILE,
+    frontend: process.env.AGENT_FRONTEND_DIR };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     const next = () => {
@@ -39,6 +44,7 @@ function parseArgs(argv) {
     else if (key === "--url") args.url = next();
     else if (key === "--token") args.token = next();
     else if (key === "--tools") args.tools = next();
+    else if (key === "--frontend") args.frontend = next();
     else if (key === "--help" || key === "-h") args.help = true;
     else throw new Error(`未知参数：${key}`);
   }
@@ -53,8 +59,10 @@ if (args.help) {
   --url <url>        改为从运行中的平台拉取 /v3/api-docs
   --token <token>    --url 时的 Authorization Bearer Token
   --tools <path>     agent-tools.json（提供 tool_search / tool_get）
+  --frontend <dir>   前端 src/api 目录（提供契约审计与封装检索）
 
-也可以使用环境变量 API_DOCS_FILE / API_DOCS_URL / API_DOCS_TOKEN / AGENT_TOOLS_FILE。
+也可以使用环境变量 API_DOCS_FILE / API_DOCS_URL / API_DOCS_TOKEN / AGENT_TOOLS_FILE /
+AGENT_FRONTEND_DIR。
 `);
   process.exit(0);
 }
@@ -75,6 +83,7 @@ const toolsFile = firstExisting([
   path.resolve(HERE, "../../platform/data/api/agent-tools.json"),
   path.resolve(HERE, "../../data/api/agent-tools.json"),
 ]);
+const frontendDir = path.resolve(args.frontend ?? DEFAULT_FRONTEND);
 
 let specCache = null;
 let toolsCache = null;
@@ -102,7 +111,7 @@ function indexSpec(root, source, fetchedAt) {
   for (const op of operations.values()) op.haystack = haystack(op);
   const schemas = new Map(Object.entries(root.components?.schemas ?? {}));
   return {
-    source, fetchedAt,
+    source, fetchedAt, root,
     title: root.info?.title ?? "", version: root.info?.version ?? "",
     operations, schemas,
   };
@@ -340,6 +349,62 @@ server.registerTool("tool_get", {
       text: `tool: ${tool.name}\nreadOnly: ${tool.readOnly}\ntoolkits: ${(tool.toolkits ?? []).join(", ")}` +
         `\ndescription:\n${tool.description ?? ""}\nparameters:\n` +
         `${JSON.stringify(tool.parameters ?? {}, null, 2)}\nsource: ${catalog.source}` }] };
+  } catch (error) {
+    return { isError: true, content: [{ type: "text", text: String(error.message ?? error) }] };
+  }
+});
+
+server.registerTool("audit_frontend_api", {
+  title: "审计前端请求与后端契约",
+  description: "只读扫描前端 src/api 下的 apiFetch / apiBlob 调用，与 OpenAPI 逐条比对路径、方法、" +
+    "路径参数、查询参数与 2xx 响应，返回带 file:line 的问题清单。",
+  inputSchema: {
+    frontend_dir: z.string().optional()
+      .describe("前端 src/api 目录，默认本仓库 platform/web/src/api"),
+    include_warnings: z.boolean().optional().describe("是否包含 warning，默认 true"),
+  },
+}, async ({ frontend_dir, include_warnings }) => {
+  try {
+    const spec = await getSpec();
+    const dir = path.resolve(frontend_dir ?? frontendDir);
+    if (!existsSync(dir)) {
+      return { content: [{ type: "text", text: `前端目录不存在：${dir}` }] };
+    }
+    const withWarnings = include_warnings ?? true;
+    const report = auditFrontend({
+      openapi: spec.root, frontendDir: dir, includeWarnings: withWarnings,
+    });
+    return { content: [{ type: "text",
+      text: `${formatReport(report, { includeWarnings: withWarnings })}\n${provenance(spec)}` }] };
+  } catch (error) {
+    return { isError: true, content: [{ type: "text", text: String(error.message ?? error) }] };
+  }
+});
+
+server.registerTool("search_frontend_api", {
+  title: "检索前端请求封装",
+  description: "只读索引前端 src/api 中的请求函数（函数名、HTTP 方法、路径、返回类型），" +
+    "用于生成代码或契约比对前了解现有封装。",
+  inputSchema: {
+    keyword: z.string().describe("关键词，如 project、settings、git-issues；可为空"),
+    frontend_dir: z.string().optional().describe("前端 src/api 目录"),
+    limit: z.number().int().min(1).max(50).optional().describe("返回条数，默认 10"),
+  },
+}, async ({ keyword, frontend_dir, limit }) => {
+  try {
+    const spec = await getSpec();
+    const dir = path.resolve(frontend_dir ?? frontendDir);
+    if (!existsSync(dir)) {
+      return { content: [{ type: "text", text: `前端目录不存在：${dir}` }] };
+    }
+    const hits = searchFrontendApi({
+      frontendDir: dir, keyword: keyword ?? "", limit: limit ?? 10,
+    });
+    const rows = hits.map((hit) =>
+      `- ${hit.name} → ${hit.method} ${hit.path}\n    ${hit.file}` +
+      `${hit.returns ? ` · 返回 ${hit.returns}` : ""}`).join("\n");
+    return { content: [{ type: "text",
+      text: `${rows || "未匹配到前端请求函数"}\n${provenance(spec)}` }] };
   } catch (error) {
     return { isError: true, content: [{ type: "text", text: String(error.message ?? error) }] };
   }

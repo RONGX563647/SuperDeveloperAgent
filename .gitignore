@@ -5,6 +5,8 @@ build/
 *.class
 *.jar
 !**/lib/*.jar
+# OpenAPI 生成的 Mock 数据（npm run mock:gen 可再生）
+platform/web/mock/
 
 # 依赖
 node_modules/
