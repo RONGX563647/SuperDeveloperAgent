@@ -7,8 +7,11 @@ import { closeNav, navDrawerOpen } from './navDrawer'
 /**
  * 应用外壳（App Shell）。
  *
- * <p>骨架：横向 Flex = 侧栏（固定 260px，可折叠）+ 主区（flex-1）。
+ * <p>骨架：横向 Flex = 侧栏（默认 288px，可拖拽调宽、可折叠为 64px 图标栏）+ 主区（flex-1）。
  * 高度锁死 100dvh，外层 overflow:hidden——整页永远没有滚动条。
+ *
+ * <p>折叠后不是消失而是收成图标栏：展开按钮始终留在栏顶，
+ * 折叠状态与宽度都写 localStorage，刷新/重启后保持一致（Ctrl/Cmd+B 也可切换）。
  *
  * <p><b>移动端（≤900px）</b>：侧栏变为离屏抽屉，由 PageHeader 的菜单按钮打开；
  * 抽屉带遮罩，点击遮罩 / 路由跳转 / Esc 都会关闭，主区始终占满宽度。
@@ -18,7 +21,25 @@ import { closeNav, navDrawerOpen } from './navDrawer'
  * 因此未登录时用户看到的只有登录页，绝不会带着侧栏"偷看"控制台。
  */
 const route = useRoute()
-const collapsed = ref(false)
+const ASIDE_COLLAPSED_KEY = 'agent.aside.collapsed'
+
+function loadCollapsed(): boolean {
+  try {
+    return localStorage.getItem(ASIDE_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+const collapsed = ref(loadCollapsed())
+
+watch(collapsed, (value) => {
+  try {
+    localStorage.setItem(ASIDE_COLLAPSED_KEY, value ? '1' : '0')
+  } catch {
+    // 隐私模式：仅本次会话生效
+  }
+})
 
 /** 防御性断言：若误把公开页挂进外壳，开发期直接暴露问题。 */
 const isPublicPage = computed(() => route.meta.public === true)
@@ -48,6 +69,11 @@ function onViewportChange(): void {
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') closeNav()
+  // Ctrl/Cmd+B：与常见编辑器一致，快速收起/展开侧栏
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+    e.preventDefault()
+    collapsed.value = !collapsed.value
+  }
 }
 
 // 手机上点导航跳页后，抽屉必须自动收起，不能盖住新页面

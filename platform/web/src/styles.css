@@ -100,15 +100,16 @@
   --leading-base: 1.55;
   --leading-relaxed: 1.75;
 
-  /* ---- 布局骨架：侧栏 260px（可折叠）/ Header 52px ---- */
-  --sidebar-width-260: 260px;
-  --header-height: 52px;
+  /* ---- 布局骨架：侧栏默认 288px（可拖拽 / 折叠成 64px 图标栏）/ Header 48px ---- */
+  --sidebar-width: 288px;
+  --sidebar-rail-width: 64px;
+  --header-height: 48px;
 
   /* ---- 工作区留白（由页面消费） ---- */
-  --workspace-padding: clamp(16px, 2.4vw, 40px);
-  --workspace-top-gap: clamp(16px, 2.5dvh, 28px);
-  --workspace-section-gap: clamp(14px, 2.5dvh, 24px);
-  --workspace-panel-padding: clamp(16px, 2vw, 22px);
+  --workspace-padding: clamp(14px, 1.8vw, 28px);
+  --workspace-top-gap: clamp(12px, 2dvh, 22px);
+  --workspace-section-gap: clamp(12px, 2dvh, 20px);
+  --workspace-panel-padding: clamp(14px, 1.6vw, 20px);
 
   /* ============ Element Plus 变量覆盖（仅主色与半径，其余用默认浅色） ============ */
   --el-color-primary: #4d82f7;

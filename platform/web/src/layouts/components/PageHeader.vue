@@ -59,7 +59,7 @@ defineProps<{
   justify-content: space-between;
   gap: 16px;
   height: var(--header-height);
-  padding: 0 20px;
+  padding: 0 16px;
   background: transparent;
 }
 .head-left {

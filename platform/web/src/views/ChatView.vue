@@ -883,7 +883,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 20px 0 24px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--line-soft);
 }
 .view-switch {
@@ -935,12 +935,12 @@ onMounted(async () => {
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
-  padding: 0 24px;
+  padding: 0 clamp(16px, 2.4vw, 40px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .chat-approval {
-  max-width: 56rem;
+  max-width: 72rem;
   margin: 0 auto 24px;
 }
 
@@ -950,7 +950,7 @@ onMounted(async () => {
   flex-direction: column;
   justify-content: center;
   width: 100%;
-  max-width: 56rem;
+  max-width: 72rem;
   min-height: 100%;
   padding: 24px 0;
   margin: 0 auto;
@@ -1060,14 +1060,14 @@ onMounted(async () => {
 /* ---- 输入区：白底浮起的 composer，底部一行工具条 ---- */
 .composer-wrap {
   flex: none;
-  padding: 0 24px 14px;
+  padding: 0 clamp(16px, 2.4vw, 40px) 12px;
 }
 .composer {
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: 100%;
-  max-width: 56rem;
+  max-width: 72rem;
   padding: 12px 12px 6px 14px;
   margin: 0 auto;
   background: var(--surface-raised);

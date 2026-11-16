@@ -197,16 +197,16 @@ async function refresh(): Promise<void> {
 .settings-body {
   flex: 1 1 0;
   min-height: 0;
-  padding: 8px clamp(16px, 2.4vw, 40px) 40px;
+  padding: 4px clamp(16px, 2vw, 32px) 32px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .settings-shell {
   display: grid;
   grid-template-columns: 232px minmax(0, 1fr);
-  gap: 24px;
+  gap: 20px;
   align-items: stretch;
-  max-width: 1200px;
+  max-width: 1440px;
   /* 撑满可视区：内容少的分区不再是一张矮卡片 + 一大片空白 */
   min-height: calc(100vh - 104px);
   margin: 0 auto;

@@ -140,7 +140,7 @@ const rows = computed(() => items.value.map((message, index) => ({
   flex-direction: column;
   gap: 4px;
   width: 100%;
-  max-width: 56rem;
+  max-width: 72rem;
   min-height: 100%;
   padding: 0 0 28px;
   margin: 0 auto;

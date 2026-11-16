@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { ChatDotRound, Delete, Document, Folder, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, Box, SwitchButton, ArrowRight, ArrowDown, FolderAdd, Warning } from '@element-plus/icons-vue'
@@ -33,6 +33,59 @@ function onFold(): void {
 const route = useRoute()
 const router = useRouter()
 const identity = computed(() => appStore.identity)
+
+/**
+ * 侧栏宽度：可拖拽调整（240~420），按用户持久化。
+ * 之前固定 260px，长工作区/会话名被截断；加宽 + 可调后由用户自己决定。
+ */
+const ASIDE_WIDTH_KEY = 'agent.aside.width'
+const MIN_ASIDE_WIDTH = 240
+const MAX_ASIDE_WIDTH = 420
+const DEFAULT_ASIDE_WIDTH = 288
+
+function loadAsideWidth(): number {
+  try {
+    const value = Number(localStorage.getItem(ASIDE_WIDTH_KEY))
+    return Number.isFinite(value) && value >= MIN_ASIDE_WIDTH && value <= MAX_ASIDE_WIDTH
+      ? value
+      : DEFAULT_ASIDE_WIDTH
+  } catch {
+    return DEFAULT_ASIDE_WIDTH
+  }
+}
+
+const asideWidth = ref(loadAsideWidth())
+const resizing = ref(false)
+
+function onResizeMove(event: PointerEvent): void {
+  asideWidth.value = Math.min(MAX_ASIDE_WIDTH, Math.max(MIN_ASIDE_WIDTH, Math.round(event.clientX)))
+}
+
+function stopResize(): void {
+  if (!resizing.value) return
+  resizing.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('pointermove', onResizeMove)
+  window.removeEventListener('pointerup', stopResize)
+  try {
+    localStorage.setItem(ASIDE_WIDTH_KEY, String(asideWidth.value))
+  } catch {
+    // 隐私模式：仅本次会话生效
+  }
+}
+
+function startResize(event: PointerEvent): void {
+  if (props.collapsed || window.matchMedia('(max-width: 900px)').matches) return
+  event.preventDefault()
+  resizing.value = true
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('pointermove', onResizeMove)
+  window.addEventListener('pointerup', stopResize)
+}
+
+onBeforeUnmount(stopResize)
 
 const entries = [
   { to: '/chat', name: 'chat', icon: ChatDotRound, label: '对话' },
@@ -281,7 +334,11 @@ watch(() => appStore.projectId, () => void loadServerSessions())
 </script>
 
 <template>
-  <aside class="aside" :class="{ collapsed, 'mobile-open': mobileOpen }">
+  <aside
+    class="aside"
+    :class="{ collapsed, resizing, 'mobile-open': mobileOpen }"
+    :style="{ '--aside-w': `${asideWidth}px` }"
+  >
     <div class="aside-inner">
       <!-- 品牌行 -->
       <div class="aside-top">
@@ -296,7 +353,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
 
       <!-- 滚动区：入口 + 工作区列表 -->
       <div class="aside-scroll">
-        <button type="button" class="new-chat" @click="newSession">
+        <button type="button" class="new-chat" title="新会话" @click="newSession">
           <el-icon><Plus /></el-icon>
           <span>新会话</span>
         </button>
@@ -308,6 +365,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
             :to="e.to"
             class="nav-entry"
             :class="{ active: activeName === e.name }"
+            :title="e.label"
           >
             <el-icon><component :is="e.icon" /></el-icon>
             <span>{{ e.label }}</span>
@@ -316,6 +374,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
             to="/settings"
             class="nav-entry"
             :class="{ active: activeName === 'settings' }"
+            title="设置"
           >
             <el-icon><Setting /></el-icon>
             <span>设置</span>
@@ -374,7 +433,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
                 :title="`切换到工作区 ${g.name}`" @click="selectWorkspace(g.id)"
               >
                 <el-icon class="ws-icon"><Folder /></el-icon>
-                <span class="ws-name">{{ g.name }}</span>
+                <span class="ws-name" :title="g.name">{{ g.name }}</span>
                 <span class="ws-count mono">{{ g.sessions.length }}</span>
               </button>
               <span class="ws-group-actions">
@@ -406,7 +465,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
               >
                 <button type="button" class="session-item" @click="openSession(s.id)">
                   <el-icon class="session-icon"><Document /></el-icon>
-                  <span class="session-title">{{ s.title }}</span>
+                  <span class="session-title" :title="s.title">{{ s.title }}</span>
                   <span class="session-time">{{ formatTime(s.at) }}</span>
                 </button>
                 <button
@@ -451,15 +510,21 @@ watch(() => appStore.projectId, () => void loadServerSessions())
         </div>
       </div>
     </div>
+    <div
+      class="aside-resizer"
+      title="拖动调整侧栏宽度"
+      @pointerdown="startResize"
+    />
   </aside>
 </template>
 
 <style scoped>
 .aside {
+  position: relative;
   display: flex;
-  flex: 0 0 var(--sidebar-width-260);
+  flex: 0 0 var(--aside-w, 288px);
   flex-direction: column;
-  width: var(--sidebar-width-260);
+  width: var(--aside-w, 288px);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -467,20 +532,87 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   border-right: 1px solid var(--line-soft);
   transition: flex-basis var(--dur-base) var(--ease-out), width var(--dur-base) var(--ease-out);
 }
+
+/* 折叠 = 收成 64px 图标栏（不是消失）：展开按钮留在栏顶，随时可恢复 */
 .aside.collapsed {
-  flex-basis: 0;
-  width: 0;
-  border-right: none;
+  flex-basis: 64px;
+  width: 64px;
+}
+/* 拖拽过程中不要过渡，否则宽度会追着指针跑 */
+.aside.resizing {
+  transition: none;
+}
+.aside.collapsed .aside-inner {
+  width: 64px;
+}
+/* 只有桌面端折叠才隐藏文字；移动端抽屉即使处于折叠状态也要完整展示 */
+@media (min-width: 901px) {
+  .aside.collapsed .brand-text,
+  .aside.collapsed .new-chat span,
+  .aside.collapsed .nav-entry span,
+  .aside.collapsed .group-head,
+  .aside.collapsed .ws-search,
+  .aside.collapsed .ws-archived,
+  .aside.collapsed .workspace-list,
+  .aside.collapsed .user-meta,
+  .aside.collapsed .logout-btn,
+  .aside.collapsed .initial-password-tip {
+    display: none;
+  }
+  .aside.collapsed .aside-top {
+    justify-content: center;
+    padding: 0;
+  }
+  .aside.collapsed .brand {
+    display: none;
+  }
+  .aside.collapsed .aside-scroll {
+    padding: 4px 10px 8px;
+  }
+  .aside.collapsed .new-chat,
+  .aside.collapsed .nav-entry {
+    justify-content: center;
+    padding: 0;
+    gap: 0;
+  }
+  .aside.collapsed .aside-bottom {
+    padding: 8px 0;
+  }
+  .aside.collapsed .user-chip {
+    justify-content: center;
+    padding: 6px 0;
+  }
+}
+
+/* 宽度拖拽手柄：贴住右边界内侧，hover 才显形 */
+.aside-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background-color var(--dur-fast) ease;
+}
+.aside-resizer:hover,
+.aside-resizer:active {
+  background: var(--accent);
+  opacity: 0.35;
+}
+.aside.collapsed .aside-resizer {
+  display: none;
 }
 .aside-inner {
   display: flex;
   flex: 1;
   flex-direction: column;
-  width: var(--sidebar-width-260);
+  width: var(--aside-w, 288px);
   min-height: 0;
 }
 
-/* 窄屏（≤900px）：侧栏变成离屏抽屉 —— 260px 常驻会把主区挤到只剩一百来像素。
+/* 窄屏（≤900px）：侧栏变成离屏抽屉 —— 288px 常驻会把主区挤到只剩一百来像素。
    抽屉由 PageHeader 的菜单按钮打开，遮罩 / 路由跳转 / Esc 关闭（见 AppLayout）。 */
 @media (max-width: 900px) {
   .aside {
@@ -490,7 +622,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
     left: 0;
     z-index: 80;
     flex-basis: auto;
-    width: min(86vw, 300px);
+    width: min(86vw, 320px);
     border-right: 1px solid var(--line-soft);
     box-shadow: var(--shadow-2);
     transform: translateX(-100%);
@@ -502,14 +634,15 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   /* 桌面折叠状态在手机上不生效：抽屉打开时必须完整可见 */
   .aside.collapsed {
     flex-basis: auto;
-    width: min(86vw, 300px);
+    width: min(86vw, 320px);
     border-right: 1px solid var(--line-soft);
     transform: translateX(-100%);
   }
   .aside.collapsed.mobile-open {
     transform: translateX(0);
   }
-  .aside-inner {
+  .aside-inner,
+  .aside.collapsed .aside-inner {
     display: flex;
     width: 100%;
   }
