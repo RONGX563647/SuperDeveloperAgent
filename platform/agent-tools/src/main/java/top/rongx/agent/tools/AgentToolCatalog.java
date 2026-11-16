@@ -198,14 +198,30 @@ public class AgentToolCatalog {
         }
     }
 
-    /** 供工具层复用的格式化：一行一个工具。 */
+    /**
+     * 供工具层复用的格式化：一行一个工具，描述只保留首句（<=100 字）。
+     *
+     * <p>这里是 {@code tool_search} 的返回体：过去的实现会带上多行完整描述，
+     * 单次搜索就能吃掉几千 token。详细参数交给 {@code tool_get}。
+     */
     public static String format(Collection<Entry> entries) {
         return entries.stream()
-                .map(e -> "- %s%s%n    %s%n    toolkits: %s".formatted(
-                        e.name, e.readOnly ? " [readOnly]" : "",
-                        e.description == null ? "" : e.description,
-                        String.join(", ", e.toolkits)))
+                .map(e -> "- %s%s — %s".formatted(
+                        e.name, e.readOnly ? " [readOnly]" : "", brief(e.description)))
                 .reduce((a, b) -> a + "\n" + b)
                 .orElse("(无匹配工具)");
+    }
+
+    /** 描述首句；超长截断。用于压缩 search 结果体积。 */
+    private static String brief(String description) {
+        if (description == null) {
+            return "";
+        }
+        String text = description.strip();
+        int cut = text.indexOf('\n');
+        if (cut >= 0) {
+            text = text.substring(0, cut);
+        }
+        return text.length() > 100 ? text.substring(0, 100) + "…" : text;
     }
 }

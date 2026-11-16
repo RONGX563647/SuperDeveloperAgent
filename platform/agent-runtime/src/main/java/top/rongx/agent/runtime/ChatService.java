@@ -91,16 +91,25 @@ public class ChatService {
                 ? new AgentFactory.AgentSession(
                         agentFactory.createDeploy(ctx, modelConnectionId, modelName), List.of())
                 : agentFactory.createChat(ctx, skills, mcpServers, modelConnectionId, modelName);
-        // 4. 显式传递运行时上下文（含项目上下文，非 ThreadLocal）
-        RuntimeContext runtime = RuntimeContext.builder()
-                .userId(ctx.userId())
-                .sessionId(sid)
-                .put(ProjectContext.class, ctx)
-                .build();
+        // 4. 显式传递运行时上下文（含项目上下文与工具插件索引，非 ThreadLocal）
+        RuntimeContext runtime = runtimeContext(ctx, sid, session.plugins());
         // 5. 返回事件流；每次模型调用结束都记录 token；结束后关闭本会话的 MCP 客户端
         return session.agent().streamEvents(text, runtime)
                 .doOnNext(event -> recordUsage(event, sid, ctx, active))
                 .doFinally(signal -> session.close());
+    }
+
+    /** 统一的运行时上下文：项目上下文 + 工具插件索引（tool_load 与中间件共用）。 */
+    private static RuntimeContext runtimeContext(ProjectContext ctx, String sid,
+                                                 top.rongx.agent.domain.tool.ToolPluginIndex plugins) {
+        RuntimeContext.Builder builder = RuntimeContext.builder()
+                .userId(ctx.userId())
+                .sessionId(sid)
+                .put(ProjectContext.class, ctx);
+        if (plugins != null) {
+            builder.put(top.rongx.agent.domain.tool.ToolPluginIndex.class, plugins);
+        }
+        return builder.build();
     }
 
     /** 每次模型调用结束都记一条 token 用量（会话累计 + 独立日志）。 */
@@ -131,11 +140,7 @@ public class ChatService {
         sessions.bindOrVerify(sid, ctx);
         ActiveModel active = modelProvider.activeConfig(modelConnectionId, modelName);
         ReActAgent agent = agentFactory.createSupervisor(ctx, modelConnectionId, modelName);
-        RuntimeContext runtime = RuntimeContext.builder()
-                .userId(ctx.userId())
-                .sessionId(sid)
-                .put(ProjectContext.class, ctx)
-                .build();
+        RuntimeContext runtime = runtimeContext(ctx, sid, null);
         return agent.streamEvents(text, runtime)
                 .doOnNext(event -> recordUsage(event, sid, ctx, active));
     }
@@ -164,11 +169,7 @@ public class ChatService {
                 ? UUID.randomUUID().toString() : sessionId;
         sessions.bindOrVerify(sid, ctx);
         AgentFactory.AgentSession session = agentFactory.createChat(ctx, null, null);
-        RuntimeContext runtime = RuntimeContext.builder()
-                .userId(ctx.userId())
-                .sessionId(sid)
-                .put(ProjectContext.class, ctx)
-                .build();
+        RuntimeContext runtime = runtimeContext(ctx, sid, session.plugins());
         return session.agent().call(text, structuredType, runtime)
                 .doFinally(signal -> session.close());
     }

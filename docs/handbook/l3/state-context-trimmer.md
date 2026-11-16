@@ -11,7 +11,7 @@ summary: 按字符预算与消息条数裁剪历史，保留 SYSTEM 且不以 TO
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 上下文预算裁剪 | `ConversationContextTrimmer#trim` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java:29-86` | agent-infra |
+| 上下文预算裁剪 | `ConversationContextTrimmer#trim` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java:29-90` | agent-infra |
 <!-- generated:end -->
 
 ## 行为拆解

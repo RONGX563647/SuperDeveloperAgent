@@ -11,7 +11,7 @@ summary: 一轮对话的校验、会话绑定、Agent 组装与事件流
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 聊天主流程：校验输入 → 绑定会话 → 组装 Agent → 事件流 | `ChatService#stream` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java:77-104` | agent-runtime |
+| 聊天主流程：校验输入 → 绑定会话 → 组装 Agent → 事件流 | `ChatService#stream` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java:77-100` | agent-runtime |
 <!-- generated:end -->
 
 ## 行为拆解

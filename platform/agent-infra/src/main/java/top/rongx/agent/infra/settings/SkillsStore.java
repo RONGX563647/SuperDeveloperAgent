@@ -75,7 +75,19 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
         }
     }
 
+    /** 技能索引（渐进披露）：只给名称与描述，正文按需读取。 */
+    @Override
+    public List<top.rongx.agent.domain.settings.SkillCatalog.Entry> entries() {
+        List<top.rongx.agent.domain.settings.SkillCatalog.Entry> out = new ArrayList<>();
+        for (Skill skill : list()) {
+            out.add(new top.rongx.agent.domain.settings.SkillCatalog.Entry(
+                    skill.dirName(), skill.name(), skill.description(), skill.enabled()));
+        }
+        return out;
+    }
+
     /** 读取 SKILL.md（预览用）；不存在返回 empty。 */
+    @Override
     public Optional<String> content(String name) {
         Path file = skillFile(name);
         if (!Files.isRegularFile(file)) {

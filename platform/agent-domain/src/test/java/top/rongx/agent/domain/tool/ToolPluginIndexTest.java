@@ -1,0 +1,77 @@
+package top.rongx.agent.domain.tool;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
+import java.util.Set;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/** 工具插件索引：核心常驻、插件按需、意图路由、提示词索引稳定。 */
+class ToolPluginIndexTest {
+
+    private static final Set<String> TOOLS = Set.of(
+            "project_info", "tool_load", "tool_search",
+            "git_status", "read_file", "ci_status", "deploy_run",
+            "mcp_tool_x", "unknown_tool");
+
+    private static ToolPluginIndex index() {
+        return ToolPluginIndex.of(List.of(
+                        new ToolPluginIndex.Plugin("repo", "代码", "仓库检索",
+                                Set.of("git", "代码"), Set.of("git_status", "read_file")),
+                        new ToolPluginIndex.Plugin("ci", "构建", "构建流水线",
+                                Set.of("构建"), Set.of("ci_status")),
+                        new ToolPluginIndex.Plugin("deploy", "发布", "部署发布",
+                                Set.of("部署"), Set.of("deploy_run")),
+                        // 定义里有、工具面没有的工具必须被过滤
+                        new ToolPluginIndex.Plugin("ghost", "幽灵", "不存在的插件",
+                                Set.of("幽灵"), Set.of("ghost_tool"))),
+                TOOLS, ToolPlugins.CORE);
+    }
+
+    @Test
+    @DisplayName("核心与未归类工具默认可见，插件工具默认隐藏")
+    void coreAndUngroupedVisible() {
+        ToolPluginIndex index = index();
+
+        assertTrue(index.visible("project_info", Set.of()));
+        assertTrue(index.visible("mcp_tool_x", Set.of()), "MCP 工具没有定义也必须可见");
+        assertTrue(index.visible("unknown_tool", Set.of()), "未归类工具不能消失");
+        assertFalse(index.visible("git_status", Set.of()));
+        assertTrue(index.visible("git_status", Set.of("repo")));
+    }
+
+    @Test
+    @DisplayName("只保留真实存在的工具，空插件被丢弃")
+    void dropsEmptyPlugins() {
+        ToolPluginIndex index = index();
+
+        assertEquals(3, index.plugins().size());
+        assertTrue(index.plugin("ghost").isEmpty());
+        assertEquals(Set.of("git_status", "read_file"), index.plugins().get(0).tools());
+    }
+
+    @Test
+    @DisplayName("按用户输入关键词路由插件")
+    void routesByKeyword() {
+        ToolPluginIndex index = index();
+
+        assertEquals(Set.of("repo"), index.route("帮我看看这个 git 分支的代码"));
+        assertEquals(Set.of("deploy", "ci"),
+                index.route("部署失败，先看构建流水线"));
+        assertTrue(index.route("你好").isEmpty());
+    }
+
+    @Test
+    @DisplayName("提示词索引只给插件摘要，不含完整 schema，且顺序稳定")
+    void promptIndexIsCompactAndStable() {
+        String text = index().promptIndex();
+
+        assertTrue(text.contains("repo"));
+        assertTrue(text.contains("deploy"));
+        assertFalse(text.contains("parameters"));
+        assertEquals(text, index().promptIndex());
+    }
+}

@@ -66,6 +66,18 @@ class ConversationContextTrimmerTest {
         assertEquals(once.getContext().size(), twice.getContext().size());
     }
 
+    @Test
+    @DisplayName("刚超预算不裁：留出缓存余量，避免每条消息都改写历史前缀")
+    void keepsSlightlyOverBudgetForCacheStability() {
+        List<Msg> messages = new ArrayList<>();
+        messages.add(msg(MsgRole.SYSTEM, "sys"));
+        // 1200 字 > 1000 的预算，但仍在 1250 的触发线以内
+        messages.add(msg(MsgRole.USER, "u" + "z".repeat(1_200)));
+        AgentState state = state(messages);
+
+        assertSame(state, ConversationContextTrimmer.trim(state, 1_000, 4));
+    }
+
     private static AgentState state(List<Msg> context) {
         return AgentState.builder()
                 .sessionId("s1")

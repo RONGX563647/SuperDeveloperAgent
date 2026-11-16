@@ -35,8 +35,12 @@ final class ConversationContextTrimmer {
             return state;
         }
         int budget = Math.max(1_000, maxChars);
+        // KV cache 友好：留 25% 余量才触发，一次裁到 60%，避免每条消息都改写历史前缀。
+        // 每裁一次模型侧的前缀缓存都会失效；高频小裁比"少裁但裁得深"贵得多。
+        int trigger = budget + budget / 4;
+        int target = Math.max(1_000, budget * 3 / 5);
         int keep = Math.max(1, keepMessages);
-        if (totalChars(context) <= budget && context.size() <= keep) {
+        if (totalChars(context) <= trigger && context.size() <= keep) {
             return state;
         }
 
@@ -49,7 +53,7 @@ final class ConversationContextTrimmer {
         if (rest.isEmpty()) {
             return state;
         }
-        if (totalChars(rest) <= budget && rest.size() <= keep) {
+        if (totalChars(rest) <= trigger && rest.size() <= keep) {
             return state;
         }
 
@@ -58,7 +62,7 @@ final class ConversationContextTrimmer {
         // 既要把总量压到预算内，又不能让窗口以 TOOL 开头（必须是新的 USER 轮次或 ASSISTANT 回复）
         while (start < rest.size() - 1) {
             boolean badStart = rest.get(start).getRole() == MsgRole.TOOL;
-            if (!badStart && chars <= budget) {
+            if (!badStart && chars <= target) {
                 break;
             }
             chars -= charsOf(rest.get(start));

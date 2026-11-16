@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-17T00:17:11+08:00",
-  "sourceCommit": "7a1d78a674bfc15a35bcd47a60987581c496f0ba",
+  "generatedAt": "2026-11-17T00:31:47+08:00",
+  "sourceCommit": "aa514fbdac24d451a0d1a00ca96315230514b665",
   "docs": [
     {
       "level": "L1",
@@ -156,8 +156,8 @@
       "symbol": "AgentFactory#createChat",
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
       "module": "agent-runtime",
-      "start": 133,
-      "end": 165
+      "start": 142,
+      "end": 181
     },
     {
       "id": "runtime-chat-service/stream",
@@ -167,7 +167,7 @@
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
       "module": "agent-runtime",
       "start": 77,
-      "end": 104
+      "end": 100
     },
     {
       "id": "state-agent-state-store/save",
@@ -187,7 +187,7 @@
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java",
       "module": "agent-infra",
       "start": 29,
-      "end": 86
+      "end": 90
     },
     {
       "id": "tools-deploy-tools/env-status",
