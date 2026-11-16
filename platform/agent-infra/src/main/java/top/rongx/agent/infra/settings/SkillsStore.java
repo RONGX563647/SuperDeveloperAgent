@@ -257,7 +257,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
         return "---\nname: " + name + "\ndescription: " + desc + "\n---\n\n" + body;
     }
 
-    private record Frontmatter(String name, String description) {
+    record Frontmatter(String name, String description) {
     }
 
     /** 单行 YAML frontmatter 解析：足够覆盖 name / description（规范只读这两个字段）。 */

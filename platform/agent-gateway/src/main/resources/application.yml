@@ -54,6 +54,12 @@ agent:
     dispatch:
       max-parallel: ${AGENT_WORKSPACE_DISPATCH_MAX_PARALLEL:4}
       max-duration-seconds: ${AGENT_WORKSPACE_DISPATCH_MAX_DURATION:600}
+  # 能力市场：设置页「MCP 市场 / Skill 市场」直接读外部目录，不再内置虚构条目。
+  # 内网无外网时改为镜像地址，或用 HTTPS_PROXY/HTTP_PROXY 让平台走代理。
+  market:
+    mcp-registry: ${AGENT_MARKET_MCP_REGISTRY:https://registry.modelcontextprotocol.io/v0/servers}
+    # 逗号分隔的 GitHub 仓库（owner/repo），例如 anthropics/skills,acme/agent-skills
+    skill-repos: ${AGENT_MARKET_SKILL_REPOS:anthropics/skills}
   # 流水线：项目与环境来自配置/接入，不在代码里写死
   pipeline:
     # 构建历史落盘（重启可恢复）

@@ -983,11 +983,14 @@ export interface CapabilityEntry {
   title: string
   description: string
   tags: string[]
+  /** 来源：MCP Registry / 技能仓库（owner/repo） */
   source: string
   transport?: McpTransport
   command?: string | null
   args?: string[]
   url?: string | null
+  /** 首次调用前必须提供的环境变量（仅 MCP stdio 包会返回） */
+  requiredEnv: string[]
   installed: boolean
 }
 
@@ -1009,7 +1012,8 @@ export function listCapabilityMarket(
 }
 
 export function installCapability(id: string): Promise<CapabilityInstallResult> {
-  return apiFetch(`/api/v1/settings/capabilities/market/${encodeURIComponent(id)}/install`, {
-    method: 'POST'
+  return apiFetch('/api/v1/settings/capabilities/market/install', {
+    method: 'POST',
+    body: JSON.stringify({ id })
   })
 }

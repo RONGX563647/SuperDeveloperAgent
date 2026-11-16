@@ -2,24 +2,28 @@ package top.rongx.agent.infra.settings;
 
 import java.util.Map;
 import org.springframework.stereotype.Component;
-import top.rongx.agent.domain.settings.CapabilityCatalog;
 import top.rongx.agent.domain.settings.CapabilityInstaller;
+import top.rongx.agent.domain.settings.CapabilityMarket;
 import top.rongx.agent.domain.settings.McpServerRepository;
 
 /**
  * 能力安装器实现：MCP 落 SQLite，Skill 落 {@code _platform/skills/<name>/SKILL.md}。
  *
- * <p>安装只负责"接入"，默认启用；用户仍可在设置页或对话工具栏关掉。
+ * <p>安装模板一律按 id 从 {@link CapabilityMarket} 重新取回，不接受前端回传的命令，
+ * 避免设置页被篡改成任意进程启动参数。安装后默认启用，用户仍可随时关掉。
  */
 @Component
 public class CapabilityInstallerImpl implements CapabilityInstaller {
 
     private final McpServerRepository servers;
     private final SkillsStore skills;
+    private final CapabilityMarket market;
 
-    public CapabilityInstallerImpl(McpServerRepository servers, SkillsStore skills) {
+    public CapabilityInstallerImpl(McpServerRepository servers, SkillsStore skills,
+                                   CapabilityMarket market) {
         this.servers = servers;
         this.skills = skills;
+        this.market = market;
     }
 
     @Override
@@ -27,11 +31,11 @@ public class CapabilityInstallerImpl implements CapabilityInstaller {
         if (name == null || name.isBlank()) {
             return false;
         }
-        CapabilityCatalog.Kind type = CapabilityCatalog.Kind.parse(kind).orElse(null);
-        if (type == CapabilityCatalog.Kind.MCP) {
+        CapabilityMarket.Kind type = CapabilityMarket.Kind.parse(kind).orElse(null);
+        if (type == CapabilityMarket.Kind.MCP) {
             return servers.findAll().stream().anyMatch(s -> name.equals(s.name()));
         }
-        if (type == CapabilityCatalog.Kind.SKILL) {
+        if (type == CapabilityMarket.Kind.SKILL) {
             return skills.list().stream().anyMatch(s -> name.equals(s.dirName()));
         }
         return false;
@@ -39,29 +43,33 @@ public class CapabilityInstallerImpl implements CapabilityInstaller {
 
     @Override
     public Result install(String capabilityId) {
-        CapabilityCatalog.Capability capability = CapabilityCatalog.find(capabilityId)
-                .orElseThrow(() -> new IllegalArgumentException("能力不存在：" + capabilityId));
-        String name = capability.name();
-        String kind = capability.kind().name();
+        CapabilityMarket.Entry entry = market.find(capabilityId)
+                .orElseThrow(() -> new IllegalArgumentException("能力不存在或已下架：" + capabilityId));
+        String name = entry.name();
+        String kind = entry.kind().name();
 
-        if (capability.kind() == CapabilityCatalog.Kind.MCP) {
+        if (entry.kind() == CapabilityMarket.Kind.MCP) {
             boolean exists = servers.findAll().stream().anyMatch(s -> name.equals(s.name()));
             if (exists) {
                 return new Result(kind, name, true, "MCP 服务「" + name + "」已在列表中");
             }
-            var spec = capability.mcp();
             servers.save(new McpServerRepository.McpServerView(
-                    null, name, spec.transport(), spec.command(), spec.args(), spec.url(), true),
+                    null, name, entry.transport(), entry.command(), entry.args(), entry.url(), true),
                     Map.of(), "market");
-            return new Result(kind, name, false, "已接入 MCP 服务「" + name + "」，可在对话工具栏勾选");
+            String hint = entry.requiredEnv().isEmpty() ? ""
+                    : "；首次调用前需在服务环境变量中提供：" + String.join(", ", entry.requiredEnv());
+            return new Result(kind, name, false,
+                    "已接入 MCP 服务「" + name + "」，可在对话工具栏勾选" + hint);
         }
 
         boolean exists = skills.list().stream().anyMatch(s -> name.equals(s.dirName()));
         if (exists) {
             return new Result(kind, name, true, "Skill「" + name + "」已存在");
         }
-        var spec = capability.skill();
-        skills.create(name, spec.description(), spec.content());
+        if (entry.content() == null || entry.content().isBlank()) {
+            throw new IllegalStateException("技能内容为空，无法安装：" + capabilityId);
+        }
+        skills.create(name, entry.description(), entry.content());
         return new Result(kind, name, false, "已接入 Skill「" + name + "」，可在对话工具栏勾选");
     }
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
+import { MagicStick, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import {
   deleteSkill, importSkill, installCapability, listCapabilityMarket, listSkills,
   readSkill, saveSkill, setSkillEnabled,
@@ -32,6 +32,8 @@ const market = ref<CapabilityEntry[]>([])
 const marketLoading = ref(false)
 const marketQuery = ref('')
 const installing = ref('')
+/** 外部市场不可达时的提示（不再静默显示为空列表）。 */
+const marketError = ref('')
 
 const marketFiltered = computed(() => {
   const q = marketQuery.value.trim().toLowerCase()
@@ -55,10 +57,12 @@ async function load(): Promise<void> {
 
 async function loadMarket(): Promise<void> {
   marketLoading.value = true
+  marketError.value = ''
   try {
     market.value = await listCapabilityMarket('SKILL')
-  } catch {
+  } catch (e) {
     market.value = []
+    marketError.value = e instanceof Error ? e.message : '技能市场加载失败'
   } finally {
     marketLoading.value = false
   }
@@ -221,8 +225,18 @@ defineExpose({ load })
 
     <template v-if="tab === 'installed'">
     <div v-if="loading" class="empty">加载中…</div>
-    <div v-else-if="!skills.length" class="empty">
-      还没有技能。新建一个 SKILL.md，或从已有目录导入。
+    <div v-else-if="!skills.length" class="empty-state">
+      <span class="empty-icon"><el-icon><MagicStick /></el-icon></span>
+      <p class="empty-title">还没有接入技能</p>
+      <p class="empty-hint">
+        技能是给 Agent 的指令包：一个目录 + SKILL.md。可以从公开技能市场一键接入，
+        也可以导入本地目录或直接新建。
+      </p>
+      <div class="empty-actions">
+        <el-button type="primary" size="small" @click="switchTab('market')">浏览 Skill 市场</el-button>
+        <el-button size="small" @click="importFromDir">导入目录</el-button>
+        <el-button size="small" @click="openForm">新建技能</el-button>
+      </div>
     </div>
     <div v-for="s in skills" :key="s.dir" class="skill-card">
       <div class="skill-main">
@@ -276,7 +290,7 @@ defineExpose({ load })
     </div>
     </template>
 
-    <!-- 市场：内置公开技能，一键写入 _platform/skills -->
+    <!-- 市场：外部技能仓库（默认 anthropics/skills），一键写入 _platform/skills -->
     <template v-else>
       <div class="market-toolbar">
         <el-input
@@ -290,7 +304,14 @@ defineExpose({ load })
         </el-button>
       </div>
       <div v-if="marketLoading" class="empty">加载市场…</div>
+      <div v-else-if="marketError" class="market-error">
+        <span>{{ marketError }}</span>
+        <el-button size="small" text @click="loadMarket">重试</el-button>
+      </div>
       <div v-else-if="!marketFiltered.length" class="empty">没有匹配的技能。</div>
+      <p v-else class="market-hint">
+        目录来自公开技能仓库（默认 anthropics/skills），需要外网或 HTTPS_PROXY 代理。
+      </p>
       <div v-for="m in marketFiltered" :key="m.id" class="market-card">
         <div class="market-main">
           <div class="market-title">{{ m.title }}</div>
@@ -317,8 +338,10 @@ defineExpose({ load })
 <style scoped>
 .panel {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
 }
 .panel-head {
   display: flex;
@@ -353,6 +376,67 @@ defineExpose({ load })
 .empty {
   padding: 18px 0;
   font-size: 12px;
+  color: var(--ink-faint);
+}
+/* 空状态：在撑满的卡片里居中，给出明确下一步，避免整页只剩一大片空白 */
+.empty-state {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 260px;
+  padding: 24px 0;
+  text-align: center;
+}
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  font-size: 19px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+}
+.empty-title {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-hint {
+  max-width: 34rem;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-muted);
+}
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+.market-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--danger);
+  background: rgb(220 78 78 / 8%);
+  border: 1px solid rgb(220 78 78 / 22%);
+  border-radius: var(--radius-md);
+}
+.market-hint {
+  margin: 0;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 .skill-card {

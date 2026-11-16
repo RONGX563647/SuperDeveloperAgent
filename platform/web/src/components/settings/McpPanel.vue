@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, SetUp } from '@element-plus/icons-vue'
 import {
   deleteMcpServer, installCapability, listCapabilityMarket, listMcpServers,
   saveMcpServer, testMcpDraft, testMcpServer,
@@ -29,6 +29,8 @@ const market = ref<CapabilityEntry[]>([])
 const marketLoading = ref(false)
 const marketQuery = ref('')
 const installing = ref('')
+/** 外部市场不可达时的提示（不再静默显示为空列表）。 */
+const marketError = ref('')
 
 // 目录很小，前端过滤即可，避免每次输入都打后端
 const marketFiltered = computed(() => {
@@ -62,10 +64,12 @@ async function load(): Promise<void> {
 
 async function loadMarket(): Promise<void> {
   marketLoading.value = true
+  marketError.value = ''
   try {
     market.value = await listCapabilityMarket('MCP')
-  } catch {
+  } catch (e) {
     market.value = []
+    marketError.value = e instanceof Error ? e.message : 'MCP 市场加载失败'
   } finally {
     marketLoading.value = false
   }
@@ -250,8 +254,17 @@ defineExpose({ load })
 
     <template v-if="tab === 'installed'">
     <div v-if="loading" class="empty">加载中…</div>
-    <div v-else-if="!servers.length" class="empty">
-      还没有 MCP 服务。可以从「新增服务」开始，例如 npx -y @playwright/mcp@latest。
+    <div v-else-if="!servers.length" class="empty-state">
+      <span class="empty-icon"><el-icon><SetUp /></el-icon></span>
+      <p class="empty-title">还没有接入 MCP 服务</p>
+      <p class="empty-hint">
+        MCP 服务给 Agent 提供外部工具（浏览器、文件、文档检索等）。可以从官方市场一键接入，
+        也可以手动填写 stdio / http 配置。
+      </p>
+      <div class="empty-actions">
+        <el-button type="primary" size="small" @click="switchTab('market')">浏览 MCP 市场</el-button>
+        <el-button size="small" @click="openForm()">手动新增</el-button>
+      </div>
     </div>
     <div v-for="s in servers" :key="s.id" class="mcp-row">
       <span class="mcp-name mono">{{ s.name }}</span>
@@ -334,7 +347,7 @@ defineExpose({ load })
     </div>
     </template>
 
-    <!-- 市场：内置目录，一键接入后可在这里启停 -->
+    <!-- 市场：MCP 官方 Registry，一键接入后可在这里启停 -->
     <template v-else>
       <div class="market-toolbar">
         <el-input
@@ -348,7 +361,14 @@ defineExpose({ load })
         </el-button>
       </div>
       <div v-if="marketLoading" class="empty">加载市场…</div>
+      <div v-else-if="marketError" class="market-error">
+        <span>{{ marketError }}</span>
+        <el-button size="small" text @click="loadMarket">重试</el-button>
+      </div>
       <div v-else-if="!marketFiltered.length" class="empty">没有匹配的 MCP 服务。</div>
+      <p v-else class="market-hint">
+        目录来自 MCP 官方 Registry（registry.modelcontextprotocol.io），需要外网或 HTTPS_PROXY 代理。
+      </p>
       <div v-for="m in marketFiltered" :key="m.id" class="market-card">
         <div class="market-main">
           <div class="market-title">
@@ -358,6 +378,9 @@ defineExpose({ load })
           <div class="market-desc">{{ m.description }}</div>
           <div class="market-meta mono">
             {{ m.name }} · {{ m.tags.join(' / ') }} · {{ m.source }}
+          </div>
+          <div v-if="m.requiredEnv.length" class="market-env">
+            首次调用前需配置环境变量：{{ m.requiredEnv.join(' / ') }}
           </div>
         </div>
         <el-button
@@ -374,8 +397,10 @@ defineExpose({ load })
 <style scoped>
 .panel {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
 }
 .panel-head {
   display: flex;
@@ -403,6 +428,72 @@ defineExpose({ load })
   padding: 18px 0;
   font-size: 12px;
   color: var(--ink-faint);
+}
+/* 空状态：在撑满的卡片里居中，给出明确下一步，避免整页只剩一大片空白 */
+.empty-state {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 260px;
+  padding: 24px 0;
+  text-align: center;
+}
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  font-size: 19px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+}
+.empty-title {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-hint {
+  max-width: 34rem;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-muted);
+}
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+.market-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--danger);
+  background: rgb(220 78 78 / 8%);
+  border: 1px solid rgb(220 78 78 / 22%);
+  border-radius: var(--radius-md);
+}
+.market-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.market-env {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--warn);
 }
 .mcp-row {
   display: flex;
