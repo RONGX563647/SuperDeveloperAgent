@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Aim, CaretRight, ChatDotRound, Check, Plus, Promotion, Refresh, Search, Tickets,
+  Aim, CaretRight, ChatDotRound, Check, Monitor, Plus, Promotion, Refresh, Search, Tickets,
 } from '@element-plus/icons-vue'
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
@@ -20,6 +20,7 @@ import {
 } from '../api/workspace'
 import { envLabel } from '../utils/pipelineLabels'
 import ChatIssuesView from '../components/chat/ChatIssuesView.vue'
+import DeploymentMatrix from '../components/workspace/DeploymentMatrix.vue'
 
 /**
  * 工作区首页：中间调度 Agent + 右侧任务/运行。
@@ -37,8 +38,8 @@ const projectId = computed(() => String(route.params.projectId ?? appStore.proje
 const projectName = ref('')
 const projects = ref<ProjectRow[]>([])
 
-/** 工作区主视图：助手（调度会话）/ 任务（Git 工单看板）。 */
-const viewMode = ref<'assistant' | 'tasks'>('assistant')
+/** 工作区主视图：助手（调度会话）/ 任务（Git 工单看板）/ 环境（版本 × 环境部署矩阵）。 */
+const viewMode = ref<'assistant' | 'tasks' | 'env'>('assistant')
 /** 任务看板的待处理数量（由 ChatIssuesView 回传，用于顶栏角标）。 */
 const issueCount = ref(0)
 
@@ -494,6 +495,7 @@ const paletteCommands = computed<PaletteCommand[]>(() => {
     { id: 'new', title: '新建会话', hint: '⌘N', run: openCreate },
     { id: 'refresh', title: '刷新工作区', hint: 'R', run: () => void loadAll() },
     { id: 'view-tasks', title: '打开任务看板', hint: '视图', run: () => { viewMode.value = 'tasks' } },
+    { id: 'view-env', title: '打开环境矩阵', hint: '视图', run: () => { viewMode.value = 'env' } },
     { id: 'view-assistant', title: '返回工作区助手', hint: '视图', run: () => { viewMode.value = 'assistant' } },
     { id: 'tasks', title: '切换到右侧任务面板', hint: '面板', run: () => { sideTab.value = 'tasks' } },
     { id: 'runs', title: '切换到运行面板', hint: '面板', run: () => { sideTab.value = 'runs' } },
@@ -793,12 +795,19 @@ onUnmounted(() => {
             <el-icon><Tickets /></el-icon>任务
             <span v-if="issueCount" class="seg-count">{{ issueCount }}</span>
           </button>
+          <button
+            type="button" role="tab" :aria-selected="viewMode === 'env'"
+            :class="{ on: viewMode === 'env' }" @click="viewMode = 'env'"
+          >
+            <el-icon><Monitor /></el-icon>环境
+          </button>
         </div>
         <span v-if="viewMode === 'assistant'" class="tag">只读 · 负责编排</span>
         <span v-if="viewMode === 'assistant'" class="live" :class="{ on: liveConnected }">
           <i class="live-dot"></i>{{ liveConnected ? '实时' : '轮询兜底' }}
         </span>
-        <span v-else class="tag">Git 工单 · 自动双向同步</span>
+        <span v-else-if="viewMode === 'tasks'" class="tag">Git 工单 · 自动双向同步</span>
+        <span v-else class="tag">版本 × 环境 · 一键启停</span>
       </div>
       <div class="ws-bar-right">
         <span class="ws-kpis">
@@ -1015,8 +1024,13 @@ onUnmounted(() => {
     </div>
 
     <!-- 任务看板：原会话页「任务」Tab，上移为项目级视图 -->
-    <section v-else class="task-shell">
+    <section v-else-if="viewMode === 'tasks'" class="task-shell">
       <ChatIssuesView @count="issueCount = $event" />
+    </section>
+
+    <!-- 环境矩阵：流水线部署出的版本，按环境启停应用（不含中间件） -->
+    <section v-else class="env-shell">
+      <DeploymentMatrix :project-id="projectId" />
     </section>
 
     <!-- 新建会话 -->
@@ -1169,7 +1183,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 16px;
   min-height: 34px;
-  padding: 0 20px 6px;
+  padding: 0 16px 6px;
 }
 .ws-bar-left {
   display: flex;
@@ -1263,6 +1277,15 @@ onUnmounted(() => {
   min-height: 0;
 }
 .task-shell > * { flex: 1; min-height: 0; }
+
+/* 环境矩阵：同样整块铺满工作区，内部自行管理滚动 */
+.env-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.env-shell > * { flex: 1; min-height: 0; }
 
 /* 计划进度：调度 Agent 的 Plan/Todo 完成率 */
 .plan-bar {
@@ -1422,7 +1445,7 @@ onUnmounted(() => {
 .chat-scroll {
   flex: 1 1 0;
   min-height: 0;
-  padding: 0 24px;
+  padding: 0 clamp(16px, 2.4vw, 40px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1431,7 +1454,7 @@ onUnmounted(() => {
   flex-direction: column;
   justify-content: center;
   width: 100%;
-  max-width: 56rem;
+  max-width: 72rem;
   min-height: 100%;
   padding: 24px 0;
   margin: 0 auto;
@@ -1518,7 +1541,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: 56rem;
+  max-width: 72rem;
   padding: 8px 12px;
   margin: 10px auto;
   font-size: 12px;
@@ -1541,14 +1564,14 @@ onUnmounted(() => {
 /* 输入区：白底浮起的 composer，底部一行工具条（复用对话页视觉） */
 .composer-wrap {
   flex: none;
-  padding: 0 24px 14px;
+  padding: 0 clamp(16px, 2.4vw, 40px) 14px;
 }
 .composer {
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: 100%;
-  max-width: 56rem;
+  max-width: 72rem;
   padding: 12px 12px 6px 14px;
   margin: 0 auto;
   background: var(--surface-raised);

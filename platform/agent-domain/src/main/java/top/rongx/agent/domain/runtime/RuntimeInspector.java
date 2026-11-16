@@ -27,6 +27,8 @@ public interface RuntimeInspector {
             String ports,
             String runId,
             String sha,
+            /** 部署版本号（agent.version 标签；旧容器为空）。 */
+            String version,
             String composeProject) {
     }
 

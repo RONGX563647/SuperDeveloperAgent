@@ -157,6 +157,68 @@ export function listTasks(projectId: string): Promise<TaskRow[]> {
   return apiFetch(`/api/v1/workspaces/${projectId}/tasks`)
 }
 
+/** 环境矩阵：一个版本在某环境里的部署产物与运行状态。 */
+export interface DeploymentEnvColumn {
+  key: string
+  label: string
+}
+
+export interface DeploymentCell {
+  env: string
+  version: string
+  state: 'RUNNING' | 'STOPPED' | 'UNKNOWN'
+  target: 'DOCKER' | 'HOST'
+  running: boolean
+  current: boolean
+  containers: string[]
+  image: string | null
+  health: string | null
+  ports: string | null
+  url: string | null
+  deployedAt: number
+  detail: string
+}
+
+export interface DeploymentMatrix {
+  environments: DeploymentEnvColumn[]
+  versions: string[]
+  cells: DeploymentCell[]
+  dockerAvailable: boolean
+  note: string
+}
+
+export interface DeploymentActionResult {
+  ok: boolean
+  message: string
+  state: string
+}
+
+export function getDeploymentMatrix(projectId: string): Promise<DeploymentMatrix> {
+  return apiFetch(`/api/v1/workspaces/${projectId}/deployments`)
+}
+
+export function startDeployment(
+  projectId: string,
+  env: string,
+  version?: string,
+): Promise<DeploymentActionResult> {
+  return apiFetch(`/api/v1/workspaces/${projectId}/deployments/${env}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ version: version ?? null }),
+  })
+}
+
+export function stopDeployment(
+  projectId: string,
+  env: string,
+  version?: string,
+): Promise<DeploymentActionResult> {
+  return apiFetch(`/api/v1/workspaces/${projectId}/deployments/${env}/stop`, {
+    method: 'POST',
+    body: JSON.stringify({ version: version ?? null }),
+  })
+}
+
 export function createTask(
   projectId: string,
   body: { goal: string; expectedOutput?: string; priority?: number; conversationId?: string },

@@ -128,13 +128,14 @@ public class AppRuntimeInspector implements RuntimeInspector {
                 + "|{{index .Config.Labels `agent.run`}}"
                 + "|{{index .Config.Labels `agent.sha`}}"
                 + "|{{index .Config.Labels `com.docker.compose.project`}}"
-                + "|{{index .Config.Labels `agent.project`}}";
+                + "|{{index .Config.Labels `agent.project`}}"
+                + "|{{index .Config.Labels `agent.version`}}";
         Cmd cmd = docker(List.of("docker", "inspect", "--format", template, container));
         if (cmd.exitCode() != 0 || cmd.output().isBlank()) {
             return null;
         }
         String[] parts = cmd.output().strip().split("\\|", -1);
-        if (parts.length < 16) {
+        if (parts.length < 17) {
             return null;
         }
         String name = parts[0].startsWith("/") ? parts[0].substring(1) : parts[0];
@@ -154,6 +155,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
                 ports(parts[9]),
                 value(parts[12]),
                 value(parts[13]),
+                value(parts[16]),
                 value(parts[14]));
     }
 

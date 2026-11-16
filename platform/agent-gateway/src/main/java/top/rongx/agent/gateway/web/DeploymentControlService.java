@@ -1,0 +1,623 @@
+package top.rongx.agent.gateway.web;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.env.EffectiveEnvironment;
+import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.process.JavaRuntime;
+import top.rongx.agent.domain.runtime.RuntimeInspector;
+import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
+
+/**
+ * 工作区「环境」视图：按 版本 × 环境 汇总部署产物（Docker 容器 / HOST 进程）并支持一键启停。
+ *
+ * <p>数据不新建表，全部来自部署事实：
+ * <ul>
+ *   <li>HOST 默认槽：{@code <workspace>/_platform/deploy/<project>-<env>/} 下的
+ *       {@code releases/<sha>}、{@code current}、{@code app.pid}、{@code app.log}；</li>
+ *   <li>HOST 打 tag 的版本：同目录下 {@code versions/<版本号>/}（各自 pid / current / port）；</li>
+ *   <li>DOCKER：{@link RuntimeInspector} 按 {@code agent.project} / {@code agent.env} /
+ *       {@code agent.version} 标签巡检。</li>
+ * </ul>
+ *
+ * <p>只管理应用本身（前后端镜像/进程），中间件资源不在这里启停。
+ */
+@Service
+public class DeploymentControlService {
+
+    private static final List<String> ENVS = List.of("dev", "test", "prod");
+    private static final Map<String, String> ENV_LABELS =
+            Map.of("dev", "开发", "test", "测试", "prod", "生产");
+    private static final Pattern HOST_PORT =
+            Pattern.compile("\\[host] started pid=\\d+ release=\\S+ port=(\\d+)");
+    private static final Pattern DOCKER_HOST_PORT = Pattern.compile("→[^:]*:(\\d+)");
+    private static final Pattern SAFE_VERSION = Pattern.compile("[A-Za-z0-9._-]{1,64}");
+    private static final long HOST_START_PROBE_MS = 800;
+    private static final long DOCKER_TIMEOUT_MS = 30_000;
+
+    private final RuntimeInspector inspector;
+    private final EnvironmentStore envStore;
+    private final Path deployRoot;
+
+    public DeploymentControlService(RuntimeInspector inspector, EnvironmentStore envStore,
+                                    @Value("${agent.workspace.root:./data/workspaces}")
+                                    String workspaceRoot) {
+        this.inspector = inspector;
+        this.envStore = envStore;
+        this.deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("deploy");
+    }
+
+    // ------------------------------------------------------------------ 查询
+
+    /** 版本 × 环境 矩阵；只包含真实存在过部署产物的版本。 */
+    public synchronized Matrix matrix(String projectId) {
+        Map<String, CellAcc> cells = new LinkedHashMap<>();
+        boolean dockerAvailable = true;
+        for (String env : ENVS) {
+            for (HostSlot slot : hostSlots(projectId, env)) {
+                CellAcc acc = cells.computeIfAbsent(env + "|" + slot.version(),
+                        k -> new CellAcc(env, slot.version()));
+                acc.mergeHost(slot);
+            }
+            List<ContainerStatus> containers;
+            try {
+                containers = inspector.containers(projectId, env);
+            } catch (IllegalStateException e) {
+                dockerAvailable = false;
+                continue;
+            }
+            Map<String, List<ContainerStatus>> byVersion = new LinkedHashMap<>();
+            for (ContainerStatus status : containers) {
+                byVersion.computeIfAbsent(versionOf(status), k -> new ArrayList<>()).add(status);
+            }
+            for (Map.Entry<String, List<ContainerStatus>> entry : byVersion.entrySet()) {
+                CellAcc acc = cells.computeIfAbsent(env + "|" + entry.getKey(),
+                        k -> new CellAcc(env, entry.getKey()));
+                acc.mergeDocker(entry.getValue());
+            }
+        }
+
+        // 「当前」= 该环境最近部署的版本（HOST / Docker 都适用，不依赖单一 current 指针）
+        Map<String, CellAcc> newest = new LinkedHashMap<>();
+        for (CellAcc acc : cells.values()) {
+            CellAcc prev = newest.get(acc.env);
+            if (prev == null || acc.deployedAt > prev.deployedAt) {
+                newest.put(acc.env, acc);
+            }
+        }
+        newest.values().forEach(acc -> acc.current = true);
+
+        List<Cell> list = cells.values().stream()
+                .map(CellAcc::toCell)
+                .sorted(Comparator.comparingLong(Cell::deployedAt).reversed()
+                        .thenComparing(Cell::env))
+                .toList();
+        List<String> versions = new ArrayList<>(list.stream().map(Cell::version)
+                .distinct().toList());
+        List<EnvColumn> columns = ENVS.stream()
+                .map(env -> new EnvColumn(env, ENV_LABELS.getOrDefault(env, env)))
+                .toList();
+        return new Matrix(columns, versions, list, dockerAvailable,
+                dockerAvailable ? "" : "Docker 不可用：当前只展示 HOST 部署");
+    }
+
+    // ------------------------------------------------------------------ 启停
+
+    /** 启动某环境指定版本（不传 version 时取默认槽的当前版本）。 */
+    public synchronized ActionResult start(String projectId, String env, String version) {
+        String targetEnv = requireEnv(env);
+        String wanted = normalizeVersion(version);
+
+        // 1) Docker：镜像/容器已经存在，直接 docker start，不重建
+        List<ContainerStatus> dockerTargets = dockerContainers(projectId, targetEnv, wanted);
+        if (!dockerTargets.isEmpty()) {
+            List<String> started = new ArrayList<>();
+            for (ContainerStatus status : dockerTargets) {
+                if (!status.running()) {
+                    docker("start", status.name());
+                    started.add(status.name());
+                }
+            }
+            return new ActionResult(true, started.isEmpty()
+                    ? "容器已在运行" : "已启动容器：" + String.join("、", started),
+                    stateOf(projectId, targetEnv, wanted));
+        }
+
+        // 2) HOST：用已落盘的 release jar 重新拉起
+        List<HostSlot> slots = hostSlots(projectId, targetEnv);
+        HostSlot host = wanted == null
+                ? slots.stream().filter(slot -> !slot.tagged()).findFirst().orElse(null)
+                : slots.stream().filter(slot -> wanted.equals(slot.version()))
+                        .findFirst().orElse(null);
+        String sha;
+        Path stateDir;
+        if (host != null) {
+            sha = host.current();
+            if (sha == null && !host.releases().isEmpty()) {
+                sha = host.releases().get(0);
+            }
+            stateDir = host.dir();
+        } else if (wanted != null) {
+            // 兼容旧矩阵行：版本值其实是 releases 里的提交 sha
+            HostSlot base = slots.stream().filter(slot -> !slot.tagged())
+                    .findFirst().orElse(null);
+            if (base == null || !base.releases().contains(wanted)) {
+                throw new IllegalArgumentException("该环境没有版本 " + wanted + " 的部署产物");
+            }
+            sha = wanted;
+            stateDir = base.dir();
+        } else {
+            throw new IllegalArgumentException("该环境还没有部署产物，请先在流水线完成一次部署");
+        }
+        if (sha == null || sha.isBlank()) {
+            throw new IllegalArgumentException("该环境还没有部署产物，请先在流水线完成一次部署");
+        }
+        Path jar = stateDir.resolve("releases").resolve(sha).resolve("app.jar");
+        if (!Files.isRegularFile(jar)) {
+            throw new IllegalArgumentException("版本 " + sha + " 没有可运行的 app.jar（Docker 部署无法用 HOST 启动）");
+        }
+        if (host != null && host.running()) {
+            return new ActionResult(true, "该版本已在运行", "RUNNING");
+        }
+        stopHostProcess(stateDir);
+
+        EffectiveEnvironment effective = envStore.effective(projectId, targetEnv);
+        if (!effective.missingSecrets().isEmpty()) {
+            throw new IllegalArgumentException("环境密钥缺失：" + String.join("、",
+                    effective.missingSecrets()));
+        }
+        int port = host != null && host.port() > 0 ? host.port()
+                : effective.defaultPort() > 0 ? effective.defaultPort() : 8080;
+        Path pidFile = stateDir.resolve("app.pid");
+        Path logFile = stateDir.resolve("app.log");
+        List<String> argv = List.of(JavaRuntime.javaBinary(), "-jar", jar.toString(),
+                "--server.port=" + port);
+        ProcessBuilder pb = new ProcessBuilder(argv)
+                .directory(stateDir.toFile())
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
+        pb.environment().put("CI", "true");
+        effective.values().forEach((key, value) ->
+                pb.environment().put(key, value == null ? "" : value));
+        Path webDist = jar.getParent().resolve("web");
+        if (Files.isDirectory(webDist)) {
+            pb.environment().put("AGENT_WEB_DIST", webDist.toAbsolutePath().toString());
+        }
+        try {
+            Process process = pb.start();
+            Files.writeString(pidFile, String.valueOf(process.pid()), StandardCharsets.UTF_8);
+            boolean exited = process.waitFor(HOST_START_PROBE_MS, TimeUnit.MILLISECONDS);
+            if (exited && process.exitValue() != 0) {
+                Files.deleteIfExists(pidFile);
+                throw new IllegalArgumentException("进程启动即退出（exit " + process.exitValue()
+                        + "）：" + tail(logFile, 8));
+            }
+            rotatePointers(stateDir, sha);
+            return new ActionResult(true,
+                    "已启动 HOST 进程 pid=" + process.pid() + "，端口 " + port,
+                    "RUNNING");
+        } catch (IOException e) {
+            throw new IllegalArgumentException("无法启动进程：" + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalArgumentException("启动被中断");
+        }
+    }
+
+    /** 停止某环境指定版本（不传 version 时停止该环境所有运行中的应用容器/进程）。 */
+    public synchronized ActionResult stop(String projectId, String env, String version) {
+        String targetEnv = requireEnv(env);
+        String wanted = normalizeVersion(version);
+
+        List<ContainerStatus> dockerTargets = dockerContainers(projectId, targetEnv, wanted);
+        List<String> stopped = new ArrayList<>();
+        for (ContainerStatus status : dockerTargets) {
+            if (status.running()) {
+                docker("stop", status.name());
+                stopped.add(status.name());
+            }
+        }
+        boolean hostStopped = false;
+        for (HostSlot slot : hostSlots(projectId, targetEnv)) {
+            boolean match = wanted == null
+                    || wanted.equals(slot.version())
+                    || wanted.equals(slot.current())
+                    || slot.releases().contains(wanted);
+            if (match && slot.running()) {
+                stopHostProcess(slot.dir());
+                hostStopped = true;
+            }
+        }
+        if (stopped.isEmpty() && !hostStopped) {
+            return new ActionResult(true, "该环境没有正在运行的应用", "STOPPED");
+        }
+        List<String> parts = new ArrayList<>();
+        if (!stopped.isEmpty()) {
+            parts.add("容器 " + String.join("、", stopped));
+        }
+        if (hostStopped) {
+            parts.add("HOST 进程");
+        }
+        return new ActionResult(true, "已停止：" + String.join("，", parts), "STOPPED");
+    }
+
+    // ------------------------------------------------------------------ HOST 状态
+
+    /**
+     * 一个环境下的所有 HOST 部署槽：默认槽（不打 tag，覆盖式）+ {@code versions/<版本号>}。
+     */
+    private List<HostSlot> hostSlots(String projectId, String env) {
+        Path base = hostDir(projectId, env);
+        List<HostSlot> slots = new ArrayList<>();
+        HostSlot baseSlot = hostSlot(base, false);
+        if (baseSlot != null) {
+            slots.add(baseSlot);
+        }
+        Path versions = base.resolve("versions");
+        if (Files.isDirectory(versions)) {
+            try (Stream<Path> stream = Files.list(versions)) {
+                for (Path slotDir : stream.filter(Files::isDirectory).toList()) {
+                    HostSlot slot = hostSlot(slotDir, true);
+                    if (slot != null) {
+                        slots.add(slot);
+                    }
+                }
+            } catch (IOException ignored) {
+                // 目录读不了按没有部署处理
+            }
+        }
+        return slots;
+    }
+
+    /** 读取一个版本槽；目录不存在或没有任何部署痕迹时返回 null。 */
+    private HostSlot hostSlot(Path dir, boolean tagged) {
+        Path releasesDir = dir.resolve("releases");
+        List<String> releases = new ArrayList<>();
+        long newestAt = 0;
+        String newestRelease = null;
+        if (Files.isDirectory(releasesDir)) {
+            try (Stream<Path> stream = Files.list(releasesDir)) {
+                for (Path release : stream.filter(Files::isDirectory).toList()) {
+                    releases.add(release.getFileName().toString());
+                    try {
+                        long at = Files.getLastModifiedTime(release).toMillis();
+                        if (at >= newestAt) {
+                            newestAt = at;
+                            newestRelease = release.getFileName().toString();
+                        }
+                    } catch (IOException ignored) {
+                        // 时间读不到不影响版本展示
+                    }
+                }
+            } catch (IOException ignored) {
+                // 目录读不了按没有部署处理
+            }
+        }
+        String current = readText(dir.resolve("current"));
+        long pid = readPid(dir.resolve("app.pid"));
+        boolean running = isHostProcess(pid);
+        int port = parseHostPort(readText(dir.resolve("app.log")));
+        if (releases.isEmpty() && current == null && pid <= 0) {
+            return null; // 只有 Docker 端口记录之类的空壳目录
+        }
+        String version = readText(dir.resolve("version"));
+        if (version == null) {
+            version = tagged ? dir.getFileName().toString()
+                    : current != null ? current : newestRelease;
+        }
+        if (version == null || version.isBlank()) {
+            version = "latest";
+        }
+        return new HostSlot(version, dir, tagged, releases, current, pid, running, port, newestAt);
+    }
+
+    private boolean isHostProcess(long pid) {
+        if (pid <= 0) {
+            return false;
+        }
+        return ProcessHandle.of(pid)
+                .filter(ProcessHandle::isAlive)
+                .map(handle -> {
+                    String commandLine = handle.info().commandLine().orElse("");
+                    return commandLine.isEmpty() || commandLine.contains("app.jar");
+                })
+                .orElse(false);
+    }
+
+    private void stopHostProcess(Path stateDir) {
+        Path pidFile = stateDir.resolve("app.pid");
+        long pid = readPid(pidFile);
+        if (pid <= 0) {
+            deleteQuietly(pidFile);
+            return;
+        }
+        Optional<ProcessHandle> handle = ProcessHandle.of(pid).filter(ProcessHandle::isAlive);
+        if (handle.isEmpty()) {
+            deleteQuietly(pidFile);
+            return;
+        }
+        String commandLine = handle.get().info().commandLine().orElse("");
+        if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
+            throw new IllegalArgumentException("pid=" + pid
+                    + " 不是平台部署的 app.jar，拒绝停止（可能是 pid 被复用）");
+        }
+        handle.get().descendants().forEach(ProcessHandle::destroy);
+        handle.get().destroy();
+        try {
+            handle.get().onExit().get(5, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            handle.get().destroyForcibly();
+        }
+        deleteQuietly(pidFile);
+    }
+
+    private void rotatePointers(Path stateDir, String sha) {
+        String current = readText(stateDir.resolve("current"));
+        try {
+            if (current != null && !current.equals(sha)) {
+                Files.writeString(stateDir.resolve("previous"), current, StandardCharsets.UTF_8);
+            }
+            Files.writeString(stateDir.resolve("current"), sha, StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            // 指针写失败不影响本次启动，下次部署会再次轮转
+        }
+    }
+
+    // ------------------------------------------------------------------ DOCKER 辅助
+
+    private List<ContainerStatus> dockerContainers(String projectId, String env, String version) {
+        List<ContainerStatus> containers;
+        try {
+            containers = inspector.containers(projectId, env);
+        } catch (IllegalStateException e) {
+            if (version == null && !hasHostRelease(projectId, env)) {
+                throw new IllegalArgumentException("Docker 不可用：" + e.getMessage());
+            }
+            return List.of();
+        }
+        if (version == null) {
+            return containers;
+        }
+        return containers.stream()
+                .filter(c -> version.equals(versionOf(c))
+                        || version.equals(c.sha() == null || c.sha().isBlank()
+                                ? "latest" : c.sha().trim()))
+                .toList();
+    }
+
+    /** 容器展示版本：优先 agent.version 标签，旧容器回落到提交 sha。 */
+    private static String versionOf(ContainerStatus status) {
+        if (status.version() != null && !status.version().isBlank()) {
+            return status.version().trim();
+        }
+        return status.sha() == null || status.sha().isBlank() ? "latest" : status.sha().trim();
+    }
+
+    private boolean hasHostRelease(String projectId, String env) {
+        return hostSlots(projectId, env).stream().anyMatch(slot -> !slot.releases().isEmpty());
+    }
+
+    private String docker(String action, String container) {
+        List<String> argv = List.of("docker", action, container);
+        try {
+            Process process = new ProcessBuilder(argv)
+                    .redirectErrorStream(true)
+                    .start();
+            byte[] output = process.getInputStream().readAllBytes();
+            if (!process.waitFor(DOCKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                throw new IllegalStateException("docker " + action + " 超时：" + container);
+            }
+            String text = new String(output, StandardCharsets.UTF_8).trim();
+            if (process.exitValue() != 0) {
+                throw new IllegalStateException("docker " + action + " 失败：" + text);
+            }
+            return text;
+        } catch (IOException e) {
+            throw new IllegalStateException("Docker 不可用：" + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("docker " + action + " 被中断");
+        }
+    }
+
+    private String stateOf(String projectId, String env, String version) {
+        return matrix(projectId).cells().stream()
+                .filter(cell -> cell.env().equals(env)
+                        && (version == null || cell.version().equals(version)))
+                .map(Cell::state)
+                .findFirst()
+                .orElse("UNKNOWN");
+    }
+
+    // ------------------------------------------------------------------ 通用
+
+    private Path hostDir(String projectId, String env) {
+        // 与 HostDeployer 的命名保持一致：<deployRoot>/<projectId>-<env>（不再额外小写化）
+        if (projectId == null || !SAFE_VERSION.matcher(projectId.trim()).matches()) {
+            throw new IllegalArgumentException("非法项目标识：" + projectId);
+        }
+        return deployRoot.resolve(projectId.trim() + "-" + env);
+    }
+
+    private static String requireEnv(String env) {
+        String value = env == null ? "" : env.trim().toLowerCase(Locale.ROOT);
+        if (!ENVS.contains(value)) {
+            throw new IllegalArgumentException("未知环境：" + env + "（可选 dev / test / prod）");
+        }
+        return value;
+    }
+
+    private static String normalizeVersion(String version) {
+        if (version == null || version.isBlank()) {
+            return null;
+        }
+        String value = version.trim();
+        if (!SAFE_VERSION.matcher(value).matches()) {
+            throw new IllegalArgumentException("非法版本标识：" + version);
+        }
+        return value;
+    }
+
+    private static String readText(Path file) {
+        try {
+            if (!Files.isRegularFile(file)) {
+                return null;
+            }
+            String value = Files.readString(file, StandardCharsets.UTF_8).trim();
+            return value.isEmpty() ? null : value;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static long readPid(Path file) {
+        String value = readText(file);
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static int parseHostPort(String log) {
+        if (log == null) {
+            return 0;
+        }
+        Matcher matcher = HOST_PORT.matcher(log);
+        int port = 0;
+        while (matcher.find()) {
+            port = Integer.parseInt(matcher.group(1));
+        }
+        return port;
+    }
+
+    private static String tail(Path logFile, int lines) {
+        try {
+            String text = Files.readString(logFile, StandardCharsets.UTF_8);
+            String[] all = text.split("\\R");
+            int from = Math.max(0, all.length - lines);
+            return String.join("\n", java.util.Arrays.copyOfRange(all, from, all.length));
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private static void deleteQuietly(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+            // 删不掉不影响后续操作
+        }
+    }
+
+    // ------------------------------------------------------------------ DTO
+
+    public record EnvColumn(String key, String label) {
+    }
+
+    public record Cell(String env, String version, String state, String target,
+                       boolean running, boolean current, List<String> containers,
+                       String image, String health, String ports, String url,
+                       long deployedAt, String detail) {
+    }
+
+    public record Matrix(List<EnvColumn> environments, List<String> versions,
+                         List<Cell> cells, boolean dockerAvailable, String note) {
+    }
+
+    public record ActionResult(boolean ok, String message, String state) {
+    }
+
+    private record HostSlot(String version, Path dir, boolean tagged, List<String> releases,
+                            String current, long pid, boolean running, int port, long newestAt) {
+    }
+
+    /** 同一 (env, version) 可能同时存在 HOST 产物与 Docker 容器，这里合并成一张卡片。 */
+    private static final class CellAcc {
+        private final String env;
+        private final String version;
+        private final LinkedHashSet<String> containers = new LinkedHashSet<>();
+        private final List<String> details = new ArrayList<>();
+        private boolean running;
+        private boolean current;
+        private String target;
+        private String image;
+        private String health;
+        private String ports;
+        private String url;
+        private long deployedAt;
+
+        private CellAcc(String env, String version) {
+            this.env = env;
+            this.version = version;
+        }
+
+        private void mergeHost(HostSlot slot) {
+            target = target == null ? "HOST" : target;
+            deployedAt = Math.max(deployedAt, slot.newestAt());
+            if (slot.running()) {
+                running = true;
+                target = "HOST";
+            }
+            if (slot.port() > 0 && ports == null) {
+                ports = "127.0.0.1:" + slot.port();
+                url = "http://127.0.0.1:" + slot.port();
+            }
+            details.add(slot.tagged() ? "打 tag 版本" : "默认部署");
+        }
+
+        private void mergeDocker(List<ContainerStatus> statuses) {
+            boolean dockerRunning = statuses.stream().anyMatch(ContainerStatus::running);
+            if (target == null || dockerRunning || !running) {
+                target = "DOCKER";
+            }
+            running = running || dockerRunning;
+            statuses.forEach(status -> containers.add(status.name()));
+            statuses.stream().map(ContainerStatus::image).filter(v -> v != null && !v.isBlank())
+                    .findFirst().ifPresent(v -> image = v);
+            statuses.stream().map(ContainerStatus::health)
+                    .filter(v -> v != null && !v.isBlank() && !"none".equals(v))
+                    .findFirst().ifPresent(v -> health = v);
+            if (ports == null) {
+                statuses.stream().map(ContainerStatus::ports)
+                        .filter(v -> v != null && !v.isBlank() && !"无端口映射".equals(v))
+                        .findFirst().ifPresent(v -> {
+                            ports = v;
+                            Matcher matcher = DOCKER_HOST_PORT.matcher(v);
+                            if (matcher.find()) {
+                                url = "http://127.0.0.1:" + matcher.group(1);
+                            }
+                        });
+            }
+            details.add(statuses.size() + " 个容器");
+        }
+
+        private Cell toCell() {
+            String state = running ? "RUNNING" : "STOPPED";
+            return new Cell(env, version, state, target == null ? "HOST" : target,
+                    running, current, List.copyOf(containers), image, health, ports, url,
+                    deployedAt, String.join("；", new LinkedHashSet<>(details)));
+        }
+    }
+}
