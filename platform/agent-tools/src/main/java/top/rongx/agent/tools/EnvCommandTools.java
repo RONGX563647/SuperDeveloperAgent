@@ -19,7 +19,7 @@ import top.rongx.agent.domain.project.ProjectContext;
  * 非生产环境仍同时具备读与写。
  *
  * <p>注意：{@code env_mapping_draft} 只产生 DRAFT 记录，<b>不能自己确认</b>，
- * 必须由人在设置页确认后才能用于 {@code deploy_run}。变量写操作会改变有效环境哈希，
+ * 必须由人在对话内的绑定确认卡确认后才能用于 {@code deploy_run}。变量写操作会改变有效环境哈希，
  * 因此旧绑定自动失效，需要重新生成草案并人工确认。
  */
 @Component
@@ -41,7 +41,7 @@ public class EnvCommandTools {
     @Tool(name = "env_mapping_draft",
             description = """
                     生成该环境的变量映射草案（写一条 DRAFT 记录，不含任何变量值）。
-                    生成后必须让用户在「设置 → 项目环境 → Agent 部署绑定」里人工确认；
+                    生成后平台会在对话里展开环境绑定确认卡，必须由用户本人点击确认；
                     Agent 自己不能确认，也不能绕过 binding_id 直接 deploy_run。
                     返回：binding_id、缺失变量、中间件告警。""",
             readOnly = false, concurrencySafe = false)
@@ -70,7 +70,7 @@ public class EnvCommandTools {
                         .append(warning.get("message")).append('\n');
             }
         }
-        sb.append("next: 请让用户到「设置 → 项目环境」确认该草案，确认后再用 binding_id 触发 deploy_run");
+        sb.append("next: 环境绑定确认卡已在对话中展开，请用户本人点击确认；确认后再用该 binding_id 触发 deploy_run");
         return sb.toString();
     }
 
@@ -132,7 +132,7 @@ public class EnvCommandTools {
                     适合补齐部署必需变量，例如 SERVER_PORT=8180、AGENT_WORKSPACE_ROOT=./data/workspaces-test。
                     值会加密落库且不会回显；变量名必须是合法环境变量名。
                     写入后有效环境哈希变化，旧的环境绑定会失效：需要重新调用 env_mapping_draft
-                    并由人在设置页确认新草案后才能 deploy_run。
+                    并由人在对话内的绑定确认卡确认新草案后才能 deploy_run。
                     生产环境拒绝执行（生产变量由运维在设置页维护）。""",
             readOnly = false, concurrencySafe = false)
     public String setVar(@ToolParam(name = "env", description = "环境：dev / test") String env,
@@ -161,7 +161,7 @@ public class EnvCommandTools {
                 env: %s
                 secret: %s
                 source: 项目覆盖（环境模板未改动）
-                next: 有效环境已变化 → 重新调用 env_mapping_draft，并请人在设置页确认新绑定后再 deploy_run
+                next: 有效环境已变化 → 重新调用 env_mapping_draft，并请人在对话确认卡中确认新绑定后再 deploy_run
                 evidence: project:%s/env:%s""".formatted(saved.key(), target, sensitive,
                 ctx.projectId(), target);
     }

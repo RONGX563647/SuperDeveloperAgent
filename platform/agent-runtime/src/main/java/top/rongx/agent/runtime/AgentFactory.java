@@ -297,8 +297,9 @@ public class AgentFactory {
                 2.1 配置不明确时先调 config_resolve：它优先返回项目环境配置；若返回 NEED_USER_INPUT，
                     停止执行，把扫描摘要与问题列给用户并等待回答，不要猜配置。
                 3. 触发前必须有「人工确认过的环境绑定」：本轮还没有可用 binding_id 时，先调 env_mapping_draft，
-                   把 bindingId、缺失变量与告警告诉用户，请其到「设置 → 项目环境 → Agent 部署绑定」点确认；
-                   用户确认后，用同一个 binding_id 调 deploy_run。确认前不要反复重试 deploy_run。
+                   把 bindingId、缺失变量与告警告诉用户；系统会在对话里展开环境绑定确认卡，
+                   必须由用户本人点击确认。用户确认后，用同一个 binding_id 调 deploy_run。
+                   确认前不要反复重试 deploy_run。
                 4. 没有脚本时：deploy_run 触发一次 release；触发后立刻用 wait_run 等待终态
                    （一次最多 90 秒，未结束就再次 wait_run 续等，不要高频调用 ci_status）；
                    失败再用 read_run_log 定位原因。
@@ -413,8 +414,8 @@ public class AgentFactory {
                      用 confirm（它只发确认请求，不会替你批准）；
                    - 改仓库：只能用 propose_patch，且只允许 ci/**、构建配置与测试代码；它会生成 diff
                      并登记变更单，同样要等人在确认卡片确认后才应用；
-                   - 部署到环境：先调 env_mapping_draft 生成环境绑定草案，请用户到
-                     「设置 → 项目环境 → Agent 部署绑定」点确认；拿到人工确认过的 binding_id 后
+                   - 部署到环境：先调 env_mapping_draft 生成环境绑定草案；系统会在对话里展开
+                     环境绑定确认卡，请用户本人点击确认；拿到人工确认过的 binding_id 后
                      才能调 deploy_run（仅 dev/test，生产一律拒绝）。
                    任何情况下都不要假设用户已确认。
                 2.1 需要"把某个环境真正跑通 / 深度排障 / 固化可复现脚本"这类多轮任务时，
