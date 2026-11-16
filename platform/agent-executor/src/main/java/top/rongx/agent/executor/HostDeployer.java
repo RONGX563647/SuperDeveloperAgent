@@ -121,8 +121,10 @@ public class HostDeployer implements Deployer {
         // 用与当前平台一致的 JDK 启动，不去 PATH 上碰运气（PATH 可能是 JDK17、平台跑在 25）。
         List<String> argv = List.of(JavaRuntime.javaBinary(), "-jar", jar.toString(),
                 "--server.port=" + request.hostPort());
+        // 工作目录必须是稳定的部署状态目录：放在本次运行的临时工作树里，进程会占用
+        // node_modules/相对 data 目录，Windows 上导致运行结束后的 worktree 清理失败（exit 255）。
         ProcessBuilder pb = new ProcessBuilder(argv)
-                .directory(workdir.toFile())
+                .directory(stateDir.toFile())
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
         pb.environment().put("CI", "true");

@@ -2,10 +2,16 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.deploy.DeployRecipe;
@@ -40,13 +46,18 @@ public class DeployTools {
     private final PipelineEngine engine;
     private final EnvBindingPort bindings;
     private final PipelineDefStore defStore;
+    /** HOST 部署状态根，与 {@code PipelineConfig} 里 HostDeployer 的 deployRoot 保持一致。 */
+    private final Path hostDeployRoot;
 
     public DeployTools(RecipeStore recipes, PipelineEngine engine, EnvBindingPort bindings,
-                       PipelineDefStore defStore) {
+                       PipelineDefStore defStore,
+                       @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.recipes = recipes;
         this.engine = engine;
         this.bindings = bindings;
         this.defStore = defStore;
+        this.hostDeployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("deploy");
     }
 
     @Tool(name = "deploy_env_status",
@@ -74,6 +85,70 @@ public class DeployTools {
         }
         sb.append("versions: ").append(recipes.versions(ctx.projectId(), target).size()).append('\n');
         return sb.toString();
+    }
+
+    /**
+     * 停掉 HOST 目标遗留的本机进程。
+     *
+     * <p>为什么需要它：切换部署目标（例如 host → docker）后，上一版的 {@code java -jar} 不受
+     * 新目标管理，却继续占用登记端口；平台没有进程管理入口时，这件事只能让用户手动杀进程，
+     * 自动化就断在这里。这里只认固定状态文件 {@code _platform/deploy/<project>-<env>/app.pid}，
+     * 且校验命令行确实是平台部署的 {@code app.jar}（防 pid 复用误杀），不提供任意 pid 操作。
+     */
+    @Tool(name = "deploy_host_stop",
+            description = """
+                    停掉「HOST 目标」上次部署遗留的本机进程（写操作，仅 dev/test）。
+                    只按固定位置的状态文件操作：<workspace>/_platform/deploy/<project>-<env>/app.pid，
+                    并校验进程命令行确实是平台部署的 app.jar（防止 pid 被复用后误杀）。
+                    适用场景：上一版 host 部署的 java -jar 仍占用端口，导致新的 docker/host 部署端口冲突；
+                    换目标后平台不会再托管该进程，只有这里能停掉它。
+                    不会结束平台自身、IDE 或任意其它 pid；生产环境拒绝执行。""",
+            readOnly = false, concurrencySafe = false)
+    public String stopHostDeployment(@ToolParam(name = "env", description = "环境：dev / test")
+                                     String env, ProjectContext ctx) {
+        String target = normalize(env);
+        if ("prod".equals(target)) {
+            return "err: 生产环境不允许停止本机进程";
+        }
+        Path pidFile = hostStateDir(hostDeployRoot, ctx.projectId(), target).resolve("app.pid");
+        if (!Files.isRegularFile(pidFile)) {
+            return "status: not_running\nenv: " + target
+                    + "\nreason: 没有 HOST 部署进程记录（可能从未用 host 目标部署，或已清理）";
+        }
+        String raw;
+        try {
+            raw = Files.readString(pidFile, StandardCharsets.UTF_8).trim();
+        } catch (IOException e) {
+            return "err: 读取 app.pid 失败：" + e.getMessage();
+        }
+        long pid;
+        try {
+            pid = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            deleteQuietly(pidFile);
+            return "status: not_running\nreason: app.pid 内容不是合法 pid（" + raw + "），已删除损坏记录";
+        }
+        Optional<ProcessHandle> handle = ProcessHandle.of(pid).filter(ProcessHandle::isAlive);
+        if (handle.isEmpty()) {
+            deleteQuietly(pidFile);
+            return "status: not_running\nreason: app.pid 指向的进程已退出（pid=" + pid + "），已清理记录";
+        }
+        String commandLine = handle.get().info().commandLine().orElse("");
+        if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
+            return "err: pid=" + pid + " 的命令行不是平台部署的 app.jar，拒绝结束"
+                    + "（可能是 pid 被复用）；请用 port_check 确认端口占用者后再处理";
+        }
+        handle.get().descendants().forEach(ProcessHandle::destroy);
+        handle.get().destroy();
+        try {
+            handle.get().onExit().get(5, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            handle.get().destroyForcibly();
+        }
+        deleteQuietly(pidFile);
+        return "status: stopped\npid: " + pid + "\nenv: " + target
+                + "\npidFile: " + pidFile
+                + "\nnext: 端口已释放，可以重新 deploy_run";
     }
 
     /**
@@ -412,6 +487,20 @@ public class DeployTools {
             return "/healthz";
         }
         return defined.healthPath().trim();
+    }
+
+    /** 与 HostDeployer 的状态目录命名保持一致：{@code <deployRoot>/<projectId>-<env>}。 */
+    static Path hostStateDir(Path hostDeployRoot, String projectId, String env) {
+        String suffix = env == null || env.isBlank() ? "" : "-" + env.trim();
+        return hostDeployRoot.resolve(projectId + suffix);
+    }
+
+    private static void deleteQuietly(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+            // 删不掉不影响结论：下次部署时 HostDeployer 会再次尝试停止
+        }
     }
 
     private static String normalize(String env) {

@@ -2799,15 +2799,80 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 (System.nanoTime() - start) / 1_000_000L));
     }
 
-    /** 构建终态后清理本次 worktree（失败不影响主流程，prune 兜底）。 */
+    /**
+     * 构建终态后清理本次 worktree（失败不影响主流程）。
+     *
+     * <p>Windows 上 {@code git worktree remove --force} 常因杀软/编辑器/残留句柄占用
+     * node_modules、target 而 exit 255。这里不再只信 git：失败后由平台自己递归删除
+     * （Java NIO 支持长路径），再 {@code git worktree prune} 注销登记；仍然失败只告警，
+     * 不影响已经成功的运行结果。
+     */
     private void cleanupWorktree(Path bare, Path runDir, RunState state) {
         ActionResult rm = host.run(bare, spec("checkout", List.of(
                 List.of("git", "worktree", "remove", "--force", posix(runDir)))));
         if (rm.result().status() == StageStatus.SUCCEEDED) {
             state.log.append("[cleanup] worktree removed\n");
+            return;
+        }
+        state.log.append("[cleanup] git worktree remove 失败（")
+                .append(rm.result().errorSummary())
+                .append("），改为删除目录并 prune 注销登记\n");
+        boolean deleted = deleteWorktreeTree(runDir);
+        ActionResult prune = host.run(bare, spec("checkout",
+                List.of(List.of("git", "worktree", "prune"))));
+        boolean pruned = prune.result().status() == StageStatus.SUCCEEDED;
+        if (deleted && pruned) {
+            state.log.append("[cleanup] 构建现场已清理（prune 已注销登记）\n");
+        } else if (deleted) {
+            state.log.append("[cleanup] 目录已删除，但 prune 失败：")
+                    .append(prune.result().errorSummary()).append('\n');
         } else {
-            state.log.append("[cleanup] worktree 清理失败（prune 兜底）：")
-                    .append(rm.result().errorSummary()).append('\n');
+            state.log.append("[cleanup] ⚠️ 构建现场未完全清理（不影响运行结果）：")
+                    .append(runDir).append(" · 删除历史时会再次尝试\n");
+        }
+    }
+
+    /** 递归删除目录（Windows 下清理被短暂占用的文件）：最多重试 3 轮，清只读属性。 */
+    private boolean deleteWorktreeTree(Path dir) {
+        if (dir == null || !Files.exists(dir)) {
+            return true;
+        }
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                List<Path> paths;
+                try (var stream = Files.walk(dir)) {
+                    paths = stream.sorted(java.util.Comparator.reverseOrder()).toList();
+                }
+                for (Path path : paths) {
+                    deleteOne(path);
+                }
+                if (!Files.exists(dir)) {
+                    return true;
+                }
+            } catch (IOException e) {
+                // 文件仍被占用：短暂等待后下一轮重试
+            }
+            try {
+                Thread.sleep(400L * (attempt + 1));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return !Files.exists(dir);
+    }
+
+    private static void deleteOne(Path path) throws IOException {
+        try {
+            Files.deleteIfExists(path);
+        } catch (java.nio.file.AccessDeniedException e) {
+            // Windows 只读属性会让删除失败：清掉再试一次
+            try {
+                Files.setAttribute(path, "dos:readonly", false);
+            } catch (RuntimeException | IOException ignored) {
+                // 非 Windows 或不支持该属性：保持原始异常
+            }
+            Files.deleteIfExists(path);
         }
     }
 

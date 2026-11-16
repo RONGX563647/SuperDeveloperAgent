@@ -64,6 +64,15 @@ class DeployToolsConfigTest {
     }
 
     @Test
+    @DisplayName("HOST 部署状态目录：<deployRoot>/<project>-<env>，与 HostDeployer 的命名一致")
+    void hostStateDirFollowsHostDeployerLayout() {
+        java.nio.file.Path root = java.nio.file.Path.of("data", "workspaces", "_platform", "deploy");
+        assertEquals(root.resolve("SUPERDEVELOPERAG-test"),
+                DeployTools.hostStateDir(root, "SUPERDEVELOPERAG", "test"));
+        assertEquals(root.resolve("RY-dev"), DeployTools.hostStateDir(root, "RY", "dev"));
+    }
+
+    @Test
     @DisplayName("非法 YAML：明确报错而不是写坏定义")
     void invalidYamlFails() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,

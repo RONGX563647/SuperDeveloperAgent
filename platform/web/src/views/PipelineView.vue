@@ -369,6 +369,32 @@ const localLinks = computed<Array<{ label: string, url: string }>>(() => {
   return links
 })
 
+/** deployment 产物的 ref 就是部署端点（docker / host / server 一致），可直接打开。 */
+function asHttpUrl(ref: string | undefined | null): string {
+  const value = (ref ?? '').trim()
+  return /^https?:\/\//i.test(value) ? value : ''
+}
+
+/** 部署地址入口：本机前后端 + 各 deployment 产物端点，按 URL 去重。 */
+const deployLinks = computed<Array<{ label: string, url: string }>>(() => {
+  const links = [...localLinks.value]
+  const seen = new Set(links.map((l) => l.url.replace(/\/$/, '')))
+  for (const a of run.value?.artifacts ?? []) {
+    if (a.kind !== 'deployment') continue
+    const url = asHttpUrl(a.ref)
+    const key = url.replace(/\/$/, '')
+    if (!url || seen.has(key)) continue
+    seen.add(key)
+    const service = String(a.meta?.service ?? '')
+    const target = String(a.meta?.target ?? '')
+    const label = service === 'frontend' ? '打开前端'
+      : service === 'backend' ? '打开后端'
+        : target === 'server' ? '打开线上服务' : '打开部署地址'
+    links.push({ label, url })
+  }
+  return links
+})
+
 /** 失败阶段（取最后一个失败/超时的阶段）——失败卡片据此展示原因与重试入口。 */
 const failedStage = computed<StageView | null>(() => {
   const stages = run.value?.stages ?? []
@@ -1408,11 +1434,11 @@ async function copyDigest(digest: string): Promise<void> {
           </section>
 
           <div class="run-detail">
-            <!-- dev 一键体验：本机服务就绪后直接给可点开的地址 -->
-            <div v-if="localLinks.length" class="local-links">
-              <span class="ll-label">本机服务已就绪</span>
+            <!-- 部署就绪后直接给可点开的地址（本机前后端 / docker / 远程服务） -->
+            <div v-if="deployLinks.length" class="local-links">
+              <span class="ll-label">{{ localLinks.length ? '本机服务已就绪' : '部署地址' }}</span>
               <a
-                v-for="l in localLinks" :key="l.url"
+                v-for="l in deployLinks" :key="l.url"
                 class="ll-link" :href="l.url" target="_blank" rel="noreferrer"
               >
                 <el-icon><Link /></el-icon> {{ l.label }}
