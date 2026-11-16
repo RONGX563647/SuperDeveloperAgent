@@ -2,6 +2,7 @@ package top.rongx.agent.infra.state;
 
 import io.agentscope.core.state.AgentStateStore;
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -34,7 +35,7 @@ public class AgentStateConfig {
                 contextMaxChars, contextKeepMessages);
     }
 
-    /** 会话状态目录：默认挂在平台工作区下，创建后收紧为属主 700。 */
+    /** 会话状态目录：默认挂在平台工作区下，创建后在支持 POSIX 的文件系统上收紧为属主 700。 */
     private static Path stateDirectory(String stateRoot, String workspaceRoot) {
         Path dir = stateRoot == null || stateRoot.isBlank()
                 ? Path.of(workspaceRoot).toAbsolutePath().normalize()
@@ -42,10 +43,21 @@ public class AgentStateConfig {
                 : Path.of(stateRoot).toAbsolutePath().normalize();
         try {
             Files.createDirectories(dir);
+        } catch (IOException e) {
+            log.warn("无法创建会话状态目录（{}）：{}", dir, e.toString());
+            return dir;
+        }
+        // Windows/NTFS 不支持 POSIX 权限视图，setPosixFilePermissions 会抛
+        // UnsupportedOperationException（message 为 null），这里直接跳过而不是告警。
+        if (!FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+            log.debug("文件系统不支持 POSIX 权限，跳过状态目录 700 收紧：{}", dir);
+            return dir;
+        }
+        try {
             Files.setPosixFilePermissions(dir,
                     PosixFilePermissions.fromString("rwx------"));
         } catch (UnsupportedOperationException | IOException e) {
-            log.warn("无法收紧会话状态目录权限（{}）：{}", dir, e.getMessage());
+            log.warn("无法收紧会话状态目录权限（{}）：{}", dir, e.toString());
         }
         return dir;
     }
