@@ -40,4 +40,14 @@ public interface RepoInspector {
 
     /** from..to 的 diff stat。 */
     List<String> diffStat(String projectId, String from, String to);
+
+    /**
+     * 指定提交里是否存在某个文件（相对仓库根、{@code /} 分隔）。
+     *
+     * <p>用于判断工作区里的文件会不会随流水线检出——例如新生成的 Dockerfile
+     * 还没提交时，补丁必须把它一并带上。默认 false，便于测试桩按需覆盖。
+     */
+    default boolean fileExistsAt(String projectId, String sha, String path) {
+        return false;
+    }
 }

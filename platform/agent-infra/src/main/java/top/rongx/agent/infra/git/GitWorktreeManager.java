@@ -503,6 +503,20 @@ public class GitWorktreeManager {
                 .logTail().lines().filter(l -> !l.isBlank()).toList();
     }
 
+    /**
+     * 指定提交里是否存在某文件（相对仓库根）。
+     *
+     * <p>用 {@code git cat-file -e} 判断；文件不存在是正常结果，因此不写 WARN 日志。
+     */
+    public boolean fileExistsAt(Path repoDir, String sha, String path) {
+        if (sha == null || sha.isBlank() || path == null || path.isBlank()) {
+            return false;
+        }
+        Raw raw = exec(repoDir, List.of("git", "cat-file", "-e", sha + ":" + path),
+                "git cat-file -e", GIT_TIMEOUT_SECONDS, null);
+        return raw.exit() == 0;
+    }
+
     /** 改动文件列表（相对仓库根）：{@code from..to}。 */
     public List<String> diffNames(Path repoDir, String from, String to) {
         return run(repoDir, List.of("git", "diff", "--name-only", from + ".." + to),

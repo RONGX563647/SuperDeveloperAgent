@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -29,6 +28,7 @@ import top.rongx.agent.domain.port.PatchStore;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RecipeStore;
+import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.project.ProjectContext;
 
 /**
@@ -71,16 +71,18 @@ public class DockerfileTools {
     private final PipelineDefStore defStore;
     private final RecipeStore recipes;
     private final ProjectRepoLocator locator;
+    private final RepoInspector inspector;
 
     public DockerfileTools(CodePatcher patcher, PatchStore patches, ChangeStore changes,
                            PipelineDefStore defStore, RecipeStore recipes,
-                           ProjectRepoLocator locator) {
+                           ProjectRepoLocator locator, RepoInspector inspector) {
         this.patcher = patcher;
         this.patches = patches;
         this.changes = changes;
         this.defStore = defStore;
         this.recipes = recipes;
         this.locator = locator;
+        this.inspector = inspector;
     }
 
     @Tool(name = "ensure_dockerfile",
@@ -136,7 +138,7 @@ public class DockerfileTools {
             }
             dockerfilePath = "Dockerfile";
             edits.add(new CodePatch.FileEdit(dockerfilePath, plan.content()));
-        } else if (!inCommit(repo, baseSha.trim(), dockerfilePath)) {
+        } else if (!inspector.fileExistsAt(ctx.projectId(), baseSha.trim(), dockerfilePath)) {
             // 工作区里有、但基线提交里没有：流水线检出的是提交，必须把它一起带进补丁，
             // 否则确认卡应用后仍然"仓库没有 Dockerfile"。
             try {
@@ -517,27 +519,6 @@ public class DockerfileTools {
 
     private static String read(Path file) throws IOException {
         return Files.readString(file, StandardCharsets.UTF_8);
-    }
-
-    /** 指定提交里是否已有该文件（判断工作区的 Dockerfile 是否真的会进流水线检出）。 */
-    private static boolean inCommit(Path repo, String sha, String path) {
-        Process process = null;
-        try {
-            process = new ProcessBuilder("git", "-C", repo.toString(), "cat-file", "-e", sha + ":" + path)
-                    .redirectErrorStream(true)
-                    .start();
-            process.getInputStream().readAllBytes();
-            return process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
-        } catch (IOException e) {
-            return false;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        } finally {
-            if (process != null && process.isAlive()) {
-                process.destroyForcibly();
-            }
-        }
     }
 
     private static String relative(Path repo, Path file) {

@@ -90,6 +90,11 @@ public class GitRepoInspector implements RepoInspector {
         return repo(projectId).map(r -> git.diffStat(r.dir(), from, to)).orElse(List.of());
     }
 
+    @Override
+    public boolean fileExistsAt(String projectId, String sha, String path) {
+        return repo(projectId).map(r -> git.fileExistsAt(r.dir(), sha, path)).orElse(false);
+    }
+
     private static Commit toCommit(GitWorktreeManager.CommitInfo info) {
         return new Commit(info.sha(), info.author(), info.relativeTime(), info.subject());
     }
