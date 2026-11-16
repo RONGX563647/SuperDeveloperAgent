@@ -60,13 +60,27 @@ public class HostDeployer implements Deployer {
         // 每次部署都看不到 previous（回滚永远 E-507）。
         String suffix = request.envName() == null || request.envName().isBlank()
                 ? "" : "-" + request.envName().trim();
-        Path stateDir = deployRoot != null
+        Path baseDir = deployRoot != null
                 ? deployRoot.resolve(request.projectId() + suffix)
                 : workdir.resolve(".agent/deploy").resolve(request.projectId());
+        // 打 tag = 独立版本槽（各自 pid / current / app.log）；不打 tag = 覆盖默认槽。
+        // 这样同一环境可以同时跑多个版本的 jar，互不替换。
+        Path stateDir = baseDir;
+        String slot = request.tagged() ? safeSlot(request.version()) : null;
+        if (slot != null) {
+            stateDir = baseDir.resolve("versions").resolve(slot);
+        }
         StringBuilder log = new StringBuilder();
 
         try {
             Files.createDirectories(stateDir.resolve("releases"));
+            // 版本号落盘：环境矩阵按它展示行（没填版本号的普通部署记为 latest；回滚不改标签）
+            String label = request.version() != null && !request.version().isBlank()
+                    ? request.version().trim()
+                    : (request.rollback() ? null : "latest");
+            if (label != null) {
+                Files.writeString(stateDir.resolve("version"), label, StandardCharsets.UTF_8);
+            }
         } catch (IOException e) {
             return DeployResult.failed(DeployTarget.HOST, "E-501",
                     "无法创建部署状态目录：" + e.getMessage(), "");
@@ -275,6 +289,15 @@ public class HostDeployer implements Deployer {
             return "/";
         }
         return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
+    }
+
+    /** 版本槽目录名：只保留安全字符（上游已校验，这里兜底防路径穿越）。 */
+    private static String safeSlot(String version) {
+        if (version == null || version.isBlank()) {
+            return null;
+        }
+        String safe = version.trim().replaceAll("[^A-Za-z0-9._-]", "-");
+        return safe.isBlank() ? null : safe;
     }
 
     /** 本次构建的前端产物：优先 platform/web/dist，其次任意 dist/index.html（排除依赖目录）。 */

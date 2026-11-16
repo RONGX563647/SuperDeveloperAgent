@@ -52,18 +52,28 @@ public record PipelineDefinition(String name, List<StageDef> stages,
      * @param serverId      SERVER 目标使用的服务器 id（设置页里配置）；空则用默认服务器
      * @param envRequired   部署必填的环境变量名清单（E-509 预检依据；只声明名字，值在「设置 → 项目环境」维护）
      * @param services      多容器部署（test：前端 + 后端各一个容器）；空 = 单容器模型
+     * @param volume        单容器部署需要持久化的容器内路径（空 = 不挂卷）
      */
     public record DeploySpec(String target, int port, int containerPort, String healthPath,
                              String artifact, String serverId, List<String> envRequired,
-                             List<ServiceSpec> services) {
+                             List<ServiceSpec> services, String volume) {
 
         public DeploySpec(String target, int port, int containerPort, String healthPath,
                           String artifact, String serverId, List<String> envRequired) {
-            this(target, port, containerPort, healthPath, artifact, serverId, envRequired, List.of());
+            this(target, port, containerPort, healthPath, artifact, serverId, envRequired, List.of(),
+                    null);
+        }
+
+        public DeploySpec(String target, int port, int containerPort, String healthPath,
+                          String artifact, String serverId, List<String> envRequired,
+                          List<ServiceSpec> services) {
+            this(target, port, containerPort, healthPath, artifact, serverId, envRequired, services,
+                    null);
         }
 
         public static DeploySpec defaults() {
-            return new DeploySpec("docker", 8080, 8080, "/healthz", null, null, List.of(), List.of());
+            return new DeploySpec("docker", 8080, 8080, "/healthz", null, null, List.of(),
+                    List.of(), null);
         }
     }
 
@@ -162,6 +172,7 @@ public record PipelineDefinition(String name, List<StageDef> stages,
         int containerPort = map.get("containerPort") instanceof Number c ? c.intValue() : port;
         String artifact = map.get("artifact") == null ? null : String.valueOf(map.get("artifact"));
         String serverId = map.get("serverId") == null ? null : String.valueOf(map.get("serverId"));
+        String volume = map.get("volume") == null ? null : String.valueOf(map.get("volume"));
         return new DeploySpec(
                 str(map, "target", "docker"),
                 port,
@@ -170,7 +181,8 @@ public record PipelineDefinition(String name, List<StageDef> stages,
                 artifact == null || artifact.isBlank() ? null : artifact,
                 serverId == null || serverId.isBlank() ? null : serverId,
                 parseEnvRequired(map),
-                parseServices(map));
+                parseServices(map),
+                volume == null || volume.isBlank() ? null : volume.trim());
     }
 
     /**

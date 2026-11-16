@@ -47,15 +47,19 @@ public class DockerDeployer implements Deployer {
         StringBuilder log = new StringBuilder();
         if (request.imageRef() == null || request.imageRef().isBlank()) {
             return DeployResult.failed(DeployTarget.DOCKER, "E-501",
-                    "DOCKER 目标需要镜像：请先执行 image_package，或检查 Dockerfile", "");
+                    "DOCKER 目标缺少镜像：流水线需要包含 image_package 且构建成功"
+                            + "（仓库缺少 Dockerfile 时镜像阶段会被裁掉）", "");
         }
         Path dir = Path.of(request.workspace() == null || request.workspace().isBlank()
                 ? "." : request.workspace());
-        String name = containerName(request.projectId(), request.envName());
-        List<String> labels = List.of(
+        String name = containerName(request.projectId(), request.envName(), slotOf(request));
+        List<String> labels = new ArrayList<>(List.of(
                 "--label", "agent.project=" + request.projectId(),
                 "--label", "agent.run=" + request.runId(),
-                "--label", "agent.sha=" + request.gitSha());
+                "--label", "agent.version=" + displayVersion(request),
+                "--label", "agent.sha=" + request.gitSha()));
+        // 单容器部署的持久化卷：不挂卷时数据库/上传文件都在镜像层，重发即清空。
+        labels.addAll(volumeArgs(request));
         return run(dir, name, request.imageRef(), request.hostPort(), request.containerPort(),
                 request.env(), request.network(), request.healthPath(), labels, log, "127.0.0.1");
     }
@@ -70,29 +74,35 @@ public class DockerDeployer implements Deployer {
     public DeployResult deployService(Path dir, String projectId, String env, String runId,
                                       String sha, String namespace, String service, String image,
                                       int hostPort, int containerPort, String network,
-                                      Map<String, String> envVars, String volumePath) {
+                                      Map<String, String> envVars, String volumePath,
+                                      String version, boolean tagged) {
         StringBuilder log = new StringBuilder();
         if (image == null || image.isBlank()) {
             return DeployResult.failed(DeployTarget.DOCKER, "E-501",
                     "服务 " + service + " 缺少镜像：请在 deploy.services 里声明 image", "");
         }
-        String name = serviceContainerName(namespace, projectId, service);
-        String alias = serviceAlias(projectId, service);
+        // 打 tag 的版本独立命名空间后缀：容器名与网络别名都带版本，旧版本继续运行
+        String slot = tagged ? normalize(version, "v") : null;
+        String name = serviceContainerName(namespace, projectId, service)
+                + (slot == null ? "" : "-" + slot);
+        String alias = serviceAlias(projectId, service) + (slot == null ? "" : "-" + slot);
         List<String> extra = new ArrayList<>(List.of(
                 "--label", "agent.namespace=" + namespace,
                 "--label", "agent.env=" + env,
                 "--label", "agent.service=" + service,
+                "--label", "agent.version=" + (version == null || version.isBlank()
+                        ? "latest" : version.trim()),
                 "--network-alias", alias));
         if (volumePath != null && !volumePath.isBlank()) {
             extra.add("-v");
             extra.add(volumeName(namespace, projectId, service) + ":" + volumePath);
         }
-        // 前端容器的反向代理目标：<project>-backend:<port>（走环境网络别名，不依赖宿主机端口）。
+        // 前端容器的反向代理目标：<project>-backend[-<版本>]:<port>（走环境网络别名，不依赖宿主机端口）。
         if ("frontend".equals(service)) {
             String backendPort = envVars.getOrDefault("BACKEND_PORT", "8080");
             extra.add("-e");
             extra.add("BACKEND_UPSTREAM=http://" + serviceAlias(projectId, "backend")
-                    + ":" + backendPort);
+                    + (slot == null ? "" : "-" + slot) + ":" + backendPort);
         }
         return run(dir, name, image, hostPort, containerPort, envVars, network, "/", extra, log,
                 "127.0.0.1");
@@ -189,8 +199,15 @@ public class DockerDeployer implements Deployer {
         ProcessExecutor.StepOutcome run = executor.exec(dir, argv, DOCKER_TIMEOUT_MS, log, never);
 
         if (run.exitCode() != 0) {
+            String summary = sanitize(run.summary(), env);
+            if (summary.contains("port is already allocated")
+                    || summary.contains("address already in use")) {
+                return DeployResult.failed(DeployTarget.DOCKER, "E-502",
+                        "宿主端口 " + hostPort + " 已被其它进程/容器占用：" + summary,
+                        ProcessExecutor.redact(log.toString()));
+            }
             return DeployResult.failed(DeployTarget.DOCKER, "E-502",
-                    "容器启动失败：" + sanitize(run.summary(), env),
+                    "容器启动失败：" + summary,
                     ProcessExecutor.redact(log.toString()));
         }
         return DeployResult.ok(DeployTarget.DOCKER,
@@ -246,6 +263,36 @@ public class DockerDeployer implements Deployer {
     public static String containerName(String projectId, String env) {
         String base = containerName(projectId);
         return env == null || env.isBlank() ? base : base + "-" + normalize(env, "env");
+    }
+
+    /**
+     * 按版本槽的容器名：{@code slot} 为空 = 默认槽（覆盖式发布）；
+     * 非空 = 独立槽（旧版本容器保留），后缀即用户填写的版本号。
+     */
+    public static String containerName(String projectId, String env, String slot) {
+        String base = containerName(projectId, env);
+        return slot == null || slot.isBlank() ? base : base + "-" + normalize(slot, "v");
+    }
+
+    /** 单容器持久化卷参数：卷名按环境隔离（agent-test-<project>-app-data），版本槽共用同一份数据。 */
+    static List<String> volumeArgs(DeployRequest request) {
+        if (request.volumePath() == null || request.volumePath().isBlank()) {
+            return List.of();
+        }
+        String volume = volumeName(composeProject(request.network(), request.envName()),
+                request.projectId(), "app");
+        return List.of("-v", volume + ":" + request.volumePath().trim());
+    }
+
+    /** 版本槽后缀：打 tag 时用版本号，否则 null（默认槽）。 */
+    private static String slotOf(DeployRequest request) {
+        return request.tagged() ? normalize(request.version(), "v") : null;
+    }
+
+    /** 展示版本：用户没填版本号时统一显示 latest。 */
+    private static String displayVersion(DeployRequest request) {
+        return request.version() == null || request.version().isBlank()
+                ? "latest" : request.version().trim();
     }
 
     /** 多服务容器名：命名空间前缀保证 dev / test / prod 各自独立。 */

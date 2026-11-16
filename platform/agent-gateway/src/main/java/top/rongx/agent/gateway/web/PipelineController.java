@@ -208,8 +208,27 @@ public class PipelineController {
         if (deployTarget != null && !deployTarget.isBlank()) {
             triggerParams.put("deployTarget", deployTarget.trim().toLowerCase());
         }
+        // 版本号 + 是否打 tag：打 tag 时版本号必填，且本次部署不覆盖旧版本
+        String version = params.get("version");
+        if (version != null && !version.isBlank()) {
+            version = version.trim();
+            if (!version.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,31}")) {
+                throw new IllegalArgumentException(
+                        "版本号只能包含字母、数字、. _ -，且以字母或数字开头（最长 32）：" + version);
+            }
+            triggerParams.put("version", version);
+        }
+        boolean tagged = "true".equalsIgnoreCase(String.valueOf(params.get("tag")))
+                || "1".equals(String.valueOf(params.get("tag")));
+        if (tagged) {
+            if (version == null || version.isBlank()) {
+                throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 v1.2.0）");
+            }
+            triggerParams.put("tag", "true");
+        }
         String runId = engine.trigger(projectId, pipelineId, triggerParams);
-        return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId));
+        return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId),
+                "version", version == null ? "" : version, "tagged", tagged);
     }
 
     /**

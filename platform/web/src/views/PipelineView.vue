@@ -186,6 +186,11 @@ function stopAgent(): void {
 
 /** 空 = 尚未选择/按流水线定义；loadPreview 会用定义里的 deployTarget 填上。 */
 const deployTarget = ref('')
+/** 版本号 + 是否打 tag：打 tag = 新版本独立部署，不覆盖旧版本。 */
+const deployVersionInput = ref('')
+const deployTagged = ref(false)
+/** 只有测试环境支持多版本并存（dev 固定本机单槽、prod 走服务器发布）。 */
+const showVersionControls = computed(() => env.value === 'test')
 /** 用户是否手动切过部署方式：切过后不再被 pipeline 定义的默认值覆盖。 */
 const targetTouched = ref(false)
 
@@ -715,10 +720,18 @@ async function loadImages(): Promise<void> {
  * 镜像已存在，后端只跑 deploy + health（不重新构建），因此秒级完成。
  */
 async function deployVersion(img: ImageVersionView): Promise<void> {
+  const version = deployVersionInput.value.trim()
+  if (showVersionControls.value && deployTagged.value && !version) {
+    ElMessage.warning('打 tag 时必须填写版本号（例如 v1.2.0）')
+    return
+  }
+  const versionNote = showVersionControls.value && deployTagged.value
+    ? `\n版本 ${version}：打 tag 独立部署，旧版本继续运行。`
+    : `\n将覆盖 ${env.value} 环境当前部署。`
   try {
     await ElMessageBox.confirm(
       `将 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）重新部署到 ${env.value} 环境？`
-      + '\n不会重新构建：直接复用已登记镜像，只跑部署与健康检查。',
+      + '\n不会重新构建：直接复用已登记镜像，只跑部署与健康检查。' + versionNote,
       '按版本部署',
       { type: 'warning', confirmButtonText: '部署', cancelButtonText: '取消' })
   } catch {
@@ -726,7 +739,8 @@ async function deployVersion(img: ImageVersionView): Promise<void> {
   }
   try {
     const result = await deployImageVersion(pipelineId.value, projectId.value, env.value,
-      img.tag, img.gitSha)
+      img.tag, img.gitSha, deployVersionInput.value.trim() || undefined,
+      showVersionControls.value && deployTagged.value)
     attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: img.gitSha })
     ElMessage.success('已触发按版本部署')
     void loadImages()
@@ -774,8 +788,13 @@ function attachRun(result: { runId: string, status: string },
 }
 
 async function triggerSelected(): Promise<void> {
+  const version = deployVersionInput.value.trim()
+  if (showVersionControls.value && deployTagged.value && !version) {
+    throw new Error('打 tag 时必须填写版本号（例如 v1.2.0）')
+  }
   const result = await triggerPipeline(
-    pipelineId.value, projectId.value, sha.value, targetForTrigger(), env.value)
+    pipelineId.value, projectId.value, sha.value, targetForTrigger(), env.value,
+    undefined, version || undefined, showVersionControls.value && deployTagged.value)
   attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: sha.value })
   ElMessage.success('已触发运行')
 }
@@ -1249,6 +1268,9 @@ async function copyDigest(digest: string): Promise<void> {
             :deploy-target="deployTarget"
             @update:deploy-target="onTargetChange"
             v-model:action="action"
+            v-model:version="deployVersionInput"
+            v-model:tagged="deployTagged"
+            :show-version="showVersionControls"
             :env-label="envLabel(env)"
             :primary-label="primaryLabel"
             :commits="commits"

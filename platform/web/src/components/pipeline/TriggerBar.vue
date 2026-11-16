@@ -46,6 +46,12 @@ interface Props {
   /** 发布 Agent：不可用原因（如生产环境、只读角色）。 */
   agentDisabled?: boolean
   agentHint?: string
+  /** 版本号（打 tag 时必填；不打 tag 时作为展示标签）。 */
+  version: string
+  /** 是否打 tag：true = 新版本独立部署，不覆盖旧版本。 */
+  tagged: boolean
+  /** 是否展示版本控制（开发/生产环境不展示多版本部署）。 */
+  showVersion?: boolean
 }
 
 const props = defineProps<Props>()
@@ -54,6 +60,8 @@ const emit = defineEmits<{
   (e: 'update:sha', v: string): void
   (e: 'update:deployTarget', v: string): void
   (e: 'update:action', v: 'release' | 'verify'): void
+  (e: 'update:version', v: string): void
+  (e: 'update:tagged', v: boolean): void
   (e: 'run'): void
   (e: 'dryrun'): void
   (e: 'refreshCommits'): void
@@ -284,6 +292,30 @@ const runLabel = computed(() =>
       <span v-if="modeNote" class="rc-mode-note">{{ modeNote }}</span>
     </div>
     <span v-else-if="modeNote && action === 'release'" class="rc-mode-note solo">{{ modeNote }}</span>
+
+    <!-- 版本控制：打 tag = 独立版本槽（旧版本继续运行）；不打 tag = 覆盖默认部署 -->
+    <div v-if="showVersion && action === 'release'" class="rc-version">
+      <span class="rc-label">版本</span>
+      <el-input
+        :model-value="version"
+        class="rc-version-input"
+        size="default"
+        clearable
+        placeholder="版本号，例如 v1.2.0"
+        @update:model-value="(v: string) => emit('update:version', v)"
+      />
+      <el-switch
+        :model-value="tagged"
+        size="default"
+        active-text="打 tag"
+        @update:model-value="(v: boolean | string | number) => emit('update:tagged', v === true)"
+      />
+      <span class="rc-version-note">
+        {{ tagged
+          ? '新版本独立部署：旧版本容器/进程保留，可同时运行'
+          : '不打 tag：覆盖该环境上一次成功部署' }}
+      </span>
+    </div>
 
     <div v-if="canStopLocal && action === 'release'" class="rc-local">
       <span class="rc-local-hint">{{ localHint }}</span>
@@ -740,6 +772,20 @@ const runLabel = computed(() =>
 }
 .rc-mode-note.solo {
   padding-left: 50px;
+}
+.rc-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.rc-version-input {
+  width: 180px;
+}
+.rc-version-note {
+  flex: 1 1 180px;
+  font-size: 11px;
+  color: var(--ink-faint);
 }
 .rc-local {
   display: flex;

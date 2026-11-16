@@ -583,6 +583,24 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (needsDocker && !dockerAvailable()) {
             blockers.add("Docker 不可用：镜像/容器部署无法执行（L3 fail-closed）");
         }
+        // P0-3：预检全绿不代表发布能成功。DOCKER 目标没有镜像阶段时，发布必然 E-501。
+        String deployTarget = previews.stream().map(StagePreview::deployTarget)
+                .filter(t -> t != null && !t.isBlank()).findFirst().orElse(null);
+        boolean hasImageStage = previews.stream().anyMatch(p ->
+                "image_package".equals(p.action()) || "image".equalsIgnoreCase(p.type()));
+        if ("docker".equalsIgnoreCase(deployTarget) && !hasImageStage) {
+            boolean hasDockerfile = repo != null
+                    && (Files.isRegularFile(repo.resolve("Dockerfile"))
+                    || Files.isRegularFile(repo.resolve("backend").resolve("Dockerfile"))
+                    || Files.isRegularFile(repo.resolve("frontend").resolve("Dockerfile")));
+            if (!hasDockerfile) {
+                blockers.add("E-501 发布将失败：DOCKER 目标但仓库没有 Dockerfile，镜像阶段无法生成");
+            } else if ("verify".equals(pipelineId)) {
+                warnings.add("检查构建会跳过镜像打包；发布前需运行 release 流水线，否则可能 E-501");
+            } else {
+                blockers.add("E-501 发布将失败：DOCKER 目标缺少 image_package 阶段（构建镜像）");
+            }
+        }
         for (StagePreview p : previews) {
             boolean runnable = p.skipReason() == null || p.skipReason().isBlank();
             stages.add(new StageDryRun(p.id(), p.type(), p.action(), runnable,
@@ -1086,6 +1104,21 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.verifyImage = "true".equalsIgnoreCase(params.get("verifyImage"));
         String deployImage = params.get("deployImage");
         state.deployImage = deployImage == null || deployImage.isBlank() ? null : deployImage.trim();
+        // 版本号 + 是否打 tag：打 tag = 新版本独立部署（不覆盖旧版本）；
+        // 不打 tag = 覆盖该环境默认部署槽（旧行为），版本号仅作为展示标签。
+        state.deployVersion = normalizeDeployVersion(params.get("version"));
+        state.deployTagged = "true".equalsIgnoreCase(String.valueOf(params.get("tag")))
+                || "1".equals(String.valueOf(params.get("tag")));
+        if (state.deployTagged && state.deployVersion == null) {
+            throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 v1.2.0）");
+        }
+        if (state.deployTagged) {
+            state.log.append("[deploy] 版本 ").append(state.deployVersion)
+                    .append("：打 tag 独立部署，旧版本不会被覆盖\n");
+        } else if (state.deployVersion != null) {
+            state.log.append("[deploy] 版本 ").append(state.deployVersion)
+                    .append("：未打 tag，将覆盖该环境的默认部署\n");
+        }
         state.bindingId = params.get("bindingId");
         state.confirmedBy = params.get("confirmedBy");
         if (state.bindingId != null && !state.bindingId.isBlank()) {
@@ -2108,7 +2141,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     // 而环境面板显示"这个环境还没有镜像版本"。
                     state.log.append("[image] 检查构建：跳过镜像打包，不记录环境镜像版本\n");
                 } else {
-                    state.log.append("[image] 镜像版本 ").append(versionOf(state))
+                    state.log.append("[image] 镜像版本 ").append(versionLabel(state))
                             .append(" · 本地镜像 ").append(tag).append('\n');
                 }
             }
@@ -2330,6 +2363,112 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 : state.gitSha.substring(0, Math.min(7, state.gitSha.length()));
     }
 
+    /** 展示版本：用户填写的版本号优先，否则回落到构建序号（test-v3）。 */
+    private static String versionLabel(RunState state) {
+        return state.deployVersion == null || state.deployVersion.isBlank()
+                ? versionOf(state) : state.deployVersion;
+    }
+
+    /** 版本槽：打 tag 时用版本号，否则 null（覆盖默认槽）。 */
+    private static String deploySlot(RunState state) {
+        return state.deployTagged && state.deployVersion != null ? state.deployVersion : null;
+    }
+
+    /** 版本号入参校验：允许字母数字开头，后面可带 . _ -，最长 32，防路径穿越。 */
+    private static String normalizeDeployVersion(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String value = raw.trim();
+        if (!value.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,31}")) {
+            throw new IllegalArgumentException("版本号只能包含字母、数字、. _ -，且以字母或数字开头（最长 32）：" + raw);
+        }
+        return value;
+    }
+
+    /** 版本槽目录（HOST 的专属状态目录 / Docker 的端口记录），与 HostDeployer 保持一致。 */
+    private Path versionSlotDir(RunState state) {
+        String project = state.projectId.replaceAll("[^A-Za-z0-9._-]", "_");
+        String slot = state.deployVersion.replaceAll("[^A-Za-z0-9._-]", "-");
+        return workspaceRoot.toAbsolutePath().normalize()
+                .resolve("_platform").resolve("deploy")
+                .resolve(project + "-" + state.env)
+                .resolve("versions").resolve(slot);
+    }
+
+    /**
+     * 打 tag 版本的宿主端口：优先复用该版本上次记录的端口；否则从默认端口之后找空闲端口。
+     *
+     * <p>端口记录写在版本槽目录里（不占数据库表），并避开其它版本槽已记录的端口，
+     * 保证多个版本同时运行时不互相抢端口。
+     */
+    private int allocateTaggedPort(RunState state, int desired, int containerPort, String key) {
+        Path dir = versionSlotDir(state);
+        Path portFile = dir.resolve("port" + (key == null || key.isBlank() ? "" : "-" + key));
+        int recorded = readPort(portFile);
+        java.util.Set<Integer> reserved = otherSlotPorts(portFile);
+        if (recorded > 0 && !reserved.contains(recorded) && portFree(recorded)) {
+            state.log.append("[port] 版本 ").append(state.deployVersion)
+                    .append(" 沿用端口 ").append(recorded).append('\n');
+            state.deployHostPort = recorded;
+            return recorded;
+        }
+        int candidate = Math.max(desired + 1, 1);
+        for (int i = 0; i < 200; i++, candidate++) {
+            if (reserved.contains(candidate) || !portFree(candidate)) {
+                continue;
+            }
+            try {
+                Files.createDirectories(dir);
+                Files.writeString(portFile, String.valueOf(candidate));
+            } catch (IOException e) {
+                throw new IllegalStateException("无法记录版本端口：" + e.getMessage(), e);
+            }
+            state.log.append("[port] 版本 ").append(state.deployVersion)
+                    .append(" 分配端口 ").append(candidate)
+                    .append("（容器端口 ").append(containerPort).append("）\n");
+            state.deployHostPort = candidate;
+            return candidate;
+        }
+        throw new IllegalStateException("端口分配失败：从 " + desired
+                + " 起 200 个端口都不可用（版本 " + state.deployVersion + "）");
+    }
+
+    private static int readPort(Path file) {
+        try {
+            if (!Files.isRegularFile(file)) {
+                return 0;
+            }
+            return Integer.parseInt(Files.readString(file).trim());
+        } catch (IOException | NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** 其它版本槽已记录的端口（不含当前文件）。 */
+    private static java.util.Set<Integer> otherSlotPorts(Path self) {
+        java.util.Set<Integer> ports = new java.util.HashSet<>();
+        Path versionsDir = self.getParent() == null ? null : self.getParent().getParent();
+        if (versionsDir == null || !Files.isDirectory(versionsDir)) {
+            return ports;
+        }
+        try (var stream = Files.walk(versionsDir, 2)) {
+            for (Path file : stream.filter(Files::isRegularFile).toList()) {
+                String name = file.getFileName().toString();
+                if (!name.startsWith("port") || file.equals(self)) {
+                    continue;
+                }
+                int port = readPort(file);
+                if (port > 0) {
+                    ports.add(port);
+                }
+            }
+        } catch (IOException ignored) {
+            // 读不到就按没有保留端口处理，端口冲突由 portFree 兜底
+        }
+        return ports;
+    }
+
     /**
      * 开发环境固定本机直跑（不允许 Docker）。
      *
@@ -2387,6 +2526,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         state.deployTargetUsed = DeployTarget.HOST.wireName();
         long start = System.nanoTime();
+        if (state.deployTagged) {
+            state.log.append("[dev] 开发环境只有单一运行槽：本次忽略 tag，仍覆盖上一轮本机进程\n");
+        }
         state.log.append("[dev] 本机模式：直接使用工作区 ").append(repo)
                 .append("（不检出提交）\n");
         state.log.append("[env] ").append(state.env)
@@ -2970,7 +3112,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 state.artifacts.add(new ArtifactRef("image", tag,
                         imageDigest(runDir, tag), imageSize(runDir, tag),
                         Map.of("runId", state.runId,
-                                "version", versionOf(state),
+                                "version", versionLabel(state),
                                 "localImage", tag)));
             }
             return result.result().status() == StageStatus.SUCCEEDED;
@@ -3388,12 +3530,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // 端口租约：冲突时自动在期望端口之后找空闲端口，保证同项目重复发布端点稳定。
         // DOCKER 单容器发布前先停同名旧容器：否则旧容器自己占着期望端口，会被判成"被占用"而漂移，
         // 每次发布端口 +1，健康检查 URL 也跟着换。
+        String slot = rollback ? null : deploySlot(state);
+        boolean tagged = slot != null;
         if (target == DeployTarget.DOCKER) {
-            String oldContainer = DockerDeployer.containerName(state.projectId, state.env);
+            String oldContainer = DockerDeployer.containerName(state.projectId, state.env, slot);
             // 升级前的命名没有环境后缀：一并清理，否则它会一直占着期望端口。
+            // 打 tag 的版本只清理同名容器，绝不碰默认槽（否则旧版本会被新版本顶掉）。
             String legacyContainer = DockerDeployer.containerName(state.projectId);
-            List<String> toRemove = legacyContainer.equals(oldContainer)
-                    ? List.of(oldContainer) : List.of(oldContainer, legacyContainer);
+            List<String> toRemove = tagged
+                    ? List.of(oldContainer)
+                    : (legacyContainer.equals(oldContainer)
+                            ? List.of(oldContainer) : List.of(oldContainer, legacyContainer));
             for (String old : toRemove) {
                 ActionResult stopped = host.run(runDir, spec("deploy-stop-old",
                         List.of(List.of("docker", "rm", "-f", old))), () -> false);
@@ -3402,7 +3549,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 }
             }
             // docker rm 后宿主端口由 docker-proxy 异步释放：短暂等待可避免端口无谓漂移
-            for (int i = 0; i < 20 && spec.port() > 0 && !portFree(spec.port()); i++) {
+            int expectedPort = tagged
+                    ? readPort(versionSlotDir(state).resolve("port")) : spec.port();
+            for (int i = 0; i < 20 && expectedPort > 0 && !portFree(expectedPort); i++) {
                 try {
                     Thread.sleep(150);
                 } catch (InterruptedException e) {
@@ -3411,7 +3560,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 }
             }
         }
-        int hostPort = allocateHostPort(state, target, spec.port(), spec.containerPort());
+        int hostPort = tagged
+                ? allocateTaggedPort(state, spec.port(), spec.containerPort(), null)
+                : allocateHostPort(state, target, spec.port(), spec.containerPort());
 
         // 运行环境快照（放在端口分配后，快照里能带上本次租约端口）：
         // 只存来源、key 与值哈希，既可追溯"这次用了哪套变量"，又不泄露明文。
@@ -3463,7 +3614,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 serverId,
                 deployEnv,
                 network,
-                state.env);
+                state.env,
+                rollback ? null : state.deployVersion,
+                tagged,
+                spec.volume());
 
         DeployResult result = deployers.deploy(request);
         String label = stageId;
@@ -3615,8 +3769,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         for (PipelineDefinition.ServiceSpec service : spec.services()) {
             int desired = service.hostPort() > 0
                     ? service.hostPort() : spec.port() + spec.services().indexOf(service);
-            int hostPort = allocateHostPort(state, DeployTarget.DOCKER, desired,
-                    service.containerPort());
+            // 打 tag 的版本用独立端口段（避免撞默认槽），端口记录在版本槽目录里
+            int hostPort = state.deployTagged
+                    ? allocateTaggedPort(state, desired, service.containerPort(), service.name())
+                    : allocateHostPort(state, DeployTarget.DOCKER, desired,
+                            service.containerPort());
             Map<String, String> svcEnv = deployEnv;
             if ("frontend".equals(service.name()) && backend != null) {
                 svcEnv = new java.util.LinkedHashMap<>(deployEnv);
@@ -3624,7 +3781,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
             DeployResult result = dockerDeployer.deployService(runDir, state.projectId, state.env,
                     state.runId, state.gitSha, namespace, service.name(), service.image(),
-                    hostPort, service.containerPort(), net, svcEnv, service.volumePath());
+                    hostPort, service.containerPort(), net, svcEnv, service.volumePath(),
+                    state.deployVersion, state.deployTagged);
             state.log.append('[').append(stageId).append("] ").append(service.name())
                     .append(" → ").append(result.endpoint()).append('\n')
                     .append(result.log()).append('\n');
@@ -4231,11 +4389,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile String deployEndpoint;
         /** 检查构建是否保留镜像打包（触发参数 verifyImage，默认 false：最贵的一步且与"能不能编过"无关）。 */
         volatile boolean verifyImage;
-        /**
-         * 按版本部署：复用已存在的镜像 tag，跳过构建/打包只跑 deploy + health。
-         * 空 = 正常构建发布。
-         */
+        /** 按版本部署：复用已存在的镜像 tag，跳过构建/打包只跑 deploy + health。
+         * 空 = 正常构建发布。 */
         volatile String deployImage;
+        /** 用户填写的版本号（可空）：打 tag 时作为独立版本槽，不打 tag 时作为展示标签。 */
+        volatile String deployVersion;
+        /** true = 打 tag：新版本独立部署，不覆盖该环境的上一版。 */
+        volatile boolean deployTagged;
         /** 端口租约分配出的宿主端口（0 = 尚未分配，health 用 pipeline 里的端口）。 */
         volatile int deployHostPort;
         /** 本次运行加载的流水线定义（deploy 段从这里读）。 */

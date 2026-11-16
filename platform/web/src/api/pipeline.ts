@@ -11,6 +11,8 @@ export interface TriggerRunView {
   runId: string
   status: string
   env?: string
+  version?: string
+  tagged?: boolean
 }
 
 /** 一次运行的 stage 结果（按执行顺序）。status 为 StageStatus 枚举名。 */
@@ -88,14 +90,21 @@ export function listPipelines(projectId: string): Promise<PipelineListView> {
   return apiFetch<PipelineListView>(`/api/v1/ci/pipelines?projectId=${encodeURIComponent(projectId)}`)
 }
 
-/** 按指定提交触发一条流水线；gitSha 需为 7-40 位小写十六进制。deployTarget 可选：docker / host / server。 */
+/**
+ * 按指定提交触发一条流水线；gitSha 需为 7-40 位小写十六进制。deployTarget 可选：docker / host / server。
+ *
+ * [version] / [tag]：版本号与是否打 tag。打 tag 时 version 必填，本次部署不覆盖旧版本；
+ * 不打 tag 时覆盖该环境的默认部署，version 仅作展示标签。
+ */
 export function triggerPipeline(
   pipelineId: string,
   projectId: string,
   gitSha: string,
   deployTarget?: string,
   env?: string,
-  confirmToken?: string
+  confirmToken?: string,
+  version?: string,
+  tag?: boolean
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
@@ -104,7 +113,9 @@ export function triggerPipeline(
       gitSha,
       env: env ?? 'test',
       deployTarget: deployTarget ?? null,
-      confirmToken: confirmToken ?? null
+      confirmToken: confirmToken ?? null,
+      version: version ?? null,
+      tag: tag === true
     })
   })
 }
@@ -202,11 +213,20 @@ export function deployImageVersion(
   projectId: string,
   env: string,
   tag: string,
-  gitSha: string
+  gitSha: string,
+  version?: string,
+  tagged?: boolean
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
-    body: JSON.stringify({ projectId, gitSha, env, deployImage: tag })
+    body: JSON.stringify({
+      projectId,
+      gitSha,
+      env,
+      deployImage: tag,
+      version: version ?? null,
+      tag: tagged === true
+    })
   })
 }
 

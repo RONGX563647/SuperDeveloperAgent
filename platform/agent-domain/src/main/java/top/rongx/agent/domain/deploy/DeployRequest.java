@@ -22,6 +22,9 @@ import java.util.Map;
  * @param env           部署时注入容器的环境变量（来自环境模板 + 项目覆盖，明文只在内存中）
  * @param network       部署网络（docker --network），可空
  * @param envName       环境名（dev / test / prod）：容器名要按环境隔离，同一项目多环境才能共存
+ * @param version       版本号（用户填写；不打 tag 时也可作为展示版本，可为空）
+ * @param tagged        true = 独立版本槽（不与上一版互相覆盖）；false = 覆盖该环境的默认槽
+ * @param volumePath    单容器部署需要持久化的容器内路径（空 = 不挂卷；多服务模型用 ServiceSpec）
  */
 public record DeployRequest(
         String projectId,
@@ -40,7 +43,10 @@ public record DeployRequest(
         String serverId,
         Map<String, String> env,
         String network,
-        String envName) {
+        String envName,
+        String version,
+        boolean tagged,
+        String volumePath) {
 
     public DeployRequest {
         env = env == null ? Map.of() : Map.copyOf(env);
@@ -53,7 +59,7 @@ public record DeployRequest(
                          boolean rollback, String serverId) {
         this(projectId, runId, gitSha, imageRef, artifactPath, workdir, workspace, target,
                 hostPort, containerPort, healthPath, previousImageRef, rollback, serverId,
-                Map.of(), null, null);
+                Map.of(), null, null, null, false, null);
     }
 
     /** 兼容“有环境变量、无网络”的调用。 */
@@ -63,7 +69,7 @@ public record DeployRequest(
                          boolean rollback, String serverId, Map<String, String> env) {
         this(projectId, runId, gitSha, imageRef, artifactPath, workdir, workspace, target,
                 hostPort, containerPort, healthPath, previousImageRef, rollback, serverId, env, null,
-                null);
+                null, null, false, null);
     }
 
     /** 不打印变量值，避免异常/日志把凭据带出去。 */
