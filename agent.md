@@ -1,5 +1,17 @@
 # Ponytail: Lazy Senior Dev (JDK 21 + Vue3)
 
+## Harness Handbook (mandatory when touching runtime)
+`docs/handbook/` is a three-level map: L1 overview, L2 stages, L3 behaviour→source.
+L3 tables are generated from `// @handbook <doc-slug>/<anchor>` comments above the
+declaration — never hand-edit a `generated:begin` block.
+1. Moving/renaming an annotated method? Keep its anchor, then run
+   `python tools/handbook/build.py sync`.
+2. Adding a new behaviour worth locating? Add an anchor and mention it in the
+   matching L2 doc.
+3. `python tools/handbook/build.py check` must pass before push (also enforced by
+   the pre-push hook and `HandbookDriftTest`), and record it in the archive's
+   `impact.verification`.
+
 ## Session archive (mandatory, highest priority)
 Every session must be archived; otherwise you may not edit code, commit, or push.
 1. Before touching code: `python tools/session-archive/gate.py start --category

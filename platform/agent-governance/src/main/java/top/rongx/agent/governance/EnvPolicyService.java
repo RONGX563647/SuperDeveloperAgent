@@ -48,6 +48,7 @@ public class EnvPolicyService implements PolicyPort {
     }
 
     /** 统一门禁：DENY 直接拒绝；CONFIRM 由调用方走审批，不能在此静默放行。 */
+    // @handbook governance-env-policy/require-not-denied | 环境策略拒绝违规动作
     public void requireNotDenied(ProjectContext ctx, ToolLevel level, String operation) {
         PolicyDecision decision = decide(ctx.env(), level);
         if (decision == PolicyDecision.DENY) {

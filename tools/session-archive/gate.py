@@ -624,6 +624,15 @@ def unarchived_code_commits() -> list[str]:
     return missing
 
 
+def handbook_check() -> int:
+    """Handbook 漂移检查：与 spec-checks 的 HandbookDriftTest 同一入口。"""
+    script = ROOT / "tools" / "handbook" / "build.py"
+    if not script.is_file():
+        return 0
+    proc = subprocess.run([sys.executable, str(script), "check"], cwd=ROOT, env=clean_env())
+    return proc.returncode
+
+
 def cmd_gate_pre_push(args) -> int:
     if ACTIVE.exists():
         active = load_json(ACTIVE)
@@ -638,7 +647,12 @@ def cmd_gate_pre_push(args) -> int:
             + "\n  ".join(sha[:7] for sha in missing)
             + "\n每个代码提交都必须 start → commit → finish 归档；禁止 --no-verify 绕过"
         )
-    return cmd_validate(args)
+    result = cmd_validate(args)
+    if result != 0:
+        return result
+    if handbook_check() != 0:
+        return fail("Harness Handbook 已漂移：运行 python tools/handbook/build.py sync 并提交 docs/handbook")
+    return 0
 
 
 # ------------------------------------------------------------------ self-test

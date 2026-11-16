@@ -118,6 +118,7 @@ public class ChatController {
     @ApiResponse(responseCode = "200", description = "SSE 事件流",
             content = @Content(mediaType = MediaType.TEXT_EVENT_STREAM_VALUE))
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    // @handbook gateway-chat-controller/chat-stream | SSE 对话入口与事件下发
     public SseEmitter chat(@RequestBody ChatRequest request) {
         // 1. 认证：身份由 Sa-Token 会话保证（客户端不可伪造）
         String userId = currentUser.requireUserId();

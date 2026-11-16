@@ -1051,6 +1051,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     @Override
+    // @handbook executor-pipeline-engine/trigger | 流水线触发与异步执行入口
     public String trigger(String projectId, String pipelineId, Map<String, String> params) {
         List<String> available = pipelines(projectId);
         if (!available.contains(pipelineId)) {

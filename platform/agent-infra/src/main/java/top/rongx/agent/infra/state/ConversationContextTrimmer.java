@@ -25,6 +25,7 @@ final class ConversationContextTrimmer {
     private ConversationContextTrimmer() {
     }
 
+    // @handbook state-context-trimmer/trim | 上下文预算裁剪
     static AgentState trim(AgentState state, int maxChars, int keepMessages) {
         if (state == null || maxChars <= 0) {
             return state;

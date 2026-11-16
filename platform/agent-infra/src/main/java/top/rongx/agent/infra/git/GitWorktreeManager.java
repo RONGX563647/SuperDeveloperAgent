@@ -216,6 +216,7 @@ public class GitWorktreeManager {
      *
      * @return worktree 路径
      */
+    // @handbook infra-git-worktree/add-worktree | 平台 worktree 创建
     public Path addWorktree(String projectId, String name, String sha) {
         Path bare = bareDir(projectId);
         Path wt = worktreesDir(projectId).resolve(name);

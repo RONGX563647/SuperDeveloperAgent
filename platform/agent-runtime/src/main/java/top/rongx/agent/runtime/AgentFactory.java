@@ -129,6 +129,7 @@ public class AgentFactory {
      * @param connectionId 模型连接 id；null = 设置页默认连接
      * @param modelName    模型名；null = 该连接配置里的模型名
      */
+    // @handbook runtime-agent-factory/create-chat | 按环境与角色裁剪工具面并构造 ReActAgent
     public AgentSession createChat(ProjectContext ctx, List<String> requestedSkills,
                                    List<String> requestedMcp, String connectionId,
                                    String modelName) {

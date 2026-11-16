@@ -73,6 +73,7 @@ public class ChatService {
      * @param modelConnectionId 模型连接 id；null = 设置页默认连接
      * @param modelName         模型名；null = 该连接配置里的模型名
      */
+    // @handbook runtime-chat-service/stream | 聊天主流程：校验输入 → 绑定会话 → 组装 Agent → 事件流
     public Flux<AgentEvent> stream(ProjectContext ctx, String sessionId, String text, String role,
                                    List<String> skills, List<String> mcpServers,
                                    String modelConnectionId, String modelName) {

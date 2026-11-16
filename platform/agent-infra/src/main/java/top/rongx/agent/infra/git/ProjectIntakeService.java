@@ -136,6 +136,7 @@ public class ProjectIntakeService {
     // ---------------------------------------------------------------- 提交接入任务
 
     /** 提交接入（异步）。返回当前状态；重复接入同一项目抛错。 */
+    // @handbook infra-project-intake/submit | 项目接入异步入口与状态机
     public IntakeState submit(IntakeRequest req) {
         String err = validate(req);
         if (err != null) {

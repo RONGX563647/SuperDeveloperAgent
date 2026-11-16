@@ -72,6 +72,7 @@ public class DeployTools {
                     返回：脚本版本、证据运行 id 与状态、能否上服务器（prod）。
                     探索前先调它，能避免重复劳动：已经有 vN 且证据成功，直接 replay 即可。""",
             readOnly = true, concurrencySafe = true)
+    // @handbook tools-deploy-tools/env-status | 部署环境状态只读查询
     public String envStatus(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
                             ProjectContext ctx) {
         String target = normalize(env);

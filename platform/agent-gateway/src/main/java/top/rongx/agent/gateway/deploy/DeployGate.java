@@ -41,6 +41,7 @@ public class DeployGate {
      *
      * @throws IllegalArgumentException E-601（证据不足）/ E-602（缺少人工确认）
      */
+    // @handbook gateway-deploy-gate/require-if-needed | 部署前证据校验与确认令牌
     public void requireIfNeeded(String projectId, String env, String sha, String confirmToken) {
         if (!EnvironmentPromotion.requiresTestEvidence(env)) {
             return;
