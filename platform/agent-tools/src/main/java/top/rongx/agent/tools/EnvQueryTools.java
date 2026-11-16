@@ -27,9 +27,11 @@ import top.rongx.agent.domain.project.ProjectContext;
 public class EnvQueryTools {
 
     private final EnvironmentStore envStore;
+    private final EffectiveEndpointResolver endpoints;
 
-    public EnvQueryTools(EnvironmentStore envStore) {
+    public EnvQueryTools(EnvironmentStore envStore, EffectiveEndpointResolver endpoints) {
         this.envStore = envStore;
+        this.endpoints = endpoints;
     }
 
     @Tool(name = "env_summary",
@@ -55,6 +57,7 @@ public class EnvQueryTools {
             (ownedBy(r, slug) ? own : shared).add(r);
         }
         long healthy = own.stream().filter(EnvResource::running).count();
+        EffectiveEndpointResolver.Endpoint endpoint = endpoints.resolve(ctx.projectId(), target);
         StringBuilder sb = new StringBuilder();
         sb.append("project: ").append(ctx.projectId()).append('\n')
                 .append("env: ").append(target).append('\n')
@@ -64,10 +67,10 @@ public class EnvQueryTools {
                 .append(" / 敏感 ").append(secret).append("）\n")
                 .append("network: ").append(effective.network() == null || effective.network().isBlank()
                         ? "默认" : effective.network()).append('\n')
-                .append("port: ").append(effective.defaultPort())
-                .append("（环境模板默认；发布实际端口以 ci_definition 的 deploy.port 为准）\n")
-                .append("healthPath: ").append(effective.healthPath())
-                .append("（环境模板默认；健康门禁以流水线 deploy.healthPath / health.url 为准）\n")
+                .append("port: ").append(endpoint.port())
+                .append("（来源：").append(endpoint.source()).append("）\n")
+                .append("healthPath: ").append(endpoint.healthPath())
+                .append("（来源：").append(endpoint.source()).append("）\n")
                 .append("middleware: ").append(effective.resources().size())
                 .append("（本项目 ").append(own.size())
                 .append(" / 环境共享 ").append(shared.size()).append("）\n");

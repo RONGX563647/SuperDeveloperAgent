@@ -1,9 +1,11 @@
 package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
-import io.agentscope.core.tool.ToolParam;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -19,9 +21,11 @@ import org.springframework.stereotype.Component;
 public class ProjectTools {
 
     private final ProjectRepository projects;
+    private final EffectiveEndpointResolver endpoints;
 
-    public ProjectTools(ProjectRepository projects) {
+    public ProjectTools(ProjectRepository projects, EffectiveEndpointResolver endpoints) {
         this.projects = projects;
+        this.endpoints = endpoints;
     }
 
     @Tool(name = "project_info",
@@ -42,15 +46,58 @@ public class ProjectTools {
     }
 
     @Tool(name = "list_envs",
-            description = "列出当前项目的所有环境及其访问地址。只读。发布前用来确认目标环境。",
+            description = """
+                    列出当前项目的所有环境、登记地址与「实际生效端点」。只读。
+                    effective 一栏来自流水线 deploy 段（仓库 ci/pipeline.yml > 平台侧 > 环境模板），
+                    是发布真正使用的端口；与登记地址不一致时会给出 warning。
+                    发布前用它确认目标环境，不要只信登记地址。""",
             readOnly = true, concurrencySafe = true)
     public String listEnvs(ProjectContext ctx) {
         List<ProjectEnv> envs = projects.findEnvs(ctx.projectId());
         if (envs.isEmpty()) {
             return "当前项目没有配置环境。evidence: project:" + ctx.projectId();
         }
-        return envs.stream()
-                .map(e -> "- %s  %s  composeDir=%s".formatted(e.env(), e.appUrl(), e.composeDir()))
-                .collect(Collectors.joining("\n", "envs:\n", "\nevidence: project:" + ctx.projectId()));
+        StringBuilder out = new StringBuilder("envs:\n");
+        Map<String, List<String>> byDir = new LinkedHashMap<>();
+        for (ProjectEnv e : envs) {
+            EffectiveEndpointResolver.Endpoint endpoint = endpoints.resolve(ctx.projectId(), e.env());
+            out.append("- ").append(e.env())
+                    .append("  appUrl=").append(e.appUrl() == null || e.appUrl().isBlank()
+                            ? "未登记" : e.appUrl())
+                    .append("  effective=http://127.0.0.1:").append(endpoint.port())
+                    .append(endpoint.healthPath())
+                    .append("（来源：").append(endpoint.source()).append("）")
+                    .append("  composeDir=").append(e.composeDir() == null ? "未登记" : e.composeDir())
+                    .append('\n');
+            int registeredPort = portOf(e.appUrl());
+            if (registeredPort > 0 && registeredPort != endpoint.port()) {
+                out.append("  warning: 登记地址端口 ").append(registeredPort)
+                        .append(" 与生效端口 ").append(endpoint.port())
+                        .append(" 不一致，以 effective 为准\n");
+            }
+            if (e.composeDir() != null && !e.composeDir().isBlank()) {
+                byDir.computeIfAbsent(e.composeDir(), k -> new ArrayList<>()).add(e.env());
+            }
+        }
+        byDir.forEach((dir, names) -> {
+            if (names.size() > 1) {
+                out.append("warning: 环境 ").append(String.join("/", names))
+                        .append(" 共用 composeDir=").append(dir)
+                        .append("；若在同一宿主机部署会互相覆盖\n");
+            }
+        });
+        out.append("evidence: project:").append(ctx.projectId());
+        return out.toString();
+    }
+
+    private static int portOf(String url) {
+        if (url == null || url.isBlank()) {
+            return 0;
+        }
+        try {
+            return URI.create(url).getPort();
+        } catch (IllegalArgumentException e) {
+            return 0;
+        }
     }
 }

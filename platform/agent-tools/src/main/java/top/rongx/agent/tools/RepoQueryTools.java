@@ -365,7 +365,11 @@ public class RepoQueryTools {
         Path root = repoRoot(ctx);
         Path target = resolveInside(root, path);
         if (!Files.isDirectory(target)) {
-            throw new IllegalArgumentException("目录不存在：" + path);
+            // 只读工具不把"目录不存在"当错误：这是正常取证结果，报错会浪费一次迭代并误导 Agent
+            String wanted = path == null || path.isBlank() ? "." : path;
+            return "dir: " + wanted + "\nexists: false\n"
+                    + "note: 目录不存在；可用 list_files 从仓库根确认实际结构\n"
+                    + "evidence: project:" + ctx.projectId();
         }
         List<Path> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(target)) {

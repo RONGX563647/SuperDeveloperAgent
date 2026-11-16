@@ -24,6 +24,7 @@ import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.run.StageStatus;
@@ -49,16 +50,18 @@ public class DeployTools {
     private final PipelineEngine engine;
     private final EnvBindingPort bindings;
     private final PipelineDefStore defStore;
+    private final ProjectRepoLocator locator;
     /** HOST 部署状态根，与 {@code PipelineConfig} 里 HostDeployer 的 deployRoot 保持一致。 */
     private final Path hostDeployRoot;
 
     public DeployTools(RecipeStore recipes, PipelineEngine engine, EnvBindingPort bindings,
-                       PipelineDefStore defStore,
+                       PipelineDefStore defStore, ProjectRepoLocator locator,
                        @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.recipes = recipes;
         this.engine = engine;
         this.bindings = bindings;
         this.defStore = defStore;
+        this.locator = locator;
         this.hostDeployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("deploy");
     }
@@ -217,6 +220,12 @@ public class DeployTools {
                                   ProjectContext ctx) {
         if (ctx.isProduction()) {
             return "err: 生产环境不允许修改流水线配置；请先在 dev/test 验证";
+        }
+        Path repo = locator.repoDir(ctx.projectId()).orElse(null);
+        if (repo != null && Files.isRegularFile(repo.resolve("ci").resolve("pipeline.yml"))) {
+            return "err: 仓库 ci/pipeline.yml 优先级高于平台侧定义，改平台侧不会生效。\n"
+                    + "请用 propose_patch 修改仓库 ci/pipeline.yml（ci/** 在白名单内），"
+                    + "人工确认后再发布。";
         }
         String yaml = defStore.read(ctx.projectId()).orElse("");
         if (yaml.isBlank()) {
@@ -414,7 +423,14 @@ public class DeployTools {
             return "err: dry-run 执行失败：" + e.getMessage();
         }
         if (!dryRun.ok()) {
-            return "err: " + ErrorCode.DRY_RUN_FAILED.code() + " dry-run 未通过：" + String.join("；", dryRun.blockers());
+            String blockers = String.join("；", dryRun.blockers());
+            String next = "";
+            if (blockers.contains("Dockerfile") || blockers.contains("image_package")) {
+                next = "\nnext: 直接调用 ensure_dockerfile（base_sha=" + sha + "）自动生成 Dockerfile，"
+                        + "并补齐 image_package 阶段与配方；确认卡应用后再重跑 dry-run / deploy_run。"
+                        + "不要让用户手写 Dockerfile。";
+            }
+            return "err: " + ErrorCode.DRY_RUN_FAILED.code() + " dry-run 未通过：" + blockers + next;
         }
         Map<String, String> params = new LinkedHashMap<>();
         params.put("gitSha", sha);

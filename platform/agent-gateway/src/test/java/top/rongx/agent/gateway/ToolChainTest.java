@@ -176,6 +176,8 @@ class ToolChainTest {
         assertTrue(agentToolkit.getToolNames().contains("ci_run"));
         assertTrue(agentToolkit.getToolNames().contains("run_action"));
         assertTrue(agentToolkit.getToolNames().contains("propose_patch"));
+        // Docker 目标缺 Dockerfile / image_package：Agent 可一键自愈（产出仍是待确认变更）
+        assertTrue(agentToolkit.getToolNames().contains("ensure_dockerfile"));
         // 部署前置配置：Agent 能自己补变量与端口，不必让用户代改
         assertTrue(agentToolkit.getToolNames().contains("env_var_set"));
         assertTrue(agentToolkit.getToolNames().contains("env_var_unset"));
@@ -188,6 +190,7 @@ class ToolChainTest {
         assertFalse(readOnlyToolkit.getToolNames().contains("confirm"));
         assertFalse(readOnlyToolkit.getToolNames().contains("ci_run"));
         assertFalse(readOnlyToolkit.getToolNames().contains("propose_patch"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("ensure_dockerfile"));
         assertFalse(readOnlyToolkit.getToolNames().contains("run_ops_agent"));
         assertFalse(readOnlyToolkit.getToolNames().contains("env_ensure"));
         assertFalse(readOnlyToolkit.getToolNames().contains("env_mapping_draft"));
@@ -211,6 +214,7 @@ class ToolChainTest {
         assertTrue(deployToolkit.getToolNames().contains("confirm"));
         assertTrue(deployToolkit.getToolNames().contains("run_action"));
         assertTrue(deployToolkit.getToolNames().contains("propose_patch"));
+        assertTrue(deployToolkit.getToolNames().contains("ensure_dockerfile"));
         // 部署前置配置也能由发布 Agent 直接补齐（变量 / 端口 / 健康检查）
         assertTrue(deployToolkit.getToolNames().contains("env_var_set"));
         assertTrue(deployToolkit.getToolNames().contains("ci_configure_deploy"));

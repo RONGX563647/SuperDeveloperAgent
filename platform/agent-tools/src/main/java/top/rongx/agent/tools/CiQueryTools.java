@@ -2,17 +2,23 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
+import org.yaml.snakeyaml.Yaml;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.run.StageResult;
@@ -36,16 +42,18 @@ public class CiQueryTools {
     private final RuntimeInspector inspector;
     private final SecretRedactor redactor;
     private final PipelineDefStore defStore;
+    private final ProjectRepoLocator locator;
 
     public CiQueryTools(PipelineEngine engine, RepoInspector repo, RecipeStore recipes,
                         RuntimeInspector inspector, SecretRedactor redactor,
-                        PipelineDefStore defStore) {
+                        PipelineDefStore defStore, ProjectRepoLocator locator) {
         this.engine = engine;
         this.repo = repo;
         this.recipes = recipes;
         this.inspector = inspector;
         this.redactor = redactor;
         this.defStore = defStore;
+        this.locator = locator;
     }
 
     @Tool(name = "ci_list_pipelines",
@@ -61,30 +69,99 @@ public class CiQueryTools {
 
     @Tool(name = "ci_definition",
             description = """
-                    读取平台侧流水线定义原文（只读），用于确认 deploy.port / containerPort /
+                    读取真正生效的流水线定义原文（只读），用于确认 deploy.port / containerPort /
                     healthPath 以及 health stage 的 url 实际值。
-                    生效顺序：环境固化脚本 > 仓库 ci/pipeline.yml > 平台侧定义（本工具读的最后一份）。
-                    如果仓库里也有 ci/pipeline.yml，它优先；可用 list_files/read_file 核对。""",
+                    生效顺序：环境固化脚本 > 仓库 ci/pipeline.yml > 平台侧定义。
+                    本工具会优先读仓库那份，并在 source 里标明来源；仓库没有时才回落平台侧。
+                    如果 deploy.target=docker 但没有 image stage，会直接给出发布必 E-501 的修复配方。""",
             readOnly = true, concurrencySafe = true)
     public String definition(ProjectContext ctx) {
-        String yaml = defStore.read(ctx.projectId()).orElse("");
+        Path repoRoot = locator.repoDir(ctx.projectId()).orElse(null);
+        Path repoDef = repoRoot == null ? null : repoRoot.resolve("ci").resolve("pipeline.yml");
+        String yaml;
+        String source;
+        String root;
+        if (repoDef != null && Files.isRegularFile(repoDef)) {
+            source = "repo（仓库 ci/pipeline.yml，优先于平台侧）";
+            root = repoRoot.toString();
+            try {
+                yaml = Files.readString(repoDef);
+            } catch (IOException e) {
+                return "source: " + source + "\nroot: " + root
+                        + "\nerror: 无法读取仓库流水线定义：" + e.getMessage()
+                        + "\nevidence: project:" + ctx.projectId();
+            }
+        } else {
+            source = "platform（仓库没有 ci/pipeline.yml，使用平台侧定义）";
+            root = defStore.rootOf(ctx.projectId()).toString();
+            yaml = defStore.read(ctx.projectId()).orElse("");
+        }
         if (yaml.isBlank()) {
-            return "definition: 无（平台侧还没有 ci/pipeline.yml；可先调用项目准备/脚手架生成）\n"
-                    + "note: 仓库根 ci/pipeline.yml 若存在则优先生效\n"
+            return "source: " + source + "\nroot: " + root
+                    + "\ndefinition: 无\n"
+                    + "note: 仓库根 ci/pipeline.yml 若存在则优先生效；可用 propose_patch 新增\n"
                     + "evidence: project:" + ctx.projectId();
         }
         int max = 4000;
         String body = yaml.length() > max
-                ? yaml.substring(0, max) + "\n…（已截断，完整内容见 "
-                + defStore.rootOf(ctx.projectId()) + "/ci/pipeline.yml）" : yaml;
-        return """
-                source: platform（仓库 ci/pipeline.yml 优先于本定义）
-                root: %s
-                ---
-                %s
-                ---
-                evidence: project:%s""".formatted(defStore.rootOf(ctx.projectId()), body,
-                ctx.projectId());
+                ? yaml.substring(0, max) + "\n…（已截断，完整内容见 " + root + "/ci/pipeline.yml）" : yaml;
+        StringBuilder out = new StringBuilder();
+        out.append("source: ").append(source).append('\n')
+                .append("root: ").append(root).append('\n')
+                .append("---\n").append(body).append("\n---\n");
+        String hint = imageRepairHint(yaml, repoRoot);
+        if (hint != null) {
+            out.append(hint);
+        }
+        out.append("evidence: project:").append(ctx.projectId());
+        return out.toString();
+    }
+
+    /**
+     * docker 目标 + 缺 image stage 的修复配方：发布必然 E-501，必须让 Agent 知道改哪里。
+     *
+     * <p>注意改的是<b>仓库</b> ci/pipeline.yml（优先级更高），不是平台侧那份。
+     */
+    private static String imageRepairHint(String yaml, Path repoRoot) {
+        Object loaded;
+        try {
+            loaded = new Yaml().load(yaml);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (!(loaded instanceof Map<?, ?> doc)) {
+            return null;
+        }
+        Map<?, ?> deploy = doc.get("deploy") instanceof Map<?, ?> m ? m : Map.of();
+        String target = deploy.get("target") == null ? "docker" : String.valueOf(deploy.get("target"));
+        boolean docker = target.isBlank() || "docker".equalsIgnoreCase(target);
+        boolean hasImageStage = false;
+        if (doc.get("stages") instanceof List<?> stages) {
+            for (Object item : stages) {
+                if (!(item instanceof Map<?, ?> stage)) {
+                    continue;
+                }
+                String type = stage.get("type") == null ? "" : String.valueOf(stage.get("type"));
+                String action = stage.get("action") == null ? "" : String.valueOf(stage.get("action"));
+                if ("image".equalsIgnoreCase(type) || "image".equalsIgnoreCase(action)
+                        || "image_package".equals(action)) {
+                    hasImageStage = true;
+                    break;
+                }
+            }
+        }
+        if (!docker || hasImageStage) {
+            return null;
+        }
+        boolean hasDockerfile = repoRoot != null
+                && (Files.isRegularFile(repoRoot.resolve("Dockerfile"))
+                || Files.isRegularFile(repoRoot.resolve("backend").resolve("Dockerfile"))
+                || Files.isRegularFile(repoRoot.resolve("frontend").resolve("Dockerfile")));
+        return "warning: deploy.target=docker 但没有 image_package stage，发布必然 E-501\n"
+                + "repair: 用 propose_patch 在仓库根新增/修改 ci/pipeline.yml，加入 "
+                + "`type: action` + `action: image_package` 的 stage"
+                + (hasDockerfile ? "" : "，并补 Dockerfile")
+                + "；仓库定义优先于平台侧，改完需人工确认\n";
     }
 
     @Tool(name = "ci_status",

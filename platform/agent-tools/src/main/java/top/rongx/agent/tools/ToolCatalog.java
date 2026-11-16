@@ -86,6 +86,7 @@ public class ToolCatalog {
                                 ActionQueryTools actionQueryTools,
                                 ActionCommandTools actionCommandTools,
                                 DeployTools deployTools,
+                                DockerfileTools dockerfileTools,
                                 EnvQueryTools envQueryTools,
                                 EnvCommandTools envCommandTools,
                                 RepoQueryTools repoQueryTools,
@@ -108,6 +109,8 @@ public class ToolCatalog {
         toolkit.registerTool(envQueryTools);
         toolkit.registerTool(envCommandTools);
         toolkit.registerTool(deployTools);
+        // Docker 发布自愈：按仓库结构生成 Dockerfile 并补齐 image stage / 配方
+        toolkit.registerTool(dockerfileTools);
         toolkit.registerTool(repoQueryTools);
         toolkit.registerTool(runtimeTools);
         toolkit.registerTool(configTools);
@@ -182,6 +185,7 @@ public class ToolCatalog {
                                  ActionQueryTools actionQueryTools,
                                  RepoQueryTools repoQueryTools,
                                  DeployTools deployTools,
+                                 DockerfileTools dockerfileTools,
                                  EnvQueryTools envQueryTools,
                                  EnvCommandTools envCommandTools,
                                  RuntimeTools runtimeTools,
@@ -200,6 +204,8 @@ public class ToolCatalog {
         toolkit.registerTool(envQueryTools);
         toolkit.registerTool(envCommandTools);
         toolkit.registerTool(deployTools);
+        // Docker 发布自愈：生成 Dockerfile、补 image_package 阶段与配方
+        toolkit.registerTool(dockerfileTools);
         toolkit.registerTool(runtimeTools);
         toolkit.registerTool(configTools);
         toolkit.registerTool(apiDocTools);

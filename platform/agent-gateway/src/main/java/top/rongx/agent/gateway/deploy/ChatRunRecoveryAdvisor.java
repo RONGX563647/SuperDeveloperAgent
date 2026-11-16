@@ -231,10 +231,14 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
                    - 用户确认后用同一个 binding_id 重试；**没有 binding_id 时不要反复调用 deploy_run**，
                      否则只会得到 "缺少 binding_id" 的确定性失败。
                 4. 若根因在仓库配置（构建/测试命令写错、e2e 用例不该在构建阶段跑、ci 定义不对、
-                   Dockerfile/compose/nginx/application 配置与部署目标不匹配），
-                   用 propose_patch 提交受限补丁（可改 ci/**、Jenkinsfile、pom/build.gradle、src/test/**、
-                   Dockerfile、deploy/**、docker-compose*.yml、nginx*.conf、application*.yml、package.json），
-                   base_sha 用本次运行的提交；工具会返回 changeId，把它写进结论，让用户到确认卡片确认。
+                   Dockerfile/compose/nginx/application 配置与部署目标不匹配）：
+                   - DOCKER 目标缺 Dockerfile / 缺 image_package（E-501、E-708）→ 直接调用
+                     ensure_dockerfile（base_sha 用本次运行的提交），不要手写 Dockerfile、不要让用户补；
+                     它会按仓库结构生成镜像定义并补齐镜像阶段与配方，返回的 changeId 仍需用户确认；
+                   - 其它配置问题 → 用 propose_patch 提交受限补丁（可改 ci/**、Jenkinsfile、
+                     pom/build.gradle、src/test/**、Dockerfile、deploy/**、docker-compose*.yml、
+                     nginx*.conf、application*.yml、package.json），base_sha 用本次运行的提交；
+                     工具会返回 changeId，把它写进结论，让用户到确认卡片确认。
                 5. 需要其它人工确认的动作，用 request_confirmation 登记变更，同样把 changeId 写进结论；
                    不要假设任何人已经确认，也不要空等确认结果。
                 6. 最多重试一次发布；不允许操作生产环境。

@@ -189,8 +189,8 @@ public class ProjectIntakeService {
         // 因此没有固定 appUrl / composeDir）；只登记 test/prod 会导致对话页缺「开发环境」选项。
         store.upsert(p, List.of(
                 new top.rongx.agent.domain.project.ProjectEnv(id, "dev", "", ""),
-                new top.rongx.agent.domain.project.ProjectEnv(id, "test", "http://127.0.0.1:8180", "/opt/apps/" + id.toLowerCase()),
-                new top.rongx.agent.domain.project.ProjectEnv(id, "prod", "http://127.0.0.1:8181", "/opt/apps/" + id.toLowerCase())));
+                new top.rongx.agent.domain.project.ProjectEnv(id, "test", "http://127.0.0.1:8180", "/opt/apps/" + id.toLowerCase() + "/test"),
+                new top.rongx.agent.domain.project.ProjectEnv(id, "prod", "http://127.0.0.1:8181", "/opt/apps/" + id.toLowerCase() + "/prod")));
     }
 
     private void update(String projectId, String phase, String message, Map<String, Object> report) {
