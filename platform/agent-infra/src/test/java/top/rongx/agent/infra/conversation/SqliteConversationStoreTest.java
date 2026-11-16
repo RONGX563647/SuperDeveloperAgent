@@ -88,4 +88,27 @@ class SqliteConversationStoreTest {
         assertEquals(1, reopened.findRunsByProject("RY", 10).size());
         assertEquals(1, reopened.findRunsByConversation("s-1", 10).size());
     }
+
+    @Test
+    @DisplayName("删除会话时历史运行与任务一并物理删除，不留孤儿行")
+    void deleteCascadesRunsAndTasks() {
+        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        store.save(Conversation.normal("s-1", "RY", "alice", "t", "test", null));
+        long now = System.currentTimeMillis();
+        store.saveRun(new ConversationRun("run-1", "RY", "s-1", "alice", "跑一下", "key",
+                RunStatus.SUCCEEDED, "ok", "", now, now, now));
+        store.saveTask(new WorkspaceTask("task-1", "RY", "s-1", "补测试", "单测通过",
+                TaskStatus.DONE, 2, now, now));
+
+        assertTrue(store.delete("s-1", "alice"));
+
+        assertTrue(store.find("s-1").isEmpty());
+        assertTrue(store.findRun("run-1").isEmpty());
+        assertTrue(store.findRunsByConversation("s-1", 10).isEmpty());
+        assertTrue(store.findTasksByConversation("s-1").isEmpty());
+        // 别人的会话删不掉，也不该误删数据
+        store.save(Conversation.normal("s-2", "RY", "alice", "t2", "test", null));
+        assertFalse(store.delete("s-2", "bob"));
+        assertTrue(store.find("s-2").isPresent());
+    }
 }

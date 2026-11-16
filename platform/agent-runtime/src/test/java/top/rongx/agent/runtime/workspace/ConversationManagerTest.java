@@ -55,6 +55,7 @@ class ConversationManagerTest {
                 new WorkspaceEventBus(), top.rongx.agent.domain.run.RunLedgerRepository.noop(),
                 concurrency);
         return new ConversationManager(store, store, store, projects, executor, userId -> false,
+                top.rongx.agent.domain.conversation.SessionDataCleaner.noop(),
                 DispatchPlan.DEFAULT_MAX_PARALLEL, DispatchPlan.DEFAULT_MAX_DURATION_SECONDS);
     }
 

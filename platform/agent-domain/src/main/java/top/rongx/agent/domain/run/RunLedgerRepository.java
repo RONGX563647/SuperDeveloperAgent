@@ -35,6 +35,14 @@ public interface RunLedgerRepository {
      */
     int purgeTerminalBefore(long updatedBefore);
 
+    /**
+     * 删除某个业务主体（会话 ID / Issue ID）名下的全部运行记录。
+     * 会话被删除时调用，避免账本里留下指向已删会话的孤儿记录。
+     *
+     * @return 删除行数
+     */
+    int deleteBySubject(String subjectId);
+
     /** 测试/降级用：不落盘。 */
     static RunLedgerRepository noop() {
         return new RunLedgerRepository() {
@@ -65,6 +73,11 @@ public interface RunLedgerRepository {
 
             @Override
             public int purgeTerminalBefore(long updatedBefore) {
+                return 0;
+            }
+
+            @Override
+            public int deleteBySubject(String subjectId) {
                 return 0;
             }
         };

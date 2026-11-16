@@ -287,12 +287,37 @@ public class SqliteConversationStore
 
     @Override
     public boolean delete(String id, String ownerUserId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM conversations WHERE id = ? AND owner_user_id = ?")) {
-            st.setString(1, id);
-            st.setString(2, ownerUserId);
-            return st.executeUpdate() > 0;
+        try (Connection conn = open()) {
+            conn.setAutoCommit(false);
+            try {
+                int removed;
+                try (PreparedStatement st = conn.prepareStatement(
+                        "DELETE FROM conversations WHERE id = ? AND owner_user_id = ?")) {
+                    st.setString(1, id);
+                    st.setString(2, ownerUserId);
+                    removed = st.executeUpdate();
+                }
+                if (removed == 0) {
+                    conn.rollback();
+                    return false;
+                }
+                // 会话删了，历史运行与任务不能留孤儿行：跟着一起物理删除
+                try (PreparedStatement st = conn.prepareStatement(
+                        "DELETE FROM conversation_runs WHERE conversation_id = ?")) {
+                    st.setString(1, id);
+                    st.executeUpdate();
+                }
+                try (PreparedStatement st = conn.prepareStatement(
+                        "DELETE FROM workspace_tasks WHERE conversation_id = ?")) {
+                    st.setString(1, id);
+                    st.executeUpdate();
+                }
+                conn.commit();
+                return true;
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            }
         } catch (SQLException e) {
             throw new IllegalStateException("会话删除失败：" + e.getMessage(), e);
         }

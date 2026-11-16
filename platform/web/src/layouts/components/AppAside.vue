@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { ChatDotRound, Delete, Document, Folder, FolderOpened, Notebook, Plus, Fold, Expand, Search, Setting, Box, SwitchButton, ArrowRight, ArrowDown, FolderAdd, Warning } from '@element-plus/icons-vue'
+import { ApiError } from '../../api/http'
 import { logout } from '../../api/auth'
 import { listProjects, type ProjectRow } from '../../api/project'
 import { appStore, type SessionItem } from '../../stores/app'
 import { clearHistory } from '../../state/sessionHistory'
 import { disposeSessionChat } from '../../state/sessionChat'
-import { createConversation, listConversations } from '../../api/workspace'
+import { deleteConversation, listConversations } from '../../api/workspace'
 
 /**
  * 左侧栏 —— 结构对齐 DSH：
@@ -144,15 +146,11 @@ const groups = computed(() => {
 const archivedGroups = computed(() =>
   archivedIds.value.map((id) => ({ id, name: projectName(id) })))
 
-/** 在指定工作区里新建会话并跳转。 */
-async function newSessionIn(projectId: string): Promise<void> {
+/** 在指定工作区里新建会话并跳转（只在本地换 id，首条消息再落库）。 */
+function newSessionIn(projectId: string): void {
   appStore.projectId = projectId
-  try {
-    const created = await createConversation(projectId, { title: '新会话', env: appStore.env })
-    appStore.selectSession(created.id)
-  } catch {
-    appStore.newSession()
-  }
+  appStore.worktree = ''
+  appStore.newSession()
   void router.push('/chat')
 }
 
@@ -216,14 +214,9 @@ function toggle() {
   emit('update:collapsed', !props.collapsed)
 }
 
-async function newSession() {
-  const projectId = appStore.projectId
-  try {
-    const created = await createConversation(projectId, { title: '新会话', env: appStore.env })
-    appStore.selectSession(created.id)
-  } catch {
-    appStore.newSession()
-  }
+/** 新会话只换本地 id：首条消息落地时才落库，避免每点一次都在服务端留下空会话。 */
+function newSession(): void {
+  appStore.newSession()
   void router.push('/chat')
 }
 
@@ -232,9 +225,22 @@ function openSession(id: string) {
   void router.push('/chat')
 }
 
-/** 删除会话：停掉后台读流 + 侧栏条目 + 本地时间线一起清，删当前会话时 store 会自动回落。 */
-function removeSession(id: string) {
+/**
+ * 删除会话：服务端（会话 + 历史运行 + 任务 + 账本 + 记忆）与本地时间线一起清。
+ * 服务端未删成功时保留侧栏条目，避免「界面没有了、数据库还在」。
+ */
+async function removeSession(id: string) {
   disposeSessionChat(id)
+  try {
+    await deleteConversation(id)
+  } catch (e) {
+    const status = e instanceof ApiError ? e.status : 0
+    // 从未同步到服务端的本地会话，服务端会回「不存在」，按已删除处理
+    if (status !== 400 && status !== 404) {
+      ElMessage.error(e instanceof Error ? e.message : '删除会话失败')
+      return
+    }
+  }
   clearHistory(id)
   appStore.removeSession(id)
 }

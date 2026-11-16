@@ -22,6 +22,7 @@ import top.rongx.agent.domain.conversation.ConversationStatus;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.RunStatus;
+import top.rongx.agent.domain.conversation.SessionDataCleaner;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
@@ -55,6 +56,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     private final ProjectRepository projects;
     private final WorkspaceRunExecutor executor;
     private final UserRolePort userRoles;
+    private final SessionDataCleaner dataCleaner;
     /** 服务端上限：模型传入的并行度/总时长只能被收紧，不能放大。 */
     private final int dispatchMaxParallel;
     private final int dispatchMaxDurationSeconds;
@@ -66,6 +68,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                                ProjectRepository projects,
                                WorkspaceRunExecutor executor,
                                UserRolePort userRoles,
+                               SessionDataCleaner dataCleaner,
                                @Value("${agent.workspace.dispatch.max-parallel:4}")
                                int dispatchMaxParallel,
                                @Value("${agent.workspace.dispatch.max-duration-seconds:600}")
@@ -76,6 +79,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         this.projects = projects;
         this.executor = executor;
         this.userRoles = userRoles;
+        this.dataCleaner = dataCleaner;
         this.dispatchMaxParallel = Math.max(1, dispatchMaxParallel);
         this.dispatchMaxDurationSeconds = Math.max(1, dispatchMaxDurationSeconds);
     }
@@ -172,8 +176,16 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         return conversations.update(conversationId, ownerUserId, patch);
     }
 
+    /**
+     * 删除会话：会话行 + 历史运行 + 任务在同一事务里物理删除，
+     * 再清掉运行账本与 Agent 记忆目录，避免「数据库里还留着」。
+     */
     public boolean deleteOwned(String conversationId, String ownerUserId) {
-        return conversations.delete(conversationId, ownerUserId);
+        if (!conversations.delete(conversationId, ownerUserId)) {
+            return false;
+        }
+        dataCleaner.purge(ownerUserId, conversationId);
+        return true;
     }
 
     public List<ConversationRun> runsOfProject(String projectId, int limit) {

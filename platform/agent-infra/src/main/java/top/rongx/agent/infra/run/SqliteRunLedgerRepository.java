@@ -171,6 +171,21 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
         }
     }
 
+    @Override
+    public int deleteBySubject(String subjectId) {
+        if (subjectId == null || subjectId.isBlank()) {
+            return 0;
+        }
+        try (Connection conn = connect();
+             PreparedStatement st = conn.prepareStatement(
+                     "DELETE FROM run_ledger WHERE subject_id = ?")) {
+            st.setString(1, subjectId);
+            return st.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("运行账本删除失败：" + e.getMessage(), e);
+        }
+    }
+
     private List<RunRecord> query(String sql, StatementBinder binder) {
         try (Connection conn = connect(); PreparedStatement st = conn.prepareStatement(sql)) {
             binder.bind(st);
