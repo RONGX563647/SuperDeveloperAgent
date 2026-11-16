@@ -78,6 +78,16 @@ function ev(type: string, sequence: number, payload: Record<string, unknown> = {
   check('change.applied 清空', p.pendingChangeId === null)
 }
 
+// 5.1 env_binding.created 驱动对话内绑定确认卡
+{
+  let p = emptyAgentProjection()
+  p = reduceAgentEvent(p, ev('env_binding.created', 1, { bindingId: 'bind-cc0913c1' }))
+  check('env_binding.created', p.pendingBindingId === 'bind-cc0913c1')
+  check('绑定步骤消息', p.messages.some((m) => m.text.includes('bind-cc0913c1')))
+  p = reduceAgentEvent(p, ev('env_binding.confirmed', 2))
+  check('env_binding.confirmed 清空', p.pendingBindingId === null)
+}
+
 // 6. error 帧
 {
   let p = emptyAgentProjection()

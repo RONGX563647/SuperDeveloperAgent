@@ -47,6 +47,13 @@ public class ChatController {
     private static final java.util.Set<String> CHANGE_TOOLS =
             java.util.Set.of("request_confirmation", "confirm", "run_ops_agent");
 
+    /** 生成环境绑定草案的工具：返回里带 bindingId，前端据此在对话中展开绑定确认卡。 */
+    private static final java.util.Set<String> ENV_BINDING_TOOLS =
+            java.util.Set.of("env_mapping_draft");
+
+    private static final java.util.regex.Pattern BINDING_ID =
+            java.util.regex.Pattern.compile("(?m)^bindingId:\\s*(bind-[A-Za-z0-9-]{6,})\\s*$");
+
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
     private final ChatService chatService;
@@ -54,6 +61,7 @@ public class ChatController {
     private final AgentEventMapper eventMapper;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
     private final ChangeRegistry changes;
+    private final top.rongx.agent.domain.env.EnvironmentStore envStore;
     private final AgentStreamLimiter limiter;
     private final AgentMetrics metrics;
     private final ConversationManager conversations;
@@ -66,6 +74,7 @@ public class ChatController {
                           AgentEventMapper eventMapper,
                           top.rongx.agent.gateway.auth.CurrentUser currentUser,
                           ChangeRegistry changes,
+                          top.rongx.agent.domain.env.EnvironmentStore envStore,
                           AgentStreamLimiter limiter,
                           AgentMetrics metrics,
                           ConversationManager conversations,
@@ -76,6 +85,7 @@ public class ChatController {
         this.eventMapper = eventMapper;
         this.currentUser = currentUser;
         this.changes = changes;
+        this.envStore = envStore;
         this.limiter = limiter;
         this.metrics = metrics;
         this.conversations = conversations;
@@ -201,8 +211,9 @@ public class ChatController {
                         ? end.getToolCallName() : toolNames.get(end.getToolCallId());
                 metrics.toolCall(toolName, "completed");
                 StringBuilder result = toolResults.remove(end.getToolCallId());
+                String text = result == null ? "" : result.toString();
                 String changeId = toolName != null && CHANGE_TOOLS.contains(toolName)
-                        && result != null ? changeIdOf(result.toString(), ctx) : null;
+                        ? changeIdOf(text, ctx) : null;
                 if (changeId != null) {
                     synchronized (sendLock) {
                         emitter.send(SseEmitter.event()
@@ -210,6 +221,20 @@ public class ChatController {
                                 .name("agent")
                                 .data(Map.of("type", "change.created",
                                         "payload", Map.of("changeId", changeId)),
+                                        MediaType.APPLICATION_JSON));
+                    }
+                }
+                String bindingId = toolName != null && ENV_BINDING_TOOLS.contains(toolName)
+                        ? bindingIdOf(text, ctx) : null;
+                if (bindingId != null) {
+                    synchronized (sendLock) {
+                        emitter.send(SseEmitter.event()
+                                .id(String.valueOf(seq.incrementAndGet()))
+                                .name("agent")
+                                .data(Map.of("type", "env_binding.created",
+                                        "payload", Map.of("bindingId", bindingId,
+                                                "projectId", ctx.projectId(),
+                                                "env", ctx.env())),
                                         MediaType.APPLICATION_JSON));
                     }
                 }
@@ -235,6 +260,26 @@ public class ChatController {
         } catch (IOException | IllegalStateException ignored) {
             // 客户端已断开，无需再写
         }
+    }
+
+    /**
+     * 从工具返回文本里提取 bindingId，并核对它确实是当前项目/环境的 DRAFT。
+     *
+     * <p>只把服务端真实存在、且属于当前上下文的草案推给前端；模型复述或伪造的
+     * bindingId 不会生成确认卡（否则用户可能确认到别的项目的绑定）。
+     */
+    private String bindingIdOf(String text, ProjectContext ctx) {
+        java.util.regex.Matcher matcher = BINDING_ID.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        String id = matcher.group(1);
+        return envStore.binding(id)
+                .filter(binding -> binding.projectId().equals(ctx.projectId()))
+                .filter(binding -> binding.env().equalsIgnoreCase(ctx.env()))
+                .filter(binding -> "DRAFT".equals(binding.status()))
+                .map(binding -> binding.id())
+                .orElse(null);
     }
 
     /**

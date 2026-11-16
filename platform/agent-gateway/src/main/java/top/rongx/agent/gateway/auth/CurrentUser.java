@@ -27,4 +27,14 @@ public class CurrentUser {
     public void checkPermission(String permission) {
         StpUtil.checkPermission(permission);
     }
+
+    /** 任一权限满足即通过；都不满足时按第一个权限码抛 403。 */
+    public void checkAnyPermission(String... permissions) {
+        for (String permission : permissions) {
+            if (StpUtil.hasPermission(permission)) {
+                return;
+            }
+        }
+        StpUtil.checkPermission(permissions[0]);
+    }
 }

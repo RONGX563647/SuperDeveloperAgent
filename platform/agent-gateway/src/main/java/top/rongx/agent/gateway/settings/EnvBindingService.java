@@ -137,7 +137,7 @@ public class EnvBindingService implements EnvBindingPort {
                     + binding.projectId() + "/" + binding.env() + "，run=" + projectId + "/" + env + "）");
         }
         if (!binding.confirmed()) {
-            throw new IllegalArgumentException("E-703 环境绑定尚未人工确认：请先在设置页确认映射草案");
+            throw new IllegalArgumentException("E-703 环境绑定尚未人工确认：请在对话的环境绑定确认卡中确认草案");
         }
         if (binding.expired()) {
             throw new IllegalArgumentException("E-703 环境绑定已过期：请重新生成并确认");

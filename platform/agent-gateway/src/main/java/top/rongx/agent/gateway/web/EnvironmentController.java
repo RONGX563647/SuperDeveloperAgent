@@ -608,13 +608,22 @@ public class EnvironmentController {
     @PostMapping("/projects/{projectId}/env-binding/draft")
     public EnvBinding draft(@PathVariable String projectId,
                             @RequestParam(defaultValue = "test") String env) {
-        requireWrite();
+        // 草案只是把现有变量名/哈希登记成 DRAFT，不改任何配置；
+        // 能执行动作的人也应该能生成部署前置的绑定。
+        currentUser.checkAnyPermission("settings:write", "action:run", "change:confirm");
         return bindings.draft(projectId, env, currentUser.requireUserId());
     }
 
     @PostMapping("/projects/{projectId}/env-binding/{bindingId}/confirm")
     public EnvBinding confirm(@PathVariable String projectId, @PathVariable String bindingId) {
-        requireWrite();
+        // 绑定确认是部署前置动作，不是改环境配置：能执行动作/确认变更的人即可确认，
+        // 否则研发运维角色（无 settings:write）会在对话确认卡里被 403 卡死。
+        currentUser.checkAnyPermission("settings:write", "action:run", "change:confirm");
+        EnvBinding binding = envStore.binding(bindingId).orElseThrow(() ->
+                new IllegalArgumentException("环境绑定不存在：" + bindingId));
+        if (!binding.projectId().equals(projectId)) {
+            throw new IllegalArgumentException("环境绑定不属于当前项目：" + bindingId);
+        }
         return bindings.confirm(bindingId, currentUser.requireUserId());
     }
 

@@ -57,6 +57,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
   let userStopped = false
 
   const pendingChangeId = computed(() => projection.value.pendingChangeId)
+  const pendingBindingId = computed(() => projection.value.pendingBindingId)
   const streamingTurn = computed(() => projection.value.streamingTurn)
 
   function isAbortError(value: unknown): boolean {
@@ -141,7 +142,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
     // 每次发送都是一个独立的 SSE 流（sequence 从 1 重新计数）：
     // 不重置去重游标的话，第二轮的全部事件会被 reducer 当成「迟到事件」丢弃，
     // 表现为第二问发出后完全收不到回复。
-    projection.value = { ...projection.value, lastSequence: 0 }
+    // 新的一轮开始时收起上一轮的绑定确认卡；若本轮又生成草案，后端会重新下发事件。
+    projection.value = { ...projection.value, lastSequence: 0, pendingBindingId: null }
 
     try {
       await streamChatOnce(
@@ -214,6 +216,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     connection,
     error,
     pendingChangeId,
+    pendingBindingId,
     // 动作
     send,
     stop,

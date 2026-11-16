@@ -31,6 +31,7 @@ export function emptyAgentProjection(): AgentProjection {
     tools: {},
     status: null,
     pendingChangeId: null,
+    pendingBindingId: null,
     sessionCost: emptySessionCost(),
   }
 }
@@ -323,6 +324,20 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
     case 'change.applied':
     case 'change.confirmed': {
       next.pendingChangeId = null
+      break
+    }
+
+    // ---- 环境绑定：草案生成后由对话内确认卡接管，Agent 不能自批 ----
+    case 'env_binding.created': {
+      const bindingId = stringData(event, 'bindingId')
+      if (bindingId) {
+        next.pendingBindingId = bindingId
+        pushMessage(next, 'step', `环境绑定 ${bindingId} 已生成，等待人工确认`, '环境绑定')
+      }
+      break
+    }
+    case 'env_binding.confirmed': {
+      next.pendingBindingId = null
       break
     }
 

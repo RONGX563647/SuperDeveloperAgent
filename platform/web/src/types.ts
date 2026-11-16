@@ -167,6 +167,8 @@ export interface AgentProjection {
   tools: Record<string, ToolActivity>
   status: RunStatus | null
   pendingChangeId: string | null
+  /** 待确认的环境绑定（env_mapping_draft 产生，确认卡在对话中展开） */
+  pendingBindingId: string | null
   /** 本会话累计费用（本地计算，仅 deepseek 系列累加） */
   sessionCost: SessionCost
 }

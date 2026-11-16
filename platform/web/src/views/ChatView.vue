@@ -20,6 +20,7 @@ import ChatIssuesView from '../components/chat/ChatIssuesView.vue'
 import { useChatCapabilities } from '../composables/useChatCapabilities'
 import ChatTraceView from '../components/chat/ChatTraceView.vue'
 import ApprovalRequestCard from '../components/chat/ApprovalRequestCard.vue'
+import EnvBindingCard from '../components/chat/EnvBindingCard.vue'
 import ChatStatusStrip from '../components/chat/ChatStatusStrip.vue'
 import EnvironmentStatusBar from '../components/chat/EnvironmentStatusBar.vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
@@ -113,6 +114,7 @@ const elapsedMs = computed(() => chatEntry.value?.chat.elapsedMs.value ?? 0)
 const tokens = computed(() => chatEntry.value?.chat.tokens.value ?? 0)
 const error = computed(() => chatEntry.value?.chat.error.value ?? '')
 const pendingChangeId = computed(() => chatEntry.value?.chat.pendingChangeId.value ?? null)
+const pendingBindingId = computed(() => chatEntry.value?.chat.pendingBindingId.value ?? null)
 
 function sendChat(text: string): Promise<void> {
   return chatEntry.value?.chat.send(text) ?? Promise.resolve()
@@ -615,6 +617,14 @@ onMounted(async () => {
         class="chat-approval"
         @applied="() => followNewContent()"
         @dismiss="approvalCardOpen = false"
+      />
+
+      <!-- 环境绑定确认卡（env_mapping_draft 后由后端事件驱动；确认动作只走已登录用户接口） -->
+      <EnvBindingCard
+        v-if="pendingBindingId"
+        :project-id="projectId"
+        :binding-id="pendingBindingId"
+        class="chat-approval"
       />
     </div>
 
