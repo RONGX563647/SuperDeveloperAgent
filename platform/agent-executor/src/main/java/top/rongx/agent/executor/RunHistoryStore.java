@@ -72,6 +72,8 @@ public class RunHistoryStore {
             data.put("env", snapshot.env());
             data.put("pipelineId", snapshot.pipelineId());
             data.put("gitSha", snapshot.gitSha());
+            // 用户填写的标签版本（打 tag 时同时同步到 git）；旧文件没有该字段
+            data.put("version", snapshot.version() == null ? "" : snapshot.version());
             data.put("status", snapshot.status().name());
             data.put("createdAt", snapshot.createdAt());
             data.put("seq", snapshot.seq());
@@ -253,7 +255,9 @@ public class RunHistoryStore {
                 m.get("definitionSource") == null || String.valueOf(m.get("definitionSource")).isBlank()
                         ? null : String.valueOf(m.get("definitionSource")),
                 m.get("definitionNote") == null || String.valueOf(m.get("definitionNote")).isBlank()
-                        ? null : String.valueOf(m.get("definitionNote")));
+                        ? null : String.valueOf(m.get("definitionNote")),
+                m.get("version") == null || String.valueOf(m.get("version")).isBlank()
+                        ? null : String.valueOf(m.get("version")));
     }
 
     /** 读取产物 meta（旧文件没有该字段，按空处理）。 */
@@ -299,13 +303,15 @@ public class RunHistoryStore {
 
     /** 历史摘要（索引项）：历史列表只需要这些字段，不需要读回阶段/日志/产物。 */
     public record Summary(String runId, String projectId, String env, String pipelineId, String gitSha,
-                          StageStatus status, long createdAt, int seq, int stageCount, long durationMs) {
+                          StageStatus status, long createdAt, int seq, int stageCount, long durationMs,
+                          String version) {
 
         static Summary of(RunSnapshot snapshot) {
             return new Summary(snapshot.runId(), snapshot.projectId(), snapshot.env(),
                     snapshot.pipelineId(), snapshot.gitSha(), snapshot.status(),
                     snapshot.createdAt(), snapshot.seq(), snapshot.stages().size(),
-                    snapshot.stages().stream().mapToLong(StageResult::durationMs).sum());
+                    snapshot.stages().stream().mapToLong(StageResult::durationMs).sum(),
+                    snapshot.version());
         }
     }
 
@@ -313,12 +319,12 @@ public class RunHistoryStore {
     public record RunSnapshot(String runId, String projectId, String env, String pipelineId, String gitSha,
                               StageStatus status, long createdAt, int seq, List<StageResult> stages,
                               List<ArtifactRef> artifacts, String log,
-                              String definitionSource, String definitionNote) {
+                              String definitionSource, String definitionNote, String version) {
 
         /** 旧文件没有 seq：补号时保持其它字段不变。 */
         public RunSnapshot withSeq(int value) {
             return new RunSnapshot(runId, projectId, env, pipelineId, gitSha, status, createdAt,
-                    value, stages, artifacts, log, definitionSource, definitionNote);
+                    value, stages, artifacts, log, definitionSource, definitionNote, version);
         }
     }
 }

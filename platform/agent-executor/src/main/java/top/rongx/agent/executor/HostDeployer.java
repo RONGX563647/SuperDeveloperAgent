@@ -162,6 +162,13 @@ public class HostDeployer implements Deployer {
                         "进程启动即退出（exit " + process.exitValue() + "）", tailOf(logFile));
             }
             rotatePointers(stateDir, releaseSha, request.rollback());
+            // 端口落盘：控制台「重启」要沿用流水线分配的端口，冲突时才漂移
+            try {
+                Files.writeString(stateDir.resolve("port"),
+                        String.valueOf(request.hostPort()), StandardCharsets.UTF_8);
+            } catch (IOException ignored) {
+                // 记录失败不影响本次启动，重启会回落到 app.log 里的端口
+            }
             log.append("[host] started pid=").append(process.pid())
                     .append(" release=").append(releaseSha)
                     .append(" port=").append(request.hostPort()).append('\n');

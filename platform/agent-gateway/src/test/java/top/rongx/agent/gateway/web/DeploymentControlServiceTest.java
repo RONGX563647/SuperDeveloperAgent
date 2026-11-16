@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -17,9 +19,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
 import top.rongx.agent.gateway.web.DeploymentControlService.Cell;
+import top.rongx.agent.gateway.web.DeploymentControlService.DeploymentLogs;
 import top.rongx.agent.gateway.web.DeploymentControlService.Matrix;
 
 /** 环境矩阵只做「读部署事实 + 校验」：不启动真实进程/容器。 */
@@ -30,6 +34,10 @@ class DeploymentControlServiceTest {
 
     private DeploymentControlService service(RuntimeInspector inspector) {
         return new DeploymentControlService(inspector, mock(EnvironmentStore.class), root.toString());
+    }
+
+    private DeploymentControlService service(RuntimeInspector inspector, EnvironmentStore store) {
+        return new DeploymentControlService(inspector, store, root.toString());
     }
 
     @Test
@@ -140,6 +148,111 @@ class DeploymentControlServiceTest {
                 () -> service.start("proj", "dev", "../../etc/passwd"));
         assertThrows(IllegalArgumentException.class,
                 () -> service.stop("proj", "uat", null));
+    }
+
+    @Test
+    @DisplayName("端口优先读 port 文件（流水线分配），并回填访问地址与发布提交")
+    void portFileDrivesEndpoint() throws IOException {
+        Path state = root.resolve("_platform").resolve("deploy").resolve("proj-dev");
+        Path release = state.resolve("releases").resolve("abc1234");
+        Files.createDirectories(release);
+        Files.writeString(release.resolve("app.jar"), "jar", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("current"), "abc1234", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("port"), "18081", StandardCharsets.UTF_8);
+
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+
+        Cell cell = service(inspector).matrix("proj").cells().get(0);
+
+        assertEquals("127.0.0.1:18081", cell.ports());
+        assertEquals("http://127.0.0.1:18081", cell.url());
+        assertEquals("abc1234", cell.release());
+    }
+
+    @Test
+    @DisplayName("HOST 日志：读 app.log 尾部并脱敏")
+    void hostLogsAreTailAndRedacted() throws IOException {
+        Path state = root.resolve("_platform").resolve("deploy").resolve("proj-dev");
+        Files.createDirectories(state.resolve("releases").resolve("abc1234"));
+        Files.writeString(state.resolve("current"), "abc1234", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("app.log"),
+                "boot line\npassword=supersecret123\nready\n", StandardCharsets.UTF_8);
+
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+
+        DeploymentLogs logs = service(inspector).logs("proj", "dev", null, null, 2, 60);
+
+        assertEquals("HOST", logs.source());
+        assertEquals(2, logs.lines().size(), logs.lines().toString());
+        assertTrue(logs.lines().get(1).contains("ready"));
+        assertTrue(logs.lines().stream().noneMatch(line -> line.contains("supersecret123")),
+                logs.lines().toString());
+    }
+
+    @Test
+    @DisplayName("旧部署没有 port 文件时用端口租约回填访问地址")
+    void leasePortFillsEndpoint() throws IOException {
+        Path state = root.resolve("_platform").resolve("deploy").resolve("proj-dev");
+        Path release = state.resolve("releases").resolve("abc1234");
+        Files.createDirectories(release);
+        Files.writeString(release.resolve("app.jar"), "jar", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("current"), "abc1234", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("version"), "latest", StandardCharsets.UTF_8);
+
+        EnvironmentStore store = mock(EnvironmentStore.class);
+        when(store.leases("proj", "dev")).thenReturn(List.of(
+                new PortLease("proj", "dev", 8080, 18090, "run-1", 1_000L)));
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+
+        Cell cell = service(inspector, store).matrix("proj").cells().get(0);
+
+        assertEquals("127.0.0.1:18090", cell.ports());
+        assertEquals("http://127.0.0.1:18090", cell.url());
+    }
+
+    @Test
+    @DisplayName("日志里的应用监听端口优先于端口租约（租约可能是旧的）")
+    void appLogPortBeatsLease() throws IOException {
+        Path state = root.resolve("_platform").resolve("deploy").resolve("proj-prod");
+        Files.createDirectories(state.resolve("releases").resolve("abc1234"));
+        Files.writeString(state.resolve("current"), "abc1234", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("app.log"),
+                "Tomcat started on port 18095 (http) with context path '/'\n",
+                StandardCharsets.UTF_8);
+
+        EnvironmentStore store = mock(EnvironmentStore.class);
+        when(store.leases("proj", "prod")).thenReturn(List.of(
+                new PortLease("proj", "prod", 8080, 18090, "run-old", 1_000L)));
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+
+        Cell cell = service(inspector, store).matrix("proj").cells().get(0);
+
+        assertEquals("127.0.0.1:18095", cell.ports());
+    }
+
+    @Test
+    @DisplayName("Docker 日志：按版本挑选运行中容器，拒绝不属于该环境的容器名")
+    void dockerLogsPicksRunningContainer() {
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+        when(inspector.containers("proj", "test")).thenReturn(List.of(
+                container("proj-test-backend", "test", "backend", false, "sha9", "app-backend:1"),
+                container("proj-test-frontend", "test", "frontend", true, "sha9", "app-web:1")));
+        when(inspector.logs(eq("proj-test-frontend"), anyInt())).thenReturn(List.of("fe ready"));
+
+        DeploymentControlService service = service(inspector);
+        DeploymentLogs logs = service.logs("proj", "test", "sha9", null, 50, 60);
+
+        assertEquals("DOCKER", logs.source());
+        assertEquals("proj-test-frontend", logs.container());
+        assertEquals(List.of("proj-test-backend", "proj-test-frontend"), logs.containers());
+        assertEquals(List.of("fe ready"), logs.lines());
+        assertThrows(IllegalArgumentException.class,
+                () -> service.logs("proj", "test", "sha9", "another-container", 50, 60));
     }
 
     private static ContainerStatus container(String name, String env, String service,

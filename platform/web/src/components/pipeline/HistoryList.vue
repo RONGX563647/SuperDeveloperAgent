@@ -60,6 +60,7 @@ const visible = computed(() => {
     if (!kw) return true
     return h.gitSha.toLowerCase().includes(kw)
       || String(h.seq).includes(kw)
+      || (h.version ?? '').toLowerCase().includes(kw)
       || pipelineLabel(h.pipelineId).toLowerCase().includes(kw)
   })
 })
@@ -190,7 +191,7 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
           {{ f.label }}<em v-if="countOf(f.key)">{{ countOf(f.key) }}</em>
         </button>
       </div>
-      <input v-model="keyword" class="hp-search" type="search" placeholder="搜提交 / 序号" />
+      <input v-model="keyword" class="hp-search" type="search" placeholder="搜提交 / 序号 / 版本" />
     </div>
 
     <div class="hp-body">
@@ -230,6 +231,9 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
                 <em v-if="h.seq" class="hist-seq">#{{ h.seq }}</em>
                 {{ pipelineLabel(h.pipelineId) }}
                 <em class="hist-env">{{ envShort(h.env) }}</em>
+                <em v-if="h.version" class="hist-tag" :title="`标签版本 ${h.version}（发布成功后已同步 git tag）`">
+                  {{ h.version }}
+                </em>
               </span>
               <span class="hist-status" :class="statusTone(h.status)">{{ statusLabel(h.status) }}</span>
             </span>
@@ -530,6 +534,17 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
   font-style: normal;
   color: var(--ink-muted);
   background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+}
+.hist-tag {
+  margin-left: 5px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--ok-ink);
+  background: var(--ok-soft);
   border-radius: var(--radius-xs);
 }
 .hist-status {

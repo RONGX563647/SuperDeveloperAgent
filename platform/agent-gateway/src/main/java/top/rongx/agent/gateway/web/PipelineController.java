@@ -347,18 +347,23 @@ public class PipelineController {
         int from = Math.max(0, offset);
         int size = Math.min(Math.max(1, limit), 200);
         return engine.history(projectId, from, size).stream()
-                .map(h -> Map.<String, Object>of(
-                        "runId", h.runId(),
-                        "projectId", h.projectId(),
-                        "env", h.env(),
-                        "pipelineId", h.pipelineId(),
-                        "gitSha", h.gitSha(),
-                        "status", h.status().name(),
-                        "createdAt", h.createdAt(),
-                        "seq", h.seq(),
-                        "stageCount", h.stageCount(),
-                        // 各阶段耗时之和：列表直接显示「这次跑了多久」，不用再点进去
-                        "durationMs", h.durationMs()))
+                .map(h -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("runId", h.runId());
+                    row.put("projectId", h.projectId());
+                    row.put("env", h.env());
+                    row.put("pipelineId", h.pipelineId());
+                    row.put("gitSha", h.gitSha());
+                    // 用户填写的版本号（打 tag 时同时同步为 git 标签），列表直接展示
+                    row.put("version", h.version() == null ? "" : h.version());
+                    row.put("status", h.status().name());
+                    row.put("createdAt", h.createdAt());
+                    row.put("seq", h.seq());
+                    row.put("stageCount", h.stageCount());
+                    // 各阶段耗时之和：列表直接显示「这次跑了多久」，不用再点进去
+                    row.put("durationMs", h.durationMs());
+                    return row;
+                })
                 .toList();
     }
 

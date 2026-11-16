@@ -1,6 +1,9 @@
 package top.rongx.agent.gateway.web;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,9 +23,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.process.JavaRuntime;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
+import top.rongx.agent.gateway.bugfix.BugFixRedactor;
 
 /**
  * 工作区「环境」视图：按 版本 × 环境 汇总部署产物（Docker 容器 / HOST 进程）并支持一键启停。
@@ -46,10 +51,16 @@ public class DeploymentControlService {
             Map.of("dev", "开发", "test", "测试", "prod", "生产");
     private static final Pattern HOST_PORT =
             Pattern.compile("\\[host] started pid=\\d+ release=\\S+ port=(\\d+)");
+    /** 应用自身启动日志里的真实监听端口（比流水线租约更可信）。 */
+    private static final Pattern TOMCAT_PORT = Pattern.compile("Tomcat started on port (\\d+)");
     private static final Pattern DOCKER_HOST_PORT = Pattern.compile("→[^:]*:(\\d+)");
+    private static final Pattern PROCESS_PORT = Pattern.compile("--server\\.port=(\\d+)");
     private static final Pattern SAFE_VERSION = Pattern.compile("[A-Za-z0-9._-]{1,64}");
     private static final long HOST_START_PROBE_MS = 800;
     private static final long DOCKER_TIMEOUT_MS = 30_000;
+    /** 停止旧进程后等待端口释放的时间（Windows 上 docker-proxy / socket 异步释放）。 */
+    private static final long PORT_RELEASE_WAIT_MS = 3_000;
+    private static final int MAX_LOG_BYTES = 2 * 1024 * 1024;
 
     private final RuntimeInspector inspector;
     private final EnvironmentStore envStore;
@@ -183,8 +194,9 @@ public class DeploymentControlService {
             throw new IllegalArgumentException("环境密钥缺失：" + String.join("、",
                     effective.missingSecrets()));
         }
-        int port = host != null && host.port() > 0 ? host.port()
-                : effective.defaultPort() > 0 ? effective.defaultPort() : 8080;
+        int preferredPort = preferredPort(projectId, targetEnv, host, effective);
+        PortChoice portChoice = choosePort(preferredPort);
+        int port = portChoice.port();
         Path pidFile = stateDir.resolve("app.pid");
         Path logFile = stateDir.resolve("app.log");
         List<String> argv = List.of(JavaRuntime.javaBinary(), "-jar", jar.toString(),
@@ -209,9 +221,12 @@ public class DeploymentControlService {
                 throw new IllegalArgumentException("进程启动即退出（exit " + process.exitValue()
                         + "）：" + tail(logFile, 8));
             }
+            writePortFile(stateDir, port);
             rotatePointers(stateDir, sha);
+            String portNote = portChoice.fallback()
+                    ? "（原端口 " + preferredPort + " 被占用，已改用 " + port + "）" : "";
             return new ActionResult(true,
-                    "已启动 HOST 进程 pid=" + process.pid() + "，端口 " + port,
+                    "已启动 HOST 进程 pid=" + process.pid() + "，端口 " + port + portNote,
                     "RUNNING");
         } catch (IOException e) {
             throw new IllegalArgumentException("无法启动进程：" + e.getMessage(), e);
@@ -258,6 +273,133 @@ public class DeploymentControlService {
         return new ActionResult(true, "已停止：" + String.join("，", parts), "STOPPED");
     }
 
+    /** 重启：先停后起，HOST 沿用原端口（只有被占用才漂移到下一个空闲端口）；容器端口映射不变。 */
+    public synchronized ActionResult restart(String projectId, String env, String version) {
+        String targetEnv = requireEnv(env);
+        String wanted = normalizeVersion(version);
+        stop(projectId, targetEnv, wanted);
+        ActionResult started = start(projectId, targetEnv, wanted);
+        String detail = started.message().startsWith("已启动")
+                ? started.message().substring("已启动".length()) : started.message();
+        return new ActionResult(true, "已重启：" + detail, started.state());
+    }
+
+    // ------------------------------------------------------------------ 运行日志
+
+    /**
+     * 读取某环境某版本的运行日志：
+     * Docker 容器用 {@code docker logs}，HOST 进程读部署状态目录的 {@code app.log}。
+     *
+     * <p>只允许读取属于该 (项目, 环境) 的容器，避免借接口读任意容器日志。
+     */
+    public synchronized DeploymentLogs logs(String projectId, String env, String version,
+                                            String container, int tail, int sinceMinutes) {
+        String targetEnv = requireEnv(env);
+        String wanted = normalizeVersion(version);
+        int limit = Math.max(1, Math.min(tail <= 0 ? 300 : tail, 2_000));
+        int since = Math.max(1, Math.min(sinceMinutes <= 0 ? 1_440 : sinceMinutes, 43_200));
+
+        List<ContainerStatus> containers = List.of();
+        try {
+            containers = inspector.containers(projectId, targetEnv);
+        } catch (IllegalStateException ignored) {
+            // Docker 不可用：继续尝试 HOST 日志
+        }
+        List<ContainerStatus> matched = wanted == null ? containers : containers.stream()
+                .filter(status -> wanted.equals(versionOf(status)))
+                .toList();
+        if (!matched.isEmpty()) {
+            ContainerStatus target = pickContainer(matched, container);
+            List<String> lines;
+            try {
+                lines = inspector.logs(target.name(), since);
+            } catch (IllegalStateException e) {
+                throw new IllegalArgumentException(e.getMessage());
+            }
+            return new DeploymentLogs("DOCKER", target.name(),
+                    matched.stream().map(ContainerStatus::name).toList(),
+                    redactTail(lines, limit),
+                    "docker logs " + target.name() + "（最近 " + since + " 分钟，最多 " + limit + " 行）");
+        }
+
+        HostSlot slot = findHostSlot(projectId, targetEnv, wanted);
+        if (slot == null) {
+            throw new IllegalArgumentException("该环境没有可读取日志的部署产物");
+        }
+        List<String> lines = readLogTail(slot.dir().resolve("app.log"), limit);
+        return new DeploymentLogs("HOST", null, List.of(), redactTail(lines, limit),
+                "HOST 进程日志 app.log（最多 " + limit + " 行）");
+    }
+
+    private static ContainerStatus pickContainer(List<ContainerStatus> matched, String container) {
+        if (container != null && !container.isBlank()) {
+            String name = container.trim();
+            return matched.stream()
+                    .filter(status -> name.equals(status.name()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "容器 " + name + " 不属于该环境/版本"));
+        }
+        return matched.stream().filter(ContainerStatus::running).findFirst()
+                .orElse(matched.get(0));
+    }
+
+    private HostSlot findHostSlot(String projectId, String env, String version) {
+        List<HostSlot> slots = hostSlots(projectId, env);
+        if (version == null) {
+            return slots.stream().filter(slot -> !slot.tagged()).findFirst()
+                    .orElse(slots.isEmpty() ? null : slots.get(0));
+        }
+        return slots.stream()
+                .filter(slot -> version.equals(slot.version())
+                        || version.equals(slot.current())
+                        || slot.releases().contains(version))
+                .findFirst().orElse(null);
+    }
+
+    /** 脱敏 + 截断，避免环境变量里的密钥随日志返回给前端。 */
+    private static List<String> redactTail(List<String> lines, int limit) {
+        if (lines == null || lines.isEmpty()) {
+            return List.of();
+        }
+        int from = Math.max(0, lines.size() - limit);
+        String safe = BugFixRedactor.redact(String.join("\n", lines.subList(from, lines.size())));
+        List<String> result = new ArrayList<>();
+        for (String line : safe.split("\\R")) {
+            if (!line.isBlank()) {
+                result.add(line);
+            }
+        }
+        return result;
+    }
+
+    /** 只读文件尾部（最多 2MB），避免大日志把网关内存打满。 */
+    private static List<String> readLogTail(Path file, int limit) {
+        if (!Files.isRegularFile(file)) {
+            return List.of();
+        }
+        try {
+            long length = Files.size(file);
+            long from = Math.max(0, length - MAX_LOG_BYTES);
+            byte[] bytes;
+            try (RandomAccessFile raf = new RandomAccessFile(file.toFile(), "r")) {
+                raf.seek(from);
+                bytes = new byte[(int) (length - from)];
+                raf.readFully(bytes);
+            }
+            String[] all = new String(bytes, StandardCharsets.UTF_8).split("\\R");
+            List<String> lines = new ArrayList<>();
+            for (int i = Math.max(0, all.length - limit); i < all.length; i++) {
+                if (!all[i].isBlank()) {
+                    lines.add(all[i]);
+                }
+            }
+            return lines;
+        } catch (IOException e) {
+            return List.of();
+        }
+    }
+
     // ------------------------------------------------------------------ HOST 状态
 
     /**
@@ -265,8 +407,10 @@ public class DeploymentControlService {
      */
     private List<HostSlot> hostSlots(String projectId, String env) {
         Path base = hostDir(projectId, env);
+        // 默认槽的端口来自流水线写入的端口租约（打 tag 的版本槽有自己的 port 文件）
+        int leasePort = latestLeasePort(projectId, env);
         List<HostSlot> slots = new ArrayList<>();
-        HostSlot baseSlot = hostSlot(base, false);
+        HostSlot baseSlot = hostSlot(base, false, leasePort);
         if (baseSlot != null) {
             slots.add(baseSlot);
         }
@@ -274,7 +418,7 @@ public class DeploymentControlService {
         if (Files.isDirectory(versions)) {
             try (Stream<Path> stream = Files.list(versions)) {
                 for (Path slotDir : stream.filter(Files::isDirectory).toList()) {
-                    HostSlot slot = hostSlot(slotDir, true);
+                    HostSlot slot = hostSlot(slotDir, true, 0);
                     if (slot != null) {
                         slots.add(slot);
                     }
@@ -287,7 +431,7 @@ public class DeploymentControlService {
     }
 
     /** 读取一个版本槽；目录不存在或没有任何部署痕迹时返回 null。 */
-    private HostSlot hostSlot(Path dir, boolean tagged) {
+    private HostSlot hostSlot(Path dir, boolean tagged, int fallbackPort) {
         Path releasesDir = dir.resolve("releases");
         List<String> releases = new ArrayList<>();
         long newestAt = 0;
@@ -313,7 +457,19 @@ public class DeploymentControlService {
         String current = readText(dir.resolve("current"));
         long pid = readPid(dir.resolve("app.pid"));
         boolean running = isHostProcess(pid);
-        int port = parseHostPort(readText(dir.resolve("app.log")));
+        int port = readPort(dir.resolve("port"));
+        if (port <= 0) {
+            // 兼容旧部署（没有 port 文件）：从 app.log 里取应用实际监听的端口
+            port = parseLogPort(readText(dir.resolve("app.log")));
+        }
+        if (port <= 0 && running) {
+            // 再兜底：直接从运行中的进程命令行取 --server.port
+            port = hostProcessPort(pid);
+        }
+        if (port <= 0) {
+            // 旧部署既没有 port 文件也没有可读的命令行：用流水线的端口租约
+            port = fallbackPort;
+        }
         if (releases.isEmpty() && current == null && pid <= 0) {
             return null; // 只有 Docker 端口记录之类的空壳目录
         }
@@ -326,6 +482,21 @@ public class DeploymentControlService {
             version = "latest";
         }
         return new HostSlot(version, dir, tagged, releases, current, pid, running, port, newestAt);
+    }
+
+    /** 从运行中的 HOST 进程命令行取 {@code --server.port}，给没有 port 文件的旧部署兜底。 */
+    private static int hostProcessPort(long pid) {
+        if (pid <= 0) {
+            return 0;
+        }
+        return ProcessHandle.of(pid)
+                .filter(ProcessHandle::isAlive)
+                .map(handle -> handle.info().commandLine().orElse(""))
+                .map(commandLine -> {
+                    Matcher matcher = PROCESS_PORT.matcher(commandLine);
+                    return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+                })
+                .orElse(0);
     }
 
     private boolean isHostProcess(long pid) {
@@ -377,6 +548,100 @@ public class DeploymentControlService {
             Files.writeString(stateDir.resolve("current"), sha, StandardCharsets.UTF_8);
         } catch (IOException ignored) {
             // 指针写失败不影响本次启动，下次部署会再次轮转
+        }
+    }
+
+    // ------------------------------------------------------------------ 端口
+
+    /** 「原来的端口」优先：上次启动记录 → 端口租约 → 环境默认端口。 */
+    private int preferredPort(String projectId, String env, HostSlot host,
+                              EffectiveEnvironment effective) {
+        if (host != null && host.port() > 0) {
+            return host.port();
+        }
+        int leased = latestLeasePort(projectId, env);
+        if (leased > 0) {
+            return leased;
+        }
+        return effective.defaultPort() > 0 ? effective.defaultPort() : 8080;
+    }
+
+    /** 最近一次流水线部署记录的宿端口租约（默认槽使用）。 */
+    private int latestLeasePort(String projectId, String env) {
+        try {
+            return envStore.leases(projectId, env).stream()
+                    .filter(lease -> lease.hostPort() > 0)
+                    .max(Comparator.comparingLong(PortLease::updatedAt))
+                    .map(PortLease::hostPort)
+                    .orElse(0);
+        } catch (RuntimeException ignored) {
+            // 租约读取失败时回落到环境默认端口
+            return 0;
+        }
+    }
+
+    /** 原端口空闲就沿用（流水线部署时分配的端口）；被占用时向后找空闲端口并说明。 */
+    private static PortChoice choosePort(int preferred) {
+        int want = preferred > 0 ? preferred : 8080;
+        if (awaitPortFree(want, PORT_RELEASE_WAIT_MS)) {
+            return new PortChoice(want, false);
+        }
+        int candidate = Math.max(want + 1, 1);
+        for (int i = 0; i < 200; i++, candidate++) {
+            if (portFree(candidate)) {
+                return new PortChoice(candidate, true);
+            }
+        }
+        throw new IllegalArgumentException("端口分配失败：原端口 " + want
+                + " 被占用，且其后 200 个端口都不可用");
+    }
+
+    private static boolean awaitPortFree(int port, long budgetMs) {
+        long deadline = System.currentTimeMillis() + budgetMs;
+        while (true) {
+            if (portFree(port)) {
+                return true;
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return portFree(port);
+            }
+        }
+    }
+
+    private static boolean portFree(int port) {
+        try (ServerSocket socket = new ServerSocket()) {
+            socket.setReuseAddress(false);
+            socket.bind(new InetSocketAddress("0.0.0.0", port));
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void writePortFile(Path stateDir, int port) {
+        try {
+            Files.writeString(stateDir.resolve("port"), String.valueOf(port),
+                    StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            // 端口记录失败不影响启动，下次会回落到 app.log
+        }
+    }
+
+    private static int readPort(Path file) {
+        String value = readText(file);
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 
@@ -500,6 +765,19 @@ public class DeploymentControlService {
         }
     }
 
+    /** 日志里的监听端口：优先应用自身「Tomcat started on port N」，再回落到部署器标记。 */
+    private static int parseLogPort(String log) {
+        if (log == null) {
+            return 0;
+        }
+        Matcher matcher = TOMCAT_PORT.matcher(log);
+        int port = 0;
+        while (matcher.find()) {
+            port = Integer.parseInt(matcher.group(1));
+        }
+        return port > 0 ? port : parseHostPort(log);
+    }
+
     private static int parseHostPort(String log) {
         if (log == null) {
             return 0;
@@ -539,7 +817,7 @@ public class DeploymentControlService {
     public record Cell(String env, String version, String state, String target,
                        boolean running, boolean current, List<String> containers,
                        String image, String health, String ports, String url,
-                       long deployedAt, String detail) {
+                       long deployedAt, String detail, String release, long pid) {
     }
 
     public record Matrix(List<EnvColumn> environments, List<String> versions,
@@ -547,6 +825,14 @@ public class DeploymentControlService {
     }
 
     public record ActionResult(boolean ok, String message, String state) {
+    }
+
+    /** 运行日志：source=DOCKER 时 container 为当前容器，containers 为可选容器列表。 */
+    public record DeploymentLogs(String source, String container, List<String> containers,
+                                 List<String> lines, String note) {
+    }
+
+    private record PortChoice(int port, boolean fallback) {
     }
 
     private record HostSlot(String version, Path dir, boolean tagged, List<String> releases,
@@ -566,6 +852,8 @@ public class DeploymentControlService {
         private String health;
         private String ports;
         private String url;
+        private String release;
+        private long pid;
         private long deployedAt;
 
         private CellAcc(String env, String version) {
@@ -579,6 +867,12 @@ public class DeploymentControlService {
             if (slot.running()) {
                 running = true;
                 target = "HOST";
+                if (slot.pid() > 0) {
+                    pid = slot.pid();
+                }
+            }
+            if (release == null && slot.current() != null) {
+                release = slot.current();
             }
             if (slot.port() > 0 && ports == null) {
                 ports = "127.0.0.1:" + slot.port();
@@ -617,7 +911,7 @@ public class DeploymentControlService {
             String state = running ? "RUNNING" : "STOPPED";
             return new Cell(env, version, state, target == null ? "HOST" : target,
                     running, current, List.copyOf(containers), image, health, ports, url,
-                    deployedAt, String.join("；", new LinkedHashSet<>(details)));
+                    deployedAt, String.join("；", new LinkedHashSet<>(details)), release, pid);
         }
     }
 }

@@ -1320,7 +1320,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public List<RunSummary> history() {
         return history.summaries(null, 0, Integer.MAX_VALUE).stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
-                        h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs()))
+                        h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs(),
+                        h.version()))
                 .toList();
     }
 
@@ -1329,7 +1330,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public List<RunSummary> history(String projectId, int offset, int limit) {
         return history.summaries(projectId, offset, limit).stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
-                        h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs()))
+                        h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs(),
+                        h.version()))
                 .toList();
     }
 
@@ -1480,6 +1482,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 }
             }
             restored.definitionNote = snap.definitionNote();
+            restored.deployVersion = snap.version();
             // 平台重启时还在 PENDING/RUNNING 的运行永远不会再推进：
             // 不修正就会在历史里留下一条"进行中"，让页头一直显示 1 个运行。
             if (!restored.status.isTerminal()) {
@@ -1603,12 +1606,36 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.status = StageStatus.FAILED;
         } finally {
             if (!state.forceTerminated) {
+                if (state.status == StageStatus.SUCCEEDED) {
+                    // 打 tag 的发布成功后才同步到 git（失败不污染仓库）
+                    syncGitTag(state);
+                }
                 // 每次运行结束（含异常）都落盘，保证重启后可查询历史。
                 // 看护已强制终态时跳过，避免重复 complete 或把 TIMEOUT 覆盖回 RUNNING。
                 history.save(state.snapshot());
                 recordLedger(state);
                 scheduler.complete(state.projectId, state.env);
             }
+        }
+    }
+
+    /**
+     * 把本次发布的版本号同步成 git 标签：本地仓库创建 tag，有 origin 时尽力推送。
+     *
+     * <p>失败只记日志，不影响已经成功的部署；历史里仍会显示用户填写的版本号。
+     */
+    private void syncGitTag(RunState state) {
+        if (!state.deployTagged || state.deployVersion == null
+                || state.deployVersion.isBlank() || state.deployImage != null
+                || repoLocator == null) {
+            return;
+        }
+        try {
+            top.rongx.agent.domain.port.ProjectRepoLocator.TagOutcome outcome =
+                    repoLocator.createTag(state.projectId, state.deployVersion, state.gitSha);
+            state.log.append("[tag] ").append(outcome.message()).append('\n');
+        } catch (Exception e) {
+            state.log.append("[tag] 同步 git 标签失败：").append(e.getMessage()).append('\n');
         }
     }
 
@@ -4453,7 +4480,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return new RunHistoryStore.RunSnapshot(runId, projectId, env, pipelineId, gitSha,
                     status, createdAt, seq, List.copyOf(stages), List.copyOf(artifacts),
                     ProcessExecutor.redact(log.toString(), sensitiveValues),
-                    definitionSource == null ? null : definitionSource.name(), definitionNote);
+                    definitionSource == null ? null : definitionSource.name(), definitionNote,
+                    deployVersion);
         }
 
         RunState(String runId, String projectId, String env, String pipelineId, String gitSha) {

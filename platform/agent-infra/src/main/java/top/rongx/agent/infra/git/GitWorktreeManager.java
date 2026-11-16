@@ -337,8 +337,7 @@ public class GitWorktreeManager {
             throw new GitIntakeException("无法创建 worktree 目录：" + e.getMessage());
         }
         if (Files.isDirectory(wt)) {
-            run(repo, List.of("git", "worktree", "remove", "--force", posix(wt)),
-                    "git worktree remove " + name);
+            forceRemoveWorktree(repo, wt, name);
         }
         run(repo, List.of("git", "worktree", "add", "--quiet", "--detach", posix(wt), sha),
                 "git worktree add " + name);
@@ -349,9 +348,58 @@ public class GitWorktreeManager {
     public void removeWorktreeAt(Path repoDir, String name) {
         Path repo = repoDir.toAbsolutePath().normalize();
         Path wt = repo.resolve(".agent").resolve("worktrees").resolve(name);
-        if (Files.isDirectory(wt)) {
-            run(repo, List.of("git", "worktree", "remove", "--force", posix(wt)),
-                    "git worktree remove " + name);
+        if (Files.exists(wt)) {
+            forceRemoveWorktree(repo, wt, name);
+        } else {
+            // 目录已经不在了：清掉 main 仓库里的 worktree 登记，避免 git worktree list 残留
+            pruneWorktrees(repo);
+        }
+    }
+
+    /**
+     * 强制移除 worktree，并容忍“目录还在但 .git 已被删/损坏”的半残状态。
+     *
+     * <p>{@code git worktree remove} 对缺少 .git 的目录会直接 fatal（validation failed），
+     * 这通常来自上一次清理被中断或手工删了 .git。此时登记已经不可用，正确做法是
+     * {@code git worktree prune} 清登记后再删除目录，而不是把异常抛给接口。
+     */
+    private void forceRemoveWorktree(Path repo, Path wt, String name) {
+        Raw raw = exec(repo, List.of("git", "worktree", "remove", "--force", posix(wt)),
+                "git worktree remove " + name, GIT_TIMEOUT_SECONDS, null);
+        if (raw.exit() == 0) {
+            deleteRecursively(wt);
+            return;
+        }
+        String detail = raw.output();
+        if (isMissingWorktreeError(detail)) {
+            log.info("worktree {} 的 .git 已丢失，改为 prune + 删除目录", name);
+            pruneWorktrees(repo);
+            deleteRecursively(wt);
+            return;
+        }
+        log.warn("git 命令失败 [git worktree remove {}]：{}", name, detail);
+        throw new GitIntakeException("git worktree remove " + name + " 失败：\n" + detail);
+    }
+
+    /** worktree 目录本身缺失/未登记/缺 .git 时的 git 报错特征。 */
+    private static boolean isMissingWorktreeError(String detail) {
+        if (detail == null) {
+            return false;
+        }
+        String text = detail.toLowerCase(java.util.Locale.ROOT);
+        return text.contains("does not exist")
+                || text.contains("validation failed")
+                || text.contains("is not a working tree")
+                || text.contains("not a valid directory")
+                || text.contains("no such file or directory");
+    }
+
+    /** 清理失效的 worktree 登记；失败不影响调用方（目录删除仍会继续）。 */
+    private void pruneWorktrees(Path repo) {
+        Raw raw = exec(repo, List.of("git", "worktree", "prune"),
+                "git worktree prune", GIT_TIMEOUT_SECONDS, null);
+        if (raw.exit() != 0) {
+            log.debug("git worktree prune 失败（忽略）：{}", raw.output());
         }
     }
 
@@ -580,6 +628,53 @@ public class GitWorktreeManager {
         run(repoDir, List.of("git", "push", "--quiet", "--force", remoteUrl,
                 "refs/heads/" + name + ":refs/heads/" + name),
                 "git push --force " + name, GIT_TIMEOUT_SECONDS, false, auth);
+    }
+
+    /**
+     * 在仓库里创建 git 标签（轻量 tag）。
+     *
+     * <p>同名标签指向同一提交视为成功（重复发布幂等）；指向其它提交则报错，
+     * 避免把用户已经发布的版本号悄悄改到别的提交上。
+     */
+    public void createTag(Path repoDir, String tag, String sha) {
+        String name = validTag(tag);
+        if (sha == null || !sha.matches("[0-9a-fA-F]{4,40}")) {
+            throw new GitIntakeException("提交号不合法，无法打标签：" + sha);
+        }
+        Raw existing = exec(repoDir, List.of("git", "rev-parse", "-q", "--verify",
+                "refs/tags/" + name), "git rev-parse tag " + name, 30, null);
+        if (existing.exit() == 0) {
+            String current = existing.output().trim();
+            if (current.startsWith(sha) || sha.startsWith(current)) {
+                return;
+            }
+            throw new GitIntakeException("标签 " + name + " 已存在且指向 "
+                    + shortSha(current) + "，与本次提交 " + shortSha(sha) + " 不一致，请换一个版本号");
+        }
+        run(repoDir, List.of("git", "tag", name, sha), "git tag " + name, 30);
+    }
+
+    /** 把本地标签推送到指定远端地址（HTTPS 可带凭据；为空时走本机凭据）。 */
+    public void pushTagTo(Path repoDir, String tag, String remoteUrl, GitAuth auth) {
+        String name = validTag(tag);
+        if (remoteUrl == null || remoteUrl.isBlank()) {
+            throw new GitIntakeException("缺少远端仓库地址，无法推送标签 " + name);
+        }
+        run(repoDir, List.of("git", "push", "--quiet", remoteUrl,
+                "refs/tags/" + name + ":refs/tags/" + name),
+                "git push tag " + name, GIT_TIMEOUT_SECONDS, false, auth);
+    }
+
+    private static String shortSha(String sha) {
+        return sha == null || sha.length() <= 7 ? String.valueOf(sha) : sha.substring(0, 7);
+    }
+
+    private static String validTag(String tag) {
+        String name = tag == null ? "" : tag.trim();
+        if (!name.matches("[A-Za-z0-9._/-]+") || name.startsWith("-") || name.contains("..")) {
+            throw new GitIntakeException("标签名不合法：" + tag);
+        }
+        return name;
     }
 
     private static String validBranch(String branch) {

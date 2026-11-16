@@ -3,9 +3,10 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Aim, CaretRight, ChatDotRound, Check, Monitor, Plus, Promotion, Refresh, Search, Tickets,
+  Aim, ArrowDown, CaretRight, ChatDotRound, Check, Monitor, Plus, Promotion, Refresh, Search, Tickets,
 } from '@element-plus/icons-vue'
 import { appStore } from '../stores/app'
+import { useFollowScroll } from '../composables/useFollowScroll'
 import { getToken } from '../api/auth'
 import { listProjects, type ProjectRow } from '../api/project'
 import { useWorkspaceEvents, type WorkspaceEvent } from '../composables/useWorkspaceEvents'
@@ -58,6 +59,33 @@ const error = computed(() => entry.value.chat.error.value)
 const tasks = ref<TaskRow[]>([])
 const runs = ref<RunRow[]>([])
 const input = ref('')
+
+/**
+ * 输入草稿按工作区保存到 localStorage：切工作区、跳设置再回来都不丢未发送的内容。
+ * 发送后自动清空；空草稿直接删键，不留下无意义记录。
+ */
+const DRAFT_PREFIX = 'agent.workspace.draft.'
+const DRAFT_LIMIT = 20_000
+let draftTimer: number | null = null
+
+function persistDraftFor(id: string, text: string): void {
+  if (!id) return
+  try {
+    if (text.trim()) localStorage.setItem(DRAFT_PREFIX + id, text.slice(0, DRAFT_LIMIT))
+    else localStorage.removeItem(DRAFT_PREFIX + id)
+  } catch {
+    // 隐私模式下 localStorage 不可写：草稿只保留在内存
+  }
+}
+
+function readDraft(id: string): string {
+  if (!id) return ''
+  try {
+    return localStorage.getItem(DRAFT_PREFIX + id) ?? ''
+  } catch {
+    return ''
+  }
+}
 const loading = ref(false)
 const lastRefreshed = ref(0)
 const messageListRef = ref<HTMLElement | null>(null)
@@ -240,7 +268,9 @@ async function init(): Promise<void> {
   const token = ++initToken
   const id = projectId.value
   const target = getWorkspaceChat(id)
-  input.value = ''
+  // 换工作区时恢复各自的草稿，而不是把用户正在写的字清掉
+  input.value = readDraft(id)
+  void nextTick(resizeInput)
   try {
     projects.value = await listProjects()
     if (token !== initToken) return
@@ -274,8 +304,7 @@ async function init(): Promise<void> {
   if (token !== initToken) return
   await nextTick()
   // 回到工作区时直接定位到最新输出（包括切走期间仍在增长的回答）
-  autoStick = true
-  scrollToBottom(true)
+  scrollToLatest({ force: true })
 }
 
 function openConversation(row: ConversationRow): void {
@@ -396,9 +425,8 @@ async function submit(): Promise<void> {
   }
   input.value = ''
   appendUserMessage(text)
-  autoStick = true
   await nextTick()
-  scrollToBottom(true)
+  scrollToLatest({ force: true })
   await sendChat(text)
   // 发送期间可能已经切走：卸载后的视图不再刷新工作区数据
   if (!mounted) return
@@ -424,7 +452,15 @@ function resizeInput(): void {
   el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.3))}px`
 }
 
-watch(input, () => void nextTick(resizeInput))
+watch(input, () => {
+  void nextTick(resizeInput)
+  const id = projectId.value
+  if (draftTimer !== null) window.clearTimeout(draftTimer)
+  draftTimer = window.setTimeout(() => {
+    draftTimer = null
+    persistDraftFor(id, input.value)
+  }, 250)
+})
 
 function usePrompt(text: string): void {
   input.value = text
@@ -649,39 +685,24 @@ function shortId(id: string): string {
   return id.length > 14 ? `${id.slice(0, 14)}…` : id
 }
 
-// 流式文本每个事件都会触发一次；合并到下一帧，避免每个 token 都强制布局
-let scrollFrame = 0
-/**
- * 是否跟随输出自动贴底：用户主动向上翻看时不再强行拽回底部，
- * 回到底部附近后自动恢复跟随。
- */
-let autoStick = true
+// 流式文本每个事件都会触发一次；粘底逻辑与对话页共用 useFollowScroll：
+// 用户上翻阅读时不被拽回底部，出现「有新内容」浮标，回到底部后恢复跟随。
+const {
+  isNearBottom, hasNewContent, updateScrollState, followNewContent, scrollToLatest,
+} = useFollowScroll(messageListRef, { bottomThreshold: 96 })
 
-function onChatScroll(): void {
-  const el = messageListRef.value
-  if (!el) return
-  autoStick = el.scrollHeight - el.scrollTop - el.clientHeight < 96
-}
-
-function scrollToBottom(force = false): void {
-  if (!force && !autoStick) return
-  if (scrollFrame) return
-  scrollFrame = requestAnimationFrame(() => {
-    scrollFrame = 0
-    if (!force && !autoStick) return
-    const el = messageListRef.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
+function jumpToBottom(): void {
+  scrollToLatest({ force: true, behavior: 'smooth' })
 }
 
 watch(() => projection.value.messages.length, async () => {
   await Promise.resolve()
-  scrollToBottom()
+  followNewContent()
 })
 
 watch(() => projection.value.streamingTurn?.text, async () => {
   await Promise.resolve()
-  scrollToBottom()
+  followNewContent()
 })
 
 /**
@@ -748,10 +769,14 @@ onMounted(async () => {
 
 onUnmounted(() => {
   mounted = false
+  if (draftTimer !== null) {
+    window.clearTimeout(draftTimer)
+    draftTimer = null
+  }
+  persistDraftFor(projectId.value, input.value)
   if (timer) clearInterval(timer)
   if (boardTimer !== undefined) clearInterval(boardTimer)
   if (reconcileTimer) clearTimeout(reconcileTimer)
-  if (scrollFrame) cancelAnimationFrame(scrollFrame)
   document.removeEventListener('keydown', onGlobalKeydown)
   document.removeEventListener('visibilitychange', onVisibility)
   workspaceEvents.stop()
@@ -825,7 +850,8 @@ onUnmounted(() => {
     <div v-if="viewMode === 'assistant'" class="ws-body">
       <!-- 中：工作区助手（与对话页共用时间线 / composer 视觉） -->
       <section class="chat-pane">
-        <div ref="messageListRef" class="chat-scroll" @scroll.passive="onChatScroll">
+        <div class="chat-scroll-wrap">
+        <div ref="messageListRef" class="chat-scroll" @scroll.passive="updateScrollState">
           <div v-if="showWelcome" class="welcome">
             <span class="welcome-icon"><el-icon><ChatDotRound /></el-icon></span>
             <h2 class="welcome-title">要做什么？</h2>
@@ -857,6 +883,21 @@ onUnmounted(() => {
             <span class="stream-error-text">{{ error }}</span>
             <button type="button" class="text-btn" :disabled="streaming" @click="retry">重试</button>
           </div>
+        </div>
+
+          <!-- 上翻阅读时的新内容提示：流式输出不抢滚动，用户主动回到底部 -->
+          <Transition name="scroll-pop">
+            <button
+              v-if="!isNearBottom || hasNewContent"
+              type="button" class="scroll-bottom"
+              :class="{ fresh: hasNewContent }"
+              :title="hasNewContent ? '有新的输出，回到底部' : '回到底部'"
+              @click="jumpToBottom"
+            >
+              <el-icon><ArrowDown /></el-icon>
+              <span>{{ hasNewContent ? '有新内容' : '回到底部' }}</span>
+            </button>
+          </Transition>
         </div>
 
         <div class="composer-wrap">
@@ -1181,9 +1222,9 @@ onUnmounted(() => {
   flex: none;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-6);
   min-height: 34px;
-  padding: 0 16px 6px;
+  padding: 0 var(--page-gutter) var(--sp-3);
 }
 .ws-bar-left {
   display: flex;
@@ -1198,14 +1239,7 @@ onUnmounted(() => {
   color: var(--ink);
   white-space: nowrap;
 }
-.tag {
-  padding: 1px 7px;
-  font-size: 10px;
-  color: var(--ink-muted);
-  white-space: nowrap;
-  background: var(--surface-sunken);
-  border-radius: 999px;
-}
+/* .tag 由全局 styles.css 提供 */
 .ws-bar-right {
   display: flex;
   flex: none;
@@ -1229,45 +1263,6 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-}
-
-/* 视图切换：助手 / 任务（任务看板已从会话页上移） */
-.ws-views {
-  display: flex;
-  flex: none;
-  gap: 2px;
-  padding: 3px;
-  background: var(--surface-sunken);
-  border-radius: 9px;
-}
-.ws-views button {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  height: 26px;
-  padding: 0 10px;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: 7px;
-  transition: color 0.12s ease, background-color 0.12s ease;
-}
-.ws-views button:hover { color: var(--ink); }
-.ws-views button.on {
-  font-weight: 500;
-  color: var(--ink);
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(16 24 40 / 8%);
-}
-.view-count {
-  padding: 0 5px;
-  font-size: 10px;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-radius: 999px;
 }
 
 /* 任务看板：整块铺满工作区，内部沿用 ChatIssuesView 的宽度约束与内边距 */
@@ -1314,49 +1309,7 @@ onUnmounted(() => {
   transition: width 0.3s ease;
 }
 
-/* 通用控件 */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 12px;
-  font-family: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  border-radius: 8px;
-}
-.btn.primary { color: #fff; background: var(--accent); }
-.btn.primary:hover:not(:disabled) { filter: brightness(1.05); }
-.btn.ghost { color: var(--ink-soft); background: #fff; border-color: var(--line-soft); }
-.btn.ghost:hover:not(:disabled) { background: var(--surface-hover); }
-.btn:disabled { cursor: not-allowed; opacity: 0.45; }
-.icon-btn {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: #fff;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  place-items: center;
-}
-.icon-btn:hover:not(:disabled) { color: var(--ink); background: var(--surface-hover); }
-.icon-btn:disabled { cursor: not-allowed; opacity: 0.45; }
-.icon-btn.sm { width: 24px; height: 24px; border: 0; background: none; }
-.text-btn {
-  padding: 0;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--ink-faint);
-  cursor: pointer;
-  background: none;
-  border: 0;
-}
-.text-btn:hover:not(:disabled) { color: var(--accent-ink); }
-.text-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+/* 通用控件（.btn / .icon-btn / .text-btn）由全局 styles.css 提供 */
 
 /* 右栏：任务 / 运行，发丝线与对话区分开 */
 .side-col {
@@ -1378,24 +1331,7 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--line-soft);
 }
 
-/* 分段筛选 */
-.seg { display: flex; flex: none; gap: 2px; }
-.seg button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: 6px;
-}
-.seg button:hover { color: var(--ink); }
-.seg button.on { color: var(--ink); background: var(--surface-sunken); font-weight: 500; }
-.seg-count { font-size: 10px; opacity: 0.7; }
+/* 分段筛选（.seg）由全局 styles.css 提供 */
 
 /* 列表行 */
 .list-item {
@@ -1432,111 +1368,73 @@ onUnmounted(() => {
   background: var(--surface-sunken);
   border-radius: 3px;
 }
-.empty {
-  padding: 18px 10px;
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.7;
-  color: var(--ink-faint);
-  text-align: center;
-}
+/* .empty 由全局 styles.css 提供 */
 
 /* 对话区：与对话页同一套白纸画布 + 居中阅读列 */
+.chat-scroll-wrap {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+}
 .chat-scroll {
   flex: 1 1 0;
   min-height: 0;
-  padding: 0 clamp(16px, 2.4vw, 40px);
+  padding: 0 var(--page-gutter);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.welcome {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  width: 100%;
-  max-width: 72rem;
-  min-height: 100%;
-  padding: 24px 0;
-  margin: 0 auto;
-}
-.welcome-icon {
-  display: flex;
+
+/* 回到底部：贴对话区底部居中，不遮挡输入区 */
+.scroll-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 8;
+  display: inline-flex;
+  gap: 5px;
   align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  font-size: 17px;
-  color: var(--ink-soft);
-  background: var(--surface-sunken);
-  border-radius: var(--radius-md);
-}
-.welcome-title {
-  margin: 14px 0 6px;
-  font-size: 19px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--ink);
-}
-.welcome-desc {
-  max-width: 34rem;
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.75;
-  color: var(--ink-muted);
-}
-.welcome-suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 22px;
-}
-.suggestion {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  padding: 12px 14px;
+  height: 28px;
+  padding: 0 12px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 11.5px;
   color: var(--ink-soft);
-  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
   background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-md);
-  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-2);
+  transform: translateX(-50%);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
 }
-.suggestion:hover {
+.scroll-bottom:hover {
   color: var(--ink);
-  border-color: var(--line);
-  box-shadow: var(--shadow-1);
+  background: var(--surface-hover);
 }
-.suggestion-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+.scroll-bottom.fresh {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
-.suggestion-main strong {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--ink);
+.scroll-bottom.fresh::before {
+  width: 5px;
+  height: 5px;
+  content: '';
+  background: var(--accent);
+  border-radius: 50%;
 }
-.suggestion-main small {
-  font-size: 12px;
-  color: var(--ink-muted);
+.scroll-pop-enter-active,
+.scroll-pop-leave-active {
+  transition: opacity var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
-.suggestion .el-icon {
-  flex: none;
-  font-size: 12px;
-  color: var(--ink-faint);
+.scroll-pop-enter-from,
+.scroll-pop-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 6px);
 }
-.welcome-note {
-  margin-top: 16px;
-  font-size: 11px;
-  color: var(--ink-faint);
-}
+/* 欢迎页 / 建议卡 / 输入区 / 发送键使用全局原语 */
 .stream-error {
   display: flex;
   align-items: center;
@@ -1561,126 +1459,7 @@ onUnmounted(() => {
   color: var(--danger);
 }
 
-/* 输入区：白底浮起的 composer，底部一行工具条（复用对话页视觉） */
-.composer-wrap {
-  flex: none;
-  padding: 0 clamp(16px, 2.4vw, 40px) 14px;
-}
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  max-width: 72rem;
-  padding: 12px 12px 6px 14px;
-  margin: 0 auto;
-  background: var(--surface-raised);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 6px 20px rgb(16 24 40 / 6%);
-  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
-}
-.composer:focus-within {
-  border-color: rgb(77 130 247 / 52%);
-  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 24px rgb(16 24 40 / 9%);
-}
-.composer-input {
-  width: 100%;
-  min-height: 46px;
-  padding: 2px;
-  overflow-y: auto;
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--ink);
-  resize: none;
-  background: transparent;
-  border: 0;
-  outline: none;
-}
-.composer-input::placeholder {
-  color: var(--ink-faint);
-}
-.composer-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.bar-left,
-.bar-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.bar-scope {
-  overflow: hidden;
-  max-width: 190px;
-  padding: 0 4px;
-  font-size: 11px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.metric {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-  font-size: 11px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.send-btn {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink-muted);
-  cursor: not-allowed;
-  background: var(--surface-hover);
-  border: 0;
-  border-radius: var(--radius-md);
-  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease,
-    transform var(--dur-fast) ease;
-}
-.send-btn.ready {
-  color: #fff;
-  cursor: pointer;
-  background: var(--accent);
-}
-.send-btn.ready:hover {
-  background: var(--accent-hover);
-  transform: translateY(-1px);
-}
-.send-btn.ready:active {
-  transform: translateY(0);
-}
-.send-btn.stop {
-  width: auto;
-  padding: 0 12px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  background: var(--surface-active);
-}
-.send-btn.stop:hover {
-  color: var(--ink);
-}
-.composer-hint {
-  max-width: 54rem;
-  margin: 8px auto 0;
-  font-size: 11px;
-  color: var(--ink-faint);
-  text-align: center;
-}
+/* 输入区：.composer / .composer-wrap 由全局 styles.css 提供 */
 
 /* 右栏 */
 .side-body { flex: 1; min-height: 0; padding: 6px 8px 10px; overflow-y: auto; }
@@ -1696,17 +1475,17 @@ onUnmounted(() => {
   color: transparent;
   cursor: pointer;
   background: none;
-  border: 1.5px solid #cbd5e1;
+  border: 1.5px solid var(--line-strong);
   border-radius: 50%;
   place-items: center;
 }
-.check:hover { color: #10b981; border-color: #10b981; }
+.check:hover { color: var(--ok); border-color: var(--ok); }
 .item-status { flex: none; padding-top: 1px; font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
-.item-status[data-s='RUNNING'] { color: #b45309; }
-.item-status[data-s='DONE'] { color: #047857; }
-.item-status[data-s='FAILED'] { color: #b91c1c; }
+.item-status[data-s='RUNNING'] { color: var(--warn-ink); }
+.item-status[data-s='DONE'] { color: var(--ok-ink); }
+.item-status[data-s='FAILED'] { color: var(--danger-ink); }
 .list-item.done { opacity: 0.66; }
-.done-mark { flex: none; width: 16px; font-size: 11px; color: #10b981; text-align: center; }
+.done-mark { flex: none; width: 16px; font-size: 11px; color: var(--ok); text-align: center; }
 .done-toggle {
   display: block;
   width: 100%;
@@ -1723,18 +1502,18 @@ onUnmounted(() => {
 }
 .done-toggle:hover { color: var(--accent-ink); }
 .run-seg { padding: 4px 8px 8px; }
-.run-dot { flex: none; width: 6px; height: 6px; margin-top: 6px; background: #cbd5e1; border-radius: 50%; }
-.run-dot[data-s='QUEUED'] { background: #94a3b8; }
-.run-dot[data-s='RUNNING'] { background: #f59e0b; }
-.run-dot[data-s='SUCCEEDED'] { background: #10b981; }
-.run-dot[data-s='FAILED'] { background: #ef4444; }
-.run-dot[data-s='CANCELLED'] { background: #cbd5e1; }
+.run-dot { flex: none; width: 6px; height: 6px; margin-top: 6px; background: var(--ink-faint); border-radius: 50%; }
+.run-dot[data-s='QUEUED'] { background: var(--ink-faint); }
+.run-dot[data-s='RUNNING'] { background: var(--warn); }
+.run-dot[data-s='SUCCEEDED'] { background: var(--ok); }
+.run-dot[data-s='FAILED'] { background: var(--danger); }
+.run-dot[data-s='CANCELLED'] { background: var(--ink-faint); }
 
 /* 实时状态 */
 .live { display: inline-flex; align-items: center; gap: 4px; }
-.live-dot { width: 6px; height: 6px; background: #cbd5e1; border-radius: 50%; }
-.live.on .live-dot { background: #10b981; box-shadow: 0 0 0 3px rgb(16 185 129 / 12%); }
-.live.on { color: #047857; }
+.live-dot { width: 6px; height: 6px; background: var(--ink-faint); border-radius: 50%; }
+.live.on .live-dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.live.on { color: var(--ok-ink); }
 
 .retry-btn { flex: none; font-size: 11px; }
 .group-label {
@@ -1743,7 +1522,7 @@ onUnmounted(() => {
 }
 .fail-badge {
   padding: 1px 6px; border-radius: 999px;
-  background: rgb(185 28 28 / 10%); color: #b91c1c; font-size: 10px;
+  background: var(--danger-soft); color: var(--danger-ink); font-size: 10px;
 }
 
 /* 命令面板 */
@@ -1760,10 +1539,10 @@ onUnmounted(() => {
 .palette {
   width: min(560px, calc(100vw - 32px));
   overflow: hidden;
-  background: #fff;
+  background: var(--panel);
   border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  box-shadow: 0 24px 60px rgb(15 23 42 / 22%);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
 }
 .palette-input {
   width: 100%;
@@ -1815,22 +1594,16 @@ onUnmounted(() => {
   .side-col { display: none; }
 }
 @media (max-width: 720px) {
-  .ws-bar { padding: 0 14px 6px; }
-  .ws-bar-right { gap: 8px; }
+  .ws-bar { padding: 0 var(--page-gutter-tight) var(--sp-3); }
+  .ws-bar-right { gap: var(--sp-4); }
   .ws-kpis,
   .ws-updated { display: none; }
-  .chat-scroll,
-  .composer-wrap {
-    padding-right: 14px;
-    padding-left: 14px;
+  .chat-scroll {
+    padding-right: var(--page-gutter-tight);
+    padding-left: var(--page-gutter-tight);
   }
-  .composer-wrap {
-    padding-bottom: calc(10px + env(safe-area-inset-bottom));
-  }
-  .metric { display: none; }
 }
 @media (max-width: 480px) {
-  .bar-scope { display: none; }
   .ws-bar-left .tag { display: none; }
 }
 </style>

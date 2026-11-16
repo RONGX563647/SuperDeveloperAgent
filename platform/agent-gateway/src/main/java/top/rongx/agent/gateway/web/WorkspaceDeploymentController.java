@@ -5,9 +5,11 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.web.DeploymentControlService.ActionResult;
+import top.rongx.agent.gateway.web.DeploymentControlService.DeploymentLogs;
 import top.rongx.agent.gateway.web.DeploymentControlService.Matrix;
 
 /**
@@ -47,6 +49,25 @@ public class WorkspaceDeploymentController {
                              @RequestBody(required = false) VersionRequest request) {
         currentUser.requireUserId();
         return deployments.stop(projectId, env, request == null ? null : request.version());
+    }
+
+    /** 重启：沿用原端口，只有端口被占用才漂移。 */
+    @PostMapping("/{env}/restart")
+    public ActionResult restart(@PathVariable String projectId, @PathVariable String env,
+                                @RequestBody(required = false) VersionRequest request) {
+        currentUser.requireUserId();
+        return deployments.restart(projectId, env, request == null ? null : request.version());
+    }
+
+    /** 运行日志：DOCKER 返回容器日志，HOST 返回 app.log 尾部。 */
+    @GetMapping("/{env}/logs")
+    public DeploymentLogs logs(@PathVariable String projectId, @PathVariable String env,
+                               @RequestParam(required = false) String version,
+                               @RequestParam(required = false) String container,
+                               @RequestParam(defaultValue = "300") int tail,
+                               @RequestParam(defaultValue = "1440") int sinceMinutes) {
+        currentUser.requireUserId();
+        return deployments.logs(projectId, env, version, container, tail, sinceMinutes);
     }
 
     public record VersionRequest(String version) {

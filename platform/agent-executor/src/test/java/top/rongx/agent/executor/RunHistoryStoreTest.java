@@ -22,7 +22,7 @@ class RunHistoryStoreTest {
                 StageStatus.SUCCEEDED, createdAt, seq, List.of(),
                 List.of(new ArtifactRef("image", TAG, "sha256:deadbeef", 12L,
                         Map.of("version", "test-v1", "localImage", TAG))),
-                "log", "repo", null);
+                "log", "repo", null, "v1.2.0");
     }
 
     @Test
@@ -74,6 +74,9 @@ class RunHistoryStoreTest {
         ArtifactRef image = store.list().get(0).artifacts().get(0);
         assertEquals("test-v1", image.meta().get("version"));
         assertEquals(TAG, image.meta().get("localImage"));
+        // 标签版本号随历史落盘：重启后列表仍能显示，不会被读成 null
+        assertEquals("v1.2.0", store.list().get(0).version());
+        assertEquals("v1.2.0", store.summaries("RY", 0, 10).get(0).version());
     }
 
     private static int seqOf(List<RunHistoryStore.RunSnapshot> list, String runId) {

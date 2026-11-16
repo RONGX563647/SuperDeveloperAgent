@@ -177,6 +177,10 @@ export interface DeploymentCell {
   url: string | null
   deployedAt: number
   detail: string
+  /** 当前发布提交（HOST 的 current 指针）。 */
+  release: string | null
+  /** HOST 进程 pid（仅运行中）。 */
+  pid: number
 }
 
 export interface DeploymentMatrix {
@@ -217,6 +221,43 @@ export function stopDeployment(
     method: 'POST',
     body: JSON.stringify({ version: version ?? null }),
   })
+}
+
+/** 重启：沿用原端口，只有端口被占用才漂移。 */
+export function restartDeployment(
+  projectId: string,
+  env: string,
+  version?: string,
+): Promise<DeploymentActionResult> {
+  return apiFetch(`/api/v1/workspaces/${projectId}/deployments/${env}/restart`, {
+    method: 'POST',
+    body: JSON.stringify({ version: version ?? null }),
+  })
+}
+
+/** 运行日志：DOCKER 为容器日志，HOST 为 app.log 尾部。 */
+export interface DeploymentLogs {
+  source: 'DOCKER' | 'HOST'
+  container: string | null
+  containers: string[]
+  lines: string[]
+  note: string
+}
+
+export function getDeploymentLogs(
+  projectId: string,
+  env: string,
+  params: { version?: string; container?: string; tail?: number; sinceMinutes?: number } = {},
+): Promise<DeploymentLogs> {
+  const query = new URLSearchParams()
+  if (params.version) query.set('version', params.version)
+  if (params.container) query.set('container', params.container)
+  if (params.tail) query.set('tail', String(params.tail))
+  if (params.sinceMinutes) query.set('sinceMinutes', String(params.sinceMinutes))
+  const qs = query.toString()
+  return apiFetch(
+    `/api/v1/workspaces/${projectId}/deployments/${env}/logs${qs ? `?${qs}` : ''}`,
+  )
 }
 
 export function createTask(

@@ -27,6 +27,20 @@ public interface ProjectRepoLocator {
     /** 存储模式。 */
     StorageMode modeOf(String projectId);
 
+    /**
+     * 在项目仓库里创建 git 标签，并尽力推送到 origin。
+     *
+     * <p>打 tag 的流水线发布成功后调用：本地建标签失败不应影响已完成的部署，
+     * 由调用方决定如何提示。
+     */
+    default TagOutcome createTag(String projectId, String tag, String sha) {
+        return new TagOutcome(false, false, "当前仓库模式不支持创建 git 标签");
+    }
+
+    /** 打标签结果：created = 本地已创建；pushed = 已推送到远端。 */
+    record TagOutcome(boolean created, boolean pushed, String message) {
+    }
+
     enum StorageMode {
         /** 仓库在用户本地目录，平台就地操作。 */
         DIRECT,

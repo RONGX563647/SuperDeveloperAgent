@@ -238,6 +238,8 @@ export interface HistoryItem {
   env: string
   pipelineId: string
   gitSha: string
+  /** 触发时填写的标签版本号（打 tag 时会同步为 git 标签）；空 = 未填写。 */
+  version: string
   status: string
   /** 触发时间（epoch 毫秒，0 表示旧格式文件）。 */
   createdAt: number

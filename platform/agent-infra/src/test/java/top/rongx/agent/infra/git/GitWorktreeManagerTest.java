@@ -88,6 +88,24 @@ class GitWorktreeManagerTest {
     }
 
     @Test
+    @DisplayName("worktree 目录还在但 .git 丢失：removeWorktreeAt 自动 prune 并清理，不抛错")
+    void removesBrokenWorktreeWithoutThrowing() throws Exception {
+        String head = makeUserRepo("broken-wt");
+        Path repo = userSpace.resolve("broken-wt");
+        GitWorktreeManager m = manager();
+        Path wt = m.addWorktreeAt(repo, "wt-build-run-dead", head);
+        assertTrue(Files.isRegularFile(wt.resolve(".git")), "worktree 已创建");
+
+        // 模拟清理被中断：目录还在，但指向主仓库的 .git 文件被删
+        Files.delete(wt.resolve(".git"));
+
+        m.removeWorktreeAt(repo, "wt-build-run-dead");
+        assertFalse(Files.exists(wt), "半残 worktree 目录应被删除");
+        // 目录本来就不存在时也应幂等成功（清掉可能的登记残留）
+        m.removeWorktreeAt(repo, "wt-build-run-gone");
+    }
+
+    @Test
     @DisplayName("L2 无 .git 目录且不允许 init → 明确报错")
     void linkLocalNoGitRefused() throws Exception {
         Path dir = userSpace.resolve("plain");
@@ -204,6 +222,36 @@ class GitWorktreeManagerTest {
                 GitWorktreeManager.GitIntakeException.class,
                 () -> m.cloneRemote("DUP", posix(remoteBare)));
         assertTrue(ex.getMessage().contains("已存在"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("createTag：本地创建、同提交幂等、版本号被占用时报错，并可推送到远端")
+    void createAndPushTag() throws Exception {
+        String head = makeUserRepo("tag-demo");
+        Path dir = userSpace.resolve("tag-demo");
+        GitWorktreeManager m = manager();
+
+        m.createTag(dir, "v1.2.0", head);
+        assertEquals(head, m.revParse(dir, "refs/tags/v1.2.0"));
+
+        // 同一提交重复发布：幂等成功
+        m.createTag(dir, "v1.2.0", head);
+
+        // 版本号已经指向别的提交：必须报错，不能悄悄改写
+        Files.writeString(dir.resolve("README.md"), "v2\n");
+        exec(dir, "git", "add", "-A");
+        exec(dir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v2");
+        String next = m.revParse(dir, "HEAD");
+        GitWorktreeManager.GitIntakeException error = assertThrows(
+                GitWorktreeManager.GitIntakeException.class, () -> m.createTag(dir, "v1.2.0", next));
+        assertTrue(error.getMessage().contains("已存在"), error.getMessage());
+
+        // 推送到本地 bare 模拟 origin
+        Path remote = userSpace.resolve("tag-remote.git");
+        Files.createDirectories(remote);
+        exec(remote, "git", "init", "--bare", "-q");
+        m.pushTagTo(dir, "v1.2.0", remote.toUri().toString(), null);
+        assertEquals(head, m.revParse(remote, "refs/tags/v1.2.0"));
     }
 
     private String posix(Path p) {

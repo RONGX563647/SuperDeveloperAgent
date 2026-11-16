@@ -994,6 +994,49 @@
         }
       }
     },
+    "/api/v1/workspaces/{projectId}/deployments/{env}/restart" : {
+      "post" : {
+        "tags" : [ "workspace-deployment-controller" ],
+        "summary" : "restart",
+        "operationId" : "restart",
+        "parameters" : [ {
+          "name" : "projectId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "env",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ActionResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{projectId}/conversations" : {
       "get" : {
         "tags" : [ "workspace-controller" ],
@@ -4066,6 +4109,72 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/Matrix"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{projectId}/deployments/{env}/logs" : {
+      "get" : {
+        "tags" : [ "workspace-deployment-controller" ],
+        "summary" : "logs",
+        "operationId" : "logs",
+        "parameters" : [ {
+          "name" : "projectId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "env",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "version",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "container",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "tail",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 300
+          }
+        }, {
+          "name" : "sinceMinutes",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 1440
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DeploymentLogs"
                 }
               }
             }
@@ -7569,6 +7678,13 @@
           },
           "detail" : {
             "type" : "string"
+          },
+          "release" : {
+            "type" : "string"
+          },
+          "pid" : {
+            "type" : "integer",
+            "format" : "int64"
           }
         }
       },
@@ -7606,6 +7722,32 @@
           },
           "dockerAvailable" : {
             "type" : "boolean"
+          },
+          "note" : {
+            "type" : "string"
+          }
+        }
+      },
+      "DeploymentLogs" : {
+        "type" : "object",
+        "properties" : {
+          "source" : {
+            "type" : "string"
+          },
+          "container" : {
+            "type" : "string"
+          },
+          "containers" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "lines" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
           },
           "note" : {
             "type" : "string"
