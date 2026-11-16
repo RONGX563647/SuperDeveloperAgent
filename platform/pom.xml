@@ -140,8 +140,9 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
-                    <!-- 与运行参数一致：测试里的 sqlite-jdbc 也会触发 JDK 24+ 受限方法告警 -->
-                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <!-- 与运行参数一致：测试里的 sqlite-jdbc 也会触发 JDK 24+ 受限方法告警。
+                         @{argLine} 由 jacoco prepare-agent 注入；直接写死会覆盖它导致没有覆盖率数据。 -->
+                    <argLine>@{argLine} --enable-native-access=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
             <!-- 覆盖率数据供会话归档 summary 聚合（docs/session-archive-spec-v1.md §4.5） -->
