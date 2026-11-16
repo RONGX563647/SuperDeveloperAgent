@@ -199,8 +199,10 @@ async function refresh(): Promise<void> {
   display: grid;
   grid-template-columns: 232px minmax(0, 1fr);
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
   max-width: 1200px;
+  /* 撑满可视区：内容少的分区不再是一张矮卡片 + 一大片空白 */
+  min-height: calc(100vh - 104px);
   margin: 0 auto;
 }
 .settings-nav {
@@ -324,6 +326,8 @@ async function refresh(): Promise<void> {
 }
 
 .settings-card {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   padding: clamp(18px, 2vw, 26px) clamp(18px, 2.2vw, 30px) clamp(22px, 2.4vw, 32px);
   background: var(--panel);
@@ -339,6 +343,7 @@ async function refresh(): Promise<void> {
   .settings-shell {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
+    min-height: 0;
   }
   /* 分区导航改为顶部横向吸顶条：不再占掉大半屏后再滚动内容 */
   .settings-nav {
