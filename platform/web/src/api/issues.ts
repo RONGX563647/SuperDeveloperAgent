@@ -1,4 +1,5 @@
 import { apiFetch } from './http'
+import { getToken } from './auth'
 
 /** 平台任务页的 Issue 任务（与 Git 双向同步）。 */
 export type GitIssueProvider = 'GITEE' | 'GITHUB' | 'GITLAB' | ''
@@ -114,6 +115,36 @@ export function deleteGitIssueComment(
     `/api/v1/git-issues/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}`,
     { method: 'DELETE' }
   )
+}
+
+// ---------------------------------------------------------------- 任务配图
+
+/**
+ * 上传一张任务配图，返回可直接写进 Markdown 的地址。
+ *
+ * 不能用 apiFetch：它会强制 JSON Content-Type，multipart 需要浏览器自己带 boundary。
+ */
+export async function uploadIssueImage(file: File): Promise<string> {
+  const body = new FormData()
+  body.append('file', file)
+  const token = getToken()
+  const res = await fetch('/api/v1/git-issues/images', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body,
+  })
+  if (!res.ok) {
+    let message = `图片上传失败（${res.status}）`
+    try {
+      const payload = await res.json()
+      message = payload.message ?? message
+    } catch {
+      // 非 JSON 响应，保留默认文案
+    }
+    throw new Error(message)
+  }
+  const data = (await res.json()) as { url: string }
+  return data.url
 }
 
 // ---------------------------------------------------------------- Issue 同步配置

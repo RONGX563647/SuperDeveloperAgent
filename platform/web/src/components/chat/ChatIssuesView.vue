@@ -2,12 +2,13 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ChatDotRound, Close, Delete, Edit, Link, Plus, Refresh, RefreshRight, Search,
+  ChatDotRound, Close, Delete, Edit, Link, Picture, Plus, Refresh, RefreshRight, Search,
   Setting, Tickets,
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
   listGitIssueComments, listGitIssues, reopenGitIssue, syncGitIssue, updateGitIssue,
+  uploadIssueImage,
   type GitIssueCommentRow, type GitIssueRow,
 } from '../../api/issues'
 import {
@@ -329,16 +330,24 @@ const kindOptions = [
   { label: 'Feat', value: 'FEAT' },
 ]
 
-/** 分类在前端过滤：数据量小，切 tab 无需再请求。 */
-const visibleItems = computed(() => kindFilter.value
-  ? items.value.filter((i) => (i.kind ?? 'BUG') === kindFilter.value)
-  : items.value)
+/** 列表排序：默认最近更新优先；任务多时按状态/标题更好找。 */
+const sortBy = ref<'updated' | 'created' | 'title'>('updated')
 
-/** 概览统计：列表数据在前端聚合，不额外请求。 */
+/** 分类与排序在前端处理：数据量小，切换无需再请求。 */
+const visibleItems = computed(() => {
+  const rows = kindFilter.value
+    ? items.value.filter((i) => (i.kind ?? 'BUG') === kindFilter.value)
+    : [...items.value]
+  return rows.sort((a, b) => {
+    if (sortBy.value === 'title') return a.title.localeCompare(b.title, 'zh-CN')
+    if (sortBy.value === 'created') return b.createdAt - a.createdAt
+    return b.updatedAt - a.updatedAt
+  })
+})
+
+/** 概览并进页头：只保留两个关键数字，不再占一整块统计卡片。 */
 const openCount = computed(() => items.value.filter((i) => i.state === 'OPEN').length)
 const closedCount = computed(() => items.value.length - openCount.value)
-const bugCount = computed(() => items.value.filter((i) => (i.kind ?? 'BUG') === 'BUG').length)
-const featCount = computed(() => items.value.filter((i) => i.kind === 'FEAT').length)
 /** 右侧详情当前选中的任务。 */
 const selectedRow = computed(() => items.value.find((i) => i.id === selectedId.value) ?? null)
 
@@ -559,6 +568,69 @@ function closeEditor(): void {
   editingId.value = ''
 }
 
+// ---------------------------------------------------------------- 配图
+
+/** 上传中标记：按钮与拖拽区共用，避免重复上传。 */
+const uploading = ref(false)
+const fileInput = ref<HTMLInputElement | null>(null)
+
+function pickImage(): void {
+  fileInput.value?.click()
+}
+
+/** 上传图片并把 Markdown 图片语法追加到正文/评论末尾。 */
+async function insertImage(file: File, target: 'body' | 'comment'): Promise<void> {
+  if (!file.type.startsWith('image/')) {
+    ElMessage.warning('只支持图片文件')
+    return
+  }
+  uploading.value = true
+  try {
+    const url = await uploadIssueImage(file)
+    const alt = file.name.replace(/[[\]()]/g, '').trim() || '图片'
+    const markdown = `\n![${alt}](${url})\n`
+    if (target === 'body') {
+      form.body = `${form.body.replace(/\s*$/, '')}${markdown}`
+    } else {
+      commentText.value = `${commentText.value.replace(/\s*$/, '')}${markdown}`
+    }
+    ElMessage.success('图片已插入')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '图片上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+function onFileChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) void insertImage(file, 'body')
+  input.value = ''
+}
+
+/** 粘贴图片：直接从剪贴板上传，不再需要先存文件。 */
+function onPasteImage(event: ClipboardEvent, target: 'body' | 'comment'): void {
+  const items = event.clipboardData?.items
+  if (!items) return
+  for (const item of items) {
+    if (!item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (!file) continue
+    event.preventDefault()
+    void insertImage(file, target)
+    return
+  }
+}
+
+/** 拖拽图片到输入区。 */
+function onDropImage(event: DragEvent, target: 'body' | 'comment'): void {
+  const file = event.dataTransfer?.files?.[0]
+  if (!file || !file.type.startsWith('image/')) return
+  event.preventDefault()
+  void insertImage(file, target)
+}
+
 async function submit(): Promise<void> {
   if (!form.title.trim()) {
     ElMessage.warning('请填写任务标题')
@@ -670,12 +742,18 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
 
 <template>
   <div class="issues-view">
+    <input
+      ref="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+      class="hidden-file" @change="onFileChange"
+    />
     <div class="issues-shell">
       <header class="issues-head">
         <div class="issues-head-main">
           <div class="issues-title-row">
             <h1 class="issues-title">任务</h1>
-            <span class="issues-sub">Git Issue 双向同步</span>
+            <span class="issues-sub">
+              {{ openCount }} 待处理 · {{ closedCount }} 已完成 · Git 双向同步
+            </span>
           </div>
           <p class="issues-desc">
             项目托管的 Git Issue 自动双向同步；Agent 可读取并操作同一批任务。
@@ -698,26 +776,6 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
           </el-button>
         </div>
       </header>
-
-      <!-- 概览：待处理 / 已完成 + 类型分布，一屏看清任务池 -->
-      <div class="issues-stats">
-        <div class="stat-card open">
-          <span class="stat-label">待处理</span>
-          <b class="stat-value mono">{{ openCount }}</b>
-        </div>
-        <div class="stat-card closed">
-          <span class="stat-label">已完成</span>
-          <b class="stat-value mono">{{ closedCount }}</b>
-        </div>
-        <div class="stat-card bug">
-          <span class="stat-label">Bug</span>
-          <b class="stat-value mono">{{ bugCount }}</b>
-        </div>
-        <div class="stat-card feat">
-          <span class="stat-label">Feat</span>
-          <b class="stat-value mono">{{ featCount }}</b>
-        </div>
-      </div>
 
       <!-- 自动修复策略：页内卡片，说明清楚“PR 必须人工合并” -->
       <section v-if="policyOpen" class="policy-card">
@@ -802,29 +860,32 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
             >
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
-            <div class="state-tabs">
-              <button
-                v-for="opt in stateOptions" :key="opt.value" type="button"
-                class="state-tab" :class="{ active: stateFilter === opt.value }"
-                @click="stateFilter = opt.value"
-              >
-                {{ opt.label }}
-              </button>
+            <div class="filter-row">
+              <div class="state-tabs">
+                <button
+                  v-for="opt in stateOptions" :key="opt.value" type="button"
+                  class="state-tab" :class="{ active: stateFilter === opt.value }"
+                  @click="stateFilter = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+              <el-select v-model="kindFilter" size="small" class="kind-select">
+                <el-option
+                  v-for="opt in kindOptions" :key="opt.value"
+                  :label="opt.label" :value="opt.value"
+                />
+              </el-select>
+              <el-select v-model="sortBy" size="small" class="sort-select">
+                <el-option label="最近更新" value="updated" />
+                <el-option label="最新创建" value="created" />
+                <el-option label="按标题" value="title" />
+              </el-select>
             </div>
-            <div class="state-tabs kind-tabs">
-              <button
-                v-for="opt in kindOptions" :key="opt.value" type="button"
-                class="state-tab"
-                :class="[
-                  opt.value ? opt.value.toLowerCase() : '',
-                  { active: kindFilter === opt.value },
-                ]"
-                @click="kindFilter = opt.value"
-              >
-                {{ opt.label }}
-              </button>
+            <div class="toolbar-count-row">
+              <span class="toolbar-count mono">{{ visibleItems.length }} 个任务</span>
+              <span class="toolbar-hint">点击任务查看详情；支持粘贴 / 拖拽图片</span>
             </div>
-            <span class="toolbar-count mono">{{ visibleItems.length }} 个任务</span>
           </div>
 
           <div class="side-list">
@@ -893,11 +954,26 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                 />
               </div>
               <div class="editor-field">
-                <span class="editor-label">描述</span>
-                <el-input
-                  v-model="form.body" type="textarea" :rows="5" resize="none"
-                  placeholder="补充背景、复现步骤或期望结果（支持 Markdown）"
-                />
+                <div class="editor-label-row">
+                  <span class="editor-label">描述</span>
+                  <button
+                    type="button" class="editor-upload" :disabled="uploading" @click="pickImage"
+                  >
+                    <el-icon><Picture /></el-icon>{{ uploading ? '上传中…' : '插入图片' }}
+                  </button>
+                </div>
+                <div
+                  class="desc-wrap"
+                  @paste="onPasteImage($event, 'body')"
+                  @dragover.prevent
+                  @drop="onDropImage($event, 'body')"
+                >
+                  <el-input
+                    v-model="form.body" type="textarea" :rows="6" resize="none"
+                    placeholder="补充背景、复现步骤或期望结果（支持 Markdown，可直接粘贴 / 拖入截图）"
+                  />
+                  <p class="desc-hint">可直接粘贴截图或拖拽图片到这里，图片会插入到描述末尾。</p>
+                </div>
               </div>
               <div class="editor-row">
                 <div class="editor-field kind-field">
@@ -1175,13 +1251,23 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                   </div>
                 </div>
 
-                <div class="comment-compose">
+                <div
+                  class="comment-compose"
+                  @paste="onPasteImage($event, 'comment')"
+                  @dragover.prevent
+                  @drop="onDropImage($event, 'comment')"
+                >
                   <el-input
                     v-model="commentText" type="textarea" :rows="2" resize="none"
-                    placeholder="写评论；已绑定 Git 的任务会同步为远端评论"
+                    placeholder="写评论；已绑定 Git 的任务会同步为远端评论（可粘贴图片）"
                   />
                   <div class="compose-foot">
                     <span class="compose-hint">Agent 也可以直接调用工具评论 / 关闭任务</span>
+                    <button
+                      type="button" class="editor-upload" :disabled="uploading" @click="pickImage"
+                    >
+                      <el-icon><Picture /></el-icon>{{ uploading ? '上传中…' : '图片' }}
+                    </button>
                     <el-button
                       size="small" type="primary" :loading="commenting"
                       :disabled="!commentText.trim()" @click="submitComment"
@@ -1290,52 +1376,6 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   border-radius: 50%;
 }
 
-/* ---- 概览统计 ---- */
-.issues-stats {
-  display: grid;
-  flex: none;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-.stat-card {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  align-items: flex-start;
-  padding: 9px 14px 10px;
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  box-shadow: var(--shadow-1);
-}
-.stat-label {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  font-size: 11px;
-  color: var(--ink-muted);
-}
-.stat-label::before {
-  width: 6px;
-  height: 6px;
-  content: '';
-  border-radius: 50%;
-}
-.stat-card.open .stat-label::before { background: var(--warn); }
-.stat-card.closed .stat-label::before { background: var(--ok); }
-.stat-card.bug .stat-label::before { background: var(--danger); }
-.stat-card.feat .stat-label::before { background: var(--accent-ink); }
-.stat-value {
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.1;
-  color: var(--ink);
-}
-.stat-card.open .stat-value { color: var(--warn); }
-.stat-card.closed .stat-value { color: var(--ok); }
-.stat-card.bug .stat-value { color: var(--danger); }
-.stat-card.feat .stat-value { color: var(--accent-ink); }
-
 /* ---- 左右分栏 ---- */
 .issues-body {
   display: flex;
@@ -1367,6 +1407,36 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
 .search {
   width: 100%;
 }
+/* 一行筛选：状态分段 + 类型 + 排序，避免两排按钮占满左栏 */
+.filter-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.filter-row .state-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kind-select { flex: none; width: 92px; }
+.sort-select { flex: none; width: 96px; }
+.filter-row :deep(.el-select__wrapper) {
+  padding: 2px 8px;
+  font-size: 11px;
+  min-height: 26px;
+}
+.toolbar-count-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.toolbar-hint {
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .state-tabs {
   display: flex;
   gap: 3px;
@@ -1395,12 +1465,6 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   color: var(--ink);
   background: var(--surface-raised);
   box-shadow: var(--shadow-1);
-}
-.kind-tabs .state-tab.bug.active {
-  color: #b54a4a;
-}
-.kind-tabs .state-tab.feat.active {
-  color: var(--accent-ink, #4a6cf7);
 }
 .toolbar-count {
   font-size: 10px;
@@ -1845,6 +1909,44 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   font-size: 11px;
   font-weight: 600;
   color: var(--ink-muted);
+}
+.editor-label-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.editor-upload {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+}
+.editor-upload:hover:not(:disabled) {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.editor-upload:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.desc-wrap {
+  position: relative;
+}
+.desc-hint {
+  margin: 4px 0 0;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.hidden-file {
+  display: none;
 }
 .editor-row {
   display: flex;

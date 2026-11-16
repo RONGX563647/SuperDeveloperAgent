@@ -48,15 +48,27 @@ function cellAlign(cell: string): string {
 /* ---- 行内语法：粗体 / 斜体 / 行内代码 / 链接（输入已转义） ---- */
 
 const INLINE_PATTERNS: Array<[RegExp, string]> = [
-  [/`([^`]+)`/g, '<code>$1</code>'],
   [/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'],
   [/\*([^*]+)\*/g, '<em>$1</em>'],
   [/&lt;([a-z]+:\/\/[^ &]+)&gt;/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'],
   [/\[([^\]]+)\]\(([^ )]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'],
 ]
 
+/** 图片语法：任务配图与远端 Issue 里的截图都走这里。 */
+const IMAGE_PATTERN = /!\[([^\]]*)\]\(([^()\s]+)\)/g
+
+/** 只允许站内路径、http(s) 与 base64 图片，避免把 markdown 当脚本注入载体。 */
+function safeImageSrc(src: string): boolean {
+  return /^(https?:\/\/|\/|data:image\/(png|jpe?g|gif|webp);base64,)/i.test(src)
+}
+
 function renderInline(escaped: string): string {
-  let out = escaped
+  // 行内代码优先，避免把代码示例里的图片语法渲染成真实图片
+  let out = escaped.replaceAll(/`([^`]+)`/g, '<code>$1</code>')
+  out = out.replace(IMAGE_PATTERN, (match, alt, src) =>
+    safeImageSrc(src)
+      ? `<img src="${src}" alt="${alt}" loading="lazy" decoding="async">`
+      : match)
   for (const [pattern, replacement] of INLINE_PATTERNS) {
     out = out.replaceAll(pattern, replacement)
   }

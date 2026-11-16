@@ -168,6 +168,16 @@ function onRootClick(event: MouseEvent): void {
 .markdown-view a:hover {
   border-bottom-color: var(--accent-ink);
 }
+/* 任务配图 / 截图：限制最大宽度，避免撑破阅读列 */
+.markdown-view img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 10px 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
 /* 内置高亮 token（utils/markdown.ts）：浅色底的深色语法色，保证 AA */
 .markdown-view .tok-kw { color: var(--code-kw); }
 .markdown-view .tok-str { color: var(--code-str); }
