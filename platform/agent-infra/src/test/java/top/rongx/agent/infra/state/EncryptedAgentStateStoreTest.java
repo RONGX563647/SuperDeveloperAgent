@@ -73,6 +73,23 @@ class EncryptedAgentStateStoreTest {
         assertTrue(store.get("u1", "s1", "agent", SampleState.class).isEmpty());
     }
 
+    @Test
+    void anonymousSlotIsIgnored() {
+        EncryptedAgentStateStore store = newStore();
+
+        // AgentScope 在绑定会话槽位前会用 userId=null + 默认 sessionId（agent 名）探一次状态：
+        // 必须静默返回"没有状态"，而不是抛 "userId 不能为空" 让框架刷 WARN。
+        assertTrue(store.get(null, "devops-agent", "agent_state", SampleState.class).isEmpty());
+        assertTrue(store.getList(null, "devops-agent", "memory", SampleState.class).isEmpty());
+        assertFalse(store.exists(null, "devops-agent"));
+        assertTrue(store.listSessionIds(null).isEmpty());
+
+        store.save(null, "devops-agent", "agent_state", new SampleState("x"));
+        store.delete(null, "devops-agent");
+        // 匿名槽位不落盘
+        assertFalse(Files.exists(temp.resolve("state")));
+    }
+
     private EncryptedAgentStateStore newStore() {
         SecretBox box = new SecretBox(temp.toString(), "");
         return new EncryptedAgentStateStore(temp.resolve("state"), box, 60_000, 24);

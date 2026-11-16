@@ -67,7 +67,7 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     @Override
     public void save(String userId, String sessionId, String key, State state) {
-        if (state == null) {
+        if (state == null || isAnonymous(userId)) {
             return;
         }
         State toSave = state;
@@ -88,6 +88,9 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     @Override
     public void save(String userId, String sessionId, String key, List<? extends State> states) {
+        if (isAnonymous(userId)) {
+            return;
+        }
         withSessionLock(userId, sessionId, () -> {
             StringBuilder body = new StringBuilder();
             if (states != null) {
@@ -104,6 +107,9 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     @Override
     public <T extends State> Optional<T> get(String userId, String sessionId, String key,
                                              Class<T> type) {
+        if (isAnonymous(userId)) {
+            return Optional.empty();
+        }
         return withSessionLock(userId, sessionId, () -> {
             String token = readToken(file(userId, sessionId, key, VALUE_SUFFIX));
             if (token == null) {
@@ -122,6 +128,9 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     @Override
     public <T extends State> List<T> getList(String userId, String sessionId, String key,
                                              Class<T> type) {
+        if (isAnonymous(userId)) {
+            return List.of();
+        }
         return withSessionLock(userId, sessionId, () -> {
             Path file = file(userId, sessionId, key, LIST_SUFFIX);
             if (!Files.isRegularFile(file)) {
@@ -145,17 +154,23 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     @Override
     public boolean exists(String userId, String sessionId) {
-        return Files.isDirectory(sessionDirectory(userId, sessionId));
+        return !isAnonymous(userId) && Files.isDirectory(sessionDirectory(userId, sessionId));
     }
 
     @Override
     public void delete(String userId, String sessionId) {
+        if (isAnonymous(userId)) {
+            return;
+        }
         withSessionLock(userId, sessionId,
                 () -> deleteRecursively(sessionDirectory(userId, sessionId)));
     }
 
     @Override
     public void delete(String userId, String sessionId, String key) {
+        if (isAnonymous(userId)) {
+            return;
+        }
         withSessionLock(userId, sessionId, () -> {
             deleteIfExists(file(userId, sessionId, key, VALUE_SUFFIX));
             deleteIfExists(file(userId, sessionId, key, LIST_SUFFIX));
@@ -164,6 +179,9 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     @Override
     public Set<String> listSessionIds(String userId) {
+        if (isAnonymous(userId)) {
+            return Set.of();
+        }
         Path dir = userDirectory(userId);
         if (!Files.isDirectory(dir)) {
             return Set.of();
@@ -178,6 +196,16 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     }
 
     // ---------------------------------------------------------------- 路径与 IO
+
+    /**
+     * 匿名槽位：AgentScope 在会话槽位绑定前会用 {@code (userId=null, 默认 sessionId=agent 名)}
+     * 探一次状态（{@code GracefulShutdownMiddleware} 的 no-arg {@code getAgentState()}），
+     * 窗口关闭时也可能用它兜底保存。这类槽位没有真实用户，既不该落盘也不该报错——
+     * 按"没有状态"处理，避免每次对话都刷一条 WARN。
+     */
+    private static boolean isAnonymous(String userId) {
+        return userId == null || userId.isBlank();
+    }
 
     private Path userDirectory(String userId) {
         return root.resolve(safeName(userId, "userId"));
