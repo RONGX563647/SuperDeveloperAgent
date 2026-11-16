@@ -400,11 +400,29 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 return ConversationManager.this.cancelRun(runId, ownerUserId);
             }
         };
-        // 服务端配置兜底：收紧模型给的并行度与总时长，避免一次派发把工作区配额吃满
+        // 服务端配置兜底：收紧模型给的并行度、总时长与熔断阈值，避免一次派发把工作区配额吃满
         DispatchPlan capped = new DispatchPlan(plan.nodes(), plan.abortOnFailure(),
                 Math.min(plan.maxParallel(), dispatchMaxParallel),
-                Math.min(plan.maxDurationSeconds(), dispatchMaxDurationSeconds));
+                Math.min(plan.maxDurationSeconds(), dispatchMaxDurationSeconds),
+                plan.maxConsecutiveFailures());
         return dispatcher.execute(capped, backend);
+    }
+
+    @Override
+    public List<ConversationRun> recallRuns(String projectId, String ownerUserId, String keyword,
+                                            int limit) {
+        requireProject(projectId);
+        requireUser(ownerUserId);
+        int cap = Math.max(1, Math.min(limit, 20));
+        String needle = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
+        return runs.findRunsByProject(projectId, Math.min(cap * 10, 200)).stream()
+                .filter(run -> ownerUserId.equals(run.ownerUserId()))
+                .filter(run -> needle.isEmpty()
+                        || run.goal().toLowerCase(Locale.ROOT).contains(needle)
+                        || run.result().toLowerCase(Locale.ROOT).contains(needle)
+                        || run.error().toLowerCase(Locale.ROOT).contains(needle))
+                .limit(cap)
+                .toList();
     }
 
     @Override

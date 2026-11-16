@@ -273,7 +273,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `AppRuntimeInspector` | `RuntimeInspector` 实现（2026-11 新增）：按环境运行时分流——test/prod 用 `docker inspect` 读实例事实（状态/重启数/镜像 digest/端口映射/健康），dev 读平台进程日志尾部；只回答事实，不判失败原因 |
 | `JschSsh` / `SshExec` | 纯 Java SSH 实现（JSch）：连通性探测、远程命令、文件上传；`SshExec` 实现 domain 的 `SshAccess` 端口（探测 docker 版本用 `{{.Server.Version}}` 模板并兜底 `docker info`） |
 
-### 4.5 agent-tools —— 工具层（24 个主源码类，18 个 @Tool 类 / 62 个工具方法）
+### 4.5 agent-tools —— 工具层（24 个主源码类，18 个 @Tool 类 / 65 个工具方法）
 
 | 类 | 职责 |
 |---|---|
@@ -289,12 +289,12 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `DeployTools` | 部署 agent 专用：`deploy_env_status`、`deploy_run`、`deploy_save_recipe`——「把某个环境跑通并固化」；`deploy_run` 必须携带人工确认过的 `binding_id`（由 `env_mapping_draft` 生成，经 `EnvBindingPort.requireForRun` 校验，E-703） |
 | `EnvQueryTools` | 环境只读：`env_summary`（变量数/网络/端口/中间件健康，**不返回值**）、`env_var_probe`（变量指向的 host:port 属于本项目中间件/共享实例/外部地址，**不返回变量值**） |
 | `EnvCommandTools` | 环境写（L2）：`env_mapping_draft`（生成 DRAFT 绑定草案，prod 拒绝，须人工确认后才能 `deploy_run`）、`env_ensure`（确保中间件容器存在并运行，缺失按需创建并写回覆盖变量，经 `EnvProvisioner`，E-702） |
-| `WorkspaceSupervisorTools` | 工作区调度 Agent 专用（17 个）：`workspace_snapshot`、`conversation_list/search/create/rename/archive/pin/send/status/wait/cancel/summarize`、`workspace_dispatch`（DAG 并行派发）、`task_create/update/complete/list`；**只能编排会话与任务，没有任何文件/命令写能力** |
+| `WorkspaceSupervisorTools` | 工作区调度 Agent 专用（20 个）：`workspace_snapshot`、`conversation_list/search/create/rename/archive/pin/send/status/wait/cancel/summarize`、`workspace_dispatch`（DAG 并行派发 + 重试 + 熔断）、`workspace_plan`（计划清单落到任务板）、`workspace_recall`（跨会话记忆检索）、`dispatch_issue`（Git 工单直派子会话）、`task_create/update/complete/list`；**只能编排会话与任务，没有任何文件/命令写能力** |
 | `cache/ToolResultCache` | 只读工具结果的进程内语义缓存：scope + 归一化参数 + 词元相似度 ≥0.9 命中，TTL 90s / LRU 512；写工具成功后按 scope 失效；统计经 `workspace_snapshot` 暴露 |
 | `cache/CachingAgentTool` | `AgentTool` 装饰器：`ToolCatalog` 装配阶段原地包装四套 Toolkit（工具名/schema/只读标记不变），负责缓存查存、超长输出截断与调用 id 回填 |
 | `CapabilityMarketTools` | 能力市场（仅对话工具面）：`search_capabilities`、`install_capability`——查找并接入公开 MCP / Skill |
 | `OpsAgentTools` | `run_ops_agent`（L2）：把「把某环境真正跑通」委派给发布 Agent；发布 Agent 自身不注册（防递归） |
-| `GitIssueQueryTools` / `GitIssueCommandTools` | 任务页：`list_git_issues`/`get_git_issue` 只读；`create/update/comment/close/reopen/sync_git_issue` 写（与「任务」Tab 同一份数据） |
+| `GitIssueQueryTools` / `GitIssueCommandTools` | 任务看板（工作区主视图）：`list_git_issues`/`get_git_issue` 只读；`create/update/comment/close/reopen/sync_git_issue` 写（与看板同一份数据） |
 | `ProjectTools` | 项目只读（L0）：`project_info`、`list_envs` |
 | `ConfigTools` | 配置解析（L0，2026-11 新增）：`config_resolve`——项目环境优先，其次仓库 `.env` 声明，最后全量扫描 README/docs/compose/application；缺失或候选冲突返回 `NEED_USER_INPUT` 摘要，**要求 Agent 停止执行并等待用户回答**；密钥类声明值一律 `****` |
 | `ConfigResolver` | 配置解析服务（非 @Tool）：优先级与全量扫描的唯一实现，工具与 `GET /projects/{id}/config/resolve` 共用；扫描候选带 `path:line` 与 envHint，不自动写环境 |
@@ -477,12 +477,14 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 - **`PatchApplier`**（bugfix）：`FIX` 阶段的 `edits(old/new 片段)` 按 精确 → 统一换行/去行尾空白 → 忽略缩进全等 → 唯一子串 的顺序匹配；多处命中直接失败并返回结构化原因（文件、原因、候选行号）。`FixStage` 把失败原因回灌 prompt 重试最多 2 次，`files` 整文件重写仍受文件数/大小限制。
 - **工作区事件驱动**：`GET /workspaces/{projectId}/events` 提供聚合 SSE；前端 `useWorkspaceEvents`（fetch 流解析、1s→15s 指数退避重连、卸载自动断开）就地更新会话/运行，终态 1.2s 防抖对账；**仅当事件流断开时**启用 10 秒兜底轮询，页面隐藏不拉取。
 - **调度 Agent 可直接答题**：`supervisorToolkit` = 会话/任务管理工具 + 全部只读工具（仍无文件写、命令、补丁、部署工具）；系统提示要求状态/日志/配置类问题直接用只读工具回答，多步动手才派子会话。
-- **易用性**：对话首屏为三张场景卡（排查失败/部署到测试/了解项目）；顶栏收敛为「对话 + 更多（轨迹/能力/任务）」；侧栏默认只展开当前工作区；新建会话标题自动预填、工作树收进高级选项；`Ctrl/⌘+K` 打开命令面板（诊断/新建会话/刷新/切换会话）；失败运行可一键重试。
+- **易用性**：对话首屏为三张场景卡（排查失败/部署到测试/了解项目）；顶栏为「对话 / 轨迹 / 能力」三个平级视图，任务看板移至工作区「助手 / 任务」主视图；侧栏默认只展开当前工作区；新建会话标题自动预填、工作树收进高级选项；`Ctrl/⌘+K` 打开命令面板（诊断/新建会话/刷新/切换会话）；失败运行可一键重试。
 - **性能**：SQLite 每库连接池 4→8（WAL 并发读）；`UserStore`/`GiteeAccountStore` 复用连接池；事件总线改用 `directBestEffort`（慢订阅者丢弃而非无界缓冲）；前端历史写 localStorage 合并为 800ms、流式滚动合并到 `requestAnimationFrame`。
 
 ### 5.18 DAG 并行调度与上下文治理（2026-11 新增，见 [ADR-0007](adr/0007-dag-context-governance.md)）
-- **`workspace_dispatch`（DAG 并行）**：调度 Agent 一次传入节点数组（`id/message/depends_on/required/timeout_seconds`），`WorkspaceDispatchScheduler` 把无依赖节点在 `max_parallel`（默认 4，上限 8）内同时派发；每个节点在自己的虚拟线程上等待，主循环只等「任意一个完成」，N 个互不依赖的目标总耗时≈最慢节点。依赖全部成功后才会派发后继；任一对必需节点的依赖失败，整条链路标记 `SKIPPED`（不占运行配额）。派发前用 Kahn 拓扑排序拒绝循环依赖，单节点超时会 cancel 对应 run；整张 DAG 还有总时长上限（`max_duration_seconds`，默认 600，上限 1800），到点取消在跑节点并返回已完成的部分结果。
+- **`workspace_dispatch`（DAG 并行）**：调度 Agent 一次传入节点数组（`id/message/depends_on/required/timeout_seconds/retries`），`WorkspaceDispatchScheduler` 把无依赖节点在 `max_parallel`（默认 4，上限 8）内同时派发；每个节点在自己的虚拟线程上等待，主循环只等「任意一个完成」，N 个互不依赖的目标总耗时≈最慢节点。依赖全部成功后才会派发后继；任一对必需节点的依赖失败，整条链路标记 `SKIPPED`（不占运行配额）。派发前用 Kahn 拓扑排序拒绝循环依赖，单节点超时会 cancel 对应 run；整张 DAG 还有总时长上限（`max_duration_seconds`，默认 600，上限 1800），到点取消在跑节点并返回已完成的部分结果。
+- **重试与熔断**：节点终态为 `FAILED` 且配置了 `retries`（0-3）时，调度器复用同一会话重发同一条 `message`，`Active.runId` 随之切换，取消始终命中当前运行；`TIMEOUT`/`CANCELLED` 不重试。连续失败达到 `max_consecutive_failures`（默认 3，0=关闭）时熔断，即使节点不是 `required` 也停止派发剩余节点，并在 `reason` 里说明。
 - **服务端兜底**：`ConversationManager.dispatch` 用 `agent.workspace.dispatch.max-parallel` / `max-duration-seconds` 收紧模型传入的并行度与总时长——只能变小，不能放大，避免一次派发吃满工作区运行配额。
+- **计划与记忆**：`workspace_plan` 把 Plan/Todo 一次写进任务板（有 `task_id` 走更新，否则新建），前端计划进度条随流式执行每 3 秒刷新；`workspace_recall` 在该项目历史运行的目标/结论/错误里按关键词检索，仅返回当前用户自己的运行；`dispatch_issue` 把 Git 工单校验归属与开启状态后直派子会话，并登记关联任务。
 - **SSE 保活**：调度入口默认 10 分钟（`agent.chat.super-timeout-ms`，覆盖整张 DAG），普通对话 3 分钟（`agent.chat.timeout-ms`）；`SseHeartbeat` 每 15 秒（`agent.chat.heartbeat-seconds`）发送注释行保活，并与业务事件共用同一把发送锁（`SseEmitter.send` 非线程安全）。
 - **提前终止**：`required=true` 的节点失败且 `abort_on_failure`（默认 true）时，停止派发未开始节点；`required` 节点全部成功后，未开始的可选节点不再派发，已在跑的可选节点直接取消并标记 `SKIPPED`。必需节点始终允许跑完，避免误杀有用结果。
 - **前缀缓存**：`GenerateOptions.cacheControl(true)`（`agent.model.prefix-cache`，默认开）。每轮的系统提示与工具 schema 保持稳定（装配顺序固定、提示词无时间戳/随机值），由服务端复用前缀 KV；不支持 `cache_control` 的兼容服务会忽略该字段。
@@ -552,9 +554,9 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 
 ---
 
-## 7. 模型工具（@Tool）一览 —— 62 个方法 / 18 个工具类
+## 7. 模型工具（@Tool）一览 —— 65 个方法 / 18 个工具类
 
-AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 24 个主源码类，其中 18 个是 @Tool 类（合计 62 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver`、`cache/ToolResultCache`、`cache/CachingAgentTool` 等非工具类）：
+AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 24 个主源码类，其中 18 个是 @Tool 类（合计 65 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver`、`cache/ToolResultCache`、`cache/CachingAgentTool` 等非工具类）：
 
 > `supervisorToolkit` = `WorkspaceSupervisorTools`（会话/运行/任务管理）+ 全部只读工具；**不含**任何文件写、命令、补丁、部署工具，保证调度 Agent 只能编排与只读取证。
 
@@ -584,11 +586,13 @@ AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readO
 | `confirm` | L1 | ChangeTools | **只把变更单推给当前操作人**：返回 PENDING_USER_CONFIRMATION，不调用令牌服务、不执行；令牌只由已登录用户的 `POST /changes/{id}/confirm` 签发 |
 | `run_ops_agent` | L2 | OpsAgentTools | 把「把某环境真正跑通」委派给发布 Agent（仅对话工具面，发布 Agent 自身没有，防递归） |
 | `search_capabilities` / `install_capability` | L1/L2 | CapabilityMarketTools | 能力市场：查找并接入公开 MCP / Skill（仅对话工具面） |
-| `list_git_issues` / `get_git_issue` | L0 只读 | GitIssueQueryTools | 任务页只读（Issue 列表/详情） |
-| `create_git_issue` / `update_git_issue` / `comment_git_issue` / `close_git_issue` / `reopen_git_issue` / `sync_git_issue` | L2 | GitIssueCommandTools | 任务页写操作（与「任务」Tab 同一份数据） |
+| `list_git_issues` / `get_git_issue` | L0 只读 | GitIssueQueryTools | 任务看板只读（Issue 列表/详情） |
+| `create_git_issue` / `update_git_issue` / `comment_git_issue` / `close_git_issue` / `reopen_git_issue` / `sync_git_issue` | L2 | GitIssueCommandTools | 任务看板写操作（工作区主视图同一份数据） |
 | `workspace_snapshot` / `conversation_list` / `conversation_search` / `conversation_status` / `conversation_wait` / `conversation_summarize` | L0 只读 | WorkspaceSupervisorTools | 调度 Agent 的工作区视图：快照（含 `tool_cache` 命中统计）、会话检索、运行状态/等待、会话摘要 |
 | `conversation_create` / `conversation_rename` / `conversation_archive` / `conversation_pin` / `conversation_send` / `conversation_cancel` | L2 | WorkspaceSupervisorTools | 调度 Agent 的编排动作：建/改/归档/置顶会话，派发消息（建运行）与取消（仍无任何文件/命令写能力） |
-| `workspace_dispatch` | L2 | WorkspaceSupervisorTools | **DAG 并行派发**：节点数组（`depends_on/required/timeout_seconds`）一次派发、并行等待、失败熔断与提前终止；单节点与整张 DAG 双超时（服务端上限可再收紧）；聚合结果有长度上限 |
+| `workspace_dispatch` | L2 | WorkspaceSupervisorTools | **DAG 并行派发**：节点数组（`depends_on/required/timeout_seconds/retries`）一次派发、并行等待；FAILED 节点按 `retries`（0-3）复用同会话重发；必需节点失败、全部成功或连续失败达到 `max_consecutive_failures`（默认 3）时提前终止；单节点与整张 DAG 双超时（服务端上限可再收紧）；聚合结果有长度上限 |
+| `workspace_plan` / `workspace_recall` | L2/L0 只读 | WorkspaceSupervisorTools | 计划清单（Plan/Todo）一次登记到任务板并返回 task id；跨会话记忆按关键词检索当前用户在本项目的最近运行（目标/结论/错误） |
+| `dispatch_issue` | L2 | WorkspaceSupervisorTools | 把任务看板的 Git 工单直派成子会话：校验归属与开启状态，新建会话 + 发送工单正文 + 登记关联任务，子会话完成后回写工单评论 |
 | `task_create` / `task_update` / `task_complete` / `task_list` | L2 | WorkspaceSupervisorTools | 工作区任务管理 |
 
 ---
@@ -602,8 +606,8 @@ Vue 3 + Vite + TypeScript strict + Element Plus；`npm run build` 走 vue-tsc �
 | 路由 | 视图 | 职责 |
 |---|---|---|
 | `/login` | `LoginView.vue` | 登录（公开页） |
-| `/` → `/chat` | `ChatView.vue` | 对话（SSE 流式、工具调用卡片、审批卡片、**流式思考块、轨迹视图、DeepSeek 费用统计、本机环境状态条**）；首屏为三张场景卡（排查失败/部署到测试/了解项目），顶栏为「对话 + 更多」两级结构 |
-| `/workspace/:projectId` | `WorkspaceHomeView.vue` | 工作区首页：左会话 / 中调度 Agent / 右任务与运行；事件驱动刷新、`Ctrl/⌘+K` 命令面板、一键诊断、失败重试、运行「最近」聚合「全部引擎」账本 |
+| `/` → `/chat` | `ChatView.vue` | 对话（SSE 流式、工具调用卡片、审批卡片、**流式思考块、轨迹视图、DeepSeek 费用统计、本机环境状态条**）；首屏为三张场景卡（排查失败/部署到测试/了解项目），顶栏为「对话 + 更多（轨迹/能力）」两级结构；**任务看板已上移到工作区** |
+| `/workspace/:projectId` | `WorkspaceHomeView.vue` | 工作区首页：顶部「助手 / 任务」主视图切换（任务 = Git 工单看板，原会话页 Tab）；助手视图左会话 / 中调度 Agent / 右任务与运行，右侧任务面板带计划完成率；事件驱动刷新 + 流式期间 3s 轮询任务板、`Ctrl/⌘+K` 命令面板、一键诊断、失败重试、运行「最近」聚合「全部引擎」账本 |
 | `/pipeline` | `PipelineView.vue` | 流水线工作台（触发、**命令级预览、单步重试、产物下载**、历史（可删除/耗时）、stage 时间线、日志） |
 | `/projects` | `ProjectListView.vue` | 项目列表 |
 | `/projects/intake` | `ProjectIntakeView.vue` | 项目接入向导（本地目录/Gitee 仓库选择） |

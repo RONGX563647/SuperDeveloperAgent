@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Aim, CaretRight, ChatDotRound, Check, Plus, Promotion, Refresh, Search,
+  Aim, CaretRight, ChatDotRound, Check, Plus, Promotion, Refresh, Search, Tickets,
 } from '@element-plus/icons-vue'
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
@@ -19,6 +19,7 @@ import {
   type ConversationRow, type RunLedgerRow, type RunRow, type TaskRow,
 } from '../api/workspace'
 import { envLabel } from '../utils/pipelineLabels'
+import ChatIssuesView from '../components/chat/ChatIssuesView.vue'
 
 /**
  * 工作区首页：中间调度 Agent + 右侧任务/运行。
@@ -26,12 +27,20 @@ import { envLabel } from '../utils/pipelineLabels'
  * 工作区 = 项目；调度 Agent 只做编排（创建/派发/跟踪/汇总），没有任何写工具，
  * 真正执行落到子会话，生产写操作仍由人工确认。
  * 消息区与对话页共用 ConversationTimeline / composer 样式，保持同一套阅读节奏。
+ *
+ * 任务看板（Git 工单 + Bug 自动修复）原来在会话页的「任务」Tab，现上移为
+ * 工作区级主视图，与「助手」平级切换：会话页回归纯对话，工单归属于项目。
  */
 const route = useRoute()
 const router = useRouter()
 const projectId = computed(() => String(route.params.projectId ?? appStore.projectId))
 const projectName = ref('')
 const projects = ref<ProjectRow[]>([])
+
+/** 工作区主视图：助手（调度会话）/ 任务（Git 工单看板）。 */
+const viewMode = ref<'assistant' | 'tasks'>('assistant')
+/** 任务看板的待处理数量（由 ChatIssuesView 回传，用于顶栏角标）。 */
+const issueCount = ref(0)
 
 const conversations = ref<ConversationRow[]>([])
 /**
@@ -106,11 +115,22 @@ const kpis = computed(() => ({
   openTasks: openTasks.value.length,
 }))
 
+/** 计划进度：调度 Agent 用任务板当 Plan/Todo，顶部直接给完成率。 */
+const planProgress = computed(() => {
+  const total = tasks.value.filter((t) => t.status !== 'CANCELLED').length
+  const done = doneTasks.value.length
+  return {
+    total,
+    done,
+    percent: total ? Math.round((done / total) * 100) : 0,
+  }
+})
+
 const actionCards = [
   { title: '查看工作区状态', desc: '会话、运行与任务一屏概览', prompt: '工作区现在什么状态？' },
+  { title: '拆分计划并派发', desc: '先登记任务清单，再按依赖并行执行', prompt: '把这件事拆成计划：先用任务板登记步骤，再按依赖并行派发会话，最后汇总结果' },
   { title: '处理失败运行', desc: '定位失败会话并重新派发', prompt: '列出运行中的会话和最近失败，给出处理建议' },
   { title: '新建修复会话', desc: '创建会话并跟踪到完成', prompt: '新建一个会话修复构建失败，并跟踪到完成' },
-  { title: '登记待办任务', desc: '把问题沉淀成可跟踪任务', prompt: '汇总今天的运行，把待办登记成任务' },
 ]
 
 /** 调度 Agent 的发送/停止都落到常驻会话上，避免视图重建时重建连接。 */
@@ -473,7 +493,9 @@ const paletteCommands = computed<PaletteCommand[]>(() => {
     { id: 'diagnose', title: '一键诊断工作区', hint: '健康检查', run: diagnose },
     { id: 'new', title: '新建会话', hint: '⌘N', run: openCreate },
     { id: 'refresh', title: '刷新工作区', hint: 'R', run: () => void loadAll() },
-    { id: 'tasks', title: '切换到任务面板', hint: '面板', run: () => { sideTab.value = 'tasks' } },
+    { id: 'view-tasks', title: '打开任务看板', hint: '视图', run: () => { viewMode.value = 'tasks' } },
+    { id: 'view-assistant', title: '返回工作区助手', hint: '视图', run: () => { viewMode.value = 'assistant' } },
+    { id: 'tasks', title: '切换到右侧任务面板', hint: '面板', run: () => { sideTab.value = 'tasks' } },
     { id: 'runs', title: '切换到运行面板', hint: '面板', run: () => { sideTab.value = 'runs' } },
     ...workerConversations.value.slice(0, 8).map((row) => ({
       id: `conv-${row.id}`,
@@ -669,6 +691,38 @@ watch(() => appStore.projectId, (id) => {
   void router.replace({ name: 'workspace', params: { projectId: id } })
 })
 
+/**
+ * 计划清单实时刷新：调度 Agent 在流式执行中调用 workspace_plan / task_update，
+ * 任务板与计划进度条需要跟着动，不能等整轮结束才刷新。
+ */
+let boardTimer: number | undefined
+async function refreshBoard(): Promise<void> {
+  try {
+    const [taskList, runList] = await Promise.all([
+      listTasks(projectId.value),
+      listRuns(projectId.value, 30),
+    ])
+    tasks.value = taskList
+    runs.value = runList
+  } catch {
+    // 轮询失败不打断对话，下一轮继续
+  }
+}
+
+watch(streaming, (on) => {
+  if (on) {
+    if (boardTimer === undefined) {
+      boardTimer = window.setInterval(() => void refreshBoard(), 3_000)
+    }
+  } else {
+    if (boardTimer !== undefined) {
+      window.clearInterval(boardTimer)
+      boardTimer = undefined
+    }
+    void refreshBoard()
+  }
+})
+
 watch(projectId, () => {
   conversations.value = []
   tasks.value = []
@@ -693,6 +747,7 @@ onMounted(async () => {
 onUnmounted(() => {
   mounted = false
   if (timer) clearInterval(timer)
+  if (boardTimer !== undefined) clearInterval(boardTimer)
   if (reconcileTimer) clearTimeout(reconcileTimer)
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
   document.removeEventListener('keydown', onGlobalKeydown)
@@ -724,11 +779,26 @@ onUnmounted(() => {
 
     <div class="ws-bar">
       <div class="ws-bar-left">
-        <h2>工作区助手</h2>
-        <span class="tag">只读 · 负责编排</span>
-        <span class="live" :class="{ on: liveConnected }">
+        <div class="seg inline view-seg" role="tablist" aria-label="工作区视图">
+          <button
+            type="button" role="tab" :aria-selected="viewMode === 'assistant'"
+            :class="{ on: viewMode === 'assistant' }" @click="viewMode = 'assistant'"
+          >
+            <el-icon><ChatDotRound /></el-icon>助手
+          </button>
+          <button
+            type="button" role="tab" :aria-selected="viewMode === 'tasks'"
+            :class="{ on: viewMode === 'tasks' }" @click="viewMode = 'tasks'"
+          >
+            <el-icon><Tickets /></el-icon>任务
+            <span v-if="issueCount" class="seg-count">{{ issueCount }}</span>
+          </button>
+        </div>
+        <span v-if="viewMode === 'assistant'" class="tag">只读 · 负责编排</span>
+        <span v-if="viewMode === 'assistant'" class="live" :class="{ on: liveConnected }">
           <i class="live-dot"></i>{{ liveConnected ? '实时' : '轮询兜底' }}
         </span>
+        <span v-else class="tag">Git 工单 · 自动双向同步</span>
       </div>
       <div class="ws-bar-right">
         <span class="ws-kpis">
@@ -736,13 +806,14 @@ onUnmounted(() => {
         </span>
         <span v-if="lastRefreshed" class="ws-updated">更新于 {{ timeAgo(lastRefreshed) }}</span>
         <button
+          v-if="viewMode === 'assistant'"
           type="button" class="text-btn"
           :disabled="streaming || !projection.messages.length" @click="clearChat"
         >清空</button>
       </div>
     </div>
 
-    <div class="ws-body">
+    <div v-if="viewMode === 'assistant'" class="ws-body">
       <!-- 中：工作区助手（与对话页共用时间线 / composer 视觉） -->
       <section class="chat-pane">
         <div ref="messageListRef" class="chat-scroll" @scroll.passive="onChatScroll">
@@ -834,6 +905,17 @@ onUnmounted(() => {
           >
             <el-icon><Plus /></el-icon>
           </button>
+        </div>
+
+        <div v-if="sideTab === 'tasks' && planProgress.total" class="plan-bar">
+          <div class="plan-text">
+            <span>计划进度</span>
+            <span class="mono">{{ planProgress.done }}/{{ planProgress.total }} · {{ planProgress.percent }}%</span>
+          </div>
+          <div class="plan-track" role="progressbar" :aria-valuenow="planProgress.percent"
+               aria-valuemin="0" aria-valuemax="100">
+            <i :style="{ width: `${planProgress.percent}%` }"></i>
+          </div>
         </div>
 
         <div class="side-body">
@@ -931,6 +1013,11 @@ onUnmounted(() => {
         </div>
       </aside>
     </div>
+
+    <!-- 任务看板：原会话页「任务」Tab，上移为项目级视图 -->
+    <section v-else class="task-shell">
+      <ChatIssuesView @count="issueCount = $event" />
+    </section>
 
     <!-- 新建会话 -->
     <el-dialog v-model="createOpen" title="新建会话" width="420px" align-center>
@@ -1128,6 +1215,80 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+/* 视图切换：助手 / 任务（任务看板已从会话页上移） */
+.ws-views {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border-radius: 9px;
+}
+.ws-views button {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+.ws-views button:hover { color: var(--ink); }
+.ws-views button.on {
+  font-weight: 500;
+  color: var(--ink);
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 8%);
+}
+.view-count {
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+/* 任务看板：整块铺满工作区，内部沿用 ChatIssuesView 的宽度约束与内边距 */
+.task-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.task-shell > * { flex: 1; min-height: 0; }
+
+/* 计划进度：调度 Agent 的 Plan/Todo 完成率 */
+.plan-bar {
+  flex: none;
+  padding: 6px 12px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.plan-text {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+}
+.plan-track {
+  height: 4px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+.plan-track i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
 }
 
 /* 通用控件 */

@@ -169,6 +169,43 @@ class WorkspaceDispatchSchedulerTest {
     }
 
     @Test
+    @DisplayName("节点失败可按 retries 自动重试，复用同一会话重发同一指令")
+    void failedNodeRetries() {
+        FakeBackend backend = new FakeBackend();
+        backend.transientFailures.put("flaky", new AtomicInteger(1));
+        DispatchPlan plan = new DispatchPlan(List.of(
+                new DispatchNode("flaky", null, null, null, null, "目标-flaky", List.of(),
+                        true, 60, 1)), true, 1);
+
+        DispatchResult result = scheduler.execute(plan, backend);
+
+        assertTrue(result.find("flaky").orElseThrow().succeeded());
+        assertEquals(List.of("flaky", "flaky"), backend.sentOrder);
+        // 重试复用同一会话，不会重复新建
+        assertEquals(1, backend.conversationsCreated.get());
+    }
+
+    @Test
+    @DisplayName("连续失败达到阈值触发熔断，剩余节点不再派发")
+    void consecutiveFailuresTripBreaker() {
+        FakeBackend backend = new FakeBackend();
+        backend.failNodes.addAll(Set.of("a", "b"));
+        DispatchPlan plan = new DispatchPlan(List.of(
+                node("a", 60, false),
+                node("b", 60, false),
+                node("c", 60, false),
+                node("d", 60, false)), false, 1, 600, 2);
+
+        DispatchResult result = scheduler.execute(plan, backend);
+
+        assertTrue(result.earlyStopped());
+        assertTrue(result.reason().contains("熔断"), "原因应说明熔断：" + result.reason());
+        assertEquals(2, backend.sentOrder.size(), "熔断后不应继续派发");
+        assertTrue(result.find("c").orElseThrow().skipped());
+        assertTrue(result.find("d").orElseThrow().skipped());
+    }
+
+    @Test
     @DisplayName("计划参数越界时收敛到安全默认值")
     void planValuesAreClamped() {
         DispatchPlan plan = new DispatchPlan(List.of(node("a", 60, true)), true, 0, 99_999);
@@ -177,6 +214,11 @@ class WorkspaceDispatchSchedulerTest {
         assertEquals(DispatchPlan.MAX_MAX_DURATION_SECONDS, plan.maxDurationSeconds());
         assertEquals(DispatchPlan.DEFAULT_MAX_DURATION_SECONDS,
                 new DispatchPlan(List.of(node("a", 60, true)), true, 4).maxDurationSeconds());
+        assertEquals(0, new DispatchPlan(List.of(node("a", 60, true)), true, 4, 600, 0)
+                .maxConsecutiveFailures(), "0 表示关闭熔断");
+        assertEquals(DispatchPlan.MAX_MAX_CONSECUTIVE_FAILURES,
+                new DispatchPlan(List.of(node("a", 60, true)), true, 4, 600, 99)
+                        .maxConsecutiveFailures());
     }
 
     private static DispatchNode node(String id, int timeoutSeconds, boolean required) {
@@ -191,12 +233,16 @@ class WorkspaceDispatchSchedulerTest {
         final List<String> sentOrder = Collections.synchronizedList(new ArrayList<>());
         final Set<String> failNodes = ConcurrentHashMap.newKeySet();
         final Set<String> fastNodes = ConcurrentHashMap.newKeySet();
+        /** 前 N 次运行失败的节点（用于验证自动重试）。 */
+        final Map<String, AtomicInteger> transientFailures = new ConcurrentHashMap<>();
         final AtomicInteger sequence = new AtomicInteger();
+        final AtomicInteger conversationsCreated = new AtomicInteger();
         volatile long delayMillis = 20;
         volatile String rejectMessage;
 
         @Override
         public String createConversation(String title, String env, String worktree) {
+            conversationsCreated.incrementAndGet();
             return "c-" + sequence.incrementAndGet();
         }
 
@@ -231,6 +277,9 @@ class WorkspaceDispatchSchedulerTest {
             if (cancelled.containsKey(runId)) {
                 status = RunStatus.CANCELLED;
             } else if (failNodes.contains(nodeId)) {
+                status = RunStatus.FAILED;
+            } else if (transientFailures.containsKey(nodeId)
+                    && transientFailures.get(nodeId).getAndUpdate(v -> v > 0 ? v - 1 : 0) > 0) {
                 status = RunStatus.FAILED;
             } else if (System.currentTimeMillis() - begin >= waitFor) {
                 status = RunStatus.SUCCEEDED;

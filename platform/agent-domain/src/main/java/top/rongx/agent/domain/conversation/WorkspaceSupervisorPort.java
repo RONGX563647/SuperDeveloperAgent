@@ -48,6 +48,12 @@ public interface WorkspaceSupervisorPort {
     /** 汇总某个会话的最近运行结果（供调度 Agent 汇报）。 */
     String summarize(String conversationId, String ownerUserId);
 
+    /**
+     * 跨会话记忆检索：在当前项目的历史运行里按关键词匹配目标 / 结论 / 错误，
+     * 只返回该 owner 自己的运行，避免把别人的工作区内容带进上下文。
+     */
+    List<ConversationRun> recallRuns(String projectId, String ownerUserId, String keyword, int limit);
+
     WorkspaceTask createTask(String projectId, String ownerUserId, String goal,
                              String expectedOutput, int priority, String conversationId);
 

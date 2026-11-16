@@ -36,6 +36,8 @@ import top.rongx.agent.domain.conversation.DispatchResult;
  *       不再派发未开始的可选节点，并取消在跑的可选节点；</li>
  *   <li><b>有界</b>：单节点超时会 cancel 对应 run；同时在跑节点数受 maxParallel 限制；
  *       整张 DAG 还有总时长上限，超时取消在跑节点并如实返回部分结果。</li>
+ *   <li><b>韧性</b>：节点执行失败（FAILED）可自动重试，复用同一会话重发同一条指令；
+ *       连续失败达到阈值时熔断，不再继续派发剩余节点。</li>
  * </ul>
  *
  * <p>不依赖 Spring：通过 {@link Backend} 注入会话创建 / 派发 / 等待 / 取消，便于单测。
@@ -60,8 +62,34 @@ public final class WorkspaceDispatchScheduler {
         boolean cancel(String runId);
     }
 
-    private record Active(String conversationId, String runId,
-                          CompletableFuture<DispatchNodeResult> future) {
+    /** 在跑节点：runId 可变，重试时切换到新的运行，让取消操作始终命中当前运行。 */
+    private static final class Active {
+        private final String conversationId;
+        private final CompletableFuture<DispatchNodeResult> future;
+        private volatile String runId;
+
+        Active(String conversationId, String runId,
+               CompletableFuture<DispatchNodeResult> future) {
+            this.conversationId = conversationId;
+            this.runId = runId == null ? "" : runId;
+            this.future = future;
+        }
+
+        String conversationId() {
+            return conversationId;
+        }
+
+        String runId() {
+            return runId;
+        }
+
+        void runId(String value) {
+            this.runId = value == null ? "" : value;
+        }
+
+        CompletableFuture<DispatchNodeResult> future() {
+            return future;
+        }
     }
 
     public DispatchResult execute(DispatchPlan plan, Backend backend) {
@@ -75,6 +103,7 @@ public final class WorkspaceDispatchScheduler {
         Map<String, Active> active = new LinkedHashMap<>();
         boolean earlyStopped = false;
         String reason = "";
+        int consecutiveFailures = 0;
 
         ExecutorService waiters = Executors.newVirtualThreadPerTaskExecutor();
         try {
@@ -121,12 +150,18 @@ public final class WorkspaceDispatchScheduler {
                      it.hasNext(); ) {
                     Map.Entry<String, Active> entry = it.next();
                     if (entry.getValue().future().isDone()) {
-                        results.put(entry.getKey(), join(entry.getValue().future()));
+                        DispatchNodeResult result = join(entry.getValue().future());
+                        results.put(entry.getKey(), result);
+                        if (result.succeeded()) {
+                            consecutiveFailures = 0;
+                        } else if (!result.skipped()) {
+                            consecutiveFailures++;
+                        }
                         it.remove();
                     }
                 }
 
-                // 4. 提前终止：必需节点失败熔断 / 必需节点全部成功后放弃可选节点
+                // 4. 提前终止：必需节点失败熔断 / 连续失败熔断 / 必需节点全部成功后放弃可选节点
                 if (!earlyStopped) {
                     Optional<DispatchNodeResult> failedRequired = results.values().stream()
                             .filter(r -> !r.succeeded() && !r.skipped())
@@ -136,6 +171,10 @@ public final class WorkspaceDispatchScheduler {
                         earlyStopped = true;
                         reason = "必需节点 " + failedRequired.get().nodeId() + " "
                                 + failedRequired.get().status() + "，提前终止剩余节点";
+                    } else if (plan.maxConsecutiveFailures() > 0
+                            && consecutiveFailures >= plan.maxConsecutiveFailures()) {
+                        earlyStopped = true;
+                        reason = "连续 " + consecutiveFailures + " 个节点失败，触发熔断，提前终止剩余节点";
                     } else if (requiredAllSucceeded(nodes, results)
                             && nodes.values().stream().anyMatch(n -> !n.required()
                             && !results.containsKey(n.id()))) {
@@ -218,33 +257,79 @@ public final class WorkspaceDispatchScheduler {
             String message = runId == null || runId.isBlank() ? "派发失败：没有返回 runId" : runId;
             return completedFailure(node, conversationId, "", message, start);
         }
-        long deadline = start + node.timeoutSeconds() * 1000L;
-        String cid = conversationId;
-        CompletableFuture<DispatchNodeResult> future = CompletableFuture.supplyAsync(
-                () -> await(node, cid, runId, deadline, backend), waiters);
-        return new Active(conversationId, runId, future);
+        Active active = new Active(conversationId, runId, new CompletableFuture<>());
+        waiters.submit(() -> {
+            try {
+                active.future().complete(await(node, active, backend, start));
+            } catch (RuntimeException e) {
+                active.future().complete(new DispatchNodeResult(node.id(), conversationId,
+                        active.runId(), "FAILED", false, "", truncate(safeMessage(e), MAX_ERROR_CHARS),
+                        System.currentTimeMillis() - start));
+            }
+        });
+        return active;
     }
 
-    private DispatchNodeResult await(DispatchNode node, String conversationId, String runId,
-                                     long deadline, Backend backend) {
-        long start = System.currentTimeMillis();
+    /**
+     * 等待节点终态；FAILED 且还有重试次数时，复用同一会话重发同一条指令。
+     *
+     * <p>重试不重置 start，便于汇报总耗时；每次尝试都有独立的节点超时预算。
+     * TIMEOUT / CANCELLED 不重试：前者往往意味着环境或模型卡死，重试只会拖长整张 DAG。
+     */
+    private DispatchNodeResult await(DispatchNode node, Active active, Backend backend,
+                                     long start) {
+        int attempt = 0;
         while (true) {
+            long deadline = System.currentTimeMillis() + node.timeoutSeconds() * 1000L;
+            DispatchNodeResult result = awaitOnce(node, active, deadline, backend, start);
+            if (result.succeeded() || attempt >= node.retries()
+                    || !"FAILED".equals(result.status())) {
+                return result;
+            }
+            attempt++;
+            log.info("节点 {} 第 {} 次失败，自动重试 {}/{}：{}",
+                    node.id(), attempt, attempt, node.retries(),
+                    truncate(result.error(), 120));
+            try {
+                String nextRunId = backend.send(active.conversationId(), node.message());
+                if (nextRunId == null || nextRunId.isBlank() || nextRunId.startsWith("err:")) {
+                    String message = nextRunId == null || nextRunId.isBlank()
+                            ? "重试派发失败：没有返回 runId" : nextRunId;
+                    return new DispatchNodeResult(node.id(), active.conversationId(),
+                            active.runId(), "FAILED", false, "",
+                            truncate("已重试 " + attempt + " 次；" + message, MAX_ERROR_CHARS),
+                            System.currentTimeMillis() - start);
+                }
+                active.runId(nextRunId);
+            } catch (RuntimeException e) {
+                return new DispatchNodeResult(node.id(), active.conversationId(),
+                        active.runId(), "FAILED", false, "",
+                        truncate("已重试 " + attempt + " 次；" + safeMessage(e), MAX_ERROR_CHARS),
+                        System.currentTimeMillis() - start);
+            }
+        }
+    }
+
+    private DispatchNodeResult awaitOnce(DispatchNode node, Active active, long deadline,
+                                         Backend backend, long start) {
+        while (true) {
+            String runId = active.runId();
             long remaining = deadline - System.currentTimeMillis();
             if (remaining <= 0) {
                 cancelQuietly(backend, runId);
-                return new DispatchNodeResult(node.id(), conversationId, runId, "TIMEOUT", false,
-                        "", "等待超时（" + node.timeoutSeconds() + "s）",
+                return new DispatchNodeResult(node.id(), active.conversationId(), runId, "TIMEOUT",
+                        false, "", "等待超时（" + node.timeoutSeconds() + "s）",
                         System.currentTimeMillis() - start);
             }
             ConversationRun run;
             try {
                 run = backend.waitForRun(runId, Math.min(remaining, WAIT_SLICE_MILLIS));
             } catch (RuntimeException e) {
-                return new DispatchNodeResult(node.id(), conversationId, runId, "FAILED", false,
-                        "", safeMessage(e), System.currentTimeMillis() - start);
+                return new DispatchNodeResult(node.id(), active.conversationId(), runId, "FAILED",
+                        false, "", safeMessage(e), System.currentTimeMillis() - start);
             }
             if (run != null && run.status().terminal()) {
-                return toResult(node, conversationId, run, start);
+                return toResult(node, active.conversationId(), run, start);
             }
         }
     }

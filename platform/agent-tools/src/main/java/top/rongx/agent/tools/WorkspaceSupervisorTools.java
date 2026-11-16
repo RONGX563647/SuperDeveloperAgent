@@ -2,6 +2,9 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import org.springframework.stereotype.Component;
@@ -12,8 +15,11 @@ import top.rongx.agent.domain.conversation.DispatchNodeResult;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.WorkspacePlanItem;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
+import top.rongx.agent.domain.gitissue.GitIssue;
+import top.rongx.agent.domain.gitissue.GitIssueService;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.tools.cache.ToolResultCache;
 
@@ -34,12 +40,17 @@ import top.rongx.agent.tools.cache.ToolResultCache;
 public class WorkspaceSupervisorTools {
 
     private static final long MAX_WAIT_SECONDS = 60L;
+    private static final DateTimeFormatter RECALL_TIME =
+            DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
     private final WorkspaceSupervisorPort supervisor;
+    private final GitIssueService issues;
     private final ToolResultCache cache;
 
-    public WorkspaceSupervisorTools(WorkspaceSupervisorPort supervisor, ToolResultCache cache) {
+    public WorkspaceSupervisorTools(WorkspaceSupervisorPort supervisor, GitIssueService issues,
+                                    ToolResultCache cache) {
         this.supervisor = supervisor;
+        this.issues = issues;
         this.cache = cache;
     }
 
@@ -203,9 +214,10 @@ public class WorkspaceSupervisorTools {
             description = """
                     把多个子目标按 DAG 一次性并行派发并等待汇总（替代逐个 send + wait 的串行方式）。
                     无依赖的节点会同时运行；有依赖的节点用 depends_on 指定前置节点。
-                    必需节点失败、或必需节点全部成功时会提前终止剩余可选节点。
+                    节点失败可按 retries 自动重试（复用同一会话重发同一指令，最多 3 次）。
+                    必需节点失败、必需节点全部成功、或连续失败达到 max_consecutive_failures 时会提前终止。
                     nodes 示例：
-                    [{"id":"build","message":"构建并修复编译错误","required":true},
+                    [{"id":"build","message":"构建并修复编译错误","required":true,"retries":1},
                      {"id":"test","message":"跑单测并汇总失败用例","depends_on":["build"]},
                      {"id":"docs","message":"更新相关文档","required":false}]
                     只有需要"边跑边改"或依赖人工确认时才退回 conversation_send。""",
@@ -213,17 +225,190 @@ public class WorkspaceSupervisorTools {
     public String dispatch(ProjectContext ctx,
                            @ToolParam(name = "nodes",
                                    description = "节点数组；每项必填 id、message，可选 conversation_id、"
-                                           + "title、env、worktree、depends_on、required、timeout_seconds")
+                                           + "title、env、worktree、depends_on、required、"
+                                           + "timeout_seconds、retries")
                            List<DispatchNode> nodes,
                            @ToolParam(name = "abort_on_failure", required = false,
                                    description = "必需节点失败后是否停止剩余节点，默认 true")
                            Boolean abortOnFailure,
                            @ToolParam(name = "max_parallel", required = false,
                                    description = "并行上限 1-8，默认 4")
-                           Integer maxParallel) {
+                           Integer maxParallel,
+                           @ToolParam(name = "max_duration_seconds", required = false,
+                                   description = "整张 DAG 总时长上限 1-1800 秒，默认 600")
+                           Integer maxDurationSeconds,
+                           @ToolParam(name = "max_consecutive_failures", required = false,
+                                   description = "连续失败熔断阈值 1-10，默认 3；0=关闭")
+                           Integer maxConsecutiveFailures) {
         return guard(() -> formatDispatch(supervisor.dispatch(ctx.projectId(), ctx.userId(),
                 new DispatchPlan(nodes, !Boolean.FALSE.equals(abortOnFailure),
-                        maxParallel == null ? DispatchPlan.DEFAULT_MAX_PARALLEL : maxParallel))));
+                        maxParallel == null ? DispatchPlan.DEFAULT_MAX_PARALLEL : maxParallel,
+                        maxDurationSeconds == null
+                                ? DispatchPlan.DEFAULT_MAX_DURATION_SECONDS : maxDurationSeconds,
+                        maxConsecutiveFailures == null
+                                ? DispatchPlan.DEFAULT_MAX_CONSECUTIVE_FAILURES
+                                : maxConsecutiveFailures))));
+    }
+
+    @Tool(name = "workspace_plan",
+            description = """
+                    把计划清单（Plan/Todo）一次登记到工作区任务板，返回每个计划项的 task id。
+                    已有 task_id 的项按 goal/expected_output/status 更新，其余新建；之后用 task_update 推进状态。
+                    适合多步骤目标开工前先让用户看见完整计划，再逐步派发执行。""",
+            readOnly = false, concurrencySafe = false)
+    public String plan(ProjectContext ctx,
+                       @ToolParam(name = "items",
+                               description = "计划项数组；每项必填 goal，可选 task_id、expected_output、"
+                                       + "priority(1-5)、status(TODO/RUNNING/BLOCKED/DONE/CANCELLED)、"
+                                       + "conversation_id")
+                       List<WorkspacePlanItem> items) {
+        return guard(() -> {
+            if (items == null || items.isEmpty()) {
+                return "err: items 不能为空";
+            }
+            StringBuilder sb = new StringBuilder("plan:\n");
+            for (WorkspacePlanItem item : items) {
+                if (item.goal() == null || item.goal().isBlank()) {
+                    return "err: 每个计划项都必须有 goal";
+                }
+                TaskStatus status = parseStatus(item.status());
+                WorkspaceTask task;
+                if (item.taskId() != null && !item.taskId().isBlank()) {
+                    task = supervisor.updateTask(ctx.projectId(), ctx.userId(), item.taskId().trim(),
+                            item.goal(), item.expectedOutput(), status);
+                } else {
+                    task = supervisor.createTask(ctx.projectId(), ctx.userId(), item.goal(),
+                            item.expectedOutput(),
+                            item.priority() == null ? 3 : item.priority(),
+                            item.conversationId());
+                    if (status != null && status != TaskStatus.TODO) {
+                        task = supervisor.updateTask(ctx.projectId(), ctx.userId(), task.id(),
+                                null, null, status);
+                    }
+                }
+                sb.append("- ").append(task.id())
+                        .append("  [").append(task.status()).append(']')
+                        .append("  p").append(task.priority())
+                        .append("  ").append(oneLine(task.goal(), 120))
+                        .append('\n');
+            }
+            return sb.toString().trim();
+        });
+    }
+
+    @Tool(name = "workspace_recall",
+            description = """
+                    跨会话记忆检索：在当前项目的历史运行里按关键词匹配目标/结论/错误，
+                    返回会话 id、时间、状态与摘要。关键词为空时返回最近运行。
+                    开工前用它回忆"上次这类问题怎么解决的"，避免重复踩坑。只读。""",
+            readOnly = true, concurrencySafe = true)
+    public String recall(ProjectContext ctx,
+                         @ToolParam(name = "keyword", required = false,
+                                 description = "关键词，可空")
+                         String keyword,
+                         @ToolParam(name = "limit", required = false,
+                                 description = "返回条数 1-20，默认 5")
+                         Integer limit) {
+        return guard(() -> {
+            List<ConversationRun> runs = supervisor.recallRuns(ctx.projectId(), ctx.userId(),
+                    keyword, limit == null ? 5 : limit);
+            if (runs.isEmpty()) {
+                return "recall: （没有匹配的历史运行）";
+            }
+            StringBuilder sb = new StringBuilder("recall:\n");
+            for (ConversationRun run : runs) {
+                sb.append("- ").append(RECALL_TIME.format(Instant.ofEpochMilli(run.createdAt())))
+                        .append("  [").append(run.status()).append(']')
+                        .append("  conversation=").append(run.conversationId())
+                        .append("  goal=").append(oneLine(run.goal(), 100)).append('\n');
+                if (!run.result().isBlank()) {
+                    sb.append("  result: ").append(oneLine(run.result(), 280)).append('\n');
+                }
+                if (!run.error().isBlank()) {
+                    sb.append("  error: ").append(oneLine(run.error(), 200)).append('\n');
+                }
+            }
+            return sb.toString().trim();
+        });
+    }
+
+    @Tool(name = "dispatch_issue",
+            description = """
+                    把任务页的一张 Git 工单直接派发成子会话：校验工单属于当前项目且未关闭，
+                    新建会话、发送包含工单标题/描述/链接的目标，并在任务板登记关联任务。
+                    子会话拿到目标后按环境策略执行，完成后由它自己用 comment_git_issue 回写工单。
+                    返回 task/conversation/run 三个 id。""",
+            readOnly = false, concurrencySafe = false)
+    public String dispatchIssue(ProjectContext ctx,
+                                @ToolParam(name = "issue_id", description = "任务/工单 id")
+                                String issueId,
+                                @ToolParam(name = "env", required = false,
+                                        description = "环境 dev/test/prod；默认当前调度会话环境")
+                                String env,
+                                @ToolParam(name = "worktree", required = false,
+                                        description = "工作树名（可空 = 主仓库）")
+                                String worktree) {
+        return guard(() -> {
+            GitIssue issue = issues.get(ctx.userId(), issueId);
+            if (issue == null) {
+                return "err: 工单不存在或无权访问：" + issueId;
+            }
+            if (!issue.projectId().isBlank() && !issue.projectId().equals(ctx.projectId())) {
+                return "err: 工单属于项目 " + issue.projectId() + "，不属于当前工作区";
+            }
+            if (!issue.open()) {
+                return "err: 工单已关闭，不派发：" + issue.id();
+            }
+            Conversation conversation = supervisor.createConversation(ctx.projectId(), ctx.userId(),
+                    issueTitle(issue), env, worktree);
+            String message = issueMessage(issue);
+            String runId = supervisor.send(conversation.id(), ctx.userId(), message);
+            if (runId.startsWith("err:")) {
+                return runId;
+            }
+            WorkspaceTask task = supervisor.createTask(ctx.projectId(), ctx.userId(),
+                    issueTitle(issue), issue.url().isBlank() ? "工单 " + issue.id() : issue.url(),
+                    2, conversation.id());
+            return "ok: task=" + task.id()
+                    + "  conversation=" + conversation.id()
+                    + "  run=" + runId
+                    + "\n工单已派发，子会话完成后会回写评论；用 conversation_status 跟踪结果。";
+        });
+    }
+
+    private static String issueTitle(GitIssue issue) {
+        String title = issue.title().isBlank() ? "工单 " + issue.id() : issue.title();
+        return oneLine("[" + (issue.number().isBlank() ? issue.id() : "#" + issue.number()) + "] "
+                + title, 60);
+    }
+
+    /** 子会话目标：把工单事实与回写要求写清楚，避免它再去猜工单内容。 */
+    private static String issueMessage(GitIssue issue) {
+        String body = issue.body().isBlank() ? "（无描述）" : issue.body();
+        return """
+                处理任务页工单 %s（%s，%s）。
+                标题：%s
+                描述：
+                %s
+
+                要求：
+                1. 先复述问题与验收标准，再动手；修改范围尽量小。
+                2. 完成后运行相关构建/测试，把关键输出作为证据。
+                3. 无论成功还是无法完成，最后都要调用 comment_git_issue 把结论回写到该工单。
+                """.formatted(issue.id(), issue.kind(), issue.state(),
+                issue.title().isBlank() ? "（无标题）" : issue.title(),
+                body.length() > 3_000 ? body.substring(0, 3_000) + "\n…（已截断）" : body);
+    }
+
+    private static TaskStatus parseStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        try {
+            return TaskStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("非法任务状态：" + status);
+        }
     }
 
     @Tool(name = "task_create",

@@ -16,7 +16,6 @@ import { formatCost, formatTokens, sumCost } from '../utils/deepseekPricing'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import ChatTraceRail from '../components/chat/ChatTraceRail.vue'
 import ChatCapabilitiesView from '../components/chat/ChatCapabilitiesView.vue'
-import ChatIssuesView from '../components/chat/ChatIssuesView.vue'
 import { useChatCapabilities } from '../composables/useChatCapabilities'
 import ChatTraceView from '../components/chat/ChatTraceView.vue'
 import ApprovalRequestCard from '../components/chat/ApprovalRequestCard.vue'
@@ -48,11 +47,8 @@ const {
   ready: capsReady, loading: capsLoading, refresh: refreshCapabilities,
 } = useChatCapabilities(sessionId)
 
-/** 视图模式：对话 / 轨迹 / 能力 / 任务，四个平级页面共用底部输入区。 */
-const viewMode = ref<'chat' | 'trace' | 'capabilities' | 'issues'>('chat')
-
-/** 任务 Tab 的待处理角标（由任务页加载后回传）。 */
-const issueCount = ref(0)
+/** 视图模式：对话 / 轨迹 / 能力，三个平级页面共用底部输入区；任务已移入工作区。 */
+const viewMode = ref<'chat' | 'trace' | 'capabilities'>('chat')
 
 /** 项目列表：只用于显示项目名与默认项目兜底（下拉已移除）。 */
 const projects = ref<ProjectRow[]>([])
@@ -326,12 +322,11 @@ function startWith(text: string): void {
   void send()
 }
 
-/** 四个平级视图直接铺开，不再收进「更多」下拉。 */
-const viewTabs: { key: 'chat' | 'trace' | 'capabilities' | 'issues'; label: string }[] = [
+/** 三个平级视图直接铺开；任务看板已上移到工作区，会话页保持纯对话。 */
+const viewTabs: { key: 'chat' | 'trace' | 'capabilities'; label: string }[] = [
   { key: 'chat', label: '对话' },
   { key: 'trace', label: '轨迹' },
   { key: 'capabilities', label: '能力' },
-  { key: 'issues', label: '任务' },
 ]
 
 /** 输入框自增高：1 行起，最高约 30vh，超出后内部滚动。 */
@@ -517,10 +512,6 @@ onMounted(async () => {
           >
             {{ selectedSkills.length + selectedMcp.length }}
           </span>
-          <span
-            v-else-if="tab.key === 'issues' && issueCount"
-            class="tab-badge mono"
-          >{{ issueCount }}</span>
         </button>
       </div>
       <EnvironmentStatusBar
@@ -558,11 +549,7 @@ onMounted(async () => {
       @refresh="refreshCapabilities"
     />
 
-    <!-- 任务视图：平台与 Git 双向同步的 Issue 工单（Agent 工具同源） -->
-    <ChatIssuesView
-      v-if="viewMode === 'issues'"
-      @count="issueCount = $event"
-    />
+    <!-- 任务视图已上移为工作区主视图，会话页不再承载任务看板 -->
 
     <!-- 消息区 + 右侧轨迹：chat-body 提供定位参照，chat-list 仍是唯一滚动容器 -->
     <div v-show="viewMode === 'chat'" class="chat-body">
@@ -638,8 +625,8 @@ onMounted(async () => {
       />
     </div>
 
-    <!-- 输入区：自然撑开在底部，不 fixed / 不 sticky；任务页不涉及对话，隐藏以留出列表高度 -->
-    <div v-if="viewMode !== 'issues'" class="composer-wrap">
+    <!-- 输入区：自然撑开在底部，不 fixed / 不 sticky -->
+    <div class="composer-wrap">
       <div class="composer">
         <textarea
           ref="inputRef"

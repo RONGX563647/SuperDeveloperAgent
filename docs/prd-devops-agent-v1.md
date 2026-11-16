@@ -27,7 +27,7 @@ code_refs:
 > - **认证/角色**：现行 Sa-Token Bearer（30 天）+ `ADMIN/DEVOPS/VIEWER` 三角色与权限码（`Role.java`/`UserStore.java`）；非 JWT、非“无角色”。§2.1、§4.10、P11 为 v1.5 产品目标。
 > - **持久化**：SQLite（users/projects/governance/automation/run_ledger/rate_limit），非 PG/MySQL；§4.4、§4.8 的 `project_member`/`project_credential`/`identity_source` 未实现。
 > - **CI**：自研引擎，无 Jenkins/SSO/镜像仓库；§4.1 图与 §4.3 的 Jenkins 适配器为历史设计。
-> - **工具面**：现行 62 个 `@Tool`（Code-Wiki §7）；§3.1、§4.7.6 的多数工具名（`issue_read`、`ci_log_digest`、`ci_artifacts`、`k8s_status`、`db_query`、`runbook_run` 等）**未实现**。
+> - **工具面**：现行 65 个 `@Tool`（Code-Wiki §7）；§3.1、§4.7.6 的多数工具名（`issue_read`、`ci_log_digest`、`ci_artifacts`、`k8s_status`、`db_query`、`runbook_run` 等）**未实现**。
 > - **执行面**：非生产完整 Toolkit bean 名为 `agentToolkit`（源码字段 `fullToolkit`）；破坏性 L2 与 L3 均需一次性确认令牌。
 > - **stage**：现行 `action/deploy/health/rollback` 四类 + 内部 `git-checkout`；`mvn/npm/docker-build/static-publish` 未实现。
 
@@ -286,7 +286,7 @@ AC：
 
 ### 3.1 工具需求（Tool Surface）
 
-> ⚠️ **本节为早期规划工具面，多数未实现**：`issue_read`/`issue_comment`/`code_symbols`/`git_blame`/`metrics_query`/`log_query`/`k8s_status`/`db_query`/`runbook_run`/`ci_log_digest`/`ci_artifacts`/`db_plan_migration` 等**均不在现行 62 个 `@Tool` 中**。现行工具以 Code-Wiki §7 为准（`list_actions`/`plan_action`/`run_action`/`ci_run`/`ci_status`/`read_run_log`/`ci_dry_run`/`request_confirmation` 等）。下表保留为能力目标。
+> ⚠️ **本节为早期规划工具面，多数未实现**：`issue_read`/`issue_comment`/`code_symbols`/`git_blame`/`metrics_query`/`log_query`/`k8s_status`/`db_query`/`runbook_run`/`ci_log_digest`/`ci_artifacts`/`db_plan_migration` 等**均不在现行 65 个 `@Tool` 中**。现行工具以 Code-Wiki §7 为准（`list_actions`/`plan_action`/`run_action`/`ci_run`/`ci_status`/`read_run_log`/`ci_dry_run`/`request_confirmation` 等）。下表保留为能力目标。
 
 **C1 代码与工单**
 

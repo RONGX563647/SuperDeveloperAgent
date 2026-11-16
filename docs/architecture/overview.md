@@ -14,7 +14,7 @@ code_refs:
 flowchart LR
   U[浏览器<br/>Vue3 工作台] -->|HTTP / SSE| GW[agent-gateway<br/>Sa-Token / 控制器]
   GW --> RT[agent-runtime<br/>Agent 装配 / 会话]
-  GW --> TL[agent-tools<br/>62 个 @Tool 方法]
+  GW --> TL[agent-tools<br/>65 个 @Tool 方法]
   GW --> EX[agent-executor<br/>流水线 / 阶段]
   EX --> DOCKER[(Docker / 宿主进程)]
   GW --> DOM[agent-domain<br/>模型与端口]

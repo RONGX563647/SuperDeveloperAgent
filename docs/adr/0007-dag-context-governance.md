@@ -44,9 +44,12 @@ code_refs:
 选 **C + 三层上下文治理**：
 
 1. **DAG 并行调度**（`WorkspaceDispatchScheduler`）：
-   - 工具 `workspace_dispatch` 接收节点数组（`id/message/depends_on/required/timeout_seconds`），
+   - 工具 `workspace_dispatch` 接收节点数组（`id/message/depends_on/required/timeout_seconds/retries`），
      无依赖节点在 `max_parallel` 内同时派发；每个节点在自己的虚拟线程上等待，
      主循环只等「任意一个完成」，因此总耗时接近最慢节点而非逐个累加；
+   - **重试与熔断**：节点 `FAILED` 且配置了 `retries`（0-3）时，复用同一会话重发同一条指令，
+     `Active.runId` 切换到新运行；`TIMEOUT`/`CANCELLED` 不重试。连续失败达到
+     `max_consecutive_failures`（默认 3，0=关闭）时熔断，未开始节点 `SKIPPED`；
    - 依赖全部成功的节点才会派发；依赖失败则整条链路 `SKIPPED`，不占用运行配额；
    - **提前终止**：`required` 节点失败且 `abort_on_failure=true` 时停止派发剩余节点；
      `required` 节点全部成功后，未开始的可选节点不再派发，在跑的可选节点直接 cancel；
