@@ -6,9 +6,12 @@ import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
+import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -19,6 +22,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.change.ChangeWire;
+import top.rongx.agent.domain.env.EnvBindingWire;
 import top.rongx.agent.domain.port.OpsAgentPort;
 import top.rongx.agent.domain.project.ProjectContext;
 
@@ -41,6 +46,8 @@ public class OpsAgentRunner implements OpsAgentPort {
     private static final int TIMEOUT_SECONDS = 150;
     /** 返回给主 Agent 的正文上限：太长会挤占主对话上下文。 */
     private static final int MAX_SUMMARY_CHARS = 4000;
+    /** 单个工具结果的累积上限（只需从中提取 changeId）。 */
+    private static final int MAX_TOOL_RESULT_CHARS = 64_000;
     private static final int MAX_ERRORS = 5;
 
     private final AgentFactory agentFactory;
@@ -86,23 +93,46 @@ public class OpsAgentRunner implements OpsAgentPort {
         }
     }
 
-    /** 消费子 Agent 事件流：保留正文结论、工具轨迹与失败原因。 */
+    /** 消费子 Agent 事件流：保留正文结论、工具轨迹、失败原因与待确认变更单号。 */
     private static Report collect(ReActAgent agent, String task, RuntimeContext runtime) {
         StringBuilder text = new StringBuilder();
         Set<String> tools = new LinkedHashSet<>();
+        Set<String> changeIds = new LinkedHashSet<>();
+        Set<String> bindingIds = new LinkedHashSet<>();
+        Map<String, StringBuilder> toolResults = new LinkedHashMap<>();
         List<String> errors = new ArrayList<>();
         for (AgentEvent event : agent.streamEvents(task, runtime).toIterable()) {
             if (event instanceof TextBlockDeltaEvent delta) {
                 if (delta.getDelta() != null && text.length() < MAX_SUMMARY_CHARS) {
                     text.append(delta.getDelta());
                 }
+            } else if (event instanceof ToolResultTextDeltaEvent delta) {
+                if (delta.getToolCallId() != null && delta.getDelta() != null) {
+                    StringBuilder buf = toolResults.computeIfAbsent(
+                            delta.getToolCallId(), k -> new StringBuilder());
+                    if (buf.length() < MAX_TOOL_RESULT_CHARS) {
+                        buf.append(delta.getDelta());
+                    }
+                }
             } else if (event instanceof ToolCallStartEvent call) {
                 if (call.getToolCallName() != null) {
                     tools.add(call.getToolCallName());
                 }
-            } else if (event instanceof ToolResultEndEvent end && isFailure(end.getState())) {
-                if (errors.size() < MAX_ERRORS) {
+            } else if (event instanceof ToolResultEndEvent end) {
+                if (isFailure(end.getState()) && errors.size() < MAX_ERRORS) {
                     errors.add(end.getToolCallName() + "：" + stateName(end.getState()));
+                }
+                // 子 Agent 的 changeId 只出现在工具结果里：这里显式提取并回填到结论，
+                // 主对话的 ChatController 才能据此弹出确认卡（否则用户只能自己去别处找单号）。
+                StringBuilder buf = end.getToolCallId() == null
+                        ? null : toolResults.remove(end.getToolCallId());
+                String changeId = buf == null ? null : ChangeWire.extract(buf.toString());
+                if (changeId != null) {
+                    changeIds.add(changeId);
+                }
+                String bindingId = buf == null ? null : EnvBindingWire.extract(buf.toString());
+                if (bindingId != null) {
+                    bindingIds.add(bindingId);
                 }
             }
         }
@@ -112,6 +142,14 @@ public class OpsAgentRunner implements OpsAgentPort {
         }
         if (summary.isEmpty()) {
             summary = "子 Agent 未返回正文结论（可查看其工具轨迹或改用工作台查看运行日志）。";
+        }
+        if (!changeIds.isEmpty()) {
+            summary = summary + "\n" + String.join("\n", changeIds.stream()
+                    .map(ChangeWire::line).toList());
+        }
+        if (!bindingIds.isEmpty()) {
+            summary = summary + "\n" + String.join("\n", bindingIds.stream()
+                    .map(EnvBindingWire::line).toList());
         }
         return new Report(errors.isEmpty() ? "SUCCEEDED" : "FAILED", summary,
                 List.copyOf(tools), List.copyOf(errors));

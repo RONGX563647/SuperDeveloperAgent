@@ -36,7 +36,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
             "ci/**", "Jenkinsfile", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts",
             "**/src/test/**",
             // 部署/运行形态相关：Dockerfile、compose、nginx、应用配置、前端构建脚本
-            "Dockerfile", "**/Dockerfile", "**/*.Dockerfile",
+            "Dockerfile", "**/Dockerfile", "**/*.Dockerfile", "**/.dockerignore",
             "deploy/**", "**/docker-compose*.yml", "**/docker-compose*.yaml",
             "**/nginx*.conf", "**/nginx/**",
             "**/application*.yml", "**/application*.yaml", "**/application*.properties",
@@ -172,6 +172,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
                 || path.startsWith("src/test/") || path.contains("/src/test/")
                 || path.equals("Dockerfile") || path.endsWith("/Dockerfile")
                 || path.endsWith(".Dockerfile")
+                || path.equals(".dockerignore") || path.endsWith("/.dockerignore")
                 || path.startsWith("deploy/") || path.contains("/deploy/")
                 || path.endsWith("/docker-compose.yml") || path.endsWith("/docker-compose.yaml")
                 || path.equals("docker-compose.yml") || path.equals("docker-compose.yaml")

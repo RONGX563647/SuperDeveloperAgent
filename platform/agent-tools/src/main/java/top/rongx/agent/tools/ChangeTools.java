@@ -47,7 +47,7 @@ public class ChangeTools {
                        /api/v1/actions/{action}/request 同一词汇表，确认后可 apply；
                     2) 可自动放行动作（env_ensure / deploy_save_recipe / env_mapping_draft）：
                        dev/test 下平台允许 Agent 直接执行，这里登记仅用于留痕，确认卡不会执行它。
-                    调用后必须把 changeId 告诉用户，并提示"请在平台确认卡片上确认"。
+                    调用后必须把 changeId 告诉用户；确认卡会自动出现在当前对话里。
                     不要假设用户已确认；确认结果由系统另行通知。""",
             readOnly = false, concurrencySafe = false)
     public String requestConfirmation(
@@ -55,7 +55,7 @@ public class ChangeTools {
                     description = "动作名：stack_deploy / stack_rollback，或 "
                             + "env_ensure / deploy_save_recipe / env_mapping_draft")
             String kind,
-            @ToolParam(name = "summary", description = "一句话说明将要做什么（不超过 120 字）") String summary,
+            @ToolParam(name = "summary", description = "一句话说明将要做什么（超过 120 字会截断）") String summary,
             @ToolParam(name = "image_digest", description = "要发布的镜像 digest（sha256:...），可空",
                     required = false) String imageDigest,
             @ToolParam(name = "high_risk", description = "是否含 SQL / 依赖升级 / 安全配置；true 时需二次密码") boolean highRisk,
@@ -77,15 +77,20 @@ public class ChangeTools {
                         + "）或可自动放行动作（" + String.join(", ", MANUAL_KINDS) + "），收到：" + kind;
             }
         }
-        if (summary == null || summary.isBlank() || summary.length() > 120) {
-            return "err: summary 不能为空且不超过 120 字";
+        if (summary == null || summary.isBlank()) {
+            return "err: summary 不能为空（一句话说明将要做什么）";
+        }
+        // 变更单摘要上限 120 字：超长截断而不是报错，避免模型重试浪费一轮
+        String shortSummary = summary.trim();
+        if (shortSummary.length() > 120) {
+            shortSummary = shortSummary.substring(0, 120);
         }
         if (imageDigest != null && !imageDigest.isBlank()
                 && !imageDigest.matches("sha256:[0-9a-f]{64}")) {
             return "err: image_digest 格式非法（需 sha256:... 64 位十六进制）";
         }
         ChangePlan plan = registry.request(ctx.projectId(), ctx.env(),
-                wire, summary, imageDigest, null, highRisk);
+                wire, shortSummary, imageDigest, null, highRisk);
         String apply = manual
                 ? "不支持（该动作在 dev/test 可自动放行，登记仅用于留痕；确认卡不会执行它）"
                 : "确认后在变更卡片上执行";
@@ -96,7 +101,7 @@ public class ChangeTools {
                 env: %s
                 apply: %s
                 highRisk: %s
-                next: 请在平台的确认卡片上确认（确认令牌 5 分钟内有效）；确认前不会执行任何操作。
+                next: 确认卡已推到当前对话（确认令牌 5 分钟内有效）；确认前不会执行任何操作。
                 evidence: change:%s
                 """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), wire, plan.env(), apply,
                 highRisk, plan.changeId());

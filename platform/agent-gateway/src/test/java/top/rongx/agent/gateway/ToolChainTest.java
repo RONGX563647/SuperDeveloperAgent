@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.governance.ChangeRegistry;
 import top.rongx.agent.tools.ActionCommandTools;
 import top.rongx.agent.tools.ActionQueryTools;
 import top.rongx.agent.tools.CiCommandTools;
@@ -18,6 +19,7 @@ import top.rongx.agent.tools.CiQueryTools;
 import top.rongx.agent.tools.ChangeTools;
 import top.rongx.agent.tools.ProjectTools;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -53,6 +55,8 @@ class ToolChainTest {
     private CiCommandTools ciCommandTools;
     @Autowired
     private ChangeTools changeTools;
+    @Autowired
+    private ChangeRegistry changes;
     @Autowired
     private ActionCommandTools actionCommandTools;
     @Autowired
@@ -144,9 +148,14 @@ class ToolChainTest {
         String badKind = changeTools.requestConfirmation("RELEASE", "x", null, false, ctx("test"));
         assertTrue(badKind.startsWith("err:"), badKind);
 
-        String badSummary = changeTools.requestConfirmation("stack_deploy",
+        // 摘要超长按 120 字截断而不是报错（避免模型重试浪费一轮）
+        String longSummary = changeTools.requestConfirmation("stack_deploy",
                 "a".repeat(121), null, false, ctx("test"));
-        assertTrue(badSummary.contains("120"), badSummary);
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("change:(chg-[A-Za-z0-9-]+)").matcher(longSummary);
+        assertTrue(matcher.find(), longSummary);
+        assertEquals(120, changes.find(matcher.group(1)).orElseThrow().summary().length(),
+                longSummary);
     }
 
     @Test

@@ -118,7 +118,7 @@ public class ActionService {
                     破坏性动作 %s 需要人工确认，未执行。
                     changeId: %s
                     env: %s
-                    next: 请把 changeId 告知用户，在平台确认卡片上确认后再执行；
+                    next: 确认卡已推到当前对话，请让用户确认后再执行；
                           不要重复调用本动作或自行假设已确认。
                     """.formatted(action.wireName(), change.changeId(), ctx.env()));
         }

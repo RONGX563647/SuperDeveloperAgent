@@ -8,6 +8,7 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
+import top.rongx.agent.domain.env.EnvBindingWire;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -57,7 +58,7 @@ public class EnvCommandTools {
         List<?> missing = mapping.get("missing") instanceof List<?> list ? list : List.of();
         List<?> warnings = mapping.get("warnings") instanceof List<?> list ? list : List.of();
         StringBuilder sb = new StringBuilder();
-        sb.append("bindingId: ").append(binding.id()).append('\n')
+        sb.append(EnvBindingWire.line(binding.id())).append('\n')
                 .append("status: ").append(binding.status()).append("（需人工确认后才可用于 deploy_run）\n")
                 .append("keys: ").append(keys.size()).append('\n')
                 .append("missing: ").append(missing.isEmpty() ? "无" : String.join(", ", missing.stream()

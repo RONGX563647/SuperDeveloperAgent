@@ -46,6 +46,21 @@ class WorkspaceCodePatcherTest {
     }
 
     @Test
+    @DisplayName("Dockerfile 与 .dockerignore 属于允许范围（修 Docker 部署链路）")
+    void allowsDockerBuildFiles() throws Exception {
+        Path repo = makeRepo();
+        String base = new GitWorktreeManager(ws).revParse(repo, "HEAD");
+        WorkspaceCodePatcher patcher = new WorkspaceCodePatcher(new GitWorktreeManager(ws), locator(repo));
+
+        CodePatcher.Staged staged = patcher.stage("P", base, List.of(
+                new CodePatch.FileEdit("Dockerfile", "FROM eclipse-temurin:21-jre\n"),
+                new CodePatch.FileEdit(".dockerignore", "data\n.agent\n")));
+
+        assertEquals(List.of("Dockerfile", ".dockerignore"), staged.files());
+        assertTrue(staged.diff().contains("+++ b/Dockerfile"), staged.diff());
+    }
+
+    @Test
     @DisplayName("预演产出 diff，应用后提交到独立分支且 worktree 被清理")
     void stageThenApplyCommitsToBranch() throws Exception {
         Path repo = makeRepo();

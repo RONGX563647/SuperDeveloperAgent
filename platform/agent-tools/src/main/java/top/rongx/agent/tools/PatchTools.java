@@ -44,15 +44,17 @@ public class PatchTools {
                     提交一份受限代码补丁，用于修复流水线失败的根因（写操作，仅 dev/test）。
                     适用场景：构建/测试配置写错、e2e 用例不该在构建阶段执行、ci 流水线定义与产物不匹配。
                     允许修改的路径：ci/**、Jenkinsfile、**/pom.xml、**/build.gradle(.kts)、**/src/test/**、
-                    Dockerfile、deploy/**、docker-compose*.yml、nginx*.conf、application*.yml、
+                    Dockerfile、.dockerignore、deploy/**、docker-compose*.yml、nginx*.conf、application*.yml、
                     package.json、.env.example；业务代码与凭证会被拒绝。
-                    本工具只生成 diff 并登记变更单，不会直接改仓库——必须在平台的确认卡片上确认后才应用。
+                    本工具只生成 diff 并登记变更单，不会直接改仓库——确认卡会直接出现在当前对话里，
+                    必须在对话中的确认卡片上确认后才应用。
                     edits 格式（每个文件一段，内容写到下一个标记为止）：
                     === FILE: ci/pipeline.yml ===
                     <该文件的完整新内容>
                     === FILE: pom.xml ===
                     <该文件的完整新内容>
-                    调用后必须把 changeId 告诉用户，并提示其到确认卡片确认；不要假设已确认。""",
+                    reason 超长会按 120 字截断（不会因此报错）。
+                    调用后把 changeId 告诉用户即可，不要假设已确认。""",
             readOnly = false, concurrencySafe = false)
     public String propose(
             @ToolParam(name = "base_sha",
@@ -65,8 +67,14 @@ public class PatchTools {
         if (ctx.isProduction()) {
             return "err: 生产环境不允许提交代码补丁；请先在 dev/test 验证";
         }
-        if (reason == null || reason.isBlank() || reason.length() > 120) {
-            return "err: reason 不能为空且不超过 120 字";
+        if (reason == null || reason.isBlank()) {
+            return "err: reason 不能为空（一句话说明为什么要改，便于人工复核）";
+        }
+        // 变更单摘要上限 120 字：超长不拒绝（模型很容易写得长），按上限截断，
+        // 完整理由仍会出现在工具结果与 diff 上下文里。
+        String summary = reason.trim();
+        if (summary.length() > 120) {
+            summary = summary.substring(0, 120);
         }
         List<CodePatch.FileEdit> files;
         try {
@@ -87,7 +95,7 @@ public class PatchTools {
                 branch, files, staged.diff(), staged.diffHash(), staged.added(), staged.removed(), 0L);
         patches.save(patch);
         ChangePlan plan = changes.registerWithHash(ctx.projectId(), ctx.env(),
-                "patch:" + patchId, reason.trim(), staged.diffHash(), false);
+                "patch:" + patchId, summary, staged.diffHash(), false);
 
         String diff = staged.diff();
         boolean truncated = diff.length() > MAX_DIFF_CHARS;
@@ -102,7 +110,7 @@ public class PatchTools {
                 files: %s
                 changes: +%d -%d
                 apply: 不支持由 Agent 直接应用（需要人工确认）
-                next: 请把 changeId 告诉用户，让其在平台的确认卡片上确认并点「带令牌执行」；确认前不会修改仓库。
+                next: 确认卡已推到当前对话，请让用户在对话中的确认卡片上确认并点「带令牌应用补丁」；确认前不会修改仓库。
                 ---
                 %s
                 evidence: patch:%s change:%s
