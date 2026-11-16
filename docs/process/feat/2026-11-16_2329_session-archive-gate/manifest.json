@@ -1,0 +1,133 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-16_2329_session-archive-gate",
+  "category": "feat",
+  "title": "会话归档门禁：start/finish/validate + Git hooks 强制",
+  "createdAt": "2026-11-16T23:29:45+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "实现会话归档机制并强制每次会话归档，否则禁止提交/推送",
+    "toolCallCount": 0
+  },
+  "problem": "Agent 会话缺少可追溯留档，代码提交与测试结果无法审计；docs/ 曾被清理后无归档规范",
+  "solution": "新增 docs/session-archive-spec-v1.md 与 process-manifest/v2 schema；gate.py 提供 start/finish/validate/self-test 与 pre-commit/pre-push 门禁；接入 JaCoCo 生成覆盖率；spec-checks 增加 ProcessArchiveTest 复用同一校验器",
+  "commits": [
+    {
+      "sha": "9c3c2807a1799b3f2db89dd4d0a0870042d3fd83",
+      "subject": "feat: 会话归档门禁（start/finish/validate + Git hooks 强制）",
+      "category": "feat",
+      "files": [
+        {
+          "path": ".githooks/pre-commit",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "88496b81cf77779c31517d36895e9af39fa66ebb"
+        },
+        {
+          "path": ".githooks/pre-push",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "cb382bbcdaa224e8735cfc41c09699ab9df95080"
+        },
+        {
+          "path": ".gitignore",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "232235d14e23a1144a4d19615085933bb54a7ab8"
+        },
+        {
+          "path": ".pre-commit-config.yaml",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "1d02ccacd537875732850706607a855990d67f7d"
+        },
+        {
+          "path": "agent.md",
+          "status": "M",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "71f4ecd0b9f9288b93d492b2c6e224cae046265e"
+        },
+        {
+          "path": "docs/schemas/process-manifest-v2.json",
+          "status": "A",
+          "additions": 147,
+          "deletions": 0,
+          "blobHash": "7a1f5b6bd76698aca23775ab823b345c5bdea493"
+        },
+        {
+          "path": "docs/session-archive-spec-v1.md",
+          "status": "A",
+          "additions": 239,
+          "deletions": 0,
+          "blobHash": "1a603d026b5589d89c9e315849800e54cb857e90"
+        },
+        {
+          "path": "platform/pom.xml",
+          "status": "M",
+          "additions": 18,
+          "deletions": 0,
+          "blobHash": "ec0e161b17402bad85fbbdc3e848e940f599cc24"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ProcessArchiveTest.java",
+          "status": "A",
+          "additions": 97,
+          "deletions": 0,
+          "blobHash": "2a0cfa1bd8d7bbeb527a23d4eb332aa4dbdc09d7"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "A",
+          "additions": 692,
+          "deletions": 0,
+          "blobHash": "9a08605f550d717bdf5c8b1bc6ed8dc5b23c9ebc"
+        },
+        {
+          "path": "tools/session-archive/install-hooks.ps1",
+          "status": "A",
+          "additions": 24,
+          "deletions": 0,
+          "blobHash": "4a1da43686efad966c5008446d926cd222c9ddfb"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ProcessArchiveTest.java",
+        "status": "A",
+        "additions": 97,
+        "deletions": 0,
+        "blobHash": "2a0cfa1bd8d7bbeb527a23d4eb332aa4dbdc09d7"
+      }
+    ],
+    "casesAdded": 2,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 506, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "spec-checks"
+    ],
+    "verification": "Tests run: 506, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-16_2329_session-archive-gate"
+    ]
+  },
+  "chain": {
+    "prev": "GENESIS",
+    "self": "51faa12bccda9220f9281c29ac3691bb2cf66e3cd868d76561fae7ef080af45d"
+  }
+}
