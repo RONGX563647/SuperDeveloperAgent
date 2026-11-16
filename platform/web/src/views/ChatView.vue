@@ -1,19 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../stores/app'
-import type { TraceTurn } from '../types'
-import { useAgentChat } from '../composables/useAgentChat'
+import type { ChatMessage, TraceTurn } from '../types'
+import { emptyAgentProjection } from '../state/agentEventReducer'
 import { useFollowScroll } from '../composables/useFollowScroll'
-import { getToken } from '../api/auth'
+import { getSessionChat, type SessionChatEntry } from '../state/sessionChat'
 import { listProjects, type ProjectRow } from '../api/project'
 import { envLabel } from '../utils/pipelineLabels'
 import { formatCost, formatTokens, sumCost } from '../utils/deepseekPricing'
-import { loadHistory, saveHistory } from '../state/sessionHistory'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import ChatTraceRail from '../components/chat/ChatTraceRail.vue'
 import ChatCapabilitiesView from '../components/chat/ChatCapabilitiesView.vue'
@@ -72,25 +71,60 @@ const permission = computed<PermissionMode>({
 /** 中文输入法组合标记：组合期间 Enter 不应触发发送。 */
 const composing = ref(false)
 
-const {
-  projection, streaming, elapsedMs, tokens, error, pendingChangeId,
-  send: sendChat, stop, reset, appendMessage, hydrate,
-} = useAgentChat({
-  buildRequest: () => ({
+/**
+ * 会话状态按 sessionId 常驻（state/sessionChat）：切换会话只是换绑实例，
+ * 后台运行中的读流不会被 abort，切回来能接着看到输出。
+ */
+const chatEntry = shallowRef<SessionChatEntry | null>(null)
+const EMPTY_PROJECTION = emptyAgentProjection()
+
+function syncChatEntry(): void {
+  const id = sessionId.value
+  if (!id) return
+  const entry = getSessionChat(id, {
     projectId: projectId.value,
     env: env.value,
-    sessionId: sessionId.value,
-    // 当前工作树：随会话一起带给后端，让 Agent 知道在哪个检出里工作
     worktree: appStore.worktree,
-    // 后端目前按变更单做门禁，这里带上策略为后续服务端约束留接口
-    permission: permission.value,
-    // 本会话启用的能力；未加载完时传 undefined，让后端按设置页默认值处理
     skills: capsReady.value ? selectedSkills.value : undefined,
     mcpServers: capsReady.value ? selectedMcp.value : undefined,
-  }),
-  getHeaders: () => ({ Authorization: `Bearer ${getToken()}` }),
-  guard: () => !composing.value,
-})
+  })
+  entry.context.projectId = projectId.value
+  entry.context.env = env.value
+  entry.context.worktree = appStore.worktree
+  if (capsReady.value) {
+    entry.context.skills = [...selectedSkills.value]
+    entry.context.mcpServers = [...selectedMcp.value]
+  }
+  chatEntry.value = entry
+}
+
+watch(
+  [
+    sessionId, () => appStore.projectId, () => appStore.env, () => appStore.worktree,
+    capsReady, selectedSkills, selectedMcp,
+  ],
+  syncChatEntry,
+  { immediate: true },
+)
+
+const projection = computed(() => chatEntry.value?.chat.projection.value ?? EMPTY_PROJECTION)
+const streaming = computed(() => chatEntry.value?.chat.streaming.value ?? false)
+const elapsedMs = computed(() => chatEntry.value?.chat.elapsedMs.value ?? 0)
+const tokens = computed(() => chatEntry.value?.chat.tokens.value ?? 0)
+const error = computed(() => chatEntry.value?.chat.error.value ?? '')
+const pendingChangeId = computed(() => chatEntry.value?.chat.pendingChangeId.value ?? null)
+
+function sendChat(text: string): Promise<void> {
+  return chatEntry.value?.chat.send(text) ?? Promise.resolve()
+}
+
+function stop(): void {
+  chatEntry.value?.chat.stop()
+}
+
+function appendMessage(message: ChatMessage): void {
+  chatEntry.value?.chat.appendMessage(message)
+}
 
 /** 会话累计费用（仅 deepseek 系列会产生；为 0 时不展示 chip）。 */
 const sessionCost = computed(() => projection.value.sessionCost)
@@ -363,8 +397,8 @@ async function send() {
   appStore.touchSession(text)
   // user 消息进同一条消息列表：多轮问答的时间线顺序才对（之前 user 全排在 assistant 前面）
   appendMessage({ id: `u-${Date.now()}`, role: 'user', text, at: Date.now() })
+  // 落盘由 sessionChat 按会话负责：这里切走也不会把内容写进别的会话
   await sendChat(text)
-  persistSession()
   void scrollToLatest({ force: true })
 }
 
@@ -383,59 +417,35 @@ async function copyMessage(text: string) {
   }
 }
 
-/** 把当前会话时间线（消息 + 工具结果）写进 localStorage，切回时恢复。 */
-function persistSession(): void {
-  saveHistory(sessionId.value, projection.value.messages, projection.value.tools)
-}
-
-/** 切换/首次进入会话：优先恢复本地历史，没有就是空会话。 */
-function restoreSession(): void {
-  const snapshot = loadHistory(sessionId.value)
-  if (snapshot) hydrate(snapshot.messages, snapshot.tools)
+function resetSession() {
+  approvalCardOpen.value = false
+  input.value = ''
+  // 只切到新会话：旧会话若仍在后台运行，让它继续跑完（与侧栏「新会话」一致）
+  appStore.newSession()
   void nextTick(() => {
+    resizeInput()
     scrollToLatest({ force: true })
     syncActiveTurn()
   })
 }
 
-/**
- * 增量落盘：不再只在 send 结束的那一刻写一次 ——
- * 流式过程中每 400ms 存一次，刷新/关页/切走都不会把整轮对话丢掉。
- */
-let persistTimer: number | null = null
-watch(
-  [() => projection.value.messages, () => projection.value.tools],
-  () => {
-    if (persistTimer) window.clearTimeout(persistTimer)
-    persistTimer = window.setTimeout(() => {
-      persistTimer = null
-      persistSession()
-    }, 400)
-  },
-)
-
-onUnmounted(() => {
-  if (persistTimer) window.clearTimeout(persistTimer)
-})
-
-function resetSession() {
-  reset()
-  approvalCardOpen.value = false
-  appStore.newSession()
-}
-
+/** 切换会话：只换绑常驻实例，不中止上一个会话仍在后台运行的读流。 */
 watch(sessionId, () => {
-  reset()
   approvalCardOpen.value = false
-  restoreSession()
+  input.value = ''
+  void nextTick(() => {
+    resizeInput()
+    scrollToLatest({ force: true })
+    syncActiveTurn()
+  })
 })
 
 onMounted(async () => {
   await loadProjects()
-  restoreSession()
   void nextTick(() => {
     resizeInput()
     scrollToLatest({ force: true })
+    syncActiveTurn()
   })
 })
 </script>

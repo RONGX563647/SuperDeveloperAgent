@@ -6,6 +6,7 @@ import { logout } from '../../api/auth'
 import { listProjects, type ProjectRow } from '../../api/project'
 import { appStore, type SessionItem } from '../../stores/app'
 import { clearHistory } from '../../state/sessionHistory'
+import { disposeSessionChat } from '../../state/sessionChat'
 import { createConversation, listConversations } from '../../api/workspace'
 
 /**
@@ -231,8 +232,9 @@ function openSession(id: string) {
   void router.push('/chat')
 }
 
-/** 删除会话：侧栏条目 + 本地时间线一起清，删当前会话时 store 会自动回落。 */
+/** 删除会话：停掉后台读流 + 侧栏条目 + 本地时间线一起清，删当前会话时 store 会自动回落。 */
 function removeSession(id: string) {
+  disposeSessionChat(id)
   clearHistory(id)
   appStore.removeSession(id)
 }
