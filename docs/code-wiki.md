@@ -407,7 +407,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 ### 5.7 环境固化与发布（方案 C）
 Agent 用 `deploy_run` 在测试环境把流程跑通 → `deploy_save_recipe` 固化为 `recipes/<env>/vN/`（可重放/回滚/activate 为当前定义）→ 上服务器需 `DeployGate` 双重前置：**该环境已有测试机成功案例（EnvironmentPromotion）+ 一次人工确认**（E-601/E-602），由 `ServerDeployer` 经 SSH 推送镜像并 docker 运行（远端端口预检，冲突续找，耗尽 E-704）。
 
-**Agent 触发的第三道前置（2026-11 新增）**：`deploy_run` 必须携带 `binding_id`——先 `env_mapping_draft` 生成映射草案，再由人在设置页确认（TTL 24h）；未确认/过期/变量已变更一律 E-703 拒绝（见 §5.11）。
+**Agent 触发的第三道前置（2026-11 新增）**：`deploy_run` 必须携带 `binding_id`——先 `env_mapping_draft` 生成映射草案，再由人在对话内展开的绑定确认卡确认（TTL 24h）；未确认/过期/变量已变更一律 E-703 拒绝（见 §5.11）。
 
 **一键自动部署入口（2026-11 新增）**：`POST /deploy/{projectId}/agent`（`DeployAgentController`，SSE）驱动发布 Agent 走完整闭环（见 §5.13）；仅放行 dev/test，生产直接拒绝，门禁仍由确认卡片把住。
 
@@ -432,7 +432,7 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
    `effective` 取变量 → **E-701 中间件预检**（资源已登记且最近检查"未运行"→ 拒绝启动容器；从未检查仅告警）→ **E-509 必填预检**（`deploy.env-required` 与有效变量求差，缺失不启动容器）→ **端口租约**（沿用既有租约；冲突从期望端口 +1 起 200 个内找本机空闲端口；SERVER 不做本机探测）→ `DeployRequest` 带 env+network 注入 → 部署后若实际端口≠租约端口则回写（远端重分配场景）。
 4. **env-snapshot 产物**：每次部署记 `ArtifactRef(kind="env-snapshot", ref="env:<test>", digest=对 key+sha256(value) 的排序摘要)`，meta 含变量数/模板数/覆盖数/敏感数/网络/租约端口/bindingId/confirmedBy/各 key 哈希——**不落任何明文值**，可审计"这次注入的是哪一版映射"。
 5. **健康检查增强**：health stage URL 端口替换为租约端口；docker 目标每轮重试前 `docker inspect` 探测 exited/dead 即提前失败；失败产出容器日志摘要（优先 ERROR 行 ≤3 条，截 300 字符）并清理失败容器（E-401 摘要含退出码）。
-6. **Agent 绑定闭环**：`env_mapping_draft`（扫描仓库 `.env.example` 的 KEY，与有效变量比对出 missing/告警，写 DRAFT，不含值）→ 人在「设置 → 项目环境」两步确认（CONFIRMED，TTL 24h）→ `deploy_run` 携带 `binding_id`，`EnvBindingService.requireForRun` 五重校验（存在/属于本项目该环境/已确认/未过期/变量摘要未变，否则 **E-703**）。prod 环境拒绝 Agent 草案触发。
+6. **Agent 绑定闭环**：`env_mapping_draft`（扫描仓库 `.env.example` 的 KEY，与有效变量比对出 missing/告警，写 DRAFT，不含值）→ 对话内绑定确认卡由用户本人确认（CONFIRMED，TTL 24h；Agent 无确认工具）→ `deploy_run` 携带 `binding_id`，`EnvBindingService.requireForRun` 五重校验（存在/属于本项目该环境/已确认/未过期/变量摘要未变，否则 **E-703**）。prod 环境拒绝 Agent 草案触发。
 7. **dev 本机服务运行时（2026-11 新增）**：dev 环境 `runtimeMode=HOST_LOCAL`——平台把项目前后端拉起来/停掉/探活（`ServiceRuntime`/`LocalProcessServiceRuntime`）：命令固定两种（backend `java -jar` 或退化 `mvnw spring-boot:run`、frontend `npm run dev -- --port --strictPort`），不接受任意拼接；端口按 `ServiceLease` 项目+环境+服务固定租约（落 `project_service_leases` 表，防重启漂移）；有效变量直接注入进程环境，前端另写受管 `.env.local`（只含非敏感 API 地址），`ProjectEnvFiles` 写 `.env`/`application-local-dev.yml` 只动受管标记块；pid/日志落 `_platform/local/<projectId>/`，停旧进程按 pid 文件+端口反查，只杀平台记录过的进程；随时可交还给 IDE（`POST /ci/deploy/host/stop`）。
 
 ### 5.12 受限代码补丁（Agent 修仓库的唯一入口，2026-11 新增）

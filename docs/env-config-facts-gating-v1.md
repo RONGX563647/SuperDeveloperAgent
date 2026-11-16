@@ -21,7 +21,7 @@ code_refs:
 |---|---|---|---|
 | 环境事实存储 | `env_templates` / `env_vars` / `project_env_overrides`，按「项目 × 环境」组织；敏感值 AES-GCM 落库、接口只回掩码 | `SqliteEnvironmentStore`、`EnvVariable` | **保留**，就是最小事实层 |
 | 配置声明扫描 | 已扫 `.env` / `.env.example` / `entrypoint.sh require` / compose `${VAR:?}` / application 配置 | `ProjectEnvFiles` | **扩展**，不要重写 |
-| 确认闭环 | `env_mapping_draft` 生成 DRAFT → 人工在设置页确认 → 24h 有效 → `mappingHash` 防确认后变更（E-703） | `EnvBindingService`、`EnvQueryTools` | **复用**，事实确认与部署绑定共用同一套确认语义 |
+| 确认闭环 | `env_mapping_draft` 生成 DRAFT → 人工在对话内确认卡确认（Agent 不能自批）→ 24h 有效 → `mappingHash` 防确认后变更（E-703） | `EnvBindingService`、`EnvQueryTools` | **复用**，事实确认与部署绑定共用同一套确认语义 |
 | 部署快照 | 每次部署记 `env-snapshot` 产物，只存 key + 值哈希，不落明文 | `BuiltInPipelineEngine` | **保留**，密钥化后改为存引用版本哈希 |
 | 执行门禁 | `ActionId` 固定 7 个动作；L2 仅非生产直跑；L3 必须 `request → confirm → apply`，令牌一次性、5 分钟、绑 `planHash` | `ActionService`、`ChangeController`、`ConfirmTokenService` | **保留**，把散落判断收口到策略层 |
 | 环境工具面 | prod 只装配只读 Toolkit；非生产装配完整 Toolkit | `ToolCatalog`、`AgentFactory` | **保留**，由策略层统一决策 |
