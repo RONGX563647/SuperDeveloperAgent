@@ -1,0 +1,203 @@
+{
+  "schema": "harness-handbook/v1",
+  "generatedAt": "2026-11-17T00:17:11+08:00",
+  "sourceCommit": "7a1d78a674bfc15a35bcd47a60987581c496f0ba",
+  "docs": [
+    {
+      "level": "L1",
+      "path": "docs/handbook/l1/data-flow.md"
+    },
+    {
+      "level": "L1",
+      "path": "docs/handbook/l1/execution-model.md"
+    },
+    {
+      "level": "L1",
+      "path": "docs/handbook/l1/system-overview.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/deploy-recipe.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/governance-policy.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/pipeline-stages.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/project-intake.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/runtime-agent-loop.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/session-state-context.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/tool-execution.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/executor-pipeline-engine.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/gateway-chat-controller.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/gateway-deploy-gate.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/governance-env-policy.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/infra-git-worktree.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/infra-project-intake.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/runtime-agent-factory.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/runtime-chat-service.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/state-agent-state-store.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/state-context-trimmer.md"
+    },
+    {
+      "level": "L3",
+      "path": "docs/handbook/l3/tools-deploy-tools.md"
+    }
+  ],
+  "anchors": [
+    {
+      "id": "executor-pipeline-engine/trigger",
+      "doc": "executor-pipeline-engine",
+      "label": "流水线触发与异步执行入口",
+      "symbol": "BuiltInPipelineEngine#trigger",
+      "source": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+      "module": "agent-executor",
+      "start": 1055,
+      "end": 1139
+    },
+    {
+      "id": "gateway-chat-controller/chat-stream",
+      "doc": "gateway-chat-controller",
+      "label": "SSE 对话入口与事件下发",
+      "symbol": "ChatController#chat",
+      "source": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
+      "module": "agent-gateway",
+      "start": 122,
+      "end": 209
+    },
+    {
+      "id": "gateway-deploy-gate/require-if-needed",
+      "doc": "gateway-deploy-gate",
+      "label": "部署前证据校验与确认令牌",
+      "symbol": "DeployGate#requireIfNeeded",
+      "source": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java",
+      "module": "agent-gateway",
+      "start": 45,
+      "end": 58
+    },
+    {
+      "id": "governance-env-policy/require-not-denied",
+      "doc": "governance-env-policy",
+      "label": "环境策略拒绝违规动作",
+      "symbol": "EnvPolicyService#requireNotDenied",
+      "source": "platform/agent-governance/src/main/java/top/rongx/agent/governance/EnvPolicyService.java",
+      "module": "agent-governance",
+      "start": 52,
+      "end": 60
+    },
+    {
+      "id": "infra-git-worktree/add-worktree",
+      "doc": "infra-git-worktree",
+      "label": "平台 worktree 创建",
+      "symbol": "GitWorktreeManager#addWorktree",
+      "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+      "module": "agent-infra",
+      "start": 220,
+      "end": 234
+    },
+    {
+      "id": "infra-project-intake/submit",
+      "doc": "infra-project-intake",
+      "label": "项目接入异步入口与状态机",
+      "symbol": "ProjectIntakeService#submit",
+      "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java",
+      "module": "agent-infra",
+      "start": 140,
+      "end": 156
+    },
+    {
+      "id": "runtime-agent-factory/create-chat",
+      "doc": "runtime-agent-factory",
+      "label": "按环境与角色裁剪工具面并构造 ReActAgent",
+      "symbol": "AgentFactory#createChat",
+      "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+      "module": "agent-runtime",
+      "start": 133,
+      "end": 165
+    },
+    {
+      "id": "runtime-chat-service/stream",
+      "doc": "runtime-chat-service",
+      "label": "聊天主流程：校验输入 → 绑定会话 → 组装 Agent → 事件流",
+      "symbol": "ChatService#stream",
+      "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
+      "module": "agent-runtime",
+      "start": 77,
+      "end": 104
+    },
+    {
+      "id": "state-agent-state-store/save",
+      "doc": "state-agent-state-store",
+      "label": "会话状态加密落盘",
+      "symbol": "EncryptedAgentStateStore#save",
+      "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
+      "module": "agent-infra",
+      "start": 70,
+      "end": 88
+    },
+    {
+      "id": "state-context-trimmer/trim",
+      "doc": "state-context-trimmer",
+      "label": "上下文预算裁剪",
+      "symbol": "ConversationContextTrimmer#trim",
+      "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java",
+      "module": "agent-infra",
+      "start": 29,
+      "end": 86
+    },
+    {
+      "id": "tools-deploy-tools/env-status",
+      "doc": "tools-deploy-tools",
+      "label": "部署环境状态只读查询",
+      "symbol": "DeployTools#envStatus",
+      "source": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+      "module": "agent-tools",
+      "start": 76,
+      "end": 95
+    }
+  ]
+}
