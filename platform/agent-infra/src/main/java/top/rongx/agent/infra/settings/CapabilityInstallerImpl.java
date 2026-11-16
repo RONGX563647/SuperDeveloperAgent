@@ -66,6 +66,12 @@ public class CapabilityInstallerImpl implements CapabilityInstaller {
         if (exists) {
             return new Result(kind, name, true, "Skill「" + name + "」已存在");
         }
+        if (entry.files() != null && !entry.files().isEmpty()) {
+            skills.createBundle(name, entry.description(), entry.files());
+            return new Result(kind, name, false,
+                    "已接入 Skill「" + name + "」（" + entry.files().size()
+                            + " 个文件，含脚本/参考资料），可在对话工具栏勾选");
+        }
         if (entry.content() == null || entry.content().isBlank()) {
             throw new IllegalStateException("技能内容为空，无法安装：" + capabilityId);
         }

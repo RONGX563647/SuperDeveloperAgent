@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import {
@@ -30,17 +30,19 @@ const form = reactive({ name: '', description: '', content: '' })
 const tab = ref<'installed' | 'market'>('installed')
 const market = ref<CapabilityEntry[]>([])
 const marketLoading = ref(false)
+const marketLoadingMore = ref(false)
 const marketQuery = ref('')
 const installing = ref('')
 /** 外部市场不可达时的提示（不再静默显示为空列表）。 */
 const marketError = ref('')
-
-const marketFiltered = computed(() => {
-  const q = marketQuery.value.trim().toLowerCase()
-  if (!q) return market.value
-  return market.value.filter((m) =>
-    `${m.title} ${m.name} ${m.description} ${m.tags.join(' ')}`.toLowerCase().includes(q))
-})
+/** 懒加载分页状态：每次打开市场都 refresh=true 重新同步两个仓库。 */
+const MARKET_PAGE = 24
+const marketTotal = ref(0)
+const marketHasMore = ref(false)
+const marketOffset = ref(0)
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+/** 请求序号：搜索/刷新会作废还在路上的旧分页响应。 */
+let loadSeq = 0
 
 async function load(): Promise<void> {
   loading.value = true
@@ -55,32 +57,81 @@ async function load(): Promise<void> {
   }
 }
 
-async function loadMarket(): Promise<void> {
-  marketLoading.value = true
+/**
+ * 市场加载。
+ *
+ * @param reset true = 从第一页开始
+ * @param sync  true = 让后端清缓存并重新同步两个技能仓库（打开市场 / 点刷新时）
+ */
+async function loadMarket({ reset = false, sync = false } = {}): Promise<void> {
+  if (!reset && (!marketHasMore.value || marketLoadingMore.value)) {
+    return
+  }
+  if (reset) {
+    marketLoading.value = true
+    marketOffset.value = 0
+  } else {
+    marketLoadingMore.value = true
+  }
   marketError.value = ''
+  const offset = reset ? 0 : marketOffset.value
+  const seq = ++loadSeq
   try {
-    market.value = await listCapabilityMarket('SKILL')
+    const page = await listCapabilityMarket('SKILL', marketQuery.value, offset,
+      MARKET_PAGE, sync)
+    if (seq !== loadSeq) return
+    market.value = reset ? page.items : [...market.value, ...page.items]
+    marketTotal.value = page.total
+    marketHasMore.value = page.hasMore
+    marketOffset.value = offset + MARKET_PAGE
   } catch (e) {
-    market.value = []
-    marketError.value = e instanceof Error ? e.message : '技能市场加载失败'
+    if (seq === loadSeq && reset) {
+      market.value = []
+      marketHasMore.value = false
+      marketTotal.value = 0
+      marketError.value = e instanceof Error ? e.message : '技能市场加载失败'
+    }
   } finally {
-    marketLoading.value = false
+    if (seq === loadSeq) {
+      marketLoading.value = false
+      marketLoadingMore.value = false
+    }
+  }
+}
+
+/** 滚动到接近底部时加载下一页。 */
+function onMarketScroll(event: Event): void {
+  const el = event.target as HTMLElement
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+    void loadMarket()
   }
 }
 
 function switchTab(next: 'installed' | 'market'): void {
   tab.value = next
-  if (next === 'market' && !market.value.length) {
-    void loadMarket()
+  // 每次进入市场都重新同步远端，避免看到 10 分钟前的旧目录
+  if (next === 'market') {
+    void loadMarket({ reset: true, sync: true })
   }
 }
+
+watch(marketQuery, () => {
+  if (tab.value !== 'market') return
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => void loadMarket({ reset: true }), 300)
+})
+onUnmounted(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 
 async function install(entry: CapabilityEntry): Promise<void> {
   installing.value = entry.id
   try {
     const r = await installCapability(entry.id)
     ElMessage.success(r.message)
-    await Promise.all([load(), loadMarket()])
+    const target = market.value.find((item) => item.id === entry.id)
+    if (target) target.installed = true
+    await load()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '接入失败')
   } finally {
@@ -224,6 +275,7 @@ defineExpose({ load })
     </div>
 
     <template v-if="tab === 'installed'">
+    <div class="panel-scroll">
     <div v-if="loading" class="empty">加载中…</div>
     <div v-else-if="!skills.length" class="empty-state">
       <span class="empty-icon"><el-icon><MagicStick /></el-icon></span>
@@ -288,9 +340,10 @@ defineExpose({ load })
         <el-button size="default" type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
     </div>
+    </div>
     </template>
 
-    <!-- 市场：外部技能仓库（默认 anthropics/skills），一键写入 _platform/skills -->
+    <!-- 市场：外部技能仓库（默认 anthropics/skills + anbeime/skill） -->
     <template v-else>
       <div class="market-toolbar">
         <el-input
@@ -299,20 +352,26 @@ defineExpose({ load })
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
-        <el-button size="default" :loading="marketLoading" @click="loadMarket">
+        <el-button
+          size="default" :loading="marketLoading"
+          title="重新同步两个技能仓库"
+          @click="loadMarket({ reset: true, sync: true })"
+        >
           <el-icon><Refresh /></el-icon>
         </el-button>
       </div>
-      <div v-if="marketLoading" class="empty">加载市场…</div>
+      <div class="panel-scroll" @scroll="onMarketScroll">
+      <div v-if="marketLoading" class="empty">正在同步技能仓库…</div>
       <div v-else-if="marketError" class="market-error">
         <span>{{ marketError }}</span>
         <el-button size="small" text @click="loadMarket">重试</el-button>
       </div>
-      <div v-else-if="!marketFiltered.length" class="empty">没有匹配的技能。</div>
+      <div v-else-if="!market.length" class="empty">没有匹配的技能。</div>
       <p v-else class="market-hint">
-        目录来自公开技能仓库（默认 anthropics/skills），需要外网或 HTTPS_PROXY 代理。
+        目录来自公开技能仓库（anthropics/skills 与 anbeime/skill），共
+        {{ marketTotal }} 个；安装会连同 scripts / references 一起下载。
       </p>
-      <div v-for="m in marketFiltered" :key="m.id" class="market-card">
+      <div v-for="m in market" :key="m.id" class="market-card">
         <div class="market-main">
           <div class="market-title">{{ m.title }}</div>
           <div class="market-desc">{{ m.description }}</div>
@@ -326,6 +385,11 @@ defineExpose({ load })
         >
           {{ m.installed ? '已接入' : '接入' }}
         </el-button>
+      </div>
+      <div v-if="marketLoadingMore" class="empty">加载更多…</div>
+      <div v-else-if="!marketHasMore && market.length" class="market-hint end">
+        已显示全部 {{ marketTotal }} 个技能
+      </div>
       </div>
     </template>
 
@@ -342,6 +406,19 @@ defineExpose({ load })
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  overflow: hidden;
+}
+/* 市场/已接入列表独立滚动：条目再多也不把整页撑长 */
+.panel-scroll {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 240px;
+  max-height: calc(100vh - 320px);
+  padding-right: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .panel-head {
   display: flex;
@@ -438,6 +515,10 @@ defineExpose({ load })
   margin: 0;
   font-size: 11px;
   color: var(--ink-faint);
+}
+.market-hint.end {
+  padding: 6px 0 2px;
+  text-align: center;
 }
 .skill-card {
   display: flex;

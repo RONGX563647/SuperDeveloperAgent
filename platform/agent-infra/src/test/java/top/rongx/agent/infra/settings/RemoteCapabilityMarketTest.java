@@ -1,12 +1,17 @@
 package top.rongx.agent.infra.settings;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Optional;
+import javax.net.ssl.X509TrustManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import top.rongx.agent.domain.settings.CapabilityMarket;
@@ -53,6 +58,48 @@ class RemoteCapabilityMarketTest {
         assertEquals(List.of("-y", "acme-files-mcp@1.2.3"), entry.args());
         assertEquals(List.of("ACME_ROOT"), entry.requiredEnv());
         assertEquals(List.of("files", "io"), entry.tags());
+    }
+
+    @Test
+    @DisplayName("cacerts 不认的证书可由系统根证书库兜底，全部不认时才失败")
+    void compositeTrustManagerAcceptsWhenAnyStoreTrusts() {
+        RemoteCapabilityMarket.CompositeTrustManager merged =
+                new RemoteCapabilityMarket.CompositeTrustManager(
+                        List.of(fakeTrustManager(false), fakeTrustManager(true)));
+        assertDoesNotThrow(() -> merged.checkServerTrusted(new X509Certificate[0], "RSA"));
+
+        RemoteCapabilityMarket.CompositeTrustManager strict =
+                new RemoteCapabilityMarket.CompositeTrustManager(
+                        List.of(fakeTrustManager(false)));
+        assertThrows(CertificateException.class,
+                () -> strict.checkServerTrusted(new X509Certificate[0], "RSA"));
+    }
+
+    private static X509TrustManager fakeTrustManager(boolean trust) {
+        return new X509TrustManager() {
+            @Override
+            public void checkClientTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                check(trust);
+            }
+
+            @Override
+            public void checkServerTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                check(trust);
+            }
+
+            private void check(boolean trusted) throws CertificateException {
+                if (!trusted) {
+                    throw new CertificateException("untrusted");
+                }
+            }
+
+            @Override
+            public X509Certificate[] getAcceptedIssuers() {
+                return new X509Certificate[0];
+            }
+        };
     }
 
     @Test

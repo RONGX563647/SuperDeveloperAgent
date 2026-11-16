@@ -1,7 +1,6 @@
 package top.rongx.agent.gateway.web;
 
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -35,13 +34,26 @@ public class CapabilityMarketController {
         this.currentUser = currentUser;
     }
 
-    /** 市场列表：kind=MCP|SKILL 可选，q 关键词可选。 */
+    /**
+     * 市场列表（分页 + 懒加载）：kind=MCP|SKILL 可选，q 关键词可选。
+     *
+     * <p>{@code refresh=true} 强制重新同步远端仓库 / Registry（设置页每次打开或点刷新都会带）；
+     * 滚动加载下一页时传 false，复用本次同步的索引。
+     */
     @GetMapping("/market")
-    public List<Map<String, Object>> market(@RequestParam(required = false) String kind,
-                                            @RequestParam(required = false) String q) {
+    public Map<String, Object> market(@RequestParam(required = false) String kind,
+                                      @RequestParam(required = false) String q,
+                                      @RequestParam(defaultValue = "0") int offset,
+                                      @RequestParam(defaultValue = "24") int limit,
+                                      @RequestParam(defaultValue = "false") boolean refresh) {
         requireRead();
         CapabilityMarket.Kind type = CapabilityMarket.Kind.parse(kind).orElse(null);
-        return market.search(type, q).stream().map(this::view).toList();
+        CapabilityMarket.Page page = market.page(type, q, offset, limit, refresh);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("items", page.items().stream().map(this::view).toList());
+        out.put("total", page.total());
+        out.put("hasMore", page.hasMore());
+        return out;
     }
 
     /** 安装：id 用市场返回的完整标识（含 MCP registry 原始名 / Skill 仓库路径）。 */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search, SetUp } from '@element-plus/icons-vue'
 import {
@@ -27,18 +27,19 @@ const formOpen = ref(false)
 const tab = ref<'installed' | 'market'>('installed')
 const market = ref<CapabilityEntry[]>([])
 const marketLoading = ref(false)
+const marketLoadingMore = ref(false)
 const marketQuery = ref('')
 const installing = ref('')
 /** 外部市场不可达时的提示（不再静默显示为空列表）。 */
 const marketError = ref('')
-
-// 目录很小，前端过滤即可，避免每次输入都打后端
-const marketFiltered = computed(() => {
-  const q = marketQuery.value.trim().toLowerCase()
-  if (!q) return market.value
-  return market.value.filter((m) =>
-    `${m.title} ${m.name} ${m.description} ${m.tags.join(' ')}`.toLowerCase().includes(q))
-})
+/** 懒加载分页状态：每次打开市场都 refresh=true 重新同步精选清单 + Registry。 */
+const MARKET_PAGE = 24
+const marketTotal = ref(0)
+const marketHasMore = ref(false)
+const marketOffset = ref(0)
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+/** 请求序号：搜索/刷新会作废还在路上的旧分页响应。 */
+let loadSeq = 0
 
 const form = reactive({
   id: '',
@@ -62,25 +63,72 @@ async function load(): Promise<void> {
   }
 }
 
-async function loadMarket(): Promise<void> {
-  marketLoading.value = true
+/**
+ * 市场加载。
+ *
+ * @param reset true = 从第一页开始
+ * @param sync  true = 让后端清缓存并重新同步精选清单 + MCP Registry
+ */
+async function loadMarket({ reset = false, sync = false } = {}): Promise<void> {
+  if (!reset && (!marketHasMore.value || marketLoadingMore.value)) {
+    return
+  }
+  if (reset) {
+    marketLoading.value = true
+    marketOffset.value = 0
+  } else {
+    marketLoadingMore.value = true
+  }
   marketError.value = ''
+  const offset = reset ? 0 : marketOffset.value
+  const seq = ++loadSeq
   try {
-    market.value = await listCapabilityMarket('MCP')
+    const page = await listCapabilityMarket('MCP', marketQuery.value, offset,
+      MARKET_PAGE, sync)
+    if (seq !== loadSeq) return
+    market.value = reset ? page.items : [...market.value, ...page.items]
+    marketTotal.value = page.total
+    marketHasMore.value = page.hasMore
+    marketOffset.value = offset + MARKET_PAGE
   } catch (e) {
-    market.value = []
-    marketError.value = e instanceof Error ? e.message : 'MCP 市场加载失败'
+    if (seq === loadSeq && reset) {
+      market.value = []
+      marketHasMore.value = false
+      marketTotal.value = 0
+      marketError.value = e instanceof Error ? e.message : 'MCP 市场加载失败'
+    }
   } finally {
-    marketLoading.value = false
+    if (seq === loadSeq) {
+      marketLoading.value = false
+      marketLoadingMore.value = false
+    }
+  }
+}
+
+/** 滚动到接近底部时加载下一页。 */
+function onMarketScroll(event: Event): void {
+  const el = event.target as HTMLElement
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+    void loadMarket()
   }
 }
 
 function switchTab(next: 'installed' | 'market'): void {
   tab.value = next
-  if (next === 'market' && !market.value.length) {
-    void loadMarket()
+  // 每次进入市场都重新同步远端，避免看到旧目录
+  if (next === 'market') {
+    void loadMarket({ reset: true, sync: true })
   }
 }
+
+watch(marketQuery, () => {
+  if (tab.value !== 'market') return
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => void loadMarket({ reset: true }), 300)
+})
+onUnmounted(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 
 /** 一键接入市场里的 MCP 服务（装完默认启用）。 */
 async function install(entry: CapabilityEntry): Promise<void> {
@@ -88,7 +136,9 @@ async function install(entry: CapabilityEntry): Promise<void> {
   try {
     const r = await installCapability(entry.id)
     ElMessage.success(r.message)
-    await Promise.all([load(), loadMarket()])
+    const target = market.value.find((item) => item.id === entry.id)
+    if (target) target.installed = true
+    await load()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '接入失败')
   } finally {
@@ -253,6 +303,7 @@ defineExpose({ load })
     </div>
 
     <template v-if="tab === 'installed'">
+    <div class="panel-scroll">
     <div v-if="loading" class="empty">加载中…</div>
     <div v-else-if="!servers.length" class="empty-state">
       <span class="empty-icon"><el-icon><SetUp /></el-icon></span>
@@ -345,9 +396,10 @@ defineExpose({ load })
         <el-button size="default" type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
     </div>
+    </div>
     </template>
 
-    <!-- 市场：MCP 官方 Registry，一键接入后可在这里启停 -->
+    <!-- 市场：Awesome-MCP-ZH 精选 + MCP 官方 Registry，一键接入后可在这里启停 -->
     <template v-else>
       <div class="market-toolbar">
         <el-input
@@ -356,20 +408,26 @@ defineExpose({ load })
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
-        <el-button size="default" :loading="marketLoading" @click="loadMarket">
+        <el-button
+          size="default" :loading="marketLoading"
+          title="重新同步精选清单与 Registry"
+          @click="loadMarket({ reset: true, sync: true })"
+        >
           <el-icon><Refresh /></el-icon>
         </el-button>
       </div>
-      <div v-if="marketLoading" class="empty">加载市场…</div>
+      <div class="panel-scroll" @scroll="onMarketScroll">
+      <div v-if="marketLoading" class="empty">正在同步 MCP 市场…</div>
       <div v-else-if="marketError" class="market-error">
         <span>{{ marketError }}</span>
         <el-button size="small" text @click="loadMarket">重试</el-button>
       </div>
-      <div v-else-if="!marketFiltered.length" class="empty">没有匹配的 MCP 服务。</div>
+      <div v-else-if="!market.length" class="empty">没有匹配的 MCP 服务。</div>
       <p v-else class="market-hint">
-        目录来自 MCP 官方 Registry（registry.modelcontextprotocol.io），需要外网或 HTTPS_PROXY 代理。
+        目录 = Awesome-MCP-ZH 精选 + MCP 官方 Registry，共 {{ marketTotal }} 个；
+        精选条目离线也可安装。
       </p>
-      <div v-for="m in marketFiltered" :key="m.id" class="market-card">
+      <div v-for="m in market" :key="m.id" class="market-card">
         <div class="market-main">
           <div class="market-title">
             {{ m.title }}
@@ -390,6 +448,11 @@ defineExpose({ load })
           {{ m.installed ? '已接入' : '接入' }}
         </el-button>
       </div>
+      <div v-if="marketLoadingMore" class="empty">加载更多…</div>
+      <div v-else-if="!marketHasMore && market.length" class="market-hint end">
+        已显示全部 {{ marketTotal }} 个 MCP 服务
+      </div>
+      </div>
     </template>
   </div>
 </template>
@@ -401,6 +464,19 @@ defineExpose({ load })
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  overflow: hidden;
+}
+/* 市场/已接入列表独立滚动：条目再多也不把整页撑长 */
+.panel-scroll {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 240px;
+  max-height: calc(100vh - 320px);
+  padding-right: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .panel-head {
   display: flex;
@@ -489,6 +565,10 @@ defineExpose({ load })
   margin: 0;
   font-size: 11px;
   color: var(--ink-faint);
+}
+.market-hint.end {
+  padding: 6px 0 2px;
+  text-align: center;
 }
 .market-env {
   margin-top: 2px;

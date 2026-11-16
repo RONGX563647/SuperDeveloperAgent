@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
@@ -100,6 +101,69 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
         } catch (IOException e) {
             throw new IllegalStateException("技能写入失败：" + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 安装公开技能包：把技能目录下的多个文件一起落盘（SKILL.md + scripts/ + references/）。
+     *
+     * <p>只写文本文件；路径一律按相对路径校验，拒绝绝对路径与 {@code ..} 越界。
+     * 任一步失败会清掉半成品目录，避免留下一个缺文件的技能。
+     */
+    public Skill createBundle(String name, String description, Map<String, String> files) {
+        String safe = requireName(name);
+        Path dir = root.resolve(safe);
+        if (Files.exists(dir)) {
+            throw new IllegalArgumentException("同名技能已存在：" + safe);
+        }
+        try {
+            Files.createDirectories(dir);
+            for (Map.Entry<String, String> file : files.entrySet()) {
+                Path target = safeResolve(dir, file.getKey());
+                if (target == null) {
+                    continue;
+                }
+                Files.createDirectories(target.getParent());
+                Files.writeString(target, file.getValue() == null ? "" : file.getValue(),
+                        StandardCharsets.UTF_8);
+            }
+            Path skillFile = dir.resolve(SKILL_FILE);
+            String content = Files.isRegularFile(skillFile)
+                    ? Files.readString(skillFile, StandardCharsets.UTF_8)
+                    : "# " + safe + "\n";
+            Files.writeString(skillFile, withFrontmatter(content, safe, description),
+                    StandardCharsets.UTF_8);
+            return read(dir);
+        } catch (IOException | RuntimeException e) {
+            try {
+                if (Files.exists(dir)) {
+                    deleteTree(dir);
+                }
+            } catch (IOException ignored) {
+                // 清理失败不掩盖原始错误
+            }
+            if (e instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException("技能安装失败：" + e.getMessage(), e);
+        }
+    }
+
+    /** 相对路径落到技能目录下；绝对路径、空路径与越界路径返回 null。 */
+    private static Path safeResolve(Path dir, String relative) {
+        if (relative == null || relative.isBlank()) {
+            return null;
+        }
+        Path rel;
+        try {
+            rel = Path.of(relative.replace('\\', '/'));
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (rel.isAbsolute() || rel.getNameCount() == 0) {
+            return null;
+        }
+        Path target = dir.resolve(rel).normalize();
+        return target.startsWith(dir) ? target : null;
     }
 
     /** 从本地目录导入：源目录必须含 SKILL.md，复制到技能根目录（同名拒绝覆盖）。 */
