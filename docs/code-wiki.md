@@ -784,7 +784,7 @@ npm run typecheck
 
 ### 11.4 CI
 
-`.workflow/build.yml`（Gitee Go）：`doc-marshal check --all` + `cd platform && mvn -B verify`；分支保护 + 两者必须绿。另有 `doc-marshal drifted` 变更漂移报告（非阻塞，提示同步文档）。
+`.workflow/build.yml`（Gitee Go）：`doc-marshal check --all` + `cd platform && mvn -B verify`；分支保护 + 两者必须绿。另有两个辅助检查：`doc-marshal drifted` 变更漂移报告（非阻塞，提示同步文档）；`audit.mjs --strict` 前端契约审计（路径/方法/参数与 OpenAPI 不一致即失败）。
 
 ---
 
@@ -799,6 +799,10 @@ npm run typecheck
 | `ConfigCredentialScanTest` | 决策面（gateway/runtime/tools/governance）配置不得含写凭证键 |
 | `MigrationGuardTest` | 已发布迁移文件不得修改（基线 `spec-checks/migration-baseline.txt`） |
 | `ApiDocContractTest` | 每个 Mapping 方法必须有 Javadoc 或 `@Operation(summary)`；`api-doc-baseline.txt` 存量棘轮，只减不增 |
+
+CI 另有前端契约审计：`node tools/api-docs-mcp/audit.mjs --strict` 扫描 `platform/web/src/api` 的
+`apiFetch` / `apiBlob`，与 `openapi.json` 比对路径、方法、路径参数、查询参数与 2xx 响应；
+`platform/web` 的 `npm run check:api-types` 保证 `src/api/generated/schema.d.ts` 与快照同步。
 
 ### 12.2 单元测试分布
 

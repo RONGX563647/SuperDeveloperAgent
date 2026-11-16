@@ -20,6 +20,16 @@ const OPENAPI = {
         parameters: [{ name: "projectId", in: "path", required: true }],
         responses: { 204: { description: "ok" } },
       },
+      put: {
+        parameters: [{ name: "projectId", in: "path", required: true }],
+        responses: { 200: { content: { "application/json": { schema: { type: "object" } } } } },
+      },
+    },
+    "/api/v1/projects": {
+      post: {
+        parameters: [],
+        responses: { 201: { content: { "application/json": { schema: { type: "object" } } } } },
+      },
     },
     "/api/v1/actions/{action}/run": {
       post: {
@@ -70,7 +80,7 @@ test("路径不存在与方法未声明都报 error", () => {
 import { apiFetch } from './http'
 export const missing = () => apiFetch('/api/v1/nope')
 export const wrongMethod = (projectId: string) =>
-  apiFetch(\`/api/v1/projects/\${projectId}\`, { method: 'PUT' })
+  apiFetch(\`/api/v1/projects/\${projectId}\`, { method: 'PATCH' })
 `;
   withFixture(source, (dir) => {
     const report = auditFrontend({ openapi: OPENAPI, frontendDir: dir });
@@ -110,6 +120,28 @@ export const run = (action: string) =>
   withFixture(source, (dir) => {
     const report = auditFrontend({ openapi: OPENAPI, frontendDir: dir });
     assert.deepEqual(report.issues.map((issue) => issue.code), ["QUERY_PARAM_MISSING"]);
+  });
+});
+
+test("三元路径与方法按分支配对", () => {
+  const source = `
+import { apiFetch } from './http'
+export function save(projectId?: string) {
+  const path = projectId
+    ? \`/api/v1/projects/\${encodeURIComponent(projectId)}\`
+    : '/api/v1/projects'
+  return apiFetch(path, { method: projectId ? 'PUT' : 'POST' })
+}
+`;
+  const calls = extractCalls(source, "demo.ts");
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.path}`),
+    ["PUT /api/v1/projects/{projectId}", "POST /api/v1/projects"],
+  );
+  withFixture(source, (dir) => {
+    const report = auditFrontend({ openapi: OPENAPI, frontendDir: dir });
+    assert.equal(report.calls, 2);
+    assert.deepEqual(report.issues, []);
   });
 });
 

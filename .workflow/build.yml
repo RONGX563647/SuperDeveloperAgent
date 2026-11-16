@@ -1,11 +1,12 @@
 # Gitee Go 流水线（Gitee 平台的官方 CI）
 #
 # ⚠️ 首次接入请对照 Gitee Go 文档核对字段：不同套餐/版本对 `triggers`、`step` 名称、
-#    `artifacts` 的支持略有差异。本文件只依赖三个稳定事实：
+#    `artifacts` 的支持略有差异。本文件只依赖四个稳定事实：
 #      1) 文档门禁：doc-marshal check --all（任一失败即中断）
-#      2) 平台构建：`mvn -B verify`（规约检查已并入，失败即中断）
-#      3) 产物目录固定：platform/agent-gateway/target/*-exec.jar
-#    如果 Gitee Go 不可用，把这三点搬到任意 CI（自建 runner / Jenkins / 云效）即可。
+#      2) 前端契约：audit.mjs --strict（路径/方法/参数与 OpenAPI 不一致即中断）
+#      3) 平台构建：`mvn -B verify`（规约检查已并入，失败即中断）
+#      4) 产物目录固定：platform/agent-gateway/target/*-exec.jar
+#    如果 Gitee Go 不可用，把这四点搬到任意 CI（自建 runner / Jenkins / 云效）即可。
 
 version: 1.0
 name: agent-platform

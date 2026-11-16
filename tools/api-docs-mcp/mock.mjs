@@ -114,7 +114,8 @@ export function generateMocks(openapi, { maxPerTag = 500 } = {}) {
       const body = media?.schema
         ? sampleValue(media.schema, openapi)
         : (status === "204" ? null : {});
-      const tag = (operation.tags?.[0] ?? "default").replace(/[^\w.-]+/g, "_");
+      const tag = (operation.tags?.[0] ?? "default")
+        .replace(/[^\w.-]+/g, "_").replace(/_+$/, "") || "default";
       const routes = tags.get(tag) ?? new Map();
       if (routes.size < maxPerTag) {
         routes.set(`${method.toUpperCase()} ${route}`, { status: Number(status), body });

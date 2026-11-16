@@ -113,20 +113,79 @@ function parsePathExpression(node, sf) {
   return { path: out, unsupported: null, queryExpression: "" };
 }
 
-function parseMethod(node, sf) {
+/** 在调用所在函数（或文件）里查找同名变量声明的初始化表达式。 */
+function findVariableInitializer(identifier, sf) {
+  let scope = identifier.parent;
+  while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
+  if (!scope) return null;
+  let found = null;
+  const visit = (node) => {
+    if (found) return;
+    if (
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
+      node.name.text === identifier.text && node.initializer
+    ) {
+      found = node.initializer;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(scope);
+  return found;
+}
+
+/** 支持三元表达式（如 `id ? 详情路径 : 集合路径`）的路径解析，返回所有静态分支。 */
+function parsePathAlternatives(node, sf, depth = 0) {
+  if (ts.isParenthesizedExpression(node)) return parsePathAlternatives(node.expression, sf, depth);
+  if (ts.isIdentifier(node) && depth < 3) {
+    const initializer = findVariableInitializer(node, sf);
+    if (initializer) return parsePathAlternatives(initializer, sf, depth + 1);
+  }
+  if (ts.isConditionalExpression(node) && depth < 3) {
+    const left = parsePathAlternatives(node.whenTrue, sf, depth + 1);
+    const right = parsePathAlternatives(node.whenFalse, sf, depth + 1);
+    if (left.unsupported) return left;
+    if (right.unsupported) return right;
+    return {
+      alternatives: [...left.alternatives, ...right.alternatives],
+      unsupported: null,
+    };
+  }
+  const parsed = parsePathExpression(node, sf);
+  if (parsed.unsupported) return { alternatives: [], unsupported: parsed.unsupported };
+  return {
+    alternatives: [{ path: parsed.path, queryExpression: parsed.queryExpression }],
+    unsupported: null,
+  };
+}
+
+/** 解析请求方法；三元表达式按分支顺序返回，便于与路径分支配对。 */
+function parseMethodAlternatives(node, sf) {
   const init = node.arguments[1];
-  if (!init) return { method: "GET", methodKnown: true };
-  if (!ts.isObjectLiteralExpression(init)) return { method: "GET", methodKnown: false };
+  if (!init) return { methods: ["GET"], known: true };
+  if (!ts.isObjectLiteralExpression(init)) return { methods: ["GET"], known: false };
   const prop = init.properties.find(
     (item) =>
       ts.isPropertyAssignment(item) &&
       (ts.isIdentifier(item.name) ? item.name.text : item.name.getText(sf)) === "method",
   );
-  if (!prop) return { method: "GET", methodKnown: true };
-  if (ts.isStringLiteralLike(prop.initializer)) {
-    return { method: prop.initializer.text.toUpperCase(), methodKnown: true };
-  }
-  return { method: "GET", methodKnown: false };
+  if (!prop) return { methods: ["GET"], known: true };
+  const collect = (expr, depth = 0) => {
+    if (ts.isStringLiteralLike(expr)) return [expr.text.toUpperCase()];
+    if (ts.isParenthesizedExpression(expr)) return collect(expr.expression, depth);
+    if (ts.isConditionalExpression(expr) && depth < 3) {
+      const left = collect(expr.whenTrue, depth + 1);
+      const right = collect(expr.whenFalse, depth + 1);
+      return left && right ? [...left, ...right] : null;
+    }
+    if (ts.isIdentifier(expr) && depth < 3) {
+      const initializer = findVariableInitializer(expr, sf);
+      return initializer ? collect(initializer, depth + 1) : null;
+    }
+    return null;
+  };
+  const methods = collect(prop.initializer);
+  return methods ? { methods, known: true } : { methods: ["GET"], known: false };
 }
 
 /** 在调用所在函数（或文件）里收集 URLSearchParams 声明的查询参数名。 */
@@ -198,32 +257,37 @@ export function extractCalls(sourceText, fileName) {
       FETCH_CALLS.has(node.expression.text)
     ) {
       const fn = node.expression.text;
-      const parsed = parsePathExpression(node.arguments[0], sf);
+      const parsed = parsePathAlternatives(node.arguments[0], sf);
       const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-      const { method, methodKnown } = fn === "apiBlob"
-        ? { method: "GET", methodKnown: true }
-        : parseMethod(node, sf);
+      const methods = fn === "apiBlob"
+        ? { methods: ["GET"], known: true }
+        : parseMethodAlternatives(node, sf);
       const location = { file: fileName, line: line + 1, column: character + 1 };
+      const responseType = node.typeArguments?.[0]?.getText(sf) ?? null;
       if (parsed.unsupported) {
         calls.push({
-          ...location, fn, method, methodKnown, path: parsed.path,
-          pathParams: [], queryVarNames: [], queryLiteralNames: [], scopeKeys: [],
-          responseType: node.typeArguments?.[0]?.getText(sf) ?? null,
-          unsupported: parsed.unsupported,
+          ...location, fn, method: methods.methods[0], methodKnown: methods.known,
+          path: null, pathParams: [], queryVarNames: [], queryLiteralNames: [], scopeKeys: [],
+          responseType, unsupported: parsed.unsupported,
         });
       } else {
-        const { path: pathPart, queryVarNames, queryLiteralNames } = splitQuery(
-          parsed.path,
-          parsed.queryExpression,
-        );
-        calls.push({
-          ...location, fn, method, methodKnown, path: pathPart,
-          pathParams: pathParamNames(pathPart),
-          queryVarNames, queryLiteralNames,
-          scopeKeys: scopeQueryKeys(node, sf),
-          responseType: node.typeArguments?.[0]?.getText(sf) ?? null,
-          unsupported: null,
-        });
+        const paired = methods.methods.length === parsed.alternatives.length;
+        const scopeKeys = scopeQueryKeys(node, sf);
+        for (const [index, alternative] of parsed.alternatives.entries()) {
+          const { path: pathPart, queryVarNames, queryLiteralNames } = splitQuery(
+            alternative.path,
+            alternative.queryExpression,
+          );
+          calls.push({
+            ...location, fn,
+            method: paired ? methods.methods[index] : methods.methods[0],
+            methodKnown: methods.known && (paired || methods.methods.length === 1),
+            path: pathPart,
+            pathParams: pathParamNames(pathPart),
+            queryVarNames, queryLiteralNames, scopeKeys,
+            responseType, unsupported: null,
+          });
+        }
       }
     }
     ts.forEachChild(node, visit);
@@ -346,7 +410,7 @@ export function searchFrontendApi({ frontendDir = DEFAULT_FRONTEND, keyword = ""
       if (ts.isFunctionDeclaration(statement) && statement.name) {
         name = statement.name.text;
         body = statement.body;
-        returns = statement.type?.getText(sf) ?? null;
+        returns = statement.type?.getText(sf).replace(/\s+/g, " ").trim() ?? null;
       } else if (ts.isVariableStatement(statement)) {
         for (const declaration of statement.declarationList.declarations) {
           if (!ts.isIdentifier(declaration.name)) continue;
@@ -357,7 +421,7 @@ export function searchFrontendApi({ frontendDir = DEFAULT_FRONTEND, keyword = ""
           ) {
             name = declaration.name.text;
             body = initializer.body;
-            returns = initializer.type?.getText(sf) ?? null;
+            returns = initializer.type?.getText(sf).replace(/\s+/g, " ").trim() ?? null;
             break;
           }
         }

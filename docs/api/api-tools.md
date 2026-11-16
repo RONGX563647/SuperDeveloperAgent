@@ -118,7 +118,8 @@ node tools/api-docs-mcp/audit.mjs --strict  # CI：存在 error 时退出码 1
 ```
 
 MCP 对应工具：`audit_frontend_api`（审计）与 `search_frontend_api`（按关键词定位前端请求函数）。
-路径模板支持字面量、`${变量}`、`${encodeURIComponent(变量)}` 与尾部 `?${qs}`；
+路径模板支持字面量、`${变量}`、`${encodeURIComponent(变量)}`、三元静态路径（如
+`id ? 详情路径 : 集合路径`，会按分支与方法配对审计）与尾部 `?${qs}`；
 其他插值会明确报 `UNSUPPORTED_PATH`，不会静默放过。
 
 边界：只校验路径、方法、路径参数、查询参数与 2xx 响应存在性；不做 TypeScript 类型与
