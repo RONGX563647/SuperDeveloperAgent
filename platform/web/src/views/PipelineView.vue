@@ -50,20 +50,13 @@ const env = computed(() => appStore.env)
 interface EnvStrategy {
   key: string
   pipeline: string
-  target: string
 }
 
-/** 部署方式默认值：dev 本机、test 镜像、prod 远程服务器。 */
-function defaultTarget(key: string): string {
-  if (key === 'dev') return 'host'
-  if (key === 'prod') return 'server'
-  return 'docker'
-}
-
+/** 环境到流水线的映射；部署方式不在这里猜，由 pipeline 定义决定（预览后显示）。 */
 const ENV_STRATEGIES: EnvStrategy[] = [
-  { key: 'dev', pipeline: 'release', target: 'host' },
-  { key: 'test', pipeline: 'release', target: 'docker' },
-  { key: 'prod', pipeline: 'release', target: 'server' },
+  { key: 'dev', pipeline: 'release' },
+  { key: 'test', pipeline: 'release' },
+  { key: 'prod', pipeline: 'release' },
 ]
 
 const commits = ref<GitCommit[]>([])
@@ -191,7 +184,20 @@ function stopAgent(): void {
   agentRunning.value = false
 }
 
-const deployTarget = ref(defaultTarget(appStore.env))
+/** 空 = 尚未选择/按流水线定义；loadPreview 会用定义里的 deployTarget 填上。 */
+const deployTarget = ref('')
+/** 用户是否手动切过部署方式：切过后不再被 pipeline 定义的默认值覆盖。 */
+const targetTouched = ref(false)
+
+function onTargetChange(value: string): void {
+  deployTarget.value = value
+  targetTouched.value = true
+}
+
+/** 未手动选择时不传 target，让后端按 pipeline 定义决定（避免 UI 猜错）。 */
+function targetForTrigger(): string | undefined {
+  return targetTouched.value ? deployTarget.value : undefined
+}
 
 const preview = ref<PreviewStage[]>([])
 /** verify 流水线的预览：展示「只检查构建会跑几步、跳过什么」。 */
@@ -306,6 +312,7 @@ const primaryLabel = computed(() => {
   if (env.value === 'dev') return '启动本机前后端'
   if (deployTarget.value === 'host') return '本机部署'
   if (currentEnvRow.value?.recipeVersion) return `重放到${envShort(env.value)}环境`
+  if (!deployTarget.value) return `部署到${envShort(env.value)}环境（按流水线定义）`
   return `打包并部署到${envShort(env.value)}环境`
 })
 
@@ -314,6 +321,8 @@ const showModeSwitch = computed(() => env.value === 'test')
 
 const modeNote = computed(() => {
   if (env.value === 'dev') return '开发环境固定本机运行：后端 jar + 前端 dist，不打镜像'
+  if (env.value === 'prod') return '发布到远程服务器（SSH），目标以流水线定义为准'
+  if (!deployTarget.value) return '部署方式以流水线定义为准（读取到定义后显示）'
   if (deployTarget.value === 'host') return '前后端直接跑在本机（后端 jar + 前端 dist）'
   if (!dockerAvailable.value) return '本机 Docker 不可用：已改为直接部署（后端 jar + 前端 dist）'
   return '构建镜像并在本机 Docker 运行'
@@ -323,6 +332,8 @@ const modeNote = computed(() => {
 watch([dockerAvailable, env], () => {
   if (env.value === 'test' && !dockerAvailable.value && deployTarget.value === 'docker') {
     deployTarget.value = 'host'
+    // 这是平台的显式降级，必须随请求发出去；否则又会让后端按定义选 docker
+    targetTouched.value = true
   }
 }, { immediate: true })
 
@@ -611,6 +622,17 @@ async function loadPreview(): Promise<void> {
     if (seq !== previewSeq) return
     preview.value = release?.stages ?? []
     verifyPreview.value = verify?.stages ?? []
+    // 部署方式以 pipeline 定义为准：ui 按环境猜（test=docker）会让没有
+    // Dockerfile / image_package 的项目白跑完整构建，最后在 docker 部署阶段失败。
+    const defined = release?.stages?.find((stage) => stage.type === 'deploy')?.deployTarget
+    if (!targetTouched.value && defined
+      && ['docker', 'host', 'server'].includes(defined)) {
+      // 定义要 docker 但本机 Docker 不可用时，按现有产品语义退回直接部署；
+      // 这是显式降级，标记 touched 让请求真的带上 host（否则后端仍按定义选 docker）。
+      const resolved = defined === 'docker' && !dockerAvailable.value ? 'host' : defined
+      deployTarget.value = resolved
+      targetTouched.value = resolved !== defined
+    }
   } finally {
     previewLoading.value = false
   }
@@ -705,8 +727,6 @@ async function loadCommits(): Promise<void> {
 function applyEnv(key: string): void {
   if (!ENV_STRATEGIES.some((s) => s.key === key)) return
   appStore.env = key
-  // 切环境时部署方式跟着换默认值：dev 本机、test 镜像、prod 远程服务器
-  deployTarget.value = defaultTarget(key)
   choosePipeline()
 }
 
@@ -729,7 +749,7 @@ function attachRun(result: { runId: string, status: string },
 
 async function triggerSelected(): Promise<void> {
   const result = await triggerPipeline(
-    pipelineId.value, projectId.value, sha.value, deployTarget.value, env.value)
+    pipelineId.value, projectId.value, sha.value, targetForTrigger(), env.value)
   attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: sha.value })
   ElMessage.success('已触发运行')
 }
@@ -796,7 +816,7 @@ async function doVerify(): Promise<void> {
   topError.value = ''
   try {
     const result = await triggerPipeline(
-      'verify', projectId.value, sha.value, deployTarget.value, env.value)
+      'verify', projectId.value, sha.value, targetForTrigger(), env.value)
     attachRun(result, { env: env.value, pipelineId: 'verify', sha: sha.value })
     ElMessage.success('已触发检查构建')
   } catch (e) {
@@ -962,7 +982,7 @@ async function rerun(item: HistoryItem): Promise<void> {
   topError.value = ''
   try {
     const result = await triggerPipeline(
-      item.pipelineId, projectId.value, item.gitSha, deployTarget.value, item.env)
+      item.pipelineId, projectId.value, item.gitSha, targetForTrigger(), item.env)
     attachRun(result, { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha })
     ElMessage.success('已用该提交重跑')
   } catch (e) {
@@ -1014,7 +1034,7 @@ async function rerunActive(): Promise<void> {
   topError.value = ''
   try {
     const result = await triggerPipeline(
-      meta.pipelineId, projectId.value, meta.sha, deployTarget.value, meta.env)
+      meta.pipelineId, projectId.value, meta.sha, targetForTrigger(), meta.env)
     attachRun(result, { env: meta.env, pipelineId: meta.pipelineId, sha: meta.sha })
     ElMessage.success('已用相同参数重跑')
   } catch (e) {
@@ -1068,7 +1088,8 @@ watch(sha, () => void loadPreview())
 
 watch(env, () => {
   // 环境也可能从侧栏/其他页面切换，不只是点环境胶囊
-  deployTarget.value = defaultTarget(env.value)
+  targetTouched.value = false
+  deployTarget.value = ''
   choosePipeline()
   void loadEnvs()
   void loadHistory()
@@ -1083,6 +1104,7 @@ onMounted(async () => {
   const qTarget = typeof route.query.target === 'string' ? route.query.target : ''
   if (qTarget === 'host' || qTarget === 'docker' || qTarget === 'server') {
     deployTarget.value = qTarget
+    targetTouched.value = true
   }
   await Promise.all([
     loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
@@ -1198,7 +1220,8 @@ async function copyDigest(digest: string): Promise<void> {
 
           <TriggerBar
             v-model:sha="sha"
-            v-model:deploy-target="deployTarget"
+            :deploy-target="deployTarget"
+            @update:deploy-target="onTargetChange"
             v-model:action="action"
             :env-label="envLabel(env)"
             :primary-label="primaryLabel"

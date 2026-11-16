@@ -15,6 +15,7 @@ import top.rongx.agent.domain.run.StageStatus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -137,6 +138,56 @@ class PipelineAutoRepairTest {
         assertEquals(StageStatus.FAILED, engine.status("run-auto"));
         assertTrue(engine.autoRepair("run-auto").resumed());
         assertEquals(2, engine.autoRepair("run-auto").attempts(), "受 maxAttempts 约束");
+    }
+
+    @Test
+    @DisplayName("诊断只读失败阶段日志：前序阶段已自愈的镜像缺失不能串到当前阶段")
+    void diagnosisUsesFailedStageLog(@TempDir Path temp) throws Exception {
+        BuiltInPipelineEngine engine = engine(temp);
+        Object state = newState("test", "ui:admin");
+        @SuppressWarnings("unchecked")
+        List<StageResult> stages = (List<StageResult>) get(state, "stages");
+        stages.clear();
+        stages.add(StageResult.failed("frontend", 1, "E-101",
+                "命令失败（exit 1）：node:20-bookworm corepack enable", 0));
+        set(state, "definition", PipelineDefinition.parse("""
+                name: release
+                deploy:
+                  target: host
+                stages:
+                  - id: build
+                    type: action
+                    action: backend_build
+                    runner: container
+                  - id: frontend
+                    type: action
+                    action: frontend_build
+                    runner: container
+                    image: node:20-bookworm
+                """, "test"));
+        StringBuffer log = (StringBuffer) get(state, "log");
+        log.setLength(0);
+        log.append("[build] Error response from daemon: No such image: maven:3.9-eclipse-temurin-21\n");
+        log.append("[frontend] 阶段开始 · 第 2/3 阶段\n");
+        log.append("[frontend] Internal Error: EACCES: permission denied\n");
+        log.append("[frontend] ❌ E-101 命令失败（exit 1）\n");
+
+        Method diagnose = BuiltInPipelineEngine.class.getDeclaredMethod("diagnoseFailure",
+                Class.forName(STATE_CLASS), int.class);
+        diagnose.setAccessible(true);
+        FailureRepair.Diagnosis diagnosis =
+                (FailureRepair.Diagnosis) diagnose.invoke(engine, state, 1);
+
+        assertNull(diagnosis.image(), "不能把前序阶段的 maven 当成当前失败镜像");
+        assertFalse(diagnosis.logTail().contains("No such image: maven"),
+                diagnosis.logTail());
+        assertTrue(diagnosis.logTail().contains("EACCES"), diagnosis.logTail());
+
+        // 当前阶段真的缺镜像时仍要能识别（预检关闭场景由 ImagePullRepair 补位）
+        log.append("[frontend] Error response from daemon: No such image: node:20-bookworm\n");
+        FailureRepair.Diagnosis withNode =
+                (FailureRepair.Diagnosis) diagnose.invoke(engine, state, 1);
+        assertEquals("node:20-bookworm", withNode.image());
     }
 
     @Test

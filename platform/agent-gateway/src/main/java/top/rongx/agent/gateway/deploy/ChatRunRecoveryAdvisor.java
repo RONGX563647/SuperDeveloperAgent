@@ -218,10 +218,16 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
 
                 要求：
                 1. 先用 read_run_log / env_summary 定位根因，不要凭空猜测；需要看代码时用 read_file / grep。
-                2. 中间件缺失或不可用 → 调 env_ensure；变量缺失/端点写错 → 说明原因并再次 env_ensure 修正。
+                2. 环境类根因优先用环境工具直接修（仅 dev/test，改完不要自己触发运行——
+                   平台会重新做只读预检，通过后自动从失败阶段续跑）：
+                   - 中间件缺失/不可用 → env_ensure 创建或重启，并把实际端点写回环境；
+                   - 缺变量（E-509）→ env_vars 查现状，env_var_set 补值（值不回显）；
+                   - 端口被占用、健康检查 404/路径不对（Spring Boot 用 /actuator/health）→
+                     ci_definition 看 deploy 段，用 ci_configure_deploy 改 port / container_port / health_path；
+                   - 工具链镜像缺失（E-209）由平台自动 pull + inspect，不要重复让用户手动拉取。
                 3. 若根因是流水线定义与产物不匹配（HOST 目标没有可运行 jar、前端静态产物选了 host、
                    前端构建缺 Node 镜像），修正定义后重试；重试 deploy_run 必须带**人工确认过的 binding_id**：
-                   - 先调 env_mapping_draft，把 bindingId 与缺失项告诉用户，请其到设置页确认；
+                   - 先调 env_mapping_draft，把 bindingId 与缺失项告诉用户，请其在对话确认卡中确认；
                    - 用户确认后用同一个 binding_id 重试；**没有 binding_id 时不要反复调用 deploy_run**，
                      否则只会得到 "缺少 binding_id" 的确定性失败。
                 4. 若根因在仓库配置（构建/测试命令写错、e2e 用例不该在构建阶段跑、ci 定义不对、

@@ -93,6 +93,6 @@ interface FailureRepair {
                    long pullTimeoutMs, List<String> pullCommand, List<String> inspectCommand,
                    String configuredImage, RunRecoveryAdvisor advisor,
                    String projectId, String env, String pipelineId, String gitSha,
-                   String actor, String logTail) {
+                   String actor, String logTail, BooleanSupplier preconditionsOk) {
     }
 }

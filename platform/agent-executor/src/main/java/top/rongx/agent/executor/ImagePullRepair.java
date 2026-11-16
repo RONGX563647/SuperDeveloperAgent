@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li>只拉取沙箱配置里的镜像，不采信日志里解析出的镜像名（日志来自仓库/构建输出，不可信）；</li>
  *   <li>pull 有硬超时、可取消、输出实时进日志；</li>
- *   <li>成功与否由 {@code docker image inspect} 复核，不靠 pull 的退出码自述。</li>
+ *   <li>成功与否由 {@code docker image inspect} 复核，不靠 pull 的退出码自述；</li>
+ *   <li>先 inspect 再 pull：镜像已在本机时直接交回后续修复器，避免把"别的故障"误报成缺镜像。</li>
  * </ul>
  */
 final class ImagePullRepair implements FailureRepair {
@@ -45,6 +46,15 @@ final class ImagePullRepair implements FailureRepair {
         }
         if (ctx.cancelled().getAsBoolean()) {
             return Outcome.notFixed("运行已取消，跳过自动修复", lines);
+        }
+
+        // 先只读复核：镜像已在本机说明这次失败不是缺镜像（日志里可能只是上一轮残留），
+        // 必须交回协调器让后续修复器（发布 Agent）继续诊断，不能谎报"已修复"并占用续跑。
+        ProcessExecutor.StepOutcome present = ctx.command()
+                .run(ctx.inspectCommand(), INSPECT_TIMEOUT_MS, null);
+        if (present.errorCode() == null) {
+            lines.add("[autofix] 镜像已在本机（docker image inspect 通过），本次失败不是缺镜像");
+            return Outcome.notFixed("镜像已就绪，当前失败另有原因（交给后续诊断）", lines);
         }
 
         // 先写「开始」再跑命令：实时进度行由 live 直接落日志，顺序才不会倒过来

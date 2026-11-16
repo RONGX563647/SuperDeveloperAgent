@@ -269,8 +269,8 @@ async function startVerify(): Promise<void> {
       verifyError.value = '仓库还没有提交，跳过检查构建'
       return
     }
-    const t = report.value?.summary?.deployTarget
-    const target = t === 'host' || t === 'server' ? t : 'docker'
+    // verify 只构建不部署：报告没给目标时不要猜 docker，交给流水线定义
+    const target = report.value?.summary?.deployTarget
     const run = await triggerPipeline('verify', status.value.projectId, sha, target, 'test')
     verifyRunId.value = run.runId
     ElMessage.success('已开始检查构建（只构建，不部署）')

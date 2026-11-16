@@ -101,6 +101,8 @@ class PipelinePreviewRenderTest {
         assertTrue(deploy.builtin());
         assertTrue(deploy.script().isEmpty());
         assertTrue(deploy.command().contains("平台内置"), deploy.command());
+        // 前端据此把部署方式默认成 host，而不是按环境猜 docker
+        assertEquals("host", deploy.deployTarget());
     }
 
     @Test
@@ -174,6 +176,9 @@ class PipelinePreviewRenderTest {
         Files.createDirectories(ci);
         Files.writeString(ci.resolve("pipeline.yml"), """
                 name: release
+                deploy:
+                  target: host
+                  port: 8080
                 stages:
                   - id: build
                     type: action

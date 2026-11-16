@@ -70,6 +70,14 @@ class DockerSandboxTest {
     }
 
     @Test
+    @DisplayName("corepack 用可写缓存目录，避免非 root 下写 /usr/local/bin")
+    void corepackUsesWritableHome() {
+        List<String> cmd = sandbox.wrap(Path.of("E:/work/RY"), List.of("corepack", "pnpm", "-v"));
+        assertTrue(cmd.contains("COREPACK_HOME=/tmp/corepack"), cmd.toString());
+        assertTrue(cmd.contains("COREPACK_ENABLE_DOWNLOAD_PROMPT=0"), cmd.toString());
+    }
+
+    @Test
     @DisplayName("网络档位可显式收紧到 none")
     void networkCanBeLockedDown() {
         DockerSandbox locked = new DockerSandbox("docker", "img", "none", "2g", "2", 512, "1000:1000");

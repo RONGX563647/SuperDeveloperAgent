@@ -21,7 +21,7 @@ class AutoRepairCoordinatorTest {
         return new FailureRepair.Context(() -> false, line -> {
         }, (argv, timeout, live) -> ProcessExecutor.StepOutcome.ok(),
                 180_000L, List.of(), List.of(), "maven:test", null,
-                "P", "test", "verify", "abcdef1", "ui:admin", "");
+                "P", "test", "verify", "abcdef1", "ui:admin", "", () -> false);
     }
 
     /** 修复器桩：固定返回给定结果，并记录被调用次数。 */

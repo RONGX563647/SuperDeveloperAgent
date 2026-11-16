@@ -170,6 +170,12 @@ public class DockerSandbox {
             cmd.add("-e");
             cmd.add("npm_config_cache=/cache/npm");
         }
+        // 5c. Corepack 下载缓存：非 root 用户不能写 /usr/local/bin，
+        //     用 COREPACK_HOME 指向可写目录；禁止交互式下载提示。
+        cmd.add("-e");
+        cmd.add("COREPACK_HOME=" + (name != null ? "/cache/corepack" : "/tmp/corepack"));
+        cmd.add("-e");
+        cmd.add("COREPACK_ENABLE_DOWNLOAD_PROMPT=0");
         // 6. 镜像 + 业务 argv
         cmd.add(image);
         cmd.addAll(argv);
@@ -282,7 +288,8 @@ public class DockerSandbox {
             }
             notify(live, "[sandbox] 首次初始化依赖缓存卷 " + volume
                     + "（每步 30s 超时，可取消）\n");
-            runAsRoot(volume, cancelled, live, "mkdir", "-p", "/cache/m2", "/cache/npm");
+            runAsRoot(volume, cancelled, live, "mkdir", "-p",
+                    "/cache/m2", "/cache/npm", "/cache/corepack");
             runAsRoot(volume, cancelled, live, "chown", "-R", "1000:1000", "/cache");
             initializedVolumes.add(volume);
         }

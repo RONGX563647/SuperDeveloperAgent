@@ -180,7 +180,7 @@ public interface PipelineEngine {
      */
     record StagePreview(String id, String type, String action, String runner, String workdir,
                         String skipReason, String shell, String command, String script,
-                        String scriptSha, boolean builtin) {
+                        String scriptSha, boolean builtin, String deployTarget) {
     }
 
     /**

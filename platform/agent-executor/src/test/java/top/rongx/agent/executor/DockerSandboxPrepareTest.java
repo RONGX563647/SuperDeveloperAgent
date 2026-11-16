@@ -66,6 +66,8 @@ class DockerSandboxPrepareTest {
 
         assertTrue(recorder.commands.isEmpty(), "命令构造不应有任何副作用");
         assertTrue(cmd.contains("agent-cache-p:/cache"), "缓存卷挂载仍要正确生成：" + cmd);
+        assertTrue(cmd.contains("COREPACK_HOME=/cache/corepack"),
+                "有缓存卷时 corepack 必须用卷内目录：" + cmd);
     }
 
     @Test
@@ -81,6 +83,8 @@ class DockerSandboxPrepareTest {
         assertEquals(2, recorder.commands.size(), "只做 mkdir + chown 两步，第二次应跳过");
         assertEquals(List.of(PREPARE_TIMEOUT, PREPARE_TIMEOUT), recorder.timeouts);
         assertTrue(recorder.commands.get(0).contains("mkdir"));
+        assertTrue(recorder.commands.get(0).contains("/cache/corepack"),
+                "corepack 下载缓存必须是可写卷目录：" + recorder.commands.get(0));
         assertTrue(recorder.commands.get(1).contains("chown"));
         assertTrue(live.toString().contains("[sandbox] $ "), "准备命令要写进实时日志");
     }

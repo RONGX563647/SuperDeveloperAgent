@@ -247,6 +247,8 @@ export interface PreviewStage {
   scriptSha: string
   /** true = 平台内置步骤（部署/健康检查/回滚），没有脚本。 */
   builtin: boolean
+  /** deploy 阶段定义里的默认目标（docker / host / server）；其他阶段为 null。 */
+  deployTarget?: string | null
 }
 
 /**

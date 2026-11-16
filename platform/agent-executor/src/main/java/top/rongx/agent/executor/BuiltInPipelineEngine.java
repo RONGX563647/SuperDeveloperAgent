@@ -419,6 +419,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return autoRepairs;
         }
         List<FailureRepair> chain = new ArrayList<>();
+        // Docker 守护进程没起会被误诊成缺镜像：先处理这个环境类根因，再谈 pull
+        chain.add(new DockerDaemonRepair());
         chain.add(new ImagePullRepair());
         chain.add(new AgentDiagnosisRepair(autoRepairPolicy.agentFallback()));
         return chain;
@@ -687,9 +689,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return stages.stream()
                 .map(s -> {
                     StageCommand cmd = describeStage(recipeRoot, s);
+                    // deploy 阶段把定义里的默认目标带给前端：否则 UI 只能按环境猜
+                    // （test 一律猜 docker），无 Dockerfile 的项目会白跑完整构建再失败。
                     return new StagePreview(s.id(), s.type(), s.action(), s.runner(), s.workdir(),
                             kept.contains(s.id()) ? null : verifySkipReason(s),
-                            cmd.shell(), cmd.command(), cmd.script(), cmd.sha(), cmd.builtin());
+                            cmd.shell(), cmd.command(), cmd.script(), cmd.sha(), cmd.builtin(),
+                            "deploy".equals(s.type()) && definition.deploy() != null
+                                    ? definition.deploy().target() : null);
                 })
                 .toList();
     }
@@ -1726,13 +1732,15 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
     }
 
-    /** 当前失败快照：失败阶段、错误码、日志尾部、日志里出现的缺失镜像名。 */
+    /** 当前失败快照：失败阶段、错误码、该阶段的日志尾部、日志里出现的缺失镜像名。 */
     private FailureRepair.Diagnosis diagnoseFailure(RunState state, int attempt) {
         StageResult failed = lastFailedStage(state);
         String code = failed == null ? "" : String.valueOf(failed.errorCode());
         String message = failed == null ? "运行失败"
                 : failed.errorSummary() == null ? code : failed.errorSummary();
-        String tail = tailOfLog(state, 20_000);
+        // 只取失败阶段自己的日志：整段运行日志里可能残留前一个阶段已自愈的
+        // "No such image: maven..."，否则前端阶段失败会被误判成后端镜像缺失并重复 pull。
+        String tail = stageTail(state, failed == null ? null : failed.stageId(), 20_000);
         // 动作前预检（DockerSandbox.ensureImageReady）已经自行 pull 过：
         // 再拉一次只会把一次失败拖成两轮硬超时，交给 Agent 兜底/人工排查更合适。
         boolean precheckTried = tail.contains("自动拉取失败")
@@ -1761,6 +1769,31 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return text.length() > max ? text.substring(text.length() - max) : text;
     }
 
+    /**
+     * 失败阶段最后一次执行的日志段（从最近一次「[stageId] 阶段开始」算起）。
+     *
+     * <p>自动修复必须只看失败阶段自己的输出：整段运行日志会把上一个阶段已经
+     * 自动拉取成功的旧 "No such image" 带进来，导致修复器对着错误的镜像反复 pull。
+     */
+    private static String stageTail(RunState state, String stageId, int max) {
+        if (stageId == null || stageId.isBlank()) {
+            return tailOfLog(state, max);
+        }
+        String text;
+        synchronized (state.log) {
+            text = state.log.toString();
+        }
+        int start = text.lastIndexOf("[" + stageId + "] 阶段开始");
+        if (start < 0) {
+            start = text.lastIndexOf("[" + stageId + "]");
+        }
+        if (start < 0) {
+            return text.length() > max ? text.substring(text.length() - max) : text;
+        }
+        String segment = text.substring(start);
+        return segment.length() > max ? segment.substring(segment.length() - max) : segment;
+    }
+
     /** 线程安全地追加一行日志，并刷新「最后输出时间」避免看护误写心跳。 */
     private static void appendLog(RunState state, String line) {
         synchronized (state.log) {
@@ -1773,6 +1806,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private FailureRepair.Context repairContext(RunState state) {
         DockerSandbox sandbox = sandboxed instanceof DockerActionRunner dockerRunner
                 ? dockerRunner.sandbox() : null;
+        StageResult failed = lastFailedStage(state);
+        String stageId = failed == null ? null : failed.stageId();
+        PipelineDefinition.StageDef stage = stageId == null || state.definition == null
+                ? null : state.definition.stages().stream()
+                .filter(s -> stageId.equals(s.id())).findFirst().orElse(null);
+        // 修复必须对着失败阶段自己的工具链镜像（如 frontend 的 node），
+        // 不能拿全局默认镜像（maven）去 pull/inspect，否则会修错对象。
+        if (sandbox != null && stage != null && stage.image() != null
+                && !stage.image().isBlank()) {
+            sandbox = sandbox.withImage(stage.image());
+        }
         return new FailureRepair.Context(
                 () -> state.cancelled || state.forceTerminated,
                 line -> appendLog(state, line),
@@ -1785,7 +1829,23 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 sandbox == null ? null : sandbox.imageInspectCommand(),
                 sandbox == null ? null : sandbox.image(),
                 recoveryAdvisor, state.projectId, state.env, state.pipelineId,
-                state.gitSha, state.actor, tailOfLog(state, 20_000));
+                state.gitSha, state.actor, stageTail(state, stageId, 20_000),
+                () -> preconditionsOk(state));
+    }
+
+    /**
+     * 平台侧的「现在能不能重跑」复核：只读 dry-run 无阻塞项。
+     *
+     * <p>Agent 修好端口、健康路径、环境变量或阶段定义后，这里必须重新算出"真的能跑"，
+     * 而不是采信模型自述；dry-run 异常一律按未通过处理（保守，不自动续跑）。
+     */
+    private boolean preconditionsOk(RunState state) {
+        try {
+            var report = dryRun(state.projectId, state.pipelineId, state.env, state.gitSha);
+            return report != null && report.ok() && report.blockers().isEmpty();
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     /**
@@ -1797,13 +1857,20 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * @return 运行是否已恢复成功
      */
     private boolean resumeFromFailedStage(RunState state, String stageId) {
+        // 本机（dev）没有 worktree：按最新配置整条重跑，否则 dev 的环境类故障永远无法自愈。
+        if (isLocalDev(state)) {
+            return resumeLocalDev(state);
+        }
         PipelineDefinition definition = state.definition;
         Path runDir = state.keptRunDir;
         if (definition == null || runDir == null || !Files.isDirectory(runDir)
-                || isLocalDev(state) || state.deployImage != null) {
-            appendLog(state, "[autofix] 无可用构建现场（本机部署/按版本部署），跳过自动续跑\n");
+                || state.deployImage != null) {
+            appendLog(state, "[autofix] 无可用构建现场（按版本部署），跳过自动续跑\n");
             return false;
         }
+        // Agent 修的往往就是定义/端口/健康路径：续跑前必须重新解析，否则刚修好的配置
+        // 会被失败时缓存的 state.definition 覆盖回去，看起来"改了但没用"。
+        definition = refreshDefinitionForResume(state, runDir);
         int idx = -1;
         for (int i = 0; i < definition.stages().size(); i++) {
             if (definition.stages().get(i).id().equals(stageId)) {
@@ -1848,6 +1915,69 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         history.save(state.snapshot());
         return state.status == StageStatus.SUCCEEDED;
+    }
+
+    /**
+     * 本机（dev）自动续跑：没有 worktree 可复用，按最新配置整条重跑。
+     *
+     * <p>仍是同一次自愈周期（{@code recoveryDone} 保持 true），不会递归触发自动修复；
+     * 上一轮遗留的本机进程/jar 锁会在 {@code executeLocalDev} 开头先清理。
+     */
+    private boolean resumeLocalDev(RunState state) {
+        Path repo = repoLocator == null ? null : repoLocator.repoDir(state.projectId).orElse(null);
+        refreshDefinitionForResume(state, repo);
+        state.stages.clear();
+        state.artifacts.clear();
+        state.status = StageStatus.RUNNING;
+        state.cancelled = false;
+        state.forceTerminated = false;
+        state.cancelRequestedAt = 0;
+        state.lastSavedAt = System.currentTimeMillis();
+        state.lastLogChangeAt = state.lastSavedAt;
+        state.maxRunMillis += autoRepairPolicy.pullTimeoutMs() + 600_000L;
+        appendLog(state, "[retry] 自动修复后重新执行本机流水线（无构建现场可复用）\n");
+        try {
+            doExecute(state);
+        } catch (Throwable e) {
+            String why = e.getMessage() == null ? e.toString() : e.getMessage();
+            appendLog(state, "[autofix] 本机自动续跑异常：" + why + "\n");
+            state.stages.add(StageResult.failed("engine", 1, "E-2xx", why, 0));
+            state.status = StageStatus.FAILED;
+        }
+        history.save(state.snapshot());
+        return state.status == StageStatus.SUCCEEDED;
+    }
+
+    /**
+     * 自动续跑前重新解析定义：Agent 修的往往就是端口 / 健康路径 / 阶段动作。
+     *
+     * <p>沿用失败时缓存的 {@code state.definition} 会把刚修好的配置覆盖回去，
+     * 表现为「Agent 改了但续跑还是旧错误」。解析失败时退回旧定义，避免把一次可重试变成定义错误。
+     *
+     * @param runDir 定义解析根（本机模式传仓库目录，普通模式传保留的 worktree）
+     */
+    private PipelineDefinition refreshDefinitionForResume(RunState state, Path runDir) {
+        if (resolver == null || runDir == null) {
+            return state.definition;
+        }
+        try {
+            Path repoRoot = repoLocator == null ? null : repoLocator.repoDir(state.projectId).orElse(null);
+            PipelineDefinitionResolver.Resolved resolved =
+                    resolver.resolveForRun(state.projectId, runDir, repoRoot, state.env);
+            if (resolved == null || resolved.definition() == null) {
+                return state.definition;
+            }
+            state.recipeRoot = resolved.recipeRoot();
+            state.definition = resolved.definition();
+            state.definitionSource = resolved.source();
+            state.definitionNote = resolved.note();
+            appendLog(state, "[autofix] 按最新定义续跑（" + resolved.source()
+                    + " · " + resolved.note() + "）\n");
+            return state.definition;
+        } catch (RuntimeException e) {
+            appendLog(state, "[autofix] 重新解析定义失败，沿用本次运行的定义：" + e.getMessage() + "\n");
+            return state.definition;
+        }
     }
 
     /** 保留失败阶段之前的结果，回收该阶段及之后产生的产物，避免续跑后产物重复。 */

@@ -44,7 +44,7 @@ class ImagePullRepairTest {
                                                  List<String> pull, List<String> inspect) {
         return new FailureRepair.Context(() -> cancelled, line -> {
         }, recorder, 60_000L, pull, inspect, CONFIGURED, null,
-                "P", "test", "verify", "abcdef1", "ui:admin", "");
+                "P", "test", "verify", "abcdef1", "ui:admin", "", () -> false);
     }
 
     @Test
@@ -70,14 +70,28 @@ class ImagePullRepairTest {
     }
 
     @Test
-    @DisplayName("pull + inspect 都成功 → 复核通过，且命令全部来自配置")
+    @DisplayName("镜像已在本机 → 不误报已修复，交给后续诊断")
+    void alreadyPresentHandsOff() {
+        Recorder recorder = new Recorder();
+        // 默认 outcome = ok：第一次 inspect 就通过
+        FailureRepair.Outcome outcome = new ImagePullRepair()
+                .repair(diagnosis(CONFIGURED), context(recorder, false, PULL, INSPECT));
+
+        assertFalse(outcome.verified());
+        assertEquals(List.of(INSPECT), recorder.commands, "已在本机时不许重复 pull");
+        assertTrue(outcome.summary().contains("另有原因"), outcome.summary());
+    }
+
+    @Test
+    @DisplayName("inspect 未命中 → pull + 复核成功 → 续跑，且命令全部来自配置")
     void pullThenInspectVerified() {
         Recorder recorder = new Recorder();
+        recorder.outcomes.add(ProcessExecutor.StepOutcome.failed(1, "E-101", "no such image"));
         FailureRepair.Outcome outcome = new ImagePullRepair()
                 .repair(diagnosis(CONFIGURED), context(recorder, false, PULL, INSPECT));
 
         assertTrue(outcome.verified(), outcome.summary());
-        assertEquals(List.of(PULL, INSPECT), recorder.commands);
+        assertEquals(List.of(INSPECT, PULL, INSPECT), recorder.commands);
         assertTrue(outcome.lines().stream().anyMatch(l -> l.contains("docker image inspect 复核")));
     }
 
@@ -85,13 +99,14 @@ class ImagePullRepairTest {
     @DisplayName("pull 自称成功但 inspect 失败 → 仍判定未修复（不采信子进程输出）")
     void pullSuccessIsNotEnough() {
         Recorder recorder = new Recorder();
+        recorder.outcomes.add(ProcessExecutor.StepOutcome.failed(1, "E-101", "no such image"));
         recorder.outcomes.add(ProcessExecutor.StepOutcome.ok());
         recorder.outcomes.add(ProcessExecutor.StepOutcome.failed(1, "E-101", "no such image"));
         FailureRepair.Outcome outcome = new ImagePullRepair()
                 .repair(diagnosis(CONFIGURED), context(recorder, false, PULL, INSPECT));
 
         assertFalse(outcome.verified());
-        assertEquals(2, recorder.commands.size());
+        assertEquals(3, recorder.commands.size());
         assertTrue(outcome.summary().contains("仍不可用"), outcome.summary());
     }
 
@@ -113,10 +128,11 @@ class ImagePullRepairTest {
     @DisplayName("pull 失败 / 已取消 / 非容器模式 → 都不续跑")
     void failureCancelAndNonDockerAreSafe() {
         Recorder failed = new Recorder();
+        failed.outcomes.add(ProcessExecutor.StepOutcome.failed(1, "E-101", "no such image"));
         failed.outcomes.add(ProcessExecutor.StepOutcome.failed(1, "E-302", "pull timeout"));
         assertFalse(new ImagePullRepair()
                 .repair(diagnosis(CONFIGURED), context(failed, false, PULL, INSPECT)).verified());
-        assertEquals(1, failed.commands.size(), "pull 失败后不应再跑 inspect");
+        assertEquals(2, failed.commands.size(), "pull 失败后不应再跑 inspect 复核");
 
         Recorder cancelled = new Recorder();
         assertFalse(new ImagePullRepair()

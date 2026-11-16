@@ -236,7 +236,7 @@ public class DeployTools {
                     触发一次流水线运行（写操作，仅 dev/test）。
                     优先使用传入的 binding_id；未传时自动复用该环境最近一次已确认且未过期的绑定
                     （变量哈希变化则由 requireForRun 拒绝，需重新生成草案并人工确认）。
-                    没有任何已确认绑定时，必须先调用 env_mapping_draft，由人在设置页确认。
+                    没有任何已确认绑定时，必须先调用 env_mapping_draft，由人在对话中的绑定确认卡确认。
                     服务器（prod）不允许用本工具触发：必须先在测试环境跑通并固化，再到部署面板确认发布。""",
             readOnly = false, concurrencySafe = false)
     public String run(@ToolParam(name = "pipeline_id", description = "流水线名（release / verify）")
@@ -267,7 +267,7 @@ public class DeployTools {
                     .orElse(null);
         }
         if (effectiveBindingId == null || effectiveBindingId.isBlank()) {
-            return "err: 缺少 binding_id：请先调用 env_mapping_draft，等人在设置页确认后再触发"
+            return "err: 缺少 binding_id：请先调用 env_mapping_draft，等人在对话确认卡里确认后再触发"
                     + "（同一环境已有未过期的确认绑定时可省略，本次没有）";
         }
         // 绑定无效 / 触发被拒都是真失败：抛出让 Agent 与前端都看到失败态（而不是一段普通文本）
@@ -300,7 +300,8 @@ public class DeployTools {
                     把「已经跑通的动作序列」固化成该环境的可复现脚本（写操作）。
                     只在确实跑通过之后调用；脚本会记录当前证据运行，供后续重放与上服务器判断。
                     actions 只能取：backend_build / backend_test / frontend_build / image_package。
-                    需要部署时传 with_deploy=true，并显式指定 target（docker / host / server）：
+                    需要部署时传 with_deploy=true；target / port / health_path 不传时沿用
+                    当前流水线定义的 deploy 段（没有定义才回落到 docker / 8080 / /healthz）：
                     固化脚本会按该目标与 health_path 渲染，避免回放到 host/server 时报 E-504。
                     可自动放行：dev/test 下无需额外确认单；生产环境拒绝执行。""",
             readOnly = false, concurrencySafe = false)
@@ -311,12 +312,13 @@ public class DeployTools {
                              @ToolParam(name = "with_deploy", description = "是否包含部署与健康检查（true/false）")
                              String withDeploy,
                              @ToolParam(name = "target", required = false,
-                                     description = "部署目标：docker / host / server（默认 docker）")
+                                     description = "部署目标：docker / host / server（缺省取流水线定义）")
                              String target,
                              @ToolParam(name = "health_path", required = false,
-                                     description = "健康检查路径，默认 /healthz")
+                                     description = "健康检查路径（缺省取流水线定义）")
                              String healthPath,
-                             @ToolParam(name = "port", description = "部署端口，默认 8080") String port,
+                             @ToolParam(name = "port", required = false,
+                                     description = "部署端口（缺省取流水线定义）") String port,
                              ProjectContext ctx) {
         String targetEnv = normalize(env);
         if ("prod".equals(targetEnv)) {
@@ -341,8 +343,11 @@ public class DeployTools {
             return "err: actions 不能为空";
         }
         boolean deploy = "true".equalsIgnoreCase(String.valueOf(withDeploy));
+        // 缺省值优先取流水线定义：定义才是执行时真正生效的配置（端口/健康路径常与项目实际端点绑定），
+        // UI 或模型的猜测不能覆盖它，否则固化的脚本会在下一次重放时又跑失败。
+        PipelineEngine.DeploySummary defined = engine.deploySummary(ctx.projectId()).orElse(null);
         String wireTarget = target == null || target.isBlank()
-                ? "docker" : target.trim().toLowerCase();
+                ? definedTarget(defined) : target.trim().toLowerCase();
         if (deploy && !List.of("docker", "host", "server").contains(wireTarget)) {
             return "err: target 只能是 docker / host / server，实际为 " + wireTarget;
         }
@@ -352,8 +357,9 @@ public class DeployTools {
             steps.add(RecipeRenderer.Step.rollback());
         }
         Integer parsedPort = parsePort(port);
-        int actualPort = parsedPort == null ? 8080 : parsedPort;
-        String path = healthPath == null || healthPath.isBlank() ? "/healthz" : healthPath.trim();
+        int actualPort = parsedPort == null ? definedPort(defined) : parsedPort;
+        String path = healthPath == null || healthPath.isBlank()
+                ? definedHealthPath(defined) : healthPath.trim();
         if (!path.startsWith("/")) {
             path = "/" + path;
         }
@@ -387,6 +393,25 @@ public class DeployTools {
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    /** 定义缺失时才用平台默认值：有定义时以定义为唯一事实来源。 */
+    private static String definedTarget(PipelineEngine.DeploySummary defined) {
+        if (defined == null || defined.target() == null || defined.target().isBlank()) {
+            return "docker";
+        }
+        return defined.target().trim().toLowerCase();
+    }
+
+    private static int definedPort(PipelineEngine.DeploySummary defined) {
+        return defined != null && defined.port() > 0 ? defined.port() : 8080;
+    }
+
+    private static String definedHealthPath(PipelineEngine.DeploySummary defined) {
+        if (defined == null || defined.healthPath() == null || defined.healthPath().isBlank()) {
+            return "/healthz";
+        }
+        return defined.healthPath().trim();
     }
 
     private static String normalize(String env) {
