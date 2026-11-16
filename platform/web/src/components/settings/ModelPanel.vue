@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { nextTick, ref, useTemplateRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheck, CircleClose, Cpu, Plus, Star } from '@element-plus/icons-vue'
 import {
-  createModel, deleteModel, listModels, setDefaultModel, testModelDraft, updateModel,
-  type ModelConnection, type ModelConnectionInput, type TestResult
+  CircleCheck, CircleClose, Cpu, Plus, Refresh, Star
+} from '@element-plus/icons-vue'
+import {
+  createModel, deleteModel, discoverModels, listModels, modelOptions, setDefaultModel,
+  testModelDraft, updateModel,
+  type ModelConnection, type ModelConnectionInput, type ModelOptionItem, type TestResult
 } from '../../api/settings'
 
 /**
@@ -18,6 +21,9 @@ const testing = ref(false)
 const testResult = ref<TestResult | null>(null)
 const editing = ref<ModelConnection | null>(null)
 const formRef = useTemplateRef<HTMLElement>('formRef')
+/** 当前连接网关同步到的模型（/models 自动发现 + 配置里的模型名）。 */
+const discovered = ref<ModelOptionItem[]>([])
+const discovering = ref(false)
 
 // PRESETS 必须在 emptyForm() 首次调用之前初始化（const 有 TDZ）。
 const PRESETS = [
@@ -66,6 +72,7 @@ async function load(): Promise<void> {
 async function openCreate(): Promise<void> {
   editing.value = null
   form.value = emptyForm()
+  discovered.value = []
   testResult.value = null
   formOpen.value = true
   await nextTick()
@@ -87,8 +94,34 @@ async function openEdit(model: ModelConnection): Promise<void> {
   }
   testResult.value = null
   formOpen.value = true
+  await loadDiscovered(model.id)
   await nextTick()
   formRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+/** 读取已保存连接的可选模型（不触网，只读设置页缓存）。 */
+async function loadDiscovered(id: string): Promise<void> {
+  try {
+    const options = await modelOptions(true)
+    discovered.value = options.connections.find((c) => c.id === id)?.models ?? []
+  } catch {
+    discovered.value = []
+  }
+}
+
+/** 主动同步网关模型列表（GET {baseUrl}/models）。 */
+async function syncModels(): Promise<void> {
+  if (!editing.value) return
+  discovering.value = true
+  try {
+    const result = await discoverModels(editing.value.id)
+    await loadDiscovered(editing.value.id)
+    ElMessage.success(`已同步 ${result.count} 个模型`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '模型同步失败')
+  } finally {
+    discovering.value = false
+  }
 }
 
 function closeForm(): void {
@@ -206,8 +239,26 @@ defineExpose({ load })
           <el-input v-model="form.baseUrl" placeholder="https://…/v1" />
         </label>
         <label class="field">
-          <span class="field-label">模型名</span>
-          <el-input v-model="form.modelName" placeholder="qwen-plus" />
+          <span class="field-label">
+            模型名
+            <button
+              v-if="editing" type="button" class="link-btn"
+              :disabled="discovering" @click.prevent="syncModels"
+            >
+              <el-icon :class="{ spin: discovering }"><Refresh /></el-icon>
+              {{ discovering ? '同步中…' : '同步网关模型' }}
+            </button>
+          </span>
+          <el-select
+            v-model="form.modelName" class="w-full" filterable allow-create
+            default-first-option placeholder="qwen-plus（可手填）"
+          >
+            <el-option
+              v-for="m in discovered" :key="m.id"
+              :label="m.source === 'config' ? `${m.label}（当前配置）` : m.label"
+              :value="m.id"
+            />
+          </el-select>
         </label>
 
         <label class="field span-2">
@@ -361,8 +412,34 @@ defineExpose({ load })
   grid-column: span 2;
 }
 .field-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11.5px;
   color: var(--ink-muted);
+}
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  margin-left: auto;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.link-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.spin {
+  animation: model-spin 0.9s linear infinite;
+}
+@keyframes model-spin {
+  to { transform: rotate(360deg); }
 }
 .w-full {
   width: 100%;
