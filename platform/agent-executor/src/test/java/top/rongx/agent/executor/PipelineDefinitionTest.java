@@ -75,6 +75,7 @@ class PipelineDefinitionTest {
                   containerPort: 9090
                   healthPath: /ready
                   artifact: backend/target/app.jar
+                  volume: /app/data
                 stages:
                   - id: build
                     type: action
@@ -101,6 +102,7 @@ class PipelineDefinitionTest {
         assertEquals(9090, deploy.containerPort());
         assertEquals("/ready", deploy.healthPath());
         assertEquals("backend/target/app.jar", deploy.artifact());
+        assertEquals("/app/data", deploy.volume(), "单容器持久化路径应被解析");
     }
 
     @Test

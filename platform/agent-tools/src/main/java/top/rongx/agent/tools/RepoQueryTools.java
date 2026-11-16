@@ -397,14 +397,22 @@ public class RepoQueryTools {
 
     @Tool(name = "read_file",
             description = """
-                    读取项目仓库内的一个文本文件（相对路径，最多约 8000 字符）。
+                    读取项目仓库内的一个文本文件（相对路径）。
                     只读。用于回答"这段配置/代码是怎么写的"；二进制文件与仓库外路径会被拒绝。
+                    大文件用 offset/limit 按行读取（offset 从 1 开始，limit 最多 400 行），避免整文件被截断。
+                    不传 offset/limit 时最多返回约 8000 字符。
                     .env、私钥与凭据文件不提供原文（请用 env_summary / env_var_probe 查看变量指向），
                     其它文本中的密钥值会被替换为 [REDACTED]。""",
             readOnly = true, concurrencySafe = true)
     public String readFile(ProjectContext ctx,
                            @ToolParam(name = "path", description = "相对仓库根的文件路径")
-                           String path) {
+                           String path,
+                           @ToolParam(name = "offset", required = false,
+                                   description = "起始行号（1 开始）；与 limit 搭配读取大文件")
+                           Integer offset,
+                           @ToolParam(name = "limit", required = false,
+                                   description = "最多读取的行数（默认全部，单次上限 400）")
+                           Integer limit) {
         Path root = repoRoot(ctx);
         Path target = resolveInside(root, path);
         if (!Files.isRegularFile(target)) {
@@ -428,22 +436,45 @@ public class RepoQueryTools {
                 }
             }
             String text = redactor.redact(Files.readString(target, StandardCharsets.UTF_8), ctx);
-            boolean truncated = text.length() > MAX_FILE_CHARS;
-            String body = truncated
-                    ? text.substring(0, MAX_FILE_CHARS) + "\n…（已截断，原文件 " + text.length() + " 字符）"
-                    : text;
+            boolean windowed = offset != null || limit != null;
+            String body;
+            String rangeNote = "";
+            if (windowed) {
+                List<String> lines = List.of(text.split("\\R"));
+                int from = offset == null ? 0 : Math.max(0, Math.min(lines.size(), offset - 1));
+                int max = limit == null ? 400 : Math.max(1, Math.min(400, limit));
+                int to = Math.min(lines.size(), from + max);
+                body = from >= lines.size()
+                        ? "（offset 超出文件行数 " + lines.size() + "）"
+                        : String.join("\n", lines.subList(from, to));
+                rangeNote = "\nlines: " + (from + 1) + "-" + to + " / " + lines.size();
+            } else {
+                body = text;
+            }
+            boolean truncated = body.length() > MAX_FILE_CHARS;
+            if (truncated) {
+                body = body.substring(0, MAX_FILE_CHARS)
+                        + "\n…（已截断，本段 " + body.length() + " 字符；用 offset/limit 继续读）";
+            }
             return """
-                    file: %s
+                    file: %s%s
                     ---
                     %s
                     ---
-                    evidence: project:%s""".formatted(relative, body, ctx.projectId());
+                    evidence: project:%s""".formatted(relative, rangeNote, body, ctx.projectId());
         } catch (IOException e) {
             throw new IllegalArgumentException("无法读取文件：" + e.getMessage());
         }
     }
 
-    /** 仓库根：会话指定了工作树则用工作树，否则用主仓库；返回真实路径（解析符号链接后的根）。 */
+    /** 兼容旧调用（整文件读取）。 */
+    public String readFile(ProjectContext ctx, String path) {
+        return readFile(ctx, path, null, null);
+    }
+
+    /**
+     * 仓库根：会话指定了工作树则用工作树，否则用主仓库；返回真实路径（解析符号链接后的根）。
+     */
     private Path repoRoot(ProjectContext ctx) {
         Path base = locator.repoDir(ctx.projectId()).orElseThrow(() ->
                 new IllegalArgumentException("项目尚未接入 git 仓库，无法浏览文件：" + ctx.projectId()));

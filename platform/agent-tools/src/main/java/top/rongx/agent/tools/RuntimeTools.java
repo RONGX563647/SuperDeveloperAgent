@@ -10,6 +10,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -19,6 +20,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
@@ -44,6 +48,8 @@ public class RuntimeTools {
     /** 单次日志返回上限：用户抱怨过 6000 字符里大半是构建产物。 */
     private static final int MAX_LOG_CHARS = 4000;
     private static final int MAX_LOG_LINES_OUT = 150;
+    private static final Pattern HOST_PORT =
+            Pattern.compile("\\[host] started pid=\\d+ release=\\S+ port=(\\d+)");
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2))
@@ -91,6 +97,9 @@ public class RuntimeTools {
         if ("dev".equals(target)) {
             any = appendHostProcesses(sb, ctx, target, effective);
         }
+        // HOST 目标的 test/prod 部署（含打 tag 的 versions/<版本号> 槽）也要可见：
+        // 否则端口被 java -jar 占用时，这里会误报"未找到该环境运行中的应用"。
+        any |= appendHostState(sb, ctx, target);
         String dockerError = null;
         List<RuntimeInspector.ContainerStatus> containers = List.of();
         try {
@@ -226,8 +235,12 @@ public class RuntimeTools {
         boolean wantsBackend = "all".equalsIgnoreCase(wanted)
                 || "backend".equalsIgnoreCase(wanted) || "app".equalsIgnoreCase(wanted);
         if (!"dev".equals(target) && wantsBackend) {
-            Path appLog = hostDeployRoot.resolve(ctx.projectId() + "-" + target).resolve("app.log");
-            if (Files.isRegularFile(appLog)) {
+            // 默认槽 + 打 tag 的版本槽都读：多版本并存时日志不能只显示其中一份
+            for (Path dir : hostStateDirs(ctx.projectId(), target)) {
+                Path appLog = dir.resolve("app.log");
+                if (!Files.isRegularFile(appLog)) {
+                    continue;
+                }
                 List<String> lines = tail(appLog, 400);
                 wrote |= appendLogSection(sb, "host-deploy", null, ServiceLease.BACKEND, lines,
                         "HOST 部署进程日志 " + appLog + "（最近 " + lines.size()
@@ -381,6 +394,104 @@ public class RuntimeTools {
             }
         }
         return true;
+    }
+
+    /** 扫描 HOST 部署状态目录：默认槽 + 打 tag 的 versions/<版本号>。 */
+    private boolean appendHostState(StringBuilder sb, ProjectContext ctx, String env) {
+        Path base = hostDeployRoot.resolve(ctx.projectId() + "-" + env);
+        boolean wrote = false;
+        for (Path dir : hostStateDirs(ctx.projectId(), env)) {
+            String fallback = dir.equals(base) ? "latest" : dir.getFileName().toString();
+            wrote |= appendHostStateDir(sb, dir, env, fallback);
+        }
+        return wrote;
+    }
+
+    /** HOST 部署状态目录：默认槽 + versions 下每个版本槽（目录不存在时为空）。 */
+    private List<Path> hostStateDirs(String projectId, String env) {
+        Path base = hostDeployRoot.resolve(projectId + "-" + env);
+        List<Path> dirs = new ArrayList<>();
+        if (Files.isDirectory(base)) {
+            dirs.add(base);
+        }
+        Path versions = base.resolve("versions");
+        if (Files.isDirectory(versions)) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(versions)) {
+                for (Path slot : stream) {
+                    if (Files.isDirectory(slot)) {
+                        dirs.add(slot);
+                    }
+                }
+            } catch (IOException ignored) {
+                // 目录读不了按没有进程处理
+            }
+        }
+        return dirs;
+    }
+
+    private boolean appendHostStateDir(StringBuilder sb, Path dir, String env, String fallbackVersion) {
+        long pid = readPid(dir.resolve("app.pid"));
+        if (pid <= 0) {
+            return false;
+        }
+        Optional<ProcessHandle> handle = ProcessHandle.of(pid).filter(ProcessHandle::isAlive);
+        if (handle.isEmpty()) {
+            return false;
+        }
+        String commandLine = handle.get().info().commandLine().orElse("");
+        if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
+            return false; // pid 已被其它进程复用
+        }
+        String version = readText(dir.resolve("version"));
+        if (version == null || version.isBlank()) {
+            version = fallbackVersion;
+        }
+        String current = readText(dir.resolve("current"));
+        int port = parseHostPort(dir.resolve("app.log"));
+        sb.append("runtime: host-process\n")
+                .append("service: app\n")
+                .append("  version: ").append(version).append('\n')
+                .append("  env: ").append(env).append('\n')
+                .append("  status: RUNNING\n")
+                .append("  pid: ").append(pid).append('\n')
+                .append("  release: ").append(current == null ? "未知" : current).append('\n')
+                .append("  port: ").append(port > 0 ? String.valueOf(port) : "未知").append('\n')
+                .append("  stateDir: ").append(dir).append('\n');
+        return true;
+    }
+
+    private static long readPid(Path file) {
+        try {
+            return Files.isRegularFile(file)
+                    ? Long.parseLong(Files.readString(file, StandardCharsets.UTF_8).trim()) : 0;
+        } catch (IOException | NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static String readText(Path file) {
+        try {
+            if (!Files.isRegularFile(file)) {
+                return null;
+            }
+            String value = Files.readString(file, StandardCharsets.UTF_8).trim();
+            return value.isEmpty() ? null : value;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static int parseHostPort(Path logFile) {
+        String text = readText(logFile);
+        if (text == null) {
+            return 0;
+        }
+        Matcher matcher = HOST_PORT.matcher(text);
+        int port = 0;
+        while (matcher.find()) {
+            port = Integer.parseInt(matcher.group(1));
+        }
+        return port;
     }
 
     /** 读取文件末尾若干行（文件不存在或不可读时返回空）。 */

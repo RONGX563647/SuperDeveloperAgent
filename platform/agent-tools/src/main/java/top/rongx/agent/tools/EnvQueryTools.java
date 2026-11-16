@@ -64,8 +64,10 @@ public class EnvQueryTools {
                 .append(" / 敏感 ").append(secret).append("）\n")
                 .append("network: ").append(effective.network() == null || effective.network().isBlank()
                         ? "默认" : effective.network()).append('\n')
-                .append("port: ").append(effective.defaultPort()).append('\n')
-                .append("healthPath: ").append(effective.healthPath()).append('\n')
+                .append("port: ").append(effective.defaultPort())
+                .append("（环境模板默认；发布实际端口以 ci_definition 的 deploy.port 为准）\n")
+                .append("healthPath: ").append(effective.healthPath())
+                .append("（环境模板默认；健康门禁以流水线 deploy.healthPath / health.url 为准）\n")
                 .append("middleware: ").append(effective.resources().size())
                 .append("（本项目 ").append(own.size())
                 .append(" / 环境共享 ").append(shared.size()).append("）\n");

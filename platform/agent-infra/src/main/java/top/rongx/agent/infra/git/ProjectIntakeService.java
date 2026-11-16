@@ -371,8 +371,9 @@ public class ProjectIntakeService {
 
         boolean hasDockerfile = Files.isRegularFile(repoRoot.resolve("Dockerfile"));
         report.put("dockerfile", hasDockerfile);
-        if (plan == null && !hasDockerfile && targetIsDocker(pipelineYaml)) {
-            // 仓库自带定义也声明了 docker：同样要挡在接入阶段，别等到部署才 E-501
+        if (!hasDockerfile && targetIsDocker(pipelineYaml)) {
+            // 不区分定义来自仓库还是平台生成：最终目标是 docker 且没有 Dockerfile 就是跑不通，
+            // 必须在接入阶段挡住，而不是等部署时才 E-501（静默降级到 HOST 会让人以为在跑镜像）。
             diags.add(diag("blocker", "DOCKERFILE_MISSING",
                     "流水线目标是 docker，但仓库没有 Dockerfile：镜像无法构建（E-501）",
                     "补 Dockerfile 后重新接入，或把 deploy.target 改成 host"));
@@ -409,9 +410,10 @@ public class ProjectIntakeService {
         }
         report.put("actions", actions);
 
-        List<Map<String, Object>> blockers = filterLevel(diags, "blocker");
-        List<Map<String, Object>> suggestions = filterLevel(diags, "suggestion");
-        List<Map<String, Object>> info = filterLevel(diags, "info");
+        List<Map<String, Object>> unique = dedupeByCode(diags);
+        List<Map<String, Object>> blockers = filterLevel(unique, "blocker");
+        List<Map<String, Object>> suggestions = filterLevel(unique, "suggestion");
+        List<Map<String, Object>> info = filterLevel(unique, "info");
         boolean deployable = blockers.isEmpty();
 
         report.put("blockers", blockers);
@@ -451,6 +453,20 @@ public class ProjectIntakeService {
         return diags.stream()
                 .filter(d -> level.equals(String.valueOf(d.get("level"))))
                 .toList();
+    }
+
+    /** 同一 code 只保留第一条：脚手架与接入检查可能同时报同一根因（如 DOCKERFILE_MISSING）。 */
+    private List<Map<String, Object>> dedupeByCode(List<Map<String, Object>> diags) {
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        for (Map<String, Object> diag : diags) {
+            String code = String.valueOf(diag.getOrDefault("code", ""));
+            if (!code.isBlank() && !seen.add(code)) {
+                continue;
+            }
+            out.add(diag);
+        }
+        return out;
     }
 
     /** 兼容旧前端/旧脚本：warnings 是三个分组的扁平文本。 */

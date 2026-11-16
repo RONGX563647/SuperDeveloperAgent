@@ -133,6 +133,20 @@ class DockerDeployerTest {
     }
 
     @Test
+    @DisplayName("单容器部署 volume：按环境隔离卷名，挂载到指定容器路径")
+    void volumeArgsMountDataDir() {
+        DeployRequest request = new DeployRequest(PROJECT, "run-x", "abcdef1234567", "img:1",
+                null, null, ".", DeployTarget.DOCKER, HOST_PORT, 3000, "/healthz", null, false,
+                null, Map.of(), "agent-test-net", "test", null, false, "/app/data");
+
+        assertEquals(List.of("-v", "agent-test-deploy-e2e-app-data:/app/data"),
+                DockerDeployer.volumeArgs(request));
+        assertTrue(DockerDeployer.volumeArgs(new DeployRequest(PROJECT, "run-x", "abcdef1234567",
+                "img:1", null, null, ".", DeployTarget.DOCKER, HOST_PORT, 3000, "/healthz", null,
+                false, null)).isEmpty(), "未声明 volume 时不应挂卷");
+    }
+
+    @Test
     @DisplayName("无镜像 → E-501（不启动容器，直接可读失败）")
     void failsFastWithoutImage() {
         DeployResult result = deployer.deploy(new DeployRequest(PROJECT, "run-x", "abcdef1234567",

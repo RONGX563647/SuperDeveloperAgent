@@ -22,6 +22,21 @@ class RepoQueryToolsSymlinkTest {
     Path temp;
 
     @Test
+    void readsFileByLineWindow() throws IOException {
+        Path repo = Files.createDirectories(temp.resolve("repo"));
+        Files.writeString(repo.resolve("big.txt"), "l1\nl2\nl3\nl4\nl5\n");
+        RepoQueryTools tools = new RepoQueryTools(emptyInspector(), locator(repo),
+                new SecretRedactor(null));
+        ProjectContext ctx = new ProjectContext("P", "test", "u1", "", null);
+
+        String window = tools.readFile(ctx, "big.txt", 2, 2);
+        assertTrue(window.contains("lines: 2-3 / 5"), window);
+        assertTrue(window.contains("l2"), window);
+        assertTrue(window.contains("l3"), window);
+        assertTrue(!window.contains("l1"), window);
+    }
+
+    @Test
     void symlinkCannotEscapeRepository() throws IOException {
         Path repo = Files.createDirectories(temp.resolve("repo"));
         Path outside = Files.createDirectories(temp.resolve("outside"));

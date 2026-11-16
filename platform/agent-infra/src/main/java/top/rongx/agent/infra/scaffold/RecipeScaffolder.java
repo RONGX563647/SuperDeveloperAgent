@@ -145,7 +145,7 @@ public class RecipeScaffolder implements ProjectScaffolder {
             String context = dockerfile.getParent().equals(repoRoot)
                     ? "." : relative(repoRoot, dockerfile.getParent());
             actions.put("image_package",
-                    "docker build -q -f " + dockerfileRel + " -t ${tag} " + context);
+                    "docker build -f " + dockerfileRel + " -t ${tag} " + context);
         } else if (target == DeployTarget.HOST) {
             diags.add(Diag.info("HOST_TARGET",
                     "HOST 目标直接运行 Java jar；前端静态产物不会由平台托管"));
@@ -244,9 +244,10 @@ public class RecipeScaffolder implements ProjectScaffolder {
             return new TargetChoice(requested, "按请求目标 " + requested.wireName() + "（不需要 Dockerfile）", diags);
         }
         if (javaDir != null && nodeDir == null) {
-            // 纯 Java 用 jar 直接跑：与其生成一个必然 E-501 的 docker 目标，不如按能力降级
-            diags.add(Diag.info("TARGET_DOWNGRADED",
-                    "未找到 Dockerfile：纯 Java 项目已自动改用 HOST（直接运行 jar）",
+            // 纯 Java 用 jar 直接跑：与其生成一个必然 E-501 的 docker 目标，不如按能力降级；
+            // 但这是显著的能力变化，必须用 suggestion 让接入报告显式提示，不能只藏在 info 里。
+            diags.add(Diag.suggestion("TARGET_DOWNGRADED",
+                    "未找到 Dockerfile：纯 Java 项目已自动改用 HOST（直接运行 jar），不是镜像部署",
                     "需要镜像部署时补 Dockerfile，再在项目页重新生成定义"));
             return new TargetChoice(DeployTarget.HOST,
                     "未找到 Dockerfile，纯 Java 项目自动降级为 HOST", diags);
@@ -254,8 +255,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
         if (javaDir != null) {
             // Java + 前端同仓：HOST 只能跑后端，前端产物仍需镜像/静态托管。
             // 仍然降级而不是阻塞：至少后端可以部署，诊断里明确提示前端归属。
-            diags.add(Diag.info("TARGET_DOWNGRADED",
-                    "未找到 Dockerfile：Java+Node 项目已自动改用 HOST（仅部署后端 jar）",
+            diags.add(Diag.suggestion("TARGET_DOWNGRADED",
+                    "未找到 Dockerfile：Java+Node 项目已自动改用 HOST（仅部署后端 jar，前端不会托管）",
                     "需要同时托管前端时，补一个根目录/backend/frontend Dockerfile 后重新生成定义"));
             return new TargetChoice(DeployTarget.HOST,
                     "未找到 Dockerfile，Java+Node 项目降级为 HOST（仅后端）", diags);

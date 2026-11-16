@@ -64,6 +64,19 @@ class DeployToolsConfigTest {
     }
 
     @Test
+    @DisplayName("单容器 volume：可写入，也可用空字符串移除")
+    void setsAndRemovesVolume() {
+        String withVolume = DeployTools.applyDeployConfig(YAML, null, null, null, null, null,
+                "/app/data");
+        Map<?, ?> deploy = (Map<?, ?>) ((Map<?, ?>) new Yaml().load(withVolume)).get("deploy");
+        assertEquals("/app/data", deploy.get("volume"));
+
+        String removed = DeployTools.applyDeployConfig(withVolume, null, null, null, null, null, "");
+        Map<?, ?> deployAfter = (Map<?, ?>) ((Map<?, ?>) new Yaml().load(removed)).get("deploy");
+        assertTrue(deployAfter == null || !deployAfter.containsKey("volume"));
+    }
+
+    @Test
     @DisplayName("HOST 部署状态目录：<deployRoot>/<project>-<env>，与 HostDeployer 的命名一致")
     void hostStateDirFollowsHostDeployerLayout() {
         java.nio.file.Path root = java.nio.file.Path.of("data", "workspaces", "_platform", "deploy");

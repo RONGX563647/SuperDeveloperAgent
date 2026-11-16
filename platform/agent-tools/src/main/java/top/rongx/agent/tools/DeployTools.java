@@ -4,8 +4,10 @@ import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,7 +99,8 @@ public class DeployTools {
      */
     @Tool(name = "deploy_host_stop",
             description = """
-                    停掉「HOST 目标」上次部署遗留的本机进程（写操作，仅 dev/test）。
+                    停掉「HOST 目标」部署遗留的本机进程（写操作，仅 dev/test）。
+                    同时覆盖默认部署与打 tag 的 versions/<版本号> 槽；可用 version 只停其中一个。
                     只按固定位置的状态文件操作：<workspace>/_platform/deploy/<project>-<env>/app.pid，
                     并校验进程命令行确实是平台部署的 app.jar（防止 pid 被复用后误杀）。
                     适用场景：上一版 host 部署的 java -jar 仍占用端口，导致新的 docker/host 部署端口冲突；
@@ -105,49 +108,74 @@ public class DeployTools {
                     不会结束平台自身、IDE 或任意其它 pid；生产环境拒绝执行。""",
             readOnly = false, concurrencySafe = false)
     public String stopHostDeployment(@ToolParam(name = "env", description = "环境：dev / test")
-                                     String env, ProjectContext ctx) {
+                                     String env,
+                                     @ToolParam(name = "version", required = false,
+                                             description = "只停这个版本槽；空 = 停默认部署与该环境所有 tag 版本")
+                                     String version,
+                                     ProjectContext ctx) {
         String target = normalize(env);
         if ("prod".equals(target)) {
             return "err: 生产环境不允许停止本机进程";
         }
-        Path pidFile = hostStateDir(hostDeployRoot, ctx.projectId(), target).resolve("app.pid");
-        if (!Files.isRegularFile(pidFile)) {
+        List<String> stopped = new ArrayList<>();
+        List<String> notes = new ArrayList<>();
+        List<Path> dirs = hostSlotDirs(ctx.projectId(), target, version);
+        if (dirs.isEmpty()) {
             return "status: not_running\nenv: " + target
                     + "\nreason: 没有 HOST 部署进程记录（可能从未用 host 目标部署，或已清理）";
         }
-        String raw;
-        try {
-            raw = Files.readString(pidFile, StandardCharsets.UTF_8).trim();
-        } catch (IOException e) {
-            return "err: 读取 app.pid 失败：" + e.getMessage();
-        }
-        long pid;
-        try {
-            pid = Long.parseLong(raw);
-        } catch (NumberFormatException e) {
+        for (Path dir : dirs) {
+            String slot = dir.equals(hostStateDir(hostDeployRoot, ctx.projectId(), target))
+                    ? "latest" : dir.getFileName().toString();
+            Path pidFile = dir.resolve("app.pid");
+            if (!Files.isRegularFile(pidFile)) {
+                continue;
+            }
+            String raw;
+            try {
+                raw = Files.readString(pidFile, StandardCharsets.UTF_8).trim();
+            } catch (IOException e) {
+                notes.add(slot + "：读取 app.pid 失败（" + e.getMessage() + "）");
+                continue;
+            }
+            long pid;
+            try {
+                pid = Long.parseLong(raw);
+            } catch (NumberFormatException e) {
+                deleteQuietly(pidFile);
+                notes.add(slot + "：app.pid 不是合法 pid（" + raw + "），已删除损坏记录");
+                continue;
+            }
+            Optional<ProcessHandle> handle = ProcessHandle.of(pid).filter(ProcessHandle::isAlive);
+            if (handle.isEmpty()) {
+                deleteQuietly(pidFile);
+                notes.add(slot + "：pid=" + pid + " 已退出，已清理记录");
+                continue;
+            }
+            String commandLine = handle.get().info().commandLine().orElse("");
+            if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
+                notes.add(slot + "：pid=" + pid + " 不是平台部署的 app.jar，拒绝结束"
+                        + "（可能是 pid 被复用）；请用 port_check 确认占用者");
+                continue;
+            }
+            handle.get().descendants().forEach(ProcessHandle::destroy);
+            handle.get().destroy();
+            try {
+                handle.get().onExit().get(5, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                handle.get().destroyForcibly();
+            }
             deleteQuietly(pidFile);
-            return "status: not_running\nreason: app.pid 内容不是合法 pid（" + raw + "），已删除损坏记录";
+            stopped.add(slot + " pid=" + pid);
         }
-        Optional<ProcessHandle> handle = ProcessHandle.of(pid).filter(ProcessHandle::isAlive);
-        if (handle.isEmpty()) {
-            deleteQuietly(pidFile);
-            return "status: not_running\nreason: app.pid 指向的进程已退出（pid=" + pid + "），已清理记录";
+        if (stopped.isEmpty()) {
+            return "status: not_running\nenv: " + target
+                    + "\nreason: 没有可停止的 HOST 进程"
+                    + (notes.isEmpty() ? "" : "\nnotes: " + String.join("；", notes));
         }
-        String commandLine = handle.get().info().commandLine().orElse("");
-        if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
-            return "err: pid=" + pid + " 的命令行不是平台部署的 app.jar，拒绝结束"
-                    + "（可能是 pid 被复用）；请用 port_check 确认端口占用者后再处理";
-        }
-        handle.get().descendants().forEach(ProcessHandle::destroy);
-        handle.get().destroy();
-        try {
-            handle.get().onExit().get(5, TimeUnit.SECONDS);
-        } catch (Exception ignored) {
-            handle.get().destroyForcibly();
-        }
-        deleteQuietly(pidFile);
-        return "status: stopped\npid: " + pid + "\nenv: " + target
-                + "\npidFile: " + pidFile
+        return "status: stopped\nenv: " + target
+                + "\nstopped: " + String.join("；", stopped)
+                + (notes.isEmpty() ? "" : "\nnotes: " + String.join("；", notes))
                 + "\nnext: 端口已释放，可以重新 deploy_run";
     }
 
@@ -161,12 +189,13 @@ public class DeployTools {
     @Tool(name = "ci_configure_deploy",
             description = """
                     修改平台侧流水线定义的部署配置（写操作，仅 dev/test）：
-                    target（docker/host/server）、port、container_port、health_path、health_url。
+                    target（docker/host/server）、port、container_port、health_path、health_url、volume。
                     适用场景：部署端口被占用（例如 dev 实例占了 8090）需要换端口；
-                    健康检查路径与项目实际端点不一致（Spring Boot 通常是 /actuator/health）。
+                    健康检查路径与项目实际端点不一致（Spring Boot 通常是 /actuator/health）；
+                    单容器部署需要持久化数据（例如 /app/data），否则重发会清空容器内数据。
                     修改后会重建 health stage 的 url（未显式给 health_url 时按 port + health_path 生成），
                     并让该环境旧的固化脚本失效，避免旧脚本覆盖新配置。
-                    默认值：container_port 跟随 port；health_path 不传则保留原值。
+                    默认值：container_port 跟随 port；health_path 不传则保留原值；volume 传空字符串表示移除。
                     先调用 ci_definition 查看当前定义；若仓库根也有 ci/pipeline.yml，它优先于本定义。
                     生产环境拒绝执行。""",
             readOnly = false, concurrencySafe = false)
@@ -181,6 +210,9 @@ public class DeployTools {
                                   @ToolParam(name = "health_url", required = false,
                                           description = "完整健康检查 URL；缺省按 http://127.0.0.1:<port><health_path> 生成")
                                   String healthUrl,
+                                  @ToolParam(name = "volume", required = false,
+                                          description = "单容器持久化路径（例如 /app/data）；传空字符串 = 移除卷挂载")
+                                  String volume,
                                   ProjectContext ctx) {
         if (ctx.isProduction()) {
             return "err: 生产环境不允许修改流水线配置；请先在 dev/test 验证";
@@ -207,13 +239,18 @@ public class DeployTools {
         if (url != null && !url.matches("https?://[^\\s\"']+")) {
             return "err: health_url 必须是以 http:// 或 https:// 开头的完整 URL";
         }
+        String volumePath = volume == null ? null : volume.trim();
+        if (volumePath != null && !volumePath.isEmpty()
+                && !volumePath.matches("/[A-Za-z0-9/._-]+")) {
+            return "err: volume 必须是容器内绝对路径（以 / 开头，只含字母、数字、/ . _ -）";
+        }
         if (wireTarget == null && port == null && containerPort == null
-                && path == null && url == null) {
-            return "err: 至少提供一个要修改的字段（target / port / container_port / health_path / health_url）";
+                && path == null && url == null && volumePath == null) {
+            return "err: 至少提供一个要修改的字段（target / port / container_port / health_path / health_url / volume）";
         }
         String updated;
         try {
-            updated = applyDeployConfig(yaml, wireTarget, port, containerPort, path, url);
+            updated = applyDeployConfig(yaml, wireTarget, port, containerPort, path, url, volumePath);
         } catch (IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
@@ -235,6 +272,13 @@ public class DeployTools {
     /** 读-改-写 deploy 段与 health stage 的 url；动作与阶段顺序不变。 */
     static String applyDeployConfig(String yaml, String target, Integer port,
                                     Integer containerPort, String healthPath, String healthUrl) {
+        return applyDeployConfig(yaml, target, port, containerPort, healthPath, healthUrl, null);
+    }
+
+    /** 读-改-写 deploy 段（含单容器 volume）与 health stage 的 url；动作与阶段顺序不变。 */
+    static String applyDeployConfig(String yaml, String target, Integer port,
+                                    Integer containerPort, String healthPath, String healthUrl,
+                                    String volumePath) {
         Object loaded;
         try {
             loaded = new org.yaml.snakeyaml.Yaml().load(yaml);
@@ -261,6 +305,13 @@ public class DeployTools {
         }
         if (healthPath != null) {
             deploy.put("healthPath", healthPath);
+        }
+        if (volumePath != null) {
+            if (volumePath.isBlank()) {
+                deploy.remove("volume");
+            } else {
+                deploy.put("volume", volumePath);
+            }
         }
         root.put("deploy", deploy);
 
@@ -321,6 +372,12 @@ public class DeployTools {
                       String env,
                       @ToolParam(name = "binding_id", description = "人工确认过的环境绑定 id（env_mapping_draft 生成）")
                       String bindingId,
+                      @ToolParam(name = "version", required = false,
+                              description = "版本号（打 tag 时必填，例如 v1.2.0；不打 tag 时可选，仅作展示标签）")
+                      String version,
+                      @ToolParam(name = "tag", required = false,
+                              description = "是否打 tag：true = 新版本独立部署，不覆盖旧版本；false/空 = 覆盖该环境默认部署")
+                      String tag,
                       ProjectContext ctx) {
         String target = normalize(env);
         if ("prod".equals(target)) {
@@ -366,8 +423,24 @@ public class DeployTools {
         params.put("confirmedBy", binding.confirmedBy() == null ? "" : binding.confirmedBy());
         params.put("dryRunHash", dryRun.reportHash());
         params.put("dryRunFingerprint", dryRun.fingerprint());
+        if (version != null && !version.isBlank()) {
+            params.put("version", version.trim());
+        }
+        if (version != null && !version.isBlank()
+                && !version.trim().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,31}")) {
+            return "err: 版本号只能包含字母、数字、. _ -，且以字母或数字开头（最长 32）";
+        }
+        if ("true".equalsIgnoreCase(String.valueOf(tag)) || "1".equals(String.valueOf(tag))) {
+            if (version == null || version.isBlank()) {
+                return "err: 打 tag 时必须填写 version（例如 v1.2.0）";
+            }
+            params.put("tag", "true");
+        }
         String runId = engine.trigger(ctx.projectId(), pipelineId, params);
-        return "runId: " + runId + "\nenv: " + target + "\nstatus: " + engine.status(runId);
+        return "runId: " + runId + "\nenv: " + target
+                + "\nversion: " + (version == null || version.isBlank() ? "latest" : version.trim())
+                + "\ntagged: " + params.getOrDefault("tag", "false")
+                + "\nstatus: " + engine.status(runId);
     }
 
     @Tool(name = "deploy_save_recipe",
@@ -493,6 +566,42 @@ public class DeployTools {
     static Path hostStateDir(Path hostDeployRoot, String projectId, String env) {
         String suffix = env == null || env.isBlank() ? "" : "-" + env.trim();
         return hostDeployRoot.resolve(projectId + suffix);
+    }
+
+    /** 待停止的 HOST 状态目录：空版本 = 默认槽 + 所有 tag 版本；指定版本 = 对应槽。 */
+    private List<Path> hostSlotDirs(String projectId, String env, String version) {
+        Path base = hostStateDir(hostDeployRoot, projectId, env);
+        List<Path> dirs = new ArrayList<>();
+        String wanted = version == null ? "" : version.trim();
+        if (wanted.isEmpty()) {
+            if (Files.isDirectory(base)) {
+                dirs.add(base);
+            }
+            Path versions = base.resolve("versions");
+            if (Files.isDirectory(versions)) {
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(versions)) {
+                    for (Path slot : stream) {
+                        if (Files.isDirectory(slot)) {
+                            dirs.add(slot);
+                        }
+                    }
+                } catch (IOException ignored) {
+                    // 目录读不了按不存在处理
+                }
+            }
+            return dirs;
+        }
+        if ("latest".equalsIgnoreCase(wanted)) {
+            if (Files.isDirectory(base)) {
+                dirs.add(base);
+            }
+            return dirs;
+        }
+        Path slot = base.resolve("versions").resolve(wanted);
+        if (Files.isDirectory(slot)) {
+            dirs.add(slot);
+        }
+        return dirs;
     }
 
     private static void deleteQuietly(Path file) {
