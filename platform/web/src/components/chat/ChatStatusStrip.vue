@@ -2,9 +2,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown, ArrowRight, Check, Connection, Cpu, Lock, Plus, Refresh, Warning
+  ArrowDown, ArrowRight, Check, Connection, Cpu, Lock, MagicStick, Plus, Refresh, Warning
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../../stores/app'
+import type { CapabilityOption } from '../../composables/useChatCapabilities'
 import {
   modelOptions,
   type ModelConnectionOption, type ModelOptions
@@ -29,6 +30,13 @@ interface Props {
   /** 本会话选择的模型连接与模型名（null = 设置页默认） */
   modelConnectionId: string | null
   modelName: string | null
+  /** 本会话可选的 Skill / MCP 与当前选择 */
+  skillOptions: CapabilityOption[]
+  mcpOptions: CapabilityOption[]
+  skills: string[]
+  mcp: string[]
+  capsReady: boolean
+  capsLoading: boolean
 }
 
 const props = defineProps<Props>()
@@ -36,17 +44,94 @@ const emit = defineEmits<{
   'update:permission': [value: PermissionMode]
   'update:worktree': [value: string]
   'update:model': [value: { connectionId: string | null, modelName: string | null }]
+  'update:skills': [value: string[]]
+  'update:mcp': [value: string[]]
+  'refresh-capabilities': []
+  'open-capabilities': []
   'new-session': []
   navigate: [path: string]
 }>()
 
-type PanelKey = 'context' | 'permission' | 'worktree' | 'model' | null
+type PanelKey = 'context' | 'permission' | 'worktree' | 'model' | 'capability' | null
 const panel = ref<PanelKey>(null)
 
 function toggle(key: Exclude<PanelKey, null>): void {
   panel.value = panel.value === key ? null : key
   if (panel.value === 'model') void loadModels()
   if (panel.value === 'worktree') void loadGit()
+  if (panel.value === 'capability' && !props.capsReady) emit('refresh-capabilities')
+}
+
+// ---------------------------------------------------------------- 能力（本会话）
+type CapKind = 'skill' | 'mcp'
+interface QuickCap extends CapabilityOption {
+  kind: CapKind
+  on: boolean
+}
+
+const capQuery = ref('')
+const capFilter = ref<'all' | 'on' | 'skill' | 'mcp'>('all')
+const capCount = computed(() => props.skills.length + props.mcp.length)
+
+const capItems = computed<QuickCap[]>(() => [
+  ...props.skillOptions.map((o) => ({
+    ...o, kind: 'skill' as const, on: props.skills.includes(o.key),
+  })),
+  ...props.mcpOptions.map((o) => ({
+    ...o, kind: 'mcp' as const, on: props.mcp.includes(o.key),
+  })),
+])
+
+const filteredCaps = computed(() => {
+  const q = capQuery.value.trim().toLowerCase()
+  return capItems.value.filter((item) => {
+    if (capFilter.value === 'on' && !item.on) return false
+    if (capFilter.value === 'skill' && item.kind !== 'skill') return false
+    if (capFilter.value === 'mcp' && item.kind !== 'mcp') return false
+    if (!q) return true
+    return `${item.label} ${item.key} ${item.description}`
+      .toLowerCase().includes(q)
+  })
+})
+
+/** 分组展示：已启用的排在前面，组内按名称排序。 */
+const capGroups = computed(() => {
+  const build = (kind: CapKind, label: string) => {
+    const all = capItems.value.filter((item) => item.kind === kind)
+    const items = filteredCaps.value
+      .filter((item) => item.kind === kind)
+      .sort((a, b) => Number(b.on) - Number(a.on) || a.label.localeCompare(b.label))
+    return { kind, label, items, on: all.filter((item) => item.on).length, total: all.length }
+  }
+  return [build('skill', 'Skill'), build('mcp', 'MCP')]
+    .filter((group) => group.items.length > 0)
+})
+
+const FILTERS: Array<{ key: typeof capFilter.value, label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'on', label: '已启用' },
+  { key: 'skill', label: 'Skill' },
+  { key: 'mcp', label: 'MCP' },
+]
+
+function toggleCap(item: QuickCap): void {
+  const current = item.kind === 'skill' ? props.skills : props.mcp
+  const next = item.on
+    ? current.filter((key) => key !== item.key)
+    : Array.from(new Set([...current, item.key]))
+  if (item.kind === 'skill') emit('update:skills', next)
+  else emit('update:mcp', next)
+}
+
+function toggleGroup(kind: CapKind, on: boolean): void {
+  const options = kind === 'skill' ? props.skillOptions : props.mcpOptions
+  if (kind === 'skill') emit('update:skills', on ? options.map((o) => o.key) : [])
+  else emit('update:mcp', on ? options.map((o) => o.key) : [])
+}
+
+function openCapabilities(): void {
+  panel.value = null
+  emit('open-capabilities')
 }
 
 // ---------------------------------------------------------------- 上下文
@@ -252,6 +337,15 @@ onMounted(() => {
         </button>
 
         <button
+          type="button" class="status-chip" :class="{ on: panel === 'capability' }"
+          title="本会话 Skill / MCP 快捷开关" @click="toggle('capability')"
+        >
+          <el-icon><MagicStick /></el-icon>
+          <span>能力 {{ capCount }}</span>
+          <el-icon class="caret"><ArrowDown /></el-icon>
+        </button>
+
+        <button
           type="button" class="status-chip" :class="{ on: panel === 'model' }"
           title="模型快捷切换" @click="toggle('model')"
         >
@@ -264,7 +358,10 @@ onMounted(() => {
 
     <!-- 点击空白关闭：比给每个 chip 挂 document 监听更好收口 -->
     <div v-if="panel" class="strip-backdrop" @click="panel = null" />
-    <div v-if="panel" class="strip-panel" :class="{ 'align-right': panel === 'model' }">
+    <div
+      v-if="panel" class="strip-panel"
+      :class="{ 'align-right': panel === 'model' || panel === 'capability' }"
+    >
       <!-- 上下文 -->
       <template v-if="panel === 'context'">
         <div class="panel-head">
@@ -394,6 +491,80 @@ onMounted(() => {
           <p>该项目尚未接入本地 git 仓库，读不到分支、改动与 worktree。</p>
           <button type="button" class="panel-action" @click="go('/projects/intake')">
             去项目接入 <el-icon><ArrowRight /></el-icon>
+          </button>
+        </div>
+      </template>
+
+      <!-- 能力：本会话快捷开关（不离开对话） -->
+      <template v-else-if="panel === 'capability'">
+        <div class="panel-head">
+          <b>本会话能力</b>
+          <span class="panel-sub">{{ skills.length }} Skill · {{ mcp.length }} MCP</span>
+        </div>
+        <el-input
+          v-model="capQuery" size="small" clearable class="cap-search"
+          placeholder="搜索 Skill / MCP"
+        />
+        <div class="cap-filters">
+          <button
+            v-for="f in FILTERS" :key="f.key" type="button"
+            class="cap-filter" :class="{ on: capFilter === f.key }"
+            @click="capFilter = f.key"
+          >
+            {{ f.label }}
+          </button>
+        </div>
+        <div v-if="!capsReady" class="panel-loading">正在读取本会话能力…</div>
+        <div v-else-if="!filteredCaps.length" class="panel-empty">
+          <el-icon><MagicStick /></el-icon>
+          <p>{{ capItems.length ? '没有匹配的能力。' : '还没有接入 Skill / MCP，去设置市场看看。' }}</p>
+          <button
+            v-if="!capItems.length" type="button" class="panel-action"
+            @click="go('/settings?section=skills')"
+          >
+            去能力市场 <el-icon><ArrowRight /></el-icon>
+          </button>
+        </div>
+        <div v-else class="cap-quick-list">
+          <section v-for="group in capGroups" :key="group.kind" class="cap-group">
+            <div class="cap-group-head">
+              <b>{{ group.label }}</b>
+              <span class="mono">{{ group.on }}/{{ group.total }}</span>
+              <span class="cap-group-actions">
+                <button type="button" @click="toggleGroup(group.kind, true)">全选</button>
+                <button type="button" @click="toggleGroup(group.kind, false)">清空</button>
+              </span>
+            </div>
+            <button
+              v-for="item in group.items" :key="`${item.kind}:${item.key}`"
+              type="button" class="cap-row" :class="{ on: item.on }"
+              @click="toggleCap(item)"
+            >
+              <span class="cap-row-icon" :class="item.kind">
+                <el-icon><component :is="item.kind === 'skill' ? MagicStick : Connection" /></el-icon>
+              </span>
+              <span class="cap-row-main">
+                <b>{{ item.label }}</b>
+                <em>{{ item.description || '（无描述）' }}</em>
+              </span>
+              <span class="cap-pill" :class="{ on: item.on }">
+                {{ item.on ? '已启用' : '启用' }}
+              </span>
+            </button>
+          </section>
+        </div>
+        <p v-if="capCount > 10" class="panel-note cap-warn">
+          已启用 {{ capCount }} 项：技能越多系统提示越长、首字延迟越高，建议只保留本轮需要的。
+        </p>
+        <div class="panel-actions">
+          <button type="button" class="panel-action" @click="openCapabilities">
+            查看详情 <el-icon><ArrowRight /></el-icon>
+          </button>
+          <button
+            type="button" class="panel-action ghost"
+            :disabled="capsLoading" @click="emit('refresh-capabilities')"
+          >
+            <el-icon :class="{ spin: capsLoading }"><Refresh /></el-icon> 刷新
           </button>
         </div>
       </template>
@@ -1000,6 +1171,157 @@ onMounted(() => {
 .model-provider {
   font-size: 10px;
   color: var(--ink-faint);
+}
+
+/* 能力快捷面板：搜索 + 筛选 + 分组开关 */
+.cap-search {
+  margin-bottom: 8px;
+}
+.cap-filters {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.cap-filter {
+  height: 22px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
+}
+.cap-filter:hover {
+  color: var(--ink-soft);
+  background: var(--surface-hover);
+}
+.cap-filter.on {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.cap-quick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.cap-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cap-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+.cap-group-head b {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.cap-group-head .mono {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.cap-group-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.cap-group-actions button {
+  padding: 0;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.cap-group-actions button:hover {
+  color: var(--accent-ink);
+}
+.cap-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.cap-row:hover {
+  background: var(--surface-hover);
+}
+.cap-row.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.cap-row-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+}
+.cap-row.on .cap-row-icon {
+  color: var(--accent-ink);
+}
+.cap-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cap-row-main b {
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cap-row-main em {
+  overflow: hidden;
+  font-size: 10px;
+  font-style: normal;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cap-pill {
+  flex: none;
+  padding: 2px 7px;
+  margin-left: auto;
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+}
+.cap-pill.on {
+  color: var(--accent-ink);
+  background: rgb(77 130 247 / 18%);
+}
+.cap-warn {
+  color: var(--warn);
 }
 .spin {
   animation: strip-spin 0.9s linear infinite;
