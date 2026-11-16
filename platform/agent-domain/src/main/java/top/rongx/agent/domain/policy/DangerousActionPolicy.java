@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.project.ProjectContext;
 
 /**
@@ -82,7 +83,7 @@ public class DangerousActionPolicy {
                 window.pollFirst();
             }
             if (window.size() >= maxPerWindow) {
-                throw new PolicyDeniedException("E-709",
+                throw new PolicyDeniedException(ErrorCode.RATE_LIMITED,
                         "破坏性动作 " + action + " 在 " + (windowMillis / 60_000)
                                 + " 分钟内已执行 " + window.size() + " 次，已触发频次上限，请稍后再试");
             }

@@ -46,6 +46,7 @@ code_refs:
 | §6 S5–S6 沙箱与镜像 | 评审 / 部署配置检查 | — | ❌ 人工（无对应规则） |
 | §10.1 禁止字段注入 | `ForbiddenPatternScanTest` + `ArchitectureRulesTest` | R05、A9 | ✅ 全自动 |
 | §10.2 禁止裸 Thread | `ForbiddenPatternScanTest` | R04 | ✅ 全自动 |
+| §10.3 业务异常统一错误码 | `ForbiddenPatternScanTest` | R14 | ✅ 全自动 |
 | §10.3 禁止吞异常 | `ForbiddenPatternScanTest` | R10 | ✅ 全自动 |
 | §10.4 禁止拼 shell | `ForbiddenPatternScanTest` | R01–R02 | ✅ 全自动 |
 | §10.4 禁止 MyBatis `${}` | `ForbiddenPatternScanTest` | R03 | ✅ 全自动 |
@@ -66,7 +67,7 @@ code_refs:
 | 检查器 | 位置 | 机制 |
 |---|---|---|
 | `ArchitectureRulesTest` | `platform/spec-checks/src/test/java/top/rongx/agent/arch/` | **ArchUnit** 7 条规则：A1 依赖方向、A2 domain 框架无关、A3 执行面隔离、A4 决策面无容器客户端、A6 禁 util/common 包、A7 tools 不启动进程、A9 禁字段注入 |
-| `ForbiddenPatternScanTest` | 同上 | 表驱动正则扫描 `src/main/java`、`src/main/resources`，13 条规则（R01–R13） |
+| `ForbiddenPatternScanTest` | 同上 | 表驱动正则扫描 `src/main/java`、`src/main/resources`，14 条规则（R01–R14） |
 | `ConfigCredentialScanTest` | 同上 | 扫描决策面 `*.yml/*.properties/*.conf`，5 条凭证规则（C1–C5） |
 | `MigrationGuardTest` | 同上 | 比对迁移文件 sha256 与基线清单（M1；基线缺失时跳过） |
 

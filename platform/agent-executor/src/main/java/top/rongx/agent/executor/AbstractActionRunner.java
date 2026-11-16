@@ -18,6 +18,7 @@ import java.util.stream.Stream;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.artifact.ArtifactRef;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.run.StageResult;
 
@@ -80,7 +81,7 @@ public abstract class AbstractActionRunner implements ActionRunner {
             // 5. 预算耗尽返回 E-302
             if (budgetMillis <= 0) {
                 long costMs = (System.nanoTime() - started) / 1_000_000L;
-                return new ActionResult(StageResult.failed(spec.action().wireName(), 124, "E-302",
+                return new ActionResult(StageResult.failed(spec.action().wireName(), 124, ErrorCode.TIMEOUT.code(),
                         "动作总预算耗尽，已终止", costMs), ProcessExecutor.tail(sink));
             }
         }
@@ -89,7 +90,7 @@ public abstract class AbstractActionRunner implements ActionRunner {
         // 7. 声明了产物却未生成 → E-401（防止配方过期静默成功）
         if (!spec.produce().isEmpty() && artifacts.isEmpty()) {
             long costMs = (System.nanoTime() - started) / 1_000_000L;
-            return new ActionResult(StageResult.failed(spec.action().wireName(), 404, "E-401",
+            return new ActionResult(StageResult.failed(spec.action().wireName(), 404, ErrorCode.ARTIFACT_MISSING.code(),
                     "声明的产物未生成，可能配方过期或构建未产出：" + spec.produce()
                             + artifactHint(workspace), costMs),
                     ProcessExecutor.tail(sink));
@@ -111,11 +112,11 @@ public abstract class AbstractActionRunner implements ActionRunner {
      */
     private String validateArgv(List<String> argv) {
         if (argv == null || argv.isEmpty()) {
-            return "E-201";
+            return ErrorCode.ARGV_INVALID.code();
         }
         String head = argv.get(0);
         if (head == null || head.isBlank()) {
-            return "E-201";
+            return ErrorCode.ARGV_INVALID.code();
         }
         String lower = head.toLowerCase().replace('\\', '/');
         String base = lower.contains("/") ? lower.substring(lower.lastIndexOf('/') + 1) : lower;
@@ -123,13 +124,13 @@ public abstract class AbstractActionRunner implements ActionRunner {
         if (base.equals("sh") || base.equals("bash") || base.equals("zsh")
                 || base.equals("cmd") || base.equals("cmd.exe") || base.equals("powershell")
                 || base.equals("pwsh")) {
-            return "E-202";
+            return ErrorCode.SHELL_REJECTED.code();
         }
         // 归一化：去扩展名（Windows 包装器 mvn.cmd / mvn.bat）并识别 mvnw wrapper
         String noExt = base.contains(".") ? base.substring(0, base.indexOf('.')) : base;
         boolean isMaven = noExt.equals("mvn") || noExt.equals("mvnw");
         if (isMaven && argv.stream().anyMatch(a -> a.equalsIgnoreCase("deploy"))) {
-            return "E-211";
+            return ErrorCode.MVN_DEPLOY_FORBIDDEN.code();
         }
         return null;
     }

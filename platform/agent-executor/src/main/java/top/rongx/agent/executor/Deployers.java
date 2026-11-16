@@ -4,6 +4,7 @@ import java.util.List;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.Deployer;
 
 /**
@@ -37,7 +38,8 @@ public class Deployers implements Deployer {
                 .filter(d -> d.supports(request.target()))
                 .findFirst()
                 .map(d -> d.deploy(request))
-                .orElseGet(() -> DeployResult.failed(request.target(), "E-505",
+                .orElseGet(() -> DeployResult.failed(request.target(),
+                        ErrorCode.DEPLOY_TARGET_UNCONFIGURED.code(),
                         "未注册的部署目标：" + request.target().wireName(), ""));
     }
 }

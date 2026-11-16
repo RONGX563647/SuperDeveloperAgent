@@ -10,6 +10,7 @@ import java.util.Optional;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.process.JavaRuntime;
 
@@ -82,7 +83,7 @@ public class HostDeployer implements Deployer {
                 Files.writeString(stateDir.resolve("version"), label, StandardCharsets.UTF_8);
             }
         } catch (IOException e) {
-            return DeployResult.failed(DeployTarget.HOST, "E-501",
+            return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                     "无法创建部署状态目录：" + e.getMessage(), "");
         }
 
@@ -91,12 +92,12 @@ public class HostDeployer implements Deployer {
         if (request.rollback()) {
             releaseSha = readPointer(stateDir.resolve("previous"));
             if (releaseSha == null) {
-                return DeployResult.failed(DeployTarget.HOST, "E-507",
+                return DeployResult.failed(DeployTarget.HOST, ErrorCode.ROLLBACK_VERSION_MISSING.code(),
                         "没有可回滚的本机版本（尚无 previous 指针）", "");
             }
             jar = stateDir.resolve("releases").resolve(releaseSha).resolve("app.jar");
             if (!Files.isRegularFile(jar)) {
-                return DeployResult.failed(DeployTarget.HOST, "E-507",
+                return DeployResult.failed(DeployTarget.HOST, ErrorCode.ROLLBACK_VERSION_MISSING.code(),
                         "上一版 jar 不存在：" + jar, "");
             }
             log.append("[host] rollback to ").append(releaseSha).append('\n');
@@ -104,7 +105,7 @@ public class HostDeployer implements Deployer {
             releaseSha = request.gitSha();
             Path sourceJar = resolveJar(request, workdir);
             if (sourceJar == null) {
-                return DeployResult.failed(DeployTarget.HOST, "E-504",
+                return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_TARGET_UNDETERMINED.code(),
                         "HOST 目标需要可运行的 jar（target/*.jar）；前端静态产物请选择 DOCKER 目标",
                         "");
             }
@@ -123,7 +124,7 @@ public class HostDeployer implements Deployer {
                     }
                 }
             } catch (IOException e) {
-                return DeployResult.failed(DeployTarget.HOST, "E-501",
+                return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                         "复制产物失败：" + e.getMessage(), "");
             }
         }
@@ -157,7 +158,7 @@ public class HostDeployer implements Deployer {
             boolean exited = process.waitFor(STARTUP_PROBE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (exited && process.exitValue() != 0) {
                 Files.deleteIfExists(pidFile);
-                return DeployResult.failed(DeployTarget.HOST, "E-502",
+                return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_START_FAILED.code(),
                         "进程启动即退出（exit " + process.exitValue() + "）", tailOf(logFile));
             }
             rotatePointers(stateDir, releaseSha, request.rollback());
@@ -168,11 +169,11 @@ public class HostDeployer implements Deployer {
                     "http://127.0.0.1:" + request.hostPort() + safePath(request.healthPath()),
                     releaseSha, ProcessExecutor.redact(log.toString()));
         } catch (IOException e) {
-            return DeployResult.failed(DeployTarget.HOST, "E-502",
+            return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_START_FAILED.code(),
                     "无法启动进程：" + e.getMessage(), "");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return DeployResult.failed(DeployTarget.HOST, "E-502", "启动被中断", "");
+            return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_START_FAILED.code(), "启动被中断", "");
         }
     }
 

@@ -39,6 +39,7 @@ import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvResource;
@@ -440,9 +441,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private static final List<String> BUILTIN_PIPELINES = List.of("release", "verify");
 
     /** 连平台侧定义都生成不出来（脚手架失败/仓库不可读）。 */
-    private static final String E_NO_PIPELINE = "E-220";
+    private static final String E_NO_PIPELINE = ErrorCode.PIPELINE_DEFINITION_UNAVAILABLE.code();
     /** 定义存在但解析不出来（人工写坏了平台定义或仓库覆盖文件）。 */
-    private static final String E_BAD_PIPELINE = "E-221";
+    private static final String E_BAD_PIPELINE = ErrorCode.PIPELINE_DEFINITION_INVALID.code();
 
     @Override
     public List<String> pipelines(String projectId) {
@@ -562,7 +563,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         top.rongx.agent.domain.env.EffectiveEnvironment effective =
                 envStore.effective(projectId, normalized);
         if (!effective.missingSecrets().isEmpty()) {
-            blockers.add("E-704 密钥引用无法解析：" + String.join("、", effective.missingSecrets()));
+            blockers.add(ErrorCode.SECRET_UNRESOLVED.code() + " 密钥引用无法解析：" + String.join("、", effective.missingSecrets()));
         }
         Path repo = resolveRepoForRead(projectId);
         if (repo != null) {
@@ -572,7 +573,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     .filter(k -> !effective.values().containsKey(k))
                     .toList();
             if (!missing.isEmpty()) {
-                blockers.add("E-509 缺少必需环境变量：" + String.join("、", missing));
+                blockers.add(ErrorCode.ENV_REQUIRED_MISSING.code() + " 缺少必需环境变量：" + String.join("、", missing));
             }
         }
         if (previews.isEmpty()) {
@@ -594,11 +595,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     || Files.isRegularFile(repo.resolve("backend").resolve("Dockerfile"))
                     || Files.isRegularFile(repo.resolve("frontend").resolve("Dockerfile")));
             if (!hasDockerfile) {
-                blockers.add("E-501 发布将失败：DOCKER 目标但仓库没有 Dockerfile，镜像阶段无法生成");
+                blockers.add(ErrorCode.DEPLOY_PREREQUISITE_MISSING.code() + " 发布将失败：DOCKER 目标但仓库没有 Dockerfile，镜像阶段无法生成");
             } else if ("verify".equals(pipelineId)) {
-                warnings.add("检查构建会跳过镜像打包；发布前需运行 release 流水线，否则可能 E-501");
+                warnings.add("检查构建会跳过镜像打包；发布前需运行 release 流水线，否则可能 "
+                        + ErrorCode.DEPLOY_PREREQUISITE_MISSING.code());
             } else {
-                blockers.add("E-501 发布将失败：DOCKER 目标缺少 image_package 阶段（构建镜像）");
+                blockers.add(ErrorCode.DEPLOY_PREREQUISITE_MISSING.code() + " 发布将失败：DOCKER 目标缺少 image_package 阶段（构建镜像）");
             }
         }
         for (StagePreview p : previews) {
@@ -1066,25 +1068,26 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (requestedHash != null && !requestedHash.isBlank()) {
             PipelineEngine.DryRunReport report = dryRun(projectId, pipelineId, env, sha);
             if (!report.ok()) {
-                throw new IllegalArgumentException("E-708 dry-run 未通过："
+                throw new IllegalArgumentException(ErrorCode.DRY_RUN_FAILED.code() + " dry-run 未通过："
                         + String.join("；", report.blockers()));
             }
             if (!requestedHash.equals(report.reportHash())) {
                 throw new IllegalArgumentException(
-                        "E-706 dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+                        ErrorCode.DRY_RUN_STALE.code() + " dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
             }
         }
         String deployTarget = params.get("deployTarget");
         // 服务器操作的前置：必须已有"测试机成功案例"（测试环境跑通并固化的脚本 + 证据运行成功）
         String problem = promotionProblem(projectId, env, sha);
         if (problem != null) {
-            throw new IllegalArgumentException("E-601 " + problem);
+            throw new IllegalArgumentException(ErrorCode.ENV_NOT_PROMOTED.code() + " " + problem);
         }
         // 不再校验"该提交里有没有 ci/pipeline.yml"：定义可以放在平台侧（默认），
         // 仓库里那份只是可选覆盖。真正缺定义时由执行期的 pipeline-def stage 说明。
         // 前置：仓库必须可定位，否则建出来的运行只会在历史里留下一条失败记录
         if (resolveRepoForRead(projectId) == null) {
-            throw new IllegalArgumentException("E-101 项目仓库不可用：请先在「项目接入」页完成 clone / 本地登记，"
+            throw new IllegalArgumentException(ErrorCode.COMPILE_FAILED.code()
+                    + " 项目仓库不可用：请先在「项目接入」页完成 clone / 本地登记，"
                     + "或在项目详情里执行「同步到平台」后重试");
         }
         String runId = "run-" + UUID.randomUUID().toString().substring(0, 8);
@@ -1359,22 +1362,22 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             blockers.add("镜像版本不存在或不属于 " + projectId + " / " + env + "：" + tag);
         }
         if (!dockerAvailable()) {
-            blockers.add("E-705 本机 Docker 不可用，无法按版本部署镜像 " + tag);
+            blockers.add(ErrorCode.LOCAL_IMAGE_UNAVAILABLE.code() + " 本机 Docker 不可用，无法按版本部署镜像 " + tag);
         } else if (!dockerImageExists(tag)) {
-            blockers.add("E-705 本机不存在镜像 " + tag + "（可能已被清理），请重新构建该版本");
+            blockers.add(ErrorCode.LOCAL_IMAGE_UNAVAILABLE.code() + " 本机不存在镜像 " + tag + "（可能已被清理），请重新构建该版本");
         }
         if (envStore != null) {
             try {
                 EffectiveEnvironment effective = envStore.effective(projectId, env);
                 if (!effective.missingSecrets().isEmpty()) {
-                    blockers.add("E-704 密钥引用无法解析：" + String.join("、", effective.missingSecrets())
+                    blockers.add(ErrorCode.SECRET_UNRESOLVED.code() + " 密钥引用无法解析：" + String.join("、", effective.missingSecrets())
                             + "。请先在「设置 → 项目环境 → 密钥」创建或轮换对应密钥");
                 }
                 PipelineDefinition definition = readDefinition(projectId, env);
                 if (definition != null && definition.deploy() != null) {
                     List<String> missing = missingRequiredEnv(definition.deploy(), effective.values());
                     if (!missing.isEmpty()) {
-                        blockers.add("E-509 环境「" + env + "」缺少必填环境变量 " + String.join("、", missing)
+                        blockers.add(ErrorCode.ENV_REQUIRED_MISSING.code() + " 环境「" + env + "」缺少必填环境变量 " + String.join("、", missing)
                                 + "。请到「设置 → 环境」或「项目覆盖」填写后重试");
                     }
                 }
@@ -1559,7 +1562,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         // 4. 仍不收敛（卡在没有取消检查点的调用）→ 强制终态并落盘
         if (s.cancelRequestedAt > 0 && now - s.cancelRequestedAt > FORCE_TERMINATE_AFTER_MS) {
-            forceTerminate(s, "E-302 运行超时且无法中断，已强制结束");
+            forceTerminate(s, ErrorCode.TIMEOUT.code() + " 运行超时且无法中断，已强制结束");
         }
     }
 
@@ -1574,7 +1577,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             synchronized (s.log) {
                 s.log.append("[watchdog] ").append(reason).append('\n');
             }
-            s.stages.add(StageResult.failed("watchdog", 124, "E-302", reason, 0));
+            s.stages.add(StageResult.failed("watchdog", 124, ErrorCode.TIMEOUT.code(), reason, 0));
             history.save(s.snapshot());
             recordLedger(s);
             scheduler.complete(s.projectId, s.env);
@@ -2107,7 +2110,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 definition = definition.forDeployOnly();
                 if (definition.stages().isEmpty()) {
                     state.log.append("[deploy] 流水线没有 deploy 阶段，无法按版本部署\n");
-                    state.stages.add(StageResult.failed("deploy", 1, "E-506",
+                    state.stages.add(StageResult.failed("deploy", 1, ErrorCode.DEPLOY_SECTION_MISSING.code(),
                             "流水线没有 deploy 阶段，无法按版本部署", 0));
                     state.status = StageStatus.FAILED;
                     return;
@@ -2155,7 +2158,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
             // E-508：部署配置必须与默认分支一致（防"改 YAML 即发布"绕过 review）
             if (!deployGuard(bare, runDir, definition, state)) {
-                state.stages.add(StageResult.failed("deploy-guard", 1, "E-508",
+                state.stages.add(StageResult.failed("deploy-guard", 1, ErrorCode.PIPELINE_DEFINITION_UNMERGED.code(),
                         "部署配置与默认分支不一致：请先把 ci/pipeline.yml 的 deploy 段合并到默认分支",
                         elapsed(0)));
                 runOnFailure(state, definition, runDir, vars);
@@ -2519,7 +2522,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (repo == null) {
             state.log.append("[dev] 定位不到项目本地目录（projectId=")
                     .append(state.projectId).append("）\n");
-            state.stages.add(StageResult.failed("workspace", 1, "E-601",
+            state.stages.add(StageResult.failed("workspace", 1, ErrorCode.ENV_NOT_PROMOTED.code(),
                     "本机部署需要项目本地工作区：请先在「接入项目」选择本地目录", 0));
             state.status = StageStatus.FAILED;
             return;
@@ -2549,14 +2552,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         try {
             Files.createDirectories(work);
         } catch (IOException e) {
-            failLocalDev(state, "workspace", "E-601", "无法创建部署目录：" + e.getMessage(), null);
+            failLocalDev(state, "workspace", ErrorCode.ENV_NOT_PROMOTED.code(), "无法创建部署目录：" + e.getMessage(), null);
             return;
         }
 
         // 1. 后端构建
         Path backendRoot = detectBackendRoot(repo);
         if (backendRoot == null) {
-            failLocalDev(state, "build", "E-601",
+            failLocalDev(state, "build", ErrorCode.ENV_NOT_PROMOTED.code(),
                     "未找到后端模块（仓库根或一级子目录需要 pom.xml）", null);
             return;
         }
@@ -2566,14 +2569,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (exit != 0) {
             String tail = localDevHost.logTail(mavenLog);
             // mvn 带 -q，明细全在日志里；不把首条 [ERROR] 捞进摘要，面板上就只剩一个退出码
-            failLocalDev(state, "build", "E-601",
+            failLocalDev(state, "build", ErrorCode.ENV_NOT_PROMOTED.code(),
                     "后端构建失败：" + commandReason(exit, "mvn") + firstErrorSuffix(tail), tail);
             return;
         }
         Path jar = findRunnableJar(backendRoot);
         if (jar == null) {
             String tail = localDevHost.logTail(mavenLog);
-            failLocalDev(state, "build", "E-601",
+            failLocalDev(state, "build", ErrorCode.ENV_NOT_PROMOTED.code(),
                     "构建完成但没有可运行 jar（target/*.jar）：" + backendRoot + firstErrorSuffix(tail),
                     tail);
             return;
@@ -2605,7 +2608,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 int feExit = localDevHost.buildFrontend(frontendRoot, npmLog);
                 if (feExit != 0) {
                     String tail = localDevHost.logTail(npmLog);
-                    failLocalDev(state, "frontend", "E-602",
+                    failLocalDev(state, "frontend", ErrorCode.CONFIRM_REQUIRED.code(),
                             "前端构建失败：" + commandReason(feExit, "npm") + firstErrorSuffix(tail),
                             tail);
                     return;
@@ -2679,14 +2682,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (!probeLocalDev(state, liveness, 20)) {
             // 非 Spring Boot 项目没有 actuator：退化为根路径探活，并明确记录，避免误判成功
             if (!probeLocalDev(state, backendBase + "/", 10)) {
-                failLocalDev(state, "health", "E-604", "后端探活未通过：" + liveness, null);
+                failLocalDev(state, "health", ErrorCode.HEALTH_CHECK_FAILED.code(), "后端探活未通过：" + liveness, null);
                 return;
             }
             state.log.append("[health] 后端未提供 /actuator/health/liveness，已退化为 "
                     + backendBase + "/ 探活（未校验依赖）\n");
         }
         if (result.frontendPort() > 0 && !probeLocalDev(state, result.endpoint(), 20)) {
-            failLocalDev(state, "health", "E-604",
+            failLocalDev(state, "health", ErrorCode.HEALTH_CHECK_FAILED.code(),
                     "前端静态服务健康检查未通过：" + result.endpoint(), null);
             return;
         }
@@ -2759,7 +2762,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (tail != null && !tail.isBlank()) {
             state.log.append(tail).append('\n');
         }
-        state.stages.add(StageResult.failed(stageId, 1, code == null ? "E-601" : code,
+        state.stages.add(StageResult.failed(stageId, 1, code == null ? ErrorCode.ENV_NOT_PROMOTED.code() : code,
                 summary, 0));
         state.status = StageStatus.FAILED;
     }
@@ -3052,7 +3055,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             // 命令本身仍在 stageDir（检出目录 / 子目录）里执行。
             Optional<ActionSpec> resolved = recipes.resolve(state.recipeRoot, action);
             if (resolved.isEmpty()) {
-                state.stages.add(StageResult.failed(stage.id(), 1, "E-201",
+                state.stages.add(StageResult.failed(stage.id(), 1, ErrorCode.ARGV_INVALID.code(),
                         "动作 " + action.wireName() + " 没有配方", elapsed(start)));
                 return false;
             }
@@ -3369,7 +3372,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private boolean deploy(RunState state, Path runDir, long start, String stageId, boolean rollback) {
         PipelineDefinition.DeploySpec spec = state.definition == null ? null : state.definition.deploy();
         if (spec == null) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-506",
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.DEPLOY_SECTION_MISSING.code(),
                     "pipeline.yml 缺少 deploy 段（target/port），无法判断部署目标", elapsed(start)));
             return false;
         }
@@ -3377,7 +3380,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 ? state.deployTargetOverride : spec.target();
         DeployTarget target = DeployTarget.fromWire(desired).orElse(null);
         if (target == null) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-506",
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.DEPLOY_SECTION_MISSING.code(),
                     "未知部署目标：" + desired + "（可选 docker / host / server）", elapsed(start)));
             return false;
         }
@@ -3420,7 +3423,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         DeployTarget reconciled = reconcileTarget(state, target, image, rollback, runDir, spec,
                 explicitTarget);
         if (reconciled == null) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-504",
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.DEPLOY_TARGET_UNDETERMINED.code(),
                     "无法确定部署目标：本次既没有镜像也没有可运行 jar。"
                             + "Java 项目请确认构建产物 target/*.jar；前端静态产物请在 deploy 段选择 docker",
                     elapsed(start)));
@@ -3453,7 +3456,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                         .append("（写入项目环境覆盖）\n");
             }
             if (!provision.ok()) {
-                state.stages.add(StageResult.failed(stageId, 1, "E-702",
+                state.stages.add(StageResult.failed(stageId, 1, ErrorCode.ENV_PREPARE_FAILED.code(),
                         provision.message() + "。请检查本机 Docker 是否可用，或在「设置 → 环境」手动处理",
                         elapsed(start)));
                 return false;
@@ -3465,7 +3468,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
 
         if (effective != null && !effective.missingSecrets().isEmpty()) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-704",
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.SECRET_UNRESOLVED.code(),
                     "密钥引用无法解析：" + String.join("、", effective.missingSecrets())
                             + "。请先在「设置 → 项目环境 → 密钥」创建或轮换对应密钥",
                     elapsed(start)));
@@ -3492,12 +3495,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // E-509 部署前预检：应用声明的必填环境变量必须在环境模板/项目覆盖里配齐。
         List<String> missingEnv = missingRequiredEnv(spec, deployEnv);
         if (!missingEnv.isEmpty()) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-509",
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.ENV_REQUIRED_MISSING.code(),
                     "部署前环境配置检查未通过：环境「" + state.env + "」缺少必填环境变量 "
                             + String.join("、", missingEnv)
                             + "。请到「设置 → 环境」或「项目覆盖」填写后重试（本次未启动容器）",
                     elapsed(start)));
-            state.log.append("[deploy] E-509 预检失败：缺少 ").append(String.join("、", missingEnv))
+            state.log.append("[deploy] ").append(ErrorCode.ENV_REQUIRED_MISSING.code())
+                    .append(" 预检失败：缺少 ").append(String.join("、", missingEnv))
                     .append("——请到「设置 → 环境」或「项目覆盖」填写（未启动容器）\n");
             return false;
         }
@@ -3513,7 +3517,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     envRuntime.ensureRunning(state.projectId, state.env);
             state.log.append("[middleware] ").append(runtime.message()).append('\n');
             if (!runtime.ok()) {
-                state.stages.add(StageResult.failed(stageId, 1, "E-701",
+                state.stages.add(StageResult.failed(stageId, 1, ErrorCode.MIDDLEWARE_START_FAILED.code(),
                         runtime.message() + "。请到「设置 → 环境」检查中间件连接信息或手动启动后重试",
                         elapsed(start)));
                 return false;
@@ -3744,7 +3748,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                      top.rongx.agent.domain.env.EnvTemplate template,
                                      boolean rollback, String image) {
         if (rollback) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-507",
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.ROLLBACK_VERSION_MISSING.code(),
                     "多服务部署暂不支持回滚：请重新发布或手动回退镜像", elapsed(start)));
             return false;
         }
@@ -3752,7 +3756,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         String net = network != null && !network.isBlank() ? network : namespace + "-net";
         StringBuilder netLog = new StringBuilder();
         if (!dockerDeployer.ensureNetwork(runDir, net, netLog)) {
-            state.stages.add(StageResult.failed(stageId, 1, "E-502",
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.DEPLOY_START_FAILED.code(),
                     "环境网络 " + net + " 不可用：" + netLog, elapsed(start)));
             return false;
         }
@@ -3975,7 +3979,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private boolean health(RunState state, PipelineDefinition.StageDef stage, long start) {
         String url = stage.url();
         if (url == null || url.isBlank()) {
-            state.stages.add(StageResult.failed(stage.id(), 1, "E-201", "health 缺少 url", elapsed(start)));
+            state.stages.add(StageResult.failed(stage.id(), 1, ErrorCode.ARGV_INVALID.code(), "health 缺少 url", elapsed(start)));
             return false;
         }
         if (state.deployHostPort > 0) {
@@ -4058,7 +4062,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         String summary = "健康检查未通过：" + url
                 + (exitInfo == null ? " body=" + brief(body) : "（容器 " + exitInfo + "）")
                 + (diag == null ? "" : "；容器日志：" + diag);
-        state.stages.add(StageResult.failed(stage.id(), 1, "E-401", summary, elapsed(start)));
+        state.stages.add(StageResult.failed(stage.id(), 1, ErrorCode.ARTIFACT_MISSING.code(), summary, elapsed(start)));
         return false;
     }
 

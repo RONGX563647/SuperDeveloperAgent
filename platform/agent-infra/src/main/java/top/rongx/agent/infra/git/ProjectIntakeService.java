@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 import top.rongx.agent.infra.persistence.IntakeProjectStore;
@@ -375,7 +376,8 @@ public class ProjectIntakeService {
             // 不区分定义来自仓库还是平台生成：最终目标是 docker 且没有 Dockerfile 就是跑不通，
             // 必须在接入阶段挡住，而不是等部署时才 E-501（静默降级到 HOST 会让人以为在跑镜像）。
             diags.add(diag("blocker", "DOCKERFILE_MISSING",
-                    "流水线目标是 docker，但仓库没有 Dockerfile：镜像无法构建（E-501）",
+                    "流水线目标是 docker，但仓库没有 Dockerfile：镜像无法构建（"
+                            + ErrorCode.DEPLOY_PREREQUISITE_MISSING.code() + "）",
                     "补 Dockerfile 后重新接入，或把 deploy.target 改成 host"));
         }
 

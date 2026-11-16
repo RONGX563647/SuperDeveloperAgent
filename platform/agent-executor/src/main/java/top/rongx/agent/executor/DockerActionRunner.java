@@ -7,6 +7,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.run.StageResult;
 
 /**
@@ -61,9 +62,11 @@ public class DockerActionRunner extends AbstractActionRunner {
             return super.run(workspace, withBudget, cancelled, live);
         } catch (RuntimeException e) {
             String why = e.getMessage() == null ? e.toString() : e.getMessage();
-            String code = why.contains("E-302") ? "E-302"
-                    : why.contains("E-303") ? "E-303" : "E-209";
-            int exit = "E-302".equals(code) ? 124 : "E-303".equals(code) ? 143 : 1;
+            String code = why.contains(ErrorCode.TIMEOUT.code()) ? ErrorCode.TIMEOUT.code()
+                    : why.contains(ErrorCode.CANCELLED.code()) ? ErrorCode.CANCELLED.code()
+                    : ErrorCode.EXECUTABLE_NOT_FOUND.code();
+            int exit = ErrorCode.TIMEOUT.code().equals(code) ? 124
+                    : ErrorCode.CANCELLED.code().equals(code) ? 143 : 1;
             if (live != null) {
                 live.accept("[sandbox] ❌ " + code + " " + why + "\n");
             }

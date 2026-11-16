@@ -13,6 +13,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import top.rongx.agent.domain.error.ErrorCode;
 
 /**
  * 单条命令的执行内核（宿主进程与容器共用）。
@@ -58,7 +59,7 @@ final class ProcessExecutor {
         try {
             process = pb.start();
         } catch (IOException e) {
-            return StepOutcome.failed(127, "E-209",
+            return StepOutcome.failed(127, ErrorCode.EXECUTABLE_NOT_FOUND.code(),
                     "无法启动命令 " + argv.get(0) + "：" + e.getMessage());
         }
 
@@ -70,7 +71,7 @@ final class ProcessExecutor {
                 if (cancelled != null && cancelled.getAsBoolean()) {
                     killTree(process);
                     joinQuietly(reader);
-                    return StepOutcome.failed(143, "E-303", "执行被取消：" + String.join(" ", argv));
+                    return StepOutcome.failed(143, ErrorCode.CANCELLED.code(), "执行被取消：" + String.join(" ", argv));
                 }
                 if (process.waitFor(200, TimeUnit.MILLISECONDS)) {
                     finished = true;
@@ -85,7 +86,7 @@ final class ProcessExecutor {
             Thread.currentThread().interrupt();
             killTree(process);
             joinQuietly(reader);
-            return StepOutcome.failed(143, "E-303", "执行被中断");
+            return StepOutcome.failed(143, ErrorCode.CANCELLED.code(), "执行被中断");
         }
 
         if (!finished) {
@@ -99,14 +100,14 @@ final class ProcessExecutor {
                 killTree(process);
             }
             joinQuietly(reader);
-            return StepOutcome.failed(124, "E-302",
+            return StepOutcome.failed(124, ErrorCode.TIMEOUT.code(),
                     "执行超时（" + (budgetMillis / 1000) + "s），已终止：" + String.join(" ", argv));
         }
 
         joinQuietly(reader);
         int exit = process.exitValue();
         if (exit != 0) {
-            return StepOutcome.failed(exit, "E-101",
+            return StepOutcome.failed(exit, ErrorCode.COMPILE_FAILED.code(),
                     "命令失败（exit " + exit + "）：" + String.join(" ", argv) + "；见日志尾部");
         }
         return StepOutcome.ok();

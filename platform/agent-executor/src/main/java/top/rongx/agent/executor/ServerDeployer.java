@@ -8,6 +8,7 @@ import java.util.Optional;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
@@ -50,24 +51,26 @@ public class ServerDeployer implements Deployer {
                 ? servers.findDefault()
                 : servers.find(request.serverId());
         if (found.isEmpty()) {
-            return DeployResult.failed(DeployTarget.SERVER, "E-505",
+            return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_TARGET_UNCONFIGURED.code(),
                     "还没有可用的部署服务器：请到「设置 → 服务器」添加并设为默认", "");
         }
         DeployServer server = found.get();
         if (!server.enabled()) {
-            return DeployResult.failed(DeployTarget.SERVER, "E-505",
+            return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_TARGET_UNCONFIGURED.code(),
                     "服务器「" + server.name() + "」已被停用", "");
         }
         if ("KEY".equalsIgnoreCase(server.authType())
                 && (server.keyPath() == null || server.keyPath().isBlank())) {
-            return DeployResult.failed(DeployTarget.SERVER, "E-505",
+            return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_TARGET_UNCONFIGURED.code(),
                     "服务器「" + server.name() + "」未配置 SSH 私钥路径", "");
         }
         String secret = servers.secretOf(server.id()).orElse(null);
 
         String image = request.rollback() ? request.previousImageRef() : request.imageRef();
         if (image == null || image.isBlank()) {
-            return DeployResult.failed(DeployTarget.SERVER, request.rollback() ? "E-507" : "E-501",
+            return DeployResult.failed(DeployTarget.SERVER,
+                    request.rollback() ? ErrorCode.ROLLBACK_VERSION_MISSING.code()
+                            : ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                     request.rollback()
                             ? "没有可回滚的上一版镜像" : "SERVER 目标需要镜像：请先执行 image_package",
                     "");
@@ -84,7 +87,7 @@ public class ServerDeployer implements Deployer {
         try {
             Files.createDirectories(localTar.getParent());
         } catch (IOException e) {
-            return DeployResult.failed(DeployTarget.SERVER, "E-501",
+            return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                     "无法创建暂存目录：" + e.getMessage(), "");
         }
 
@@ -93,21 +96,21 @@ public class ServerDeployer implements Deployer {
                     "docker", "save", "-o", localTar.toString(), image),
                     SAVE_TIMEOUT_MS, log, never);
             if (save.exitCode() != 0) {
-                return DeployResult.failed(DeployTarget.SERVER, "E-501",
+                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                         "docker save 失败（镜像是否存在？）：" + save.summary(), redact(log));
             }
 
             SshAccess.Result scp = ssh.upload(server, secret, localTar, remoteTar,
                     TRANSFER_TIMEOUT_MS);
             if (!scp.ok()) {
-                return DeployResult.failed(DeployTarget.SERVER, "E-502",
+                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
                         "scp 传输失败：" + scp.error(), redact(log));
             }
 
             SshAccess.Result load = ssh.run(server, secret,
                     "docker load -i " + remoteTar, SSH_TIMEOUT_MS);
             if (!load.ok()) {
-                return DeployResult.failed(DeployTarget.SERVER, "E-502",
+                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
                         "远端 docker load 失败：" + load.error(), redact(log));
             }
 
@@ -116,7 +119,7 @@ public class ServerDeployer implements Deployer {
             // 远端端口预检：ss + docker ps，冲突时在期望端口之后续找；不杀未知进程。
             int hostPort = allocateRemotePort(server, secret, request.hostPort());
             if (hostPort < 0) {
-                return DeployResult.failed(DeployTarget.SERVER, "E-704",
+                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.SECRET_UNRESOLVED.code(),
                         "远端端口耗尽：从 " + request.hostPort() + " 起 200 个端口都被占用", redact(log));
             }
             if (hostPort != request.hostPort()) {
@@ -135,7 +138,7 @@ public class ServerDeployer implements Deployer {
                     + " " + image;
             SshAccess.Result run = ssh.run(server, secret, runCommand, SSH_TIMEOUT_MS);
             if (!run.ok()) {
-                return DeployResult.failed(DeployTarget.SERVER, "E-502",
+                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
                         "远端容器启动失败：" + DockerDeployer.sanitize(run.error(), request.env()),
                         redact(log));
             }

@@ -795,7 +795,7 @@ npm run typecheck
 | 测试类 | 内容 |
 |---|---|
 | `ArchitectureRulesTest`（ArchUnit） | **A1** 分层单向（Gateway → {Runtime, Tools, Governance, Executor, Infra} → Domain；Tools 额外允许 Governance）；**A2** domain 零框架；**A3** executor 无 LLM；**A4** 决策面无 docker-java/fabric8；**A6** 禁 util/common/helper 包；**A7** tools 禁 ProcessBuilder；**A9** 禁字段注入 |
-| `ForbiddenPatternScanTest` | R01 禁 Runtime.exec、R02 禁 shell 解释器、R03 禁 MyBatis `${}`、R04 禁 new Thread、R05 禁字段注入、R06 金额禁 double、R07 日志禁打印凭证、R08 禁 SELECT *、R09 禁 java.util.Date、R10 禁空 catch、R11 禁 System.out、R12 禁动态脚本、R13 软删用 deleted_at。误报豁免：`// spec-ignore: R06 <原因>`（原因不足 3 字视为无效；现登记豁免仅 `LocalDevHostDeployer` 两处 R02——Windows 的 mvn/npm 是 .cmd 批处理须经 `cmd /c`，参数全常量无拼接，已写入规约 §13）。扫描已剪枝（跳过 target/.git/node_modules/dist/data），避免误扫产物 |
+| `ForbiddenPatternScanTest` | R01 禁 Runtime.exec、R02 禁 shell 解释器、R03 禁 MyBatis `${}`、R04 禁 new Thread、R05 禁字段注入、R06 金额禁 double、R07 日志禁打印凭证、R08 禁 SELECT *、R09 禁 java.util.Date、R10 禁空 catch、R11 禁 System.out、R12 禁动态脚本、R13 软删用 deleted_at、R14 错误码必须走 `ErrorCode` 枚举（定义文件除外）。误报豁免：`// spec-ignore: R06 <原因>`（原因不足 3 字视为无效；现登记豁免仅 `LocalDevHostDeployer` 两处 R02——Windows 的 mvn/npm 是 .cmd 批处理须经 `cmd /c`，参数全常量无拼接，已写入规约 §13）。扫描已剪枝（跳过 target/.git/node_modules/dist/data），避免误扫产物 |
 | `ConfigCredentialScanTest` | 决策面（gateway/runtime/tools/governance）配置不得含写凭证键 |
 | `MigrationGuardTest` | 已发布迁移文件不得修改（基线 `spec-checks/migration-baseline.txt`） |
 | `ApiDocContractTest` | 每个 Mapping 方法必须有 Javadoc 或 `@Operation(summary)`；`api-doc-baseline.txt` 存量棘轮，只减不增 |

@@ -10,6 +10,7 @@ import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.Deployer;
 
 /**
@@ -46,7 +47,7 @@ public class DockerDeployer implements Deployer {
     public DeployResult deploy(DeployRequest request) {
         StringBuilder log = new StringBuilder();
         if (request.imageRef() == null || request.imageRef().isBlank()) {
-            return DeployResult.failed(DeployTarget.DOCKER, "E-501",
+            return DeployResult.failed(DeployTarget.DOCKER, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                     "DOCKER 目标缺少镜像：流水线需要包含 image_package 且构建成功"
                             + "（仓库缺少 Dockerfile 时镜像阶段会被裁掉）", "");
         }
@@ -78,7 +79,7 @@ public class DockerDeployer implements Deployer {
                                       String version, boolean tagged) {
         StringBuilder log = new StringBuilder();
         if (image == null || image.isBlank()) {
-            return DeployResult.failed(DeployTarget.DOCKER, "E-501",
+            return DeployResult.failed(DeployTarget.DOCKER, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                     "服务 " + service + " 缺少镜像：请在 deploy.services 里声明 image", "");
         }
         // 打 tag 的版本独立命名空间后缀：容器名与网络别名都带版本，旧版本继续运行
@@ -202,11 +203,11 @@ public class DockerDeployer implements Deployer {
             String summary = sanitize(run.summary(), env);
             if (summary.contains("port is already allocated")
                     || summary.contains("address already in use")) {
-                return DeployResult.failed(DeployTarget.DOCKER, "E-502",
+                return DeployResult.failed(DeployTarget.DOCKER, ErrorCode.DEPLOY_START_FAILED.code(),
                         "宿主端口 " + hostPort + " 已被其它进程/容器占用：" + summary,
                         ProcessExecutor.redact(log.toString()));
             }
-            return DeployResult.failed(DeployTarget.DOCKER, "E-502",
+            return DeployResult.failed(DeployTarget.DOCKER, ErrorCode.DEPLOY_START_FAILED.code(),
                     "容器启动失败：" + summary,
                     ProcessExecutor.redact(log.toString()));
         }

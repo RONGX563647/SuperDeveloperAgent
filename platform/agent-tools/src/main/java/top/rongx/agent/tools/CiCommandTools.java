@@ -3,6 +3,7 @@ package top.rongx.agent.tools;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.util.Map;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.policy.PolicyDecision;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.port.PipelineEngine;
@@ -59,14 +60,15 @@ public class CiCommandTools {
             return "err: git_sha 格式非法（需 7-40 位小写十六进制）";
         }
         if (policy.decide(ctx.env(), ToolLevel.L2_EXECUTE_ISOLATED) == PolicyDecision.DENY) {
-            return "err: 生产环境 " + ctx.env() + " 的策略不允许直接触发构建（E-707），请先在测试环境验证";
+            return "err: 生产环境 " + ctx.env() + " 的策略不允许直接触发构建（"
+                    + ErrorCode.ENV_POLICY_DENIED.code() + "），请先在测试环境验证";
         }
         String runId;
         try {
             PipelineEngine.DryRunReport dryRun = engine.dryRun(ctx.projectId(), pipelineId,
                     ctx.env(), gitSha);
             if (!dryRun.ok()) {
-                return "err: E-708 dry-run 未通过：" + String.join("；", dryRun.blockers());
+                return "err: " + ErrorCode.DRY_RUN_FAILED.code() + " dry-run 未通过：" + String.join("；", dryRun.blockers());
             }
             runId = engine.trigger(ctx.projectId(), pipelineId,
                     Map.of("gitSha", gitSha, "env", ctx.env(),

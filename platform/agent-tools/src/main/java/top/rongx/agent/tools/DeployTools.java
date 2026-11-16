@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.deploy.RecipeRenderer;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.env.EnvNames;
@@ -413,7 +414,7 @@ public class DeployTools {
             return "err: dry-run 执行失败：" + e.getMessage();
         }
         if (!dryRun.ok()) {
-            return "err: E-708 dry-run 未通过：" + String.join("；", dryRun.blockers());
+            return "err: " + ErrorCode.DRY_RUN_FAILED.code() + " dry-run 未通过：" + String.join("；", dryRun.blockers());
         }
         Map<String, String> params = new LinkedHashMap<>();
         params.put("gitSha", sha);

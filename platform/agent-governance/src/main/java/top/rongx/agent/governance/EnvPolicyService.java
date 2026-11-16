@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.policy.EnvPolicy;
 import top.rongx.agent.domain.policy.PolicyDecision;
 import top.rongx.agent.domain.policy.PolicyDeniedException;
@@ -52,7 +53,7 @@ public class EnvPolicyService implements PolicyPort {
         if (decision == PolicyDecision.DENY) {
             String where = "prod".equals(ctx.env()) ? "生产环境 " + ctx.env()
                     : "当前环境 " + ctx.env();
-            throw new PolicyDeniedException("E-707",
+            throw new PolicyDeniedException(ErrorCode.ENV_POLICY_DENIED,
                     where + " 的策略拒绝 " + operation + "（" + level + "=" + decision + "）");
         }
     }

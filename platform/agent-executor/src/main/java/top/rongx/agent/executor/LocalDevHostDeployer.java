@@ -15,6 +15,7 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ServiceLease;
+import top.rongx.agent.domain.error.ErrorCode;
 
 /**
  * 开发环境本机托管：后端 {@code java -jar} + 前端 dist（Node 静态服务器），全部跑在宿主机。
@@ -83,11 +84,11 @@ public class LocalDevHostDeployer {
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {
-            return new Result(false, null, "E-601",
+            return new Result(false, null, ErrorCode.ENV_NOT_PROMOTED.code(),
                     "无法创建本机部署目录：" + e.getMessage(), "", backendPort, frontendPort);
         }
         if (jar == null || !Files.isRegularFile(jar)) {
-            return new Result(false, null, "E-601",
+            return new Result(false, null, ErrorCode.ENV_NOT_PROMOTED.code(),
                     "本机部署需要可运行 jar（target/*.jar），本次未找到", "", backendPort, frontendPort);
         }
 
@@ -112,7 +113,7 @@ public class LocalDevHostDeployer {
             backend = pb.start();
             Files.writeString(backendPid, String.valueOf(backend.pid()), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            return new Result(false, null, "E-601",
+            return new Result(false, null, ErrorCode.ENV_NOT_PROMOTED.code(),
                     "无法启动后端进程：" + e.getMessage(), "", backendPort, frontendPort);
         }
         log.append("[dev] 后端启动中 pid=").append(backend.pid())
@@ -121,7 +122,7 @@ public class LocalDevHostDeployer {
         if (backendFail != null) {
             kill(backend.pid());
             deleteQuietly(backendPid);
-            return new Result(false, null, "E-601",
+            return new Result(false, null, ErrorCode.ENV_NOT_PROMOTED.code(),
                     "后端未就绪：" + backendFail, redact(log.toString() + tail(backendLog)),
                     backendPort, frontendPort);
         }
@@ -152,7 +153,7 @@ public class LocalDevHostDeployer {
                 if (frontendFail != null) {
                     kill(frontend.pid());
                     deleteQuietly(frontendPid);
-                    return new Result(false, null, "E-603",
+                    return new Result(false, null, ErrorCode.FRONTEND_START_FAILED.code(),
                             "前端静态服务器未就绪：" + frontendFail,
                             redact(log.toString() + tail(frontendLog)), backendPort, frontendPort);
                 }
@@ -160,7 +161,7 @@ public class LocalDevHostDeployer {
                 log.append("[dev] 前端就绪 http://127.0.0.1:").append(frontendPort).append('\n');
                 saveLease(projectId, env, ServiceLease.FRONTEND, frontendPort, frontend.pid());
             } catch (IOException e) {
-                return new Result(false, null, "E-603",
+                return new Result(false, null, ErrorCode.FRONTEND_START_FAILED.code(),
                         "无法启动前端静态服务器：" + e.getMessage(), log.toString(),
                         backendPort, frontendPort);
             }

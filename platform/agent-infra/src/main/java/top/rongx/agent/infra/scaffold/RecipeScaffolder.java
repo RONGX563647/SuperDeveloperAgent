@@ -20,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan.ScaffoldFile;
@@ -265,7 +266,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
                 ? "未识别出可构建工程且未找到 Dockerfile"
                 : "未找到 Dockerfile，但仓库包含前端静态产物";
         diags.add(Diag.blocker("DOCKERFILE_MISSING",
-                why + "：DOCKER 目标无法打镜像，部署会失败（E-501）",
+                why + "：DOCKER 目标无法打镜像，部署会失败（"
+                        + ErrorCode.DEPLOY_PREREQUISITE_MISSING.code() + "）",
                 "补一个 Dockerfile 后重新生成定义，或改用 SERVER 目标（需先配置服务器）"));
         return new TargetChoice(DeployTarget.DOCKER, why, diags);
     }

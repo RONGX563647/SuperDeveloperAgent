@@ -59,8 +59,14 @@ class ForbiddenPatternScanTest {
             new Rule("R12", "禁止动态脚本执行（ScriptEngine / eval）",
                     Pattern.compile("ScriptEngine|\\beval\\s*\\("), "java"),
             new Rule("R13", "软删必须用 deleted_at，禁止 is_deleted 布尔字段",
-                    Pattern.compile("\\bis_deleted\\b|\\bisDeleted\\b"), "both")
+                    Pattern.compile("\\bis_deleted\\b|\\bisDeleted\\b"), "both"),
+            new Rule("R14", "错误码必须使用 ErrorCode 枚举，禁止硬编码 E-xxx 字面量",
+                    Pattern.compile("\"E-\\d{3}"), "java")
     );
+
+    /** 错误码定义文件本身允许出现字面量，其余生产代码一律走枚举。 */
+    private static final String ERROR_CODE_OWNER =
+            "agent-domain/src/main/java/top/rongx/agent/domain/error/ErrorCode.java";
 
     private static final Pattern IGNORE = Pattern.compile("spec-ignore:\\s*(R\\d{2})\\s*(.*)");
 
@@ -73,6 +79,9 @@ class ForbiddenPatternScanTest {
 
         for (Rule rule : RULES) {
             for (Path file : collect(root, rule.scope())) {
+                if (ERROR_CODE_OWNER.equals(root.relativize(file).toString().replace('\\', '/'))) {
+                    continue;
+                }
                 scanned++;
                 List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
                 for (int i = 0; i < lines.size(); i++) {
