@@ -80,6 +80,9 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
                     <mainClass>top.rongx.agent.gateway.AgentApplication</mainClass>
+                    <!-- sqlite-jdbc 通过 System.load 加载本地库：JDK 24+ 需要显式放行，
+                         否则每次启动都会打印 Restricted method 警告（JDK 21 上该参数无害） -->
+                    <jvmArguments>--enable-native-access=ALL-UNNAMED</jvmArguments>
                 </configuration>
                 <executions>
                     <execution>

@@ -17,7 +17,8 @@ cd platform && mvn -q verify
 # 只启动网关（热重启靠手动；默认 agent.sandbox.mode=docker，本机无 Docker 时显式用 process）
 mvn -q -pl agent-gateway -am -DskipTests package
 AGENT_SANDBOX_MODE=process \
-  java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
+  java --enable-native-access=ALL-UNNAMED \
+  -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
 
 # 模型 API Key 无需在启动前注入：到「设置 → 模型连接」配置即可（或可选地注入 AGENT_MODEL_API_KEY）
 

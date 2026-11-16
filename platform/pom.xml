@@ -136,6 +136,10 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
+                <configuration>
+                    <!-- 与运行参数一致：测试里的 sqlite-jdbc 也会触发 JDK 24+ 受限方法告警 -->
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                </configuration>
             </plugin>
         </plugins>
     </build>

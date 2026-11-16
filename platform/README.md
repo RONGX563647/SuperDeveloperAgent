@@ -71,7 +71,9 @@ export AGENT_MODEL_NAME=qwen-plus          # 可选，默认 qwen-plus
 mvn -q verify                              # 编译 + 规约检查 + 单测（推荐先跑）
 mvn -q -DskipTests package                 # 只打包
 
-java -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
+# JDK 24+ 建议带上 native-access：sqlite-jdbc 通过 System.load 加载本地库
+java --enable-native-access=ALL-UNNAMED \
+  -jar agent-gateway/target/agent-gateway-0.1.0-SNAPSHOT-exec.jar
 # 健康检查：http://127.0.0.1:8090/actuator/health
 ```
 
