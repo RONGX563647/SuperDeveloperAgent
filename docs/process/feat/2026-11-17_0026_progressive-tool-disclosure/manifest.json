@@ -1,0 +1,285 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-17_0026_progressive-tool-disclosure",
+  "category": "feat",
+  "title": "工具渐进披露与任务面板改版",
+  "createdAt": "2026-11-17T00:26:12+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "工具每轮全量注入导致 token 爆炸；工作区任务页概览冗余、筛选难用、不能贴图",
+    "toolCallCount": 0
+  },
+  "problem": "每轮对话都把 70+ 个工具 schema、技能全文与 MCP 工具塞进上下文，单次请求工具定义约占两万 token；上下文裁剪过于频繁，模型侧前缀缓存不断失效。工作区任务页统计卡占空间、筛选要两排按钮，任务描述无法贴图。",
+  "solution": "工具按能力拆成插件，默认只暴露核心工具，其余用 tool_load 按需激活并写入会话状态；技能只给索引、正文用 skill_load 读取，MCP 工具按服务成插件。系统提示与 tool_search 输出压缩，工具顺序稳定，裁剪改为 25% 余量触发且一次裁到 60%。任务页删概览卡，状态/类型/排序收成一行；描述与评论支持按钮、粘贴、拖拽上传图片，Markdown 渲染限制图片协议与宽度。",
+  "commits": [
+    {
+      "sha": "4b0a8c46b53018a6f48aa0a984c3d962199b5154",
+      "subject": "feat(tools): 工具按插件渐进披露以压缩上下文",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "dfa0af96c175dfc0481a7f432119403e47845685"
+        },
+        {
+          "path": "docs/handbook/l3/runtime-chat-service.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "35117fc1bde5ee0a0b5073ab2744148c69f36dc7"
+        },
+        {
+          "path": "docs/handbook/l3/state-context-trimmer.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "c12378cf51299c9f65f6011f4ae2c8a85cf8537e"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "bcc0f82aceb6f6d264bce0156a2612926b4d02c7"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/SkillCatalog.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 1,
+          "blobHash": "1669d6f15f411b78b1036069e9ef54bc0234b4e7"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/tool/ToolPluginIndex.java",
+          "status": "A",
+          "additions": 179,
+          "deletions": 0,
+          "blobHash": "668af539743070ad9fd8df854d875b2d65552faa"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/tool/ToolPlugins.java",
+          "status": "A",
+          "additions": 91,
+          "deletions": 0,
+          "blobHash": "016a65d52109c5d76d40c45b5e4d1e6bffef2e2b"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/tool/ToolPluginIndexTest.java",
+          "status": "A",
+          "additions": 77,
+          "deletions": 0,
+          "blobHash": "0ebd7788307861d424551f32c7dc7335f5dbb92a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SkillsStore.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 0,
+          "blobHash": "324613d379b343c45a808ae54ddf2e2ad29f9feb"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 3,
+          "blobHash": "dca1af6fe3050c76c1584718701a73e9795ac7cd"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextTrimmerTest.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 0,
+          "blobHash": "ffd2d6b0c1daa0f790e6271d5ad7ff9eb2a3932a"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 124,
+          "deletions": 104,
+          "blobHash": "c3f0b53e0b07c7498f9e1261b2eaf237320f80de"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 16,
+          "blobHash": "33372097559533160e9bb1e1ca52e69932b42e7f"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ProgressiveToolMiddleware.java",
+          "status": "A",
+          "additions": 90,
+          "deletions": 0,
+          "blobHash": "c121d95708cc431b8856aeab098cd78029d1b49f"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/ProgressiveToolMiddlewareTest.java",
+          "status": "A",
+          "additions": 97,
+          "deletions": 0,
+          "blobHash": "d4007791e73c911bcb6c4974c8b6b156d27b267a"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/AgentToolCatalog.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 5,
+          "blobHash": "49e9d8c6ac87149b5e7a919c409b85447e7d4f29"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalogTools.java",
+          "status": "M",
+          "additions": 153,
+          "deletions": 20,
+          "blobHash": "459bf0ff7c45cc95012499117e99a508fb8546ab"
+        }
+      ]
+    },
+    {
+      "sha": "ef7eaa824b6832cc569f3b4fa10287dc26698d5c",
+      "subject": "feat(issue): 任务支持上传并读取配图",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/auth/SaTokenConfig.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "e31ac0ce8ec22a6fc958127e275c641502224db0"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GitIssueController.java",
+          "status": "M",
+          "additions": 64,
+          "deletions": 1,
+          "blobHash": "29d610a2c1f882a02fce19700b404cfaa403267c"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GitIssueImageController.java",
+          "status": "A",
+          "additions": 60,
+          "deletions": 0,
+          "blobHash": "065c4423c1c29eaab1f4b3ad3358398d0c146d71"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 66,
+          "deletions": 0,
+          "blobHash": "990975d4f8333424e88799f6541b8d1997b9e3ea"
+        }
+      ]
+    },
+    {
+      "sha": "2b7dc5f4cd9f1fa9d0e4379df2aea544d2f634b5",
+      "subject": "feat(ui): 任务面板去掉概览并把筛选收成一行",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/api/issues.ts",
+          "status": "M",
+          "additions": 31,
+          "deletions": 0,
+          "blobHash": "6e6c402996118489da360c005e6b3731869bbc83"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatIssuesView.vue",
+          "status": "M",
+          "additions": 211,
+          "deletions": 109,
+          "blobHash": "c4cd12b7bca4018642578ff05870968f9970ff73"
+        },
+        {
+          "path": "platform/web/src/components/chat/MarkdownView.vue",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "6c4a7d41ce25849f67b2d8cb4e9e69143080c101"
+        },
+        {
+          "path": "platform/web/src/utils/markdown.ts",
+          "status": "M",
+          "additions": 14,
+          "deletions": 2,
+          "blobHash": "a7f39326277d9a56b80d09c345502701485c139f"
+        }
+      ]
+    },
+    {
+      "sha": "b3fbfe791e9c0f7bdf6bcdba8f4991ba4a73ee10",
+      "subject": "test(issue): 覆盖任务配图读取的路径与类型校验",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GitIssueImageControllerTest.java",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "c878453a3036d90c8132e2b88b783efc06f2364c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/tool/ToolPluginIndexTest.java",
+        "status": "A",
+        "additions": 77,
+        "deletions": 0,
+        "blobHash": "0ebd7788307861d424551f32c7dc7335f5dbb92a"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextTrimmerTest.java",
+        "status": "M",
+        "additions": 12,
+        "deletions": 0,
+        "blobHash": "ffd2d6b0c1daa0f790e6271d5ad7ff9eb2a3932a"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/ProgressiveToolMiddlewareTest.java",
+        "status": "A",
+        "additions": 97,
+        "deletions": 0,
+        "blobHash": "d4007791e73c911bcb6c4974c8b6b156d27b267a"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GitIssueImageControllerTest.java",
+        "status": "A",
+        "additions": 46,
+        "deletions": 0,
+        "blobHash": "c878453a3036d90c8132e2b88b783efc06f2364c"
+      }
+    ],
+    "casesAdded": 2,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 516, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools",
+      "web"
+    ],
+    "verification": "Tests run: 516, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_0026_progressive-tool-disclosure"
+    ]
+  },
+  "chain": {
+    "prev": "eaeba961df46a37a3ec576b82c8b517d22fcbbee532474bd33410dbc733f4105",
+    "self": "c36afd0b5426b15b07ab583f5bba6a6bfebe379f9a15355b5bc576482dc47aff"
+  }
+}
