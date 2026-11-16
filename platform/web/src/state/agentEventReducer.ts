@@ -214,6 +214,23 @@ function pushMessage(
   })
 }
 
+/**
+ * 找一个可以兜底的 toolCallId：最近一个仍在执行（可选同名）的工具。
+ *
+ * <p>模型流式返回参数时，后续碎片可能只带参数、不带 toolCallId（上游置空）。
+ * 直接丢弃会让工具入参永远是空串，轨迹详情栏就显示「没有入参」。
+ */
+function fallbackToolCallId(tools: Record<string, ToolActivity>, name?: string): string {
+  const entries = Object.values(tools)
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const tool = entries[i]
+    if (tool.status !== 'RUNNING') continue
+    if (name && tool.toolName !== name) continue
+    return tool.toolCallId
+  }
+  return ''
+}
+
 export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent): AgentProjection {
   if (rawEvent.sequence <= current.lastSequence) return current
   const event = normalizeEvent(rawEvent)
@@ -407,9 +424,11 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
     case 'tool.result.delta': {
       // 工具返回文本流式累积到工具卡片上：这是"这一步实际拿到了什么"的唯一证据，
       // 丢弃它会让执行过程只剩工具名（部署时看不出 runId / 失败原因）。
-      const toolCallId = stringData(event, 'toolCallId')
       const delta = stringData(event, 'delta') ?? ''
-      if (!toolCallId || !delta) break
+      if (!delta) break
+      const toolCallId = stringData(event, 'toolCallId')
+        ?? fallbackToolCallId(next.tools, stringData(event, 'toolCallName'))
+      if (!toolCallId) break
       const tool = next.tools[toolCallId] ?? {
         toolCallId,
         toolName: stringData(event, 'toolCallName') ?? 'unknown_tool',
@@ -426,12 +445,18 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
     case 'tool.arguments': {
       // 工具入参是碎片增量（ToolCallDeltaEvent.delta），必须按 toolCallId 累积；
       // 之前这里直接 break，导致真实会话里所有工具的 arguments 都是空的。
-      const toolCallId = stringData(event, 'toolCallId')
-      const delta = stringData(event, 'delta') ?? ''
-      if (!toolCallId || !delta) break
+      // 兼容上游直接给全量字段（arguments / content）的形态。
+      const delta = stringData(event, 'delta')
+        ?? stringData(event, 'arguments')
+        ?? stringData(event, 'content')
+        ?? ''
+      if (!delta) break
+      const name = stringData(event, 'toolCallName') ?? stringData(event, 'name')
+      const toolCallId = stringData(event, 'toolCallId') ?? fallbackToolCallId(next.tools, name)
+      if (!toolCallId) break
       const tool = next.tools[toolCallId] ?? {
         toolCallId,
-        toolName: stringData(event, 'toolCallName') ?? 'unknown_tool',
+        toolName: name ?? 'unknown_tool',
         status: 'RUNNING' as const,
       }
       next.tools[toolCallId] = { ...tool, arguments: (tool.arguments ?? '') + delta }

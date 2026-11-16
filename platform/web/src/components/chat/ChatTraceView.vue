@@ -126,17 +126,18 @@ function stateText(status?: string): string {
   } as Record<string, string>)[status ?? ''] ?? ''
 }
 
+/** 入参优先用派生时的快照，缺失再回退按 toolCallId 查 tools 表。 */
 function argsOf(step: TraceStep): string {
-  return step.toolCallId ? (props.tools[step.toolCallId]?.arguments ?? '') : ''
+  return step.arguments ?? (step.toolCallId ? (props.tools[step.toolCallId]?.arguments ?? '') : '')
 }
 
 function resultOf(step: TraceStep): string {
-  return step.toolCallId ? (props.tools[step.toolCallId]?.resultText ?? '') : ''
+  return step.resultText ?? (step.toolCallId ? (props.tools[step.toolCallId]?.resultText ?? '') : '')
 }
 
 /** 原始工具名（run_action / shell_command），展示名之外给排查用。 */
 function rawToolName(step: TraceStep): string {
-  return step.toolCallId ? (props.tools[step.toolCallId]?.toolName ?? '') : ''
+  return step.toolName ?? (step.toolCallId ? (props.tools[step.toolCallId]?.toolName ?? '') : '')
 }
 
 function errorCode(step: TraceStep): string {

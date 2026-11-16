@@ -370,6 +370,10 @@ const traceTurns = computed<TraceTurn[]>(() => {
         title: m.text,
         text: m.label ?? '',
         toolCallId: m.toolCallId,
+        // 入参/结果在派生时固化，避免渲染阶段反查 tools 表失败导致详情栏空白
+        arguments: tool?.arguments,
+        resultText: tool?.resultText,
+        toolName: tool?.toolName,
         at: m.at,
         durationMs: 0,
         status: tool?.status,

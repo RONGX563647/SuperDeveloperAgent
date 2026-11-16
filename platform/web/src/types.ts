@@ -126,6 +126,15 @@ export interface TraceStep {
   title: string
   text: string
   toolCallId?: string
+  /**
+   * 工具入参 / 返回 / 原始工具名：派生轨迹时从 projection.tools 快照进来。
+   *
+   * <p>不依赖渲染时按 toolCallId 反查 tools 表——切会话、历史恢复或事件顺序异常时
+   * 那张表可能对不上号，表现就是「详情栏参数缺失」。
+   */
+  arguments?: string
+  resultText?: string
+  toolName?: string
   at: number
   /** 估算耗时：本条到下一步（或轮次结束）的间隔，用于时间轴比例。 */
   durationMs: number
