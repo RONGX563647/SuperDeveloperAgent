@@ -1,10 +1,19 @@
 package top.rongx.agent.infra.security;
 
 import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.UserPrincipal;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.EnumSet;
+import java.util.List;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -64,14 +73,43 @@ public class SecretBox {
         }
     }
 
-    /** 主密钥只允许属主读写（600）；非 POSIX 文件系统上退化为尽力而为。 */
+    /**
+     * 主密钥只允许属主读写：POSIX 用 600，Windows 用 ACL，其它文件系统尽力而为。
+     *
+     * <p>之前直接调用 {@code setPosixFilePermissions}，在 Windows 上必然抛
+     * {@link UnsupportedOperationException}（message 为 null），于是每次启动都打一条
+     * “无法收紧…：null”的误导性 WARN。这里先判断文件系统能力，再按平台选择实现。
+     */
     private static void restrictToOwner(Path keyFile) {
         try {
-            Files.setPosixFilePermissions(keyFile,
-                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
-        } catch (UnsupportedOperationException | java.io.IOException e) {
-            log.warn("无法收紧主密钥文件权限（{}）：{}", keyFile, e.getMessage());
+            if (keyFile.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+                Files.setPosixFilePermissions(keyFile,
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+                return;
+            }
+            AclFileAttributeView acl = Files.getFileAttributeView(
+                    keyFile, AclFileAttributeView.class);
+            if (acl == null) {
+                log.debug("当前文件系统不支持权限收紧，跳过主密钥文件权限设置：{}", keyFile);
+                return;
+            }
+            UserPrincipal owner = acl.getOwner();
+            AclEntry ownerOnly = AclEntry.newBuilder()
+                    .setType(AclEntryType.ALLOW)
+                    .setPrincipal(owner)
+                    .setPermissions(EnumSet.allOf(AclEntryPermission.class))
+                    .build();
+            // 只保留属主 ACE，移除继承来的其它用户权限
+            acl.setAcl(List.of(ownerOnly));
+        } catch (UnsupportedOperationException | IOException | SecurityException e) {
+            log.warn("无法收紧主密钥文件权限（{}）：{}", keyFile, describe(e));
         }
+    }
+
+    /** 异常 message 可能为 null（如 UnsupportedOperationException），退化为类名。 */
+    private static String describe(Exception e) {
+        return e.getMessage() == null || e.getMessage().isBlank()
+                ? e.getClass().getSimpleName() : e.getMessage();
     }
 
     /** 密文 + IV（均为 Base64）。 */
