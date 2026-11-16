@@ -1042,13 +1042,21 @@ public class RecipeScaffolder implements ProjectScaffolder {
                 ? "./mvnw -B -q -DskipTests package" : "mvn -B -q -DskipTests package";
     }
 
-    /** 前端构建：pnpm/yarn 先 corepack enable（Node 镜像默认不带全局包管理器），再安装、构建。 */
+    /**
+     * 前端构建：非 npm 项目用 {@code corepack <pm>} 直接运行包管理器。
+     *
+     * <p>不要用 {@code corepack enable}：它会在 /usr/local/bin 建软链，而沙箱固定以
+     * 非 root（1000:1000）运行，必然 EACCES。Corepack 的下载缓存由 COREPACK_HOME
+     * 指到 /cache/corepack（DockerSandbox 注入），无需写系统目录。
+     */
     private String frontendBuildCommand(Path nodeRoot, String pm, boolean lock) {
         String install = installCommand(pm, lock);
+        String build = pm + " run " + detectBuildScript(nodeRoot);
         if (!"npm".equals(pm)) {
-            install = "corepack enable && " + install;
+            install = "corepack " + install;
+            build = "corepack " + build;
         }
-        return install + " && " + pm + " run " + detectBuildScript(nodeRoot);
+        return install + " && " + build;
     }
 
     /** 读取 package.json 的 scripts，优先 build:prod，其次 build；都读不到就按 build。 */
