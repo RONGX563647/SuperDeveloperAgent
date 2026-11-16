@@ -60,6 +60,9 @@ tsconfig.tsbuildinfo
 .playwright-cli/
 docs/research/*.png
 
+# 会话归档运行时状态（active 会话与测试证据，归档在 docs/process、docs/summary）
+docs/.session/
+
 # 本地登录配置（可能含凭据）与临时校验脚本
 login.yaml
 platform/web/scripts/_tmp-*.mjs

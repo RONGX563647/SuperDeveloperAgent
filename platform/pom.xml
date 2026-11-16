@@ -40,6 +40,7 @@
         <junit.version>5.11.3</junit.version>
         <!-- springdoc 3.x 才支持 Spring Framework 7 / Boot 4；Knife4j 4.x 仍绑定 springdoc 2.x -->
         <springdoc.version>3.2.0</springdoc.version>
+        <jacoco.version>0.8.12</jacoco.version>
     </properties>
 
     <dependencyManagement>
@@ -142,6 +143,23 @@
                     <!-- 与运行参数一致：测试里的 sqlite-jdbc 也会触发 JDK 24+ 受限方法告警 -->
                     <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                 </configuration>
+            </plugin>
+            <!-- 覆盖率数据供会话归档 summary 聚合（docs/session-archive-spec-v1.md §4.5） -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals><goal>prepare-agent</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals><goal>report</goal></goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

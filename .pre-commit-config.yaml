@@ -3,3 +3,12 @@ repos:
     rev: v0.6.1
     hooks:
       - id: doc-marshal-check
+  # 会话归档门禁：与 .githooks/pre-commit 同一入口，装了 pre-commit 框架也生效
+  - repo: local
+    hooks:
+      - id: session-archive-gate
+        name: session archive gate
+        entry: python tools/session-archive/gate.py gate-pre-commit
+        language: system
+        pass_filenames: false
+        always_run: true

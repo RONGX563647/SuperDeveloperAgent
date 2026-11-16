@@ -1,0 +1,692 @@
+#!/usr/bin/env python3
+"""会话归档门禁：start / finish / validate / self-test / git hooks。
+
+设计见 docs/session-archive-spec-v1.md。
+只用 Python 标准库，Windows / Linux 均可运行。
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SESSION_DIR = ROOT / "docs" / ".session"
+ACTIVE = SESSION_DIR / "active.json"
+EVIDENCE = SESSION_DIR / "test-evidence.json"
+PROCESS = ROOT / "docs" / "process"
+SUMMARY = ROOT / "docs" / "summary"
+CATEGORIES = ("feat", "bug", "chore", "docs", "deploy")
+TEST_CATEGORIES = ("feat", "bug")
+DEFAULT_TEST_CMD = "mvn -B -pl spec-checks -am test"
+FOLDER_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{4})_([a-z0-9]+(?:-[a-z0-9]+)*)$")
+TEST_PATH_RE = re.compile(r"(/src/test/|Test\.java$|Tests\.java$|\.test\.tsx?$|\.spec\.tsx?$)")
+CASE_LINE_RE = re.compile(r"^\+\s*(@Test\b|@ParameterizedTest\b|it\(|test\()")
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+# hook 会把这些变量注入子进程（GIT_INDEX_FILE=.git/index 是相对路径），
+# 测试里再跑 git 时会按错误的目录解析，导致 worktree/index 建到别处。
+GIT_ENV_KEYS = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX", "GIT_QUARANTINE_PATH",
+)
+
+
+class GateError(Exception):
+    pass
+
+
+def out(msg: str = "") -> None:
+    print(msg)
+
+
+def fail(msg: str) -> int:
+    print(f"ERROR: {msg}", file=sys.stderr)
+    return 1
+
+
+def clean_env() -> dict:
+    env = dict(os.environ)
+    for key in GIT_ENV_KEYS:
+        env.pop(key, None)
+    return env
+
+
+def git(*args: str, check: bool = True, binary: bool = False):
+    proc = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, env=clean_env())
+    if check and proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip()
+        raise GateError(f"git {' '.join(args)} 失败：{detail}")
+    return proc.stdout if binary else proc.stdout.decode("utf-8", "replace").strip()
+
+
+def now_iso() -> str:
+    return datetime.now().astimezone().replace(microsecond=0).isoformat()
+
+
+def canonical(obj: dict) -> str:
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def manifest_self(manifest: dict) -> str:
+    body = json.loads(json.dumps(manifest, ensure_ascii=False))
+    body.get("chain", {}).pop("self", None)
+    return hashlib.sha256(canonical(body).encode("utf-8")).hexdigest()
+
+
+def blob_hash(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def commit_blob(sha: str, path: str) -> bytes:
+    return git("show", f"{sha}:{path}", binary=True)
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def load_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GateError(f"{path.relative_to(ROOT)} 读取失败：{exc}") from exc
+
+
+def manifests(root: Path = PROCESS) -> list[tuple[Path, dict]]:
+    if not root.is_dir():
+        return []
+    rows = []
+    for path in sorted(root.glob("*/*/manifest.json")):
+        rows.append((path, load_json(path)))
+    return rows
+
+
+def category_chain(category: str) -> list[dict]:
+    rows = [m for _, m in manifests() if m.get("category") == category]
+    rows.sort(key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
+    return rows
+
+
+def classify(subject: str) -> str:
+    low = subject.lower()
+    if low.startswith("feat"):
+        return "feat"
+    if low.startswith("fix"):
+        return "bug"
+    if low.startswith("docs"):
+        return "docs"
+    if low.startswith(("deploy", "ops")):
+        return "deploy"
+    return "chore"
+
+
+# ------------------------------------------------------------------ start
+
+def cmd_start(args) -> int:
+    if args.category not in CATEGORIES:
+        return fail(f"category 必须是 {CATEGORIES}")
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.slug or ""):
+        return fail("slug 必须是 kebab-case 英文（小写字母/数字/短横线）")
+    if ACTIVE.exists():
+        return fail("已有进行中的会话；先执行 finish 或删除 docs/.session/active.json")
+    stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M")
+    folder = f"{stamp}_{args.slug}"
+    seq = 2
+    while (PROCESS / args.category / folder).exists():
+        folder = f"{stamp}_{args.slug}-{seq}"
+        seq += 1
+    active = {
+        "schema": "session-active/v1",
+        "id": f"{args.category}/{folder}",
+        "category": args.category,
+        "slug": args.slug,
+        "folder": folder,
+        "title": args.title,
+        "startedAt": now_iso(),
+        "baseHead": git("rev-parse", "HEAD"),
+        "agentModel": args.model,
+        "toolCallCount": args.tool_calls,
+        "promptSummary": args.prompt or args.title,
+        "followUps": args.follow_up or [],
+    }
+    write_json(ACTIVE, active)
+    out(f"会话已开始：{active['id']}")
+    out("下一步：写实现 + 单元测试，然后 git commit（pre-commit 会自动跑测试并留存证据）")
+    return 0
+
+
+# ------------------------------------------------------------------ tests
+
+def surefire_stats(started: float) -> dict:
+    tests = failures = errors = skipped = 0
+    reports = ROOT / "platform"
+    for xml in reports.glob("*/target/surefire-reports/TEST-*.xml"):
+        if xml.stat().st_mtime < started - 5:
+            continue
+        text = xml.read_text(encoding="utf-8", errors="replace")
+        head = text[:2000]
+
+        def attr(name: str) -> int:
+            match = re.search(rf'\b{name}="(\d+)"', head)
+            return int(match.group(1)) if match else 0
+
+        tests += attr("tests")
+        failures += attr("failures")
+        errors += attr("errors")
+        skipped += attr("skipped")
+    return {"tests": tests, "failures": failures, "errors": errors, "skipped": skipped}
+
+
+def run_tests(command: str) -> dict:
+    started = datetime.now().timestamp()
+    proc = subprocess.run(command, cwd=ROOT / "platform", shell=True, env=clean_env())
+    stats = surefire_stats(started)
+    result = "PASSED" if proc.returncode == 0 and stats["failures"] == 0 and stats["errors"] == 0 else "FAILED"
+    return {
+        "schema": "test-evidence/v1",
+        "command": command,
+        "ranAt": now_iso(),
+        "result": result,
+        "testsRun": stats["tests"],
+        "failures": stats["failures"],
+        "errors": stats["errors"],
+        "skipped": stats["skipped"],
+        "tree": git("write-tree"),
+    }
+
+
+def cmd_gate_pre_commit(args) -> int:
+    staged = [line for line in git("diff", "--cached", "--name-only").splitlines() if line]
+    code = [p for p in staged if not is_exempt(p)]
+    if not code:
+        out("仅文档/工具改动，跳过会话归档测试门禁")
+        return 0
+    if not ACTIVE.exists():
+        return fail(
+            "代码提交被拦截：没有进行中的会话归档。\n"
+            "先执行：python tools/session-archive/gate.py start "
+            "--category feat|bug|chore|deploy --slug <英文短名> --title <中文标题>\n"
+            "（docs 类纯文档提交免此限制）"
+        )
+    command = os.environ.get("SESSION_ARCHIVE_TEST_CMD", DEFAULT_TEST_CMD)
+    out(f"运行测试门禁：{command}")
+    evidence = run_tests(command)
+    write_json(EVIDENCE, evidence)
+    if evidence["result"] != "PASSED":
+        return fail(
+            f"测试未通过，禁止提交（tests={evidence['testsRun']} "
+            f"failures={evidence['failures']} errors={evidence['errors']}）"
+        )
+    out(
+        f"测试通过：{evidence['testsRun']} 个用例，失败 {evidence['failures']}，"
+        f"错误 {evidence['errors']}，跳过 {evidence['skipped']}"
+    )
+    return 0
+
+
+def is_exempt(path: str) -> bool:
+    return (
+        path.startswith("docs/")
+        or path.startswith("tools/session-archive/")
+        or path.startswith(".githooks/")
+        or path in {".gitignore", ".pre-commit-config.yaml", "agent.md"}
+        or path.endswith(".md")
+    )
+
+
+# ------------------------------------------------------------------ finish
+
+def commit_files(sha: str) -> list[dict]:
+    status_lines = git("diff-tree", "--no-commit-id", "--name-status", "-r", "-M", sha).splitlines()
+    num_lines = git("diff-tree", "--no-commit-id", "--numstat", "-r", "-M", sha).splitlines()
+    nums = {}
+    for line in num_lines:
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            nums[parts[-1]] = (parts[0], parts[1])
+    files = []
+    for line in status_lines:
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0][0]
+        path = parts[-1]
+        add, delete = nums.get(path, ("0", "0"))
+        files.append({
+            "path": path,
+            "status": "R" if status == "R" else status,
+            "additions": int(add) if add.isdigit() else 0,
+            "deletions": int(delete) if delete.isdigit() else 0,
+            "blobHash": "-" if status == "D" else blob_hash(commit_blob(sha, path)),
+        })
+    return files
+
+
+def cases_added(sha: str, tests: list[dict]) -> int:
+    count = 0
+    for test in tests:
+        if test["status"] == "D":
+            continue
+        patch = git("show", "--format=", "--unified=0", sha, "--", test["path"])
+        count += sum(1 for line in patch.splitlines() if CASE_LINE_RE.match(line))
+    return count
+
+
+def cmd_finish(args) -> int:
+    if not ACTIVE.exists():
+        return fail("没有进行中的会话；先执行 start")
+    active = load_json(ACTIVE)
+    category = active["category"]
+    head = git("rev-parse", "HEAD")
+    head_tree = git("rev-parse", "HEAD^{tree}")
+    evidence = load_json(EVIDENCE) if EVIDENCE.exists() else {
+        "command": "未执行", "result": "SKIPPED", "testsRun": 0,
+        "failures": 0, "errors": 0, "skipped": 0, "tree": "",
+    }
+    sha_list = [s for s in git("log", "--reverse", "--no-merges",
+                               "--format=%H", f"{active['baseHead']}..{head}").splitlines() if s]
+    if not sha_list:
+        return fail("会话内没有提交，无需归档")
+    commits = []
+    all_tests: list[dict] = []
+    modules = set()
+    code_trees: list[str] = []
+    for sha in sha_list:
+        subject = git("log", "-1", "--format=%s", sha)
+        files = commit_files(sha)
+        if any(not is_exempt(f["path"]) for f in files):
+            code_trees.append(git("rev-parse", f"{sha}^{{tree}}"))
+        tests = [f for f in files if TEST_PATH_RE.search(f["path"])]
+        all_tests.extend(tests)
+        commits.append({
+            "sha": sha, "subject": subject,
+            "category": classify(subject), "files": files,
+        })
+        for f in files:
+            match = re.match(r"platform/([^/]+)/", f["path"])
+            if match and match.group(1) != "web":
+                modules.add(match.group(1))
+            if f["path"].startswith("platform/web/"):
+                modules.add("web")
+
+    if category in TEST_CATEGORIES:
+        if not code_trees:
+            return fail("feat/bug 归档要求会话内有代码改动")
+        if evidence["result"] != "PASSED":
+            return fail("feat/bug 归档要求测试通过；当前证据不是 PASSED")
+        if evidence.get("tree") != code_trees[-1]:
+            return fail("测试后代码又变了（tree 不一致）；请重新提交并让 pre-commit 重跑测试")
+
+    tests_section = {
+        "required": category in TEST_CATEGORIES,
+        "files": all_tests,
+        "casesAdded": cases_added(head, all_tests),
+        "command": evidence["command"],
+        "result": evidence["result"],
+        "evidence": (
+            f"Tests run: {evidence['testsRun']}, Failures: {evidence['failures']}, "
+            f"Errors: {evidence['errors']}, Skipped: {evidence['skipped']}"
+        ),
+    }
+    if category == "chore":
+        has_code = any(not is_exempt(f["path"]) for c in commits for f in c["files"])
+        if has_code and not args.verification:
+            return fail("chore 含代码改动，必须提供 --verification")
+    if category == "deploy" and not args.verification:
+        return fail("deploy 归档必须提供 --verification")
+    if category in TEST_CATEGORIES and tests_section["casesAdded"] < 1:
+        return fail("feat/bug 归档至少要有 1 个新增测试用例")
+
+    chain_rows = category_chain(category)
+    prev = chain_rows[-1]["chain"]["self"] if chain_rows else "GENESIS"
+    period = active["folder"][:7]
+    summary_ref = f"{period}/{active['folder']}"
+    manifest = {
+        "schema": "process-manifest/v2",
+        "id": active["id"],
+        "category": category,
+        "title": active["title"],
+        "createdAt": active["startedAt"],
+        "session": {
+            "agentModel": active["agentModel"],
+            "promptSummary": active["promptSummary"],
+            "toolCallCount": active["toolCallCount"],
+        },
+        "problem": args.problem or active["title"],
+        "solution": args.solution or (commits[-1]["subject"] if commits else active["title"]),
+        "commits": commits,
+        "tests": tests_section,
+        "impact": {
+            "modules": sorted(modules),
+            "verification": args.verification or tests_section["evidence"],
+        },
+        "followUps": active.get("followUps") or [],
+        "links": {"relatedIds": [], "summaryRefs": [summary_ref]},
+        "chain": {"prev": prev, "self": ""},
+    }
+    manifest["chain"]["self"] = manifest_self(manifest)
+
+    folder_dir = PROCESS / category / active["folder"]
+    write_json(folder_dir / "manifest.json", manifest)
+    write_summary(manifest, active, period)
+    ACTIVE.unlink(missing_ok=True)
+    EVIDENCE.unlink(missing_ok=True)
+    out(f"归档完成：docs/process/{category}/{active['folder']}/manifest.json")
+    out(f"总结：docs/summary/{period}/{active['folder']}.md")
+    out("请提交 docs/ 归档后再推送")
+    return 0
+
+
+# ------------------------------------------------------------------ summary
+
+def jacoco_coverage() -> str:
+    covered = missed = 0
+    for xml in (ROOT / "platform").glob("*/target/site/jacoco/jacoco.xml"):
+        text = xml.read_text(encoding="utf-8", errors="replace")
+        for match in re.finditer(r'<counter type="LINE" missed="(\d+)" covered="(\d+)"/>', text):
+            missed += int(match.group(1))
+            covered += int(match.group(2))
+    total = covered + missed
+    return f"{covered * 100.0 / total:.1f}%" if total else "N/A"
+
+
+def write_summary(manifest: dict, active: dict, period: str) -> None:
+    folder = active["folder"]
+    primary = SUMMARY / period / f"{folder}.md"
+    track_dir = SUMMARY / manifest["category"]
+    secondary = track_dir / f"{period}_{active['slug']}.md"
+    previous = sorted(track_dir.glob("*.md")) if track_dir.is_dir() else []
+    extends = previous[-1].stem.split("_", 1)[-1] if previous else "null"
+    coverage = jacoco_coverage()
+    gate = "PASS" if manifest["tests"]["result"] == "PASSED" else "WARN"
+    tests = manifest["tests"]
+    match = re.search(r"Tests run: (\d+)", tests.get("evidence", ""))
+    cases_total = int(match.group(1)) if match else 0
+    commits = "\n".join(
+        f"| `{c['sha'][:7]}` | {c['category']} | {c['subject']} |" for c in manifest["commits"])
+    body = f"""---
+schema: session-summary/v1
+period: {period}
+createdAt: {now_iso()}
+extends: {extends}
+refs:
+  - {manifest['id']}
+metrics:
+  sessions: 1
+  casesAdded: {tests['casesAdded']}
+  casesTotal: {cases_total}
+  passRate: "{'100%' if tests['result'] == 'PASSED' else '0%'}"
+  lineCoverage: "{coverage}"
+  coverageDelta: "N/A"
+  patchCoverage: "N/A"
+  gate: {gate}
+---
+
+# {manifest['title']}
+
+## 概述
+{manifest['problem']}
+{manifest['solution']}
+
+## 交付清单
+| 提交 | 类别 | 说明 |
+|---|---|---|
+{commits}
+
+## 测试与质量总结
+- 命令：`{tests['command']}`
+- 结果：{tests['result']}；{tests['evidence']}
+- 新增用例：{tests['casesAdded']}
+- 行覆盖率：{coverage}（JaCoCo；patch coverage 需按 diff 统计，暂记 N/A）
+- 质量门禁：**{gate}**
+
+## 风险敞口
+- 未覆盖的新增文件：{'无' if tests['result'] == 'PASSED' else '见失败测试'}
+- 跳过用例：见 evidence 中 Skipped 计数
+
+## 遗留与建议
+{chr(10).join('- ' + f for f in manifest.get('followUps', [])) or '- 无'}
+
+## 链接
+- 归档：`docs/process/{manifest['category']}/{folder}/manifest.json`
+- 上一份同域总结：{extends}
+"""
+    for path, canonical_path in ((primary, None), (secondary, primary)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = body
+        if canonical_path is not None:
+            text = text.replace("---\n", f"---\ncanonical: {canonical_path.relative_to(ROOT).as_posix()}\n", 1)
+        path.write_text(text, encoding="utf-8")
+
+
+# ------------------------------------------------------------------ validate
+
+REQUIRED = ("schema", "id", "category", "title", "createdAt", "session", "problem",
+            "solution", "commits", "tests", "impact", "links", "chain")
+
+
+def validate_manifest(path: Path, manifest: dict, skip_git: bool) -> list[str]:
+    errors: list[str] = []
+    rel = path.relative_to(path.parents[2]) if len(path.parents) > 2 else path
+    for key in REQUIRED:
+        if key not in manifest:
+            errors.append(f"{rel}: 缺少字段 {key}")
+    if manifest.get("schema") != "process-manifest/v2":
+        errors.append(f"{rel}: schema 必须是 process-manifest/v2")
+    category = manifest.get("category")
+    if category not in CATEGORIES:
+        errors.append(f"{rel}: category 非法")
+    ident = manifest.get("id", "")
+    folder = path.parent.name
+    if not FOLDER_RE.fullmatch(folder):
+        errors.append(f"{rel}: 目录名不符合 YYYY-MM-DD_HHMM_<slug>")
+    if ident != f"{category}/{folder}":
+        errors.append(f"{rel}: id 与目录不一致（应为 {category}/{folder}）")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00",
+                         manifest.get("createdAt", "")):
+        errors.append(f"{rel}: createdAt 必须为 +08:00 ISO 时间")
+
+    commits = manifest.get("commits") or []
+    if not commits:
+        errors.append(f"{rel}: commits 不能为空")
+    for commit in commits:
+        sha = commit.get("sha", "")
+        if not SHA_RE.fullmatch(sha):
+            errors.append(f"{rel}: commit sha 非法 {sha}")
+            continue
+        if skip_git:
+            continue
+        check = subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=ROOT,
+                               capture_output=True, env=clean_env())
+        if check.returncode != 0:
+            errors.append(f"{rel}: commit {sha} 不存在")
+            continue
+        for f in commit.get("files", []):
+            if f.get("status") == "D":
+                continue
+            try:
+                actual = blob_hash(commit_blob(sha, f["path"]))
+            except GateError:
+                errors.append(f"{rel}: {sha} 中不存在文件 {f['path']}")
+                continue
+            if actual != f.get("blobHash"):
+                errors.append(f"{rel}: {f['path']} blobHash 不匹配")
+
+    tests = manifest.get("tests") or {}
+    if category in TEST_CATEGORIES:
+        if tests.get("required") is not True:
+            errors.append(f"{rel}: feat/bug 必须 tests.required=true")
+        if tests.get("result") != "PASSED":
+            errors.append(f"{rel}: feat/bug 必须 tests.result=PASSED")
+        if int(tests.get("casesAdded", 0)) < 1:
+            errors.append(f"{rel}: feat/bug 至少新增 1 个用例")
+        if not tests.get("files"):
+            errors.append(f"{rel}: feat/bug 必须登记测试文件")
+    if category == "deploy" and not (manifest.get("impact") or {}).get("verification"):
+        errors.append(f"{rel}: deploy 必须填写 impact.verification")
+
+    expected = manifest_self(manifest)
+    if manifest.get("chain", {}).get("self") != expected:
+        errors.append(f"{rel}: chain.self 与内容不符（历史被改动？）")
+    return errors
+
+
+def validate_root(root: Path, skip_git: bool = False) -> list[str]:
+    errors: list[str] = []
+    process_root = root / "docs" / "process"
+    rows = []
+    if process_root.is_dir():
+        for path in sorted(process_root.glob("*/*/manifest.json")):
+            try:
+                rows.append((path, load_json(path)))
+            except GateError as exc:
+                errors.append(str(exc))
+    for path, manifest in rows:
+        errors.extend(validate_manifest(path, manifest, skip_git))
+    for category in CATEGORIES:
+        chain = sorted([m for _, m in rows if m.get("category") == category],
+                       key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
+        prev = "GENESIS"
+        for manifest in chain:
+            if manifest.get("chain", {}).get("prev") != prev:
+                errors.append(f"{manifest.get('id')}: chain.prev 断链")
+            prev = manifest.get("chain", {}).get("self", "")
+
+    summary_root = root / "docs" / "summary"
+    ids = {m.get("id") for _, m in rows}
+    if summary_root.is_dir():
+        for path in sorted(summary_root.glob("**/*.md")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if not text.startswith("---\n"):
+                errors.append(f"{path.relative_to(root)}: 缺少 frontmatter")
+                continue
+            front = text.split("---", 2)[1]
+            refs = []
+            in_refs = False
+            for line in front.splitlines():
+                if line.startswith("refs:"):
+                    in_refs = True
+                    continue
+                if in_refs and line.strip().startswith("- "):
+                    refs.append(line.strip()[2:].strip())
+                elif in_refs and line and not line.startswith(" "):
+                    in_refs = False
+            for ref in refs:
+                if ref not in ids:
+                    errors.append(f"{path.relative_to(root)}: 引用不存在的归档 {ref}")
+    return errors
+
+
+def cmd_validate(args) -> int:
+    errors = validate_root(ROOT)
+    if errors:
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return fail(f"会话归档校验失败：{len(errors)} 项")
+    count = len(manifests())
+    out(f"会话归档校验通过（{count} 份）")
+    return 0
+
+
+def cmd_gate_pre_push(args) -> int:
+    if ACTIVE.exists():
+        active = load_json(ACTIVE)
+        return fail(f"会话未归档：{active.get('id')}。先执行 python tools/session-archive/gate.py finish")
+    dirty = git("status", "--porcelain", "docs/process", "docs/summary")
+    if dirty:
+        return fail("存在未提交的归档/总结文件，请先提交 docs/ 后再推送")
+    return cmd_validate(args)
+
+
+# ------------------------------------------------------------------ self-test
+
+def cmd_self_test(args) -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        base = {
+            "schema": "process-manifest/v2",
+            "id": "feat/2026-11-17_1000_sample",
+            "category": "feat",
+            "title": "示例特性",
+            "createdAt": "2026-11-17T10:00:00+08:00",
+            "session": {"agentModel": "test", "promptSummary": "示例", "toolCallCount": 1},
+            "problem": "问题描述示例",
+            "solution": "方案描述示例",
+            "commits": [{"sha": "0123456", "subject": "feat: x", "category": "feat",
+                         "files": [{"path": "a.java", "status": "A", "additions": 1,
+                                    "deletions": 0, "blobHash": "0" * 40}]}],
+            "tests": {"required": True, "files": [{"path": "ATest.java", "status": "A",
+                       "additions": 1, "deletions": 0, "blobHash": "0" * 40}],
+                      "casesAdded": 1, "command": "mvn test", "result": "PASSED",
+                      "evidence": "Tests run: 1"},
+            "impact": {"modules": ["x"], "verification": "ok"},
+            "links": {"relatedIds": [], "summaryRefs": []},
+            "chain": {"prev": "GENESIS", "self": ""},
+        }
+        base["chain"]["self"] = manifest_self(base)
+        target = root / "docs" / "process" / "feat" / "2026-11-17_1000_sample" / "manifest.json"
+        write_json(target, base)
+        if validate_root(root, skip_git=True):
+            return fail("self-test: 合法样本不应报错")
+
+        broken = json.loads(json.dumps(base))
+        broken["tests"]["casesAdded"] = 0
+        write_json(target, broken)
+        if not validate_root(root, skip_git=True):
+            return fail("self-test: 缺用例应报错")
+
+        tampered = json.loads(json.dumps(base))
+        tampered["chain"]["self"] = "f" * 64
+        write_json(target, tampered)
+        if not validate_root(root, skip_git=True):
+            return fail("self-test: 篡改 self 应报错")
+    out("self-test OK")
+    return 0
+
+
+# ------------------------------------------------------------------ main
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="session-archive")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("start")
+    p.add_argument("--category", required=True)
+    p.add_argument("--slug", required=True)
+    p.add_argument("--title", required=True)
+    p.add_argument("--model", default="unknown")
+    p.add_argument("--prompt", default="")
+    p.add_argument("--tool-calls", type=int, default=0)
+    p.add_argument("--follow-up", action="append")
+    p.set_defaults(func=cmd_start)
+
+    p = sub.add_parser("finish")
+    p.add_argument("--problem")
+    p.add_argument("--solution")
+    p.add_argument("--verification")
+    p.set_defaults(func=cmd_finish)
+
+    sub.add_parser("validate").set_defaults(func=cmd_validate)
+    sub.add_parser("self-test").set_defaults(func=cmd_self_test)
+    sub.add_parser("gate-pre-commit").set_defaults(func=cmd_gate_pre_commit)
+    sub.add_parser("gate-pre-push").set_defaults(func=cmd_gate_pre_push)
+
+    args = parser.parse_args()
+    try:
+        return args.func(args)
+    except GateError as exc:
+        return fail(str(exc))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
