@@ -29,6 +29,8 @@ public class SaTokenConfig {
     private static final String[] WHITELIST = {
             "/api/v1/auth/login",
             "/actuator/health",
+            // 任务配图：<img> 标签不会带 Authorization，文件名是不可猜的 UUID + 后缀白名单
+            "/api/v1/git-issue-images/**",
             // OAuth 回调是浏览器 302 跳转（无 Authorization 头）；安全性由 state 防 CSRF 保证
             "/api/v1/gitee/oauth/callback",
             "/api/v1/settings/git-hosts/oauth/github/callback",

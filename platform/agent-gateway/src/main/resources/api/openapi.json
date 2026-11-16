@@ -3090,6 +3090,44 @@
         }
       }
     },
+    "/api/v1/git-issues/images" : {
+      "post" : {
+        "tags" : [ "git-issue-controller" ],
+        "summary" : "upload image",
+        "operationId" : "uploadImage",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "properties" : {
+                  "file" : {
+                    "type" : "string",
+                    "format" : "binary"
+                  }
+                },
+                "required" : [ "file" ]
+              }
+            }
+          }
+        },
+        "responses" : {
+          "201" : {
+            "description" : "Created",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/deploy/{projectId}/replay" : {
       "post" : {
         "tags" : [ "deploy-controller" ],
@@ -5367,6 +5405,34 @@
                 "schema" : {
                   "type" : "object",
                   "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/git-issue-images/{name}" : {
+      "get" : {
+        "tags" : [ "git-issue-image-controller" ],
+        "summary" : "image",
+        "operationId" : "image",
+        "parameters" : [ {
+          "name" : "name",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "string",
+                  "format" : "binary"
                 }
               }
             }

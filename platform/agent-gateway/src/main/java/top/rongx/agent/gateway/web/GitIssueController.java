@@ -1,7 +1,14 @@
 package top.rongx.agent.gateway.web;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.gitissue.GitIssue;
 import top.rongx.agent.domain.gitissue.GitIssueComment;
@@ -31,10 +39,17 @@ public class GitIssueController {
 
     private final GitIssueService issues;
     private final CurrentUser currentUser;
+    /** 任务配图落盘目录：与工作区数据同源，不污染用户仓库。 */
+    private final Path imageDir;
+    private static final long IMAGE_MAX_BYTES = 5L * 1024 * 1024;
+    private static final Set<String> IMAGE_EXTS = Set.of("png", "jpg", "jpeg", "gif", "webp");
 
-    public GitIssueController(GitIssueService issues, CurrentUser currentUser) {
+    public GitIssueController(GitIssueService issues, CurrentUser currentUser,
+                              @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.issues = issues;
         this.currentUser = currentUser;
+        this.imageDir = Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("issues").resolve("images");
     }
 
     @GetMapping
@@ -105,6 +120,54 @@ public class GitIssueController {
     public Map<String, Object> deleteComment(@PathVariable String id, @PathVariable String commentId) {
         issues.deleteComment(currentUser.requireUserId(), id, commentId);
         return Map.of("deleted", true);
+    }
+
+    // ---------------------------------------------------------------- 任务配图
+
+    /**
+     * 上传一张任务配图，返回可直接写进 Markdown 的地址。
+     *
+     * <p>任务正文以 Markdown 存储，图片只保存文件与本机地址；Git 远端只拿到这段文本，
+     * 图片仍由平台提供（本地部署场景）。
+     */
+    @PostMapping("/images")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, String> uploadImage(@RequestParam("file") MultipartFile file)
+            throws IOException {
+        if (file == null || file.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "图片不能为空");
+        }
+        if (file.getSize() > IMAGE_MAX_BYTES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "图片不能超过 5MB");
+        }
+        String ext = extension(file.getOriginalFilename(), file.getContentType());
+        if (!IMAGE_EXTS.contains(ext)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "只支持 png / jpg / jpeg / gif / webp 图片");
+        }
+        Files.createDirectories(imageDir);
+        String name = UUID.randomUUID() + "." + ext;
+        file.transferTo(imageDir.resolve(name));
+        return Map.of("url", "/api/v1/git-issue-images/" + name);
+    }
+
+    /** 扩展名：优先文件名，其次 Content-Type；未知返回空串。 */
+    private static String extension(String filename, String contentType) {
+        if (filename != null) {
+            int dot = filename.lastIndexOf('.');
+            if (dot >= 0 && dot < filename.length() - 1) {
+                String ext = filename.substring(dot + 1).toLowerCase(Locale.ROOT);
+                if (!ext.contains("/") && ext.length() <= 5) {
+                    return ext;
+                }
+            }
+        }
+        String type = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+        if (type.contains("png")) return "png";
+        if (type.contains("gif")) return "gif";
+        if (type.contains("webp")) return "webp";
+        if (type.contains("jpeg") || type.contains("jpg")) return "jpg";
+        return "";
     }
 
     private static GitIssue.Draft draft(Map<String, Object> body) {
