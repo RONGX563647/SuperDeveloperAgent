@@ -17,6 +17,11 @@ interface Props {
 
 const props = defineProps<Props>()
 
+const emit = defineEmits<{
+  /** 用户本人确认成功：父组件据此让 Agent 接着执行，不必再手打「继续」。 */
+  (e: 'confirmed', bindingId: string): void
+}>()
+
 const binding = ref<EnvBindingView | null>(null)
 const busy = ref(false)
 const loadError = ref('')
@@ -66,6 +71,7 @@ async function doConfirm(): Promise<void> {
     const result = await confirmEnvBinding(props.projectId, props.bindingId)
     binding.value = result
     ElMessage.success('环境绑定已确认')
+    emit('confirmed', props.bindingId)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '确认环境绑定失败')
   } finally {
@@ -111,7 +117,7 @@ onMounted(load)
         v-if="confirmed && !expired"
         type="success" :closable="false" show-icon
         title="绑定已确认"
-        description="请回复「继续」，Agent 会复用该 binding_id 触发发布。"
+        description="已确认，Agent 会自动继续执行（无需再回复「继续」）。"
       />
       <el-alert
         v-if="expired"

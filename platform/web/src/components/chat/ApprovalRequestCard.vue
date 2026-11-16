@@ -16,7 +16,9 @@ interface Props {
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
-  (e: 'applied', result: { action: string, status: string, durationMs: number }): void
+  (e: 'applied', result: {
+    changeId: string, action: string, status: string, durationMs: number
+  }): void
   (e: 'dismiss'): void
 }>()
 
@@ -62,7 +64,12 @@ async function doApply(): Promise<void> {
     applyResult.value = `${result.action} → ${result.status}（${result.durationMs} ms）`
     applyLog.value = result.logTail || null
     ElMessage.success(`变更执行完毕：${result.status}`)
-    emit('applied', result)
+    emit('applied', {
+      changeId: props.changeId,
+      action: result.action,
+      status: result.status,
+      durationMs: result.durationMs,
+    })
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '执行失败')
   } finally {

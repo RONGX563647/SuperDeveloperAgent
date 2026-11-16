@@ -11,6 +11,10 @@ import { emptyAgentProjection } from '../state/agentEventReducer'
 import { useFollowScroll } from '../composables/useFollowScroll'
 import { getSessionChat, type SessionChatEntry } from '../state/sessionChat'
 import { listProjects, type ProjectRow } from '../api/project'
+import {
+  listConversations, updateConversation,
+} from '../api/workspace'
+import { getSessionUsage } from '../api/settings'
 import { envLabel } from '../utils/pipelineLabels'
 import { formatCost, formatTokens, sumCost } from '../utils/deepseekPricing'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
@@ -75,6 +79,12 @@ const composing = ref(false)
 const chatEntry = shallowRef<SessionChatEntry | null>(null)
 const EMPTY_PROJECTION = emptyAgentProjection()
 
+/** 本会话选择的模型（null = 设置页默认）；随会话保存，不修改全局默认。 */
+const modelSelection = shallowRef<{ connectionId: string | null, modelName: string | null }>({
+  connectionId: null,
+  modelName: null,
+})
+
 function syncChatEntry(): void {
   const id = sessionId.value
   if (!id) return
@@ -84,10 +94,14 @@ function syncChatEntry(): void {
     worktree: appStore.worktree,
     skills: capsReady.value ? selectedSkills.value : undefined,
     mcpServers: capsReady.value ? selectedMcp.value : undefined,
+    modelConnectionId: modelSelection.value.connectionId,
+    modelName: modelSelection.value.modelName,
   })
   entry.context.projectId = projectId.value
   entry.context.env = env.value
   entry.context.worktree = appStore.worktree
+  entry.context.modelConnectionId = modelSelection.value.connectionId
+  entry.context.modelName = modelSelection.value.modelName
   if (capsReady.value) {
     entry.context.skills = [...selectedSkills.value]
     entry.context.mcpServers = [...selectedMcp.value]
@@ -98,16 +112,59 @@ function syncChatEntry(): void {
 watch(
   [
     sessionId, () => appStore.projectId, () => appStore.env, () => appStore.worktree,
-    capsReady, selectedSkills, selectedMcp,
+    capsReady, selectedSkills, selectedMcp, modelSelection,
   ],
   syncChatEntry,
   { immediate: true },
 )
 
+/** 切换会话时恢复服务端保存的模型选择与 token 累计。 */
+async function loadSessionMeta(): Promise<void> {
+  const id = sessionId.value
+  if (!id || !projectId.value) return
+  try {
+    const rows = await listConversations(projectId.value, true)
+    const row = rows.find((item) => item.id === id)
+    modelSelection.value = {
+      connectionId: row?.modelConnectionId ?? null,
+      modelName: row?.modelName ?? null,
+    }
+  } catch {
+    // 新会话还没在服务端登记：保持当前本地选择
+  }
+  if (chatEntry.value && chatEntry.value.chat.usage.value.calls === 0) {
+    try {
+      const usage = await getSessionUsage(id)
+      chatEntry.value.chat.applyUsage(usage.totals)
+    } catch {
+      // 没有用量记录（首轮尚未发生）时忽略
+    }
+  }
+}
+
+watch([sessionId, () => appStore.projectId], () => void loadSessionMeta())
+
+/** 选择模型：只写本会话；服务端有新会话时忽略 400。 */
+function chooseModel(value: { connectionId: string | null, modelName: string | null }): void {
+  modelSelection.value = value
+  const id = sessionId.value
+  if (!id) return
+  void updateConversation(id, {
+    modelConnectionId: value.connectionId,
+    modelName: value.modelName,
+  }).catch(() => {
+    // 新会话尚未登记：首条消息会由服务端一起保存
+  })
+}
+
 const projection = computed(() => chatEntry.value?.chat.projection.value ?? EMPTY_PROJECTION)
 const streaming = computed(() => chatEntry.value?.chat.streaming.value ?? false)
 const elapsedMs = computed(() => chatEntry.value?.chat.elapsedMs.value ?? 0)
 const tokens = computed(() => chatEntry.value?.chat.tokens.value ?? 0)
+/** 本会话真实 token 累计（所有模型）。 */
+const sessionUsage = computed(() => chatEntry.value?.chat.usage.value ?? {
+  calls: 0, inputTokens: 0, cachedTokens: 0, outputTokens: 0, totalTokens: 0,
+})
 const error = computed(() => chatEntry.value?.chat.error.value ?? '')
 const pendingChangeId = computed(() => chatEntry.value?.chat.pendingChangeId.value ?? null)
 const pendingBindingId = computed(() => chatEntry.value?.chat.pendingBindingId.value ?? null)
@@ -158,6 +215,40 @@ function openApprovalCard(): void {
     approvalCard.value?.load()
     void scrollToLatest({ force: true })
   })
+}
+
+/**
+ * 确认卡点完就不再需要用户手打「继续」：把结果直接回灌给 Agent，让它接着跑下一步。
+ * 仍在流式输出时只提示（不抢占当前流），避免同一会话并发两条请求。
+ */
+function continueAfterUserAction(prompt: string): void {
+  if (streaming.value) {
+    ElMessage.info('确认已生效；当前回复还在生成，结束后让 Agent 继续即可')
+    return
+  }
+  approvalCardOpen.value = false
+  ElMessage.success('已确认，Agent 继续执行')
+  void sendChat(prompt)
+}
+
+/** 变更单应用成功（补丁已提交到分支）：让 Agent 接着按新提交重新部署。 */
+function onApprovalApplied(result: {
+  changeId: string, action: string, status: string, durationMs: number
+}): void {
+  followNewContent()
+  chatEntry.value?.chat.clearPendingChange(result.changeId)
+  continueAfterUserAction(
+    `用户已在对话里确认并应用变更 ${result.changeId}（${result.action} → ${result.status}）。`
+    + '请继续后续步骤：需要时用 git_status / git_commits 查看最新提交 sha，并用该 sha 重新运行部署。',
+  )
+}
+
+/** 环境绑定确认成功：复用该 binding_id 继续，不重新生成草案。 */
+function onBindingConfirmed(bindingId: string): void {
+  continueAfterUserAction(
+    `用户已在对话里确认环境绑定 ${bindingId}（DRAFT → CONFIRMED）。`
+    + '请直接复用该 binding_id 继续执行 deploy_run，不要重新生成草案。',
+  )
 }
 
 const {
@@ -439,6 +530,7 @@ watch(sessionId, () => {
 
 onMounted(async () => {
   await loadProjects()
+  void loadSessionMeta()
   void nextTick(() => {
     resizeInput()
     scrollToLatest({ force: true })
@@ -455,6 +547,36 @@ onMounted(async () => {
       context-env
     >
       <template #actions>
+        <!-- 会话累计 token：每次模型调用的 usage 累加，所有模型都统计 -->
+        <el-tooltip
+          v-if="sessionUsage.calls > 0"
+          placement="bottom-end"
+          :show-after="100"
+          popper-class="session-cost-tip"
+        >
+          <template #content>
+            <div class="tip-row">
+              <span>输入</span>
+              <span class="mono">{{ formatTokens(sessionUsage.inputTokens) }}</span>
+            </div>
+            <div class="tip-row">
+              <span>其中缓存命中</span>
+              <span class="mono">{{ formatTokens(sessionUsage.cachedTokens) }}</span>
+            </div>
+            <div class="tip-row">
+              <span>输出</span>
+              <span class="mono">{{ formatTokens(sessionUsage.outputTokens) }}</span>
+            </div>
+            <div class="tip-row tip-total">
+              <span>{{ sessionUsage.calls }} 次调用</span>
+              <span class="mono">合计 {{ formatTokens(sessionUsage.totalTokens) }}</span>
+            </div>
+          </template>
+          <span class="session-cost mono">
+            <el-icon class="cost-icon"><Coin /></el-icon>
+            {{ formatTokens(sessionUsage.totalTokens) }} tokens
+          </span>
+        </el-tooltip>
         <!-- 会话累计费用：本地按 usage 累加，悬浮看命中/未命中/输出明细 -->
         <el-tooltip
           v-if="sessionCost.calls > 0"
@@ -602,7 +724,7 @@ onMounted(async () => {
         ref="approvalCard"
         :change-id="pendingChangeId"
         class="chat-approval"
-        @applied="() => followNewContent()"
+        @applied="onApprovalApplied"
         @dismiss="approvalCardOpen = false"
       />
 
@@ -612,6 +734,7 @@ onMounted(async () => {
         :project-id="projectId"
         :binding-id="pendingBindingId"
         class="chat-approval"
+        @confirmed="onBindingConfirmed"
       />
     </div>
 
@@ -680,8 +803,11 @@ onMounted(async () => {
             :worktree="appStore.worktree"
             :context="contextUsage"
             :permission="permission"
+            :model-connection-id="modelSelection.connectionId"
+            :model-name="modelSelection.modelName"
             @update:permission="appStore.setPermission($event)"
             @update:worktree="appStore.setWorktree($event)"
+            @update:model="chooseModel($event)"
             @new-session="resetSession"
             @navigate="goPath"
           />

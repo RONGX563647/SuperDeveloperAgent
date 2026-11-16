@@ -24,6 +24,10 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import top.rongx.agent.domain.change.ChangePlan;
 import top.rongx.agent.domain.change.ChangeWire;
+import top.rongx.agent.domain.port.ModelRegistry;
+import top.rongx.agent.domain.port.ModelRegistry.ActiveModel;
+import top.rongx.agent.domain.settings.ModelCatalogRepository;
+import top.rongx.agent.domain.settings.ModelConnectionRepository;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.web.dto.ChatRequest;
 import top.rongx.agent.governance.ChangeRegistry;
@@ -45,14 +49,12 @@ public class ChatController {
 
     /** 变更相关工具：只有它们的返回会被翻译成确认卡事件（委派结果里也可能带 changeId）。 */
     private static final java.util.Set<String> CHANGE_TOOLS =
-            java.util.Set.of("request_confirmation", "confirm", "run_ops_agent");
+            java.util.Set.of("request_confirmation", "confirm", "propose_patch", "run_action",
+                    "run_ops_agent");
 
     /** 生成环境绑定草案的工具：返回里带 bindingId，前端据此在对话中展开绑定确认卡。 */
     private static final java.util.Set<String> ENV_BINDING_TOOLS =
-            java.util.Set.of("env_mapping_draft");
-
-    private static final java.util.regex.Pattern BINDING_ID =
-            java.util.regex.Pattern.compile("(?m)^bindingId:\\s*(bind-[A-Za-z0-9-]{6,})\\s*$");
+            java.util.Set.of("env_mapping_draft", "run_ops_agent");
 
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
@@ -65,6 +67,9 @@ public class ChatController {
     private final AgentStreamLimiter limiter;
     private final AgentMetrics metrics;
     private final ConversationManager conversations;
+    private final ModelRegistry models;
+    private final ModelConnectionRepository connections;
+    private final ModelCatalogRepository catalog;
     /** 单次会话的 SSE 生命周期上限（默认 3 分钟，可按部署调整）。 */
     private final long streamTimeoutMillis;
     private final long heartbeatMillis;
@@ -78,6 +83,9 @@ public class ChatController {
                           AgentStreamLimiter limiter,
                           AgentMetrics metrics,
                           ConversationManager conversations,
+                          ModelRegistry models,
+                          ModelConnectionRepository connections,
+                          ModelCatalogRepository catalog,
                           @Value("${agent.chat.timeout-ms:180000}") long streamTimeoutMillis,
                           @Value("${agent.chat.heartbeat-seconds:15}") long heartbeatSeconds) {
         this.chatService = chatService;
@@ -89,6 +97,9 @@ public class ChatController {
         this.limiter = limiter;
         this.metrics = metrics;
         this.conversations = conversations;
+        this.models = models;
+        this.connections = connections;
+        this.catalog = catalog;
         this.streamTimeoutMillis = Math.max(30_000L, streamTimeoutMillis);
         this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
     }
@@ -106,8 +117,15 @@ public class ChatController {
         // 2. 服务端解析并校验项目上下文（模型不可篡改）
         ProjectContext ctx = contextResolver.resolve(
                 request.projectId(), request.env(), userId, request.worktree());
-        // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树
-        conversations.ensureFromChat(ctx, request.sessionId(), request.message(), request.worktree());
+        // 2.0 会话选择的模型必须真实可用：非法/停用的连接或目录外模型直接 400，不回退默认
+        requireKnownModel(request.modelConnectionId(), request.modelName());
+        ActiveModel active = models.resolve(request.modelConnectionId(), request.modelName())
+                .orElseThrow(() -> new IllegalArgumentException("模型连接不可用或已停用："
+                        + (request.modelConnectionId() == null ? "默认连接"
+                        : request.modelConnectionId())));
+        // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树/模型
+        conversations.ensureFromChat(ctx, request.sessionId(), request.message(),
+                request.worktree(), request.modelConnectionId(), request.modelName());
         // 3. 并发闸门：拿不到许可直接 429，不构建 Agent、不拉起 MCP
         AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
@@ -148,13 +166,14 @@ public class ChatController {
 
         try {
             Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
-                    "chat", request.skills(), request.mcpServers());
+                    "chat", request.skills(), request.mcpServers(),
+                    request.modelConnectionId(), request.modelName());
             // 工具结果是流式增量：按 toolCallId 累积，结束事件时判断是否含变更单号
             Map<String, String> toolNames = new HashMap<>();
             Map<String, StringBuilder> toolResults = new HashMap<>();
             Disposable disposable = events.subscribe(
                     event -> onEvent(event, emitter, ctx, toolNames, toolResults, seq, cancel,
-                            sendLock),
+                            sendLock, active.modelName()),
                     error -> {
                         failed.set(true);
                         log.error("对话流异常 project={} env={}", ctx.projectId(), ctx.env(), error);
@@ -181,9 +200,28 @@ public class ChatController {
         return emitter;
     }
 
+    /**
+     * 校验「模型属于该网关」：连接配置里的模型名或目录（发现/手工）中的模型都算合法。
+     *
+     * <p>只给连接不给模型（或只给模型）时不在这里判断，交由 ModelRegistry 解析。
+     */
+    private void requireKnownModel(String connectionId, String modelName) {
+        if (connectionId == null || connectionId.isBlank()
+                || modelName == null || modelName.isBlank()) {
+            return;
+        }
+        boolean configured = connections.find(connectionId)
+                .map(c -> modelName.equals(c.modelName()))
+                .orElse(false);
+        if (!configured && catalog.find(connectionId, modelName).isEmpty()) {
+            throw new IllegalArgumentException("模型不在该网关的模型目录中：" + modelName
+                    + "（可在「设置 → 模型连接」同步网关模型）");
+        }
+    }
+
     private void onEvent(AgentEvent event, SseEmitter emitter, ProjectContext ctx,
                          Map<String, String> toolNames, Map<String, StringBuilder> toolResults,
-                         AtomicLong seq, Runnable cancel, Object sendLock) {
+                         AtomicLong seq, Runnable cancel, Object sendLock, String modelName) {
         try {
             if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
                 toolNames.put(call.getToolCallId(), call.getToolCallName());
@@ -197,7 +235,7 @@ public class ChatController {
                     buf.append(delta.getDelta());
                 }
             }
-            Map<String, Object> dto = eventMapper.toDto(event);
+            Map<String, Object> dto = eventMapper.toDto(event, modelName);
             synchronized (sendLock) {
                 emitter.send(SseEmitter.event()
                         .id(String.valueOf(seq.incrementAndGet()))
@@ -269,11 +307,10 @@ public class ChatController {
      * bindingId 不会生成确认卡（否则用户可能确认到别的项目的绑定）。
      */
     private String bindingIdOf(String text, ProjectContext ctx) {
-        java.util.regex.Matcher matcher = BINDING_ID.matcher(text);
-        if (!matcher.find()) {
+        String id = top.rongx.agent.domain.env.EnvBindingWire.extract(text);
+        if (id == null) {
             return null;
         }
-        String id = matcher.group(1);
         return envStore.binding(id)
                 .filter(binding -> binding.projectId().equals(ctx.projectId()))
                 .filter(binding -> binding.env().equalsIgnoreCase(ctx.env()))
