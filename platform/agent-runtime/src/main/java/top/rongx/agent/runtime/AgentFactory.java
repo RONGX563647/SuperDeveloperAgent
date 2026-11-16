@@ -157,7 +157,7 @@ public class AgentFactory {
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(toolkit)
                 .permissionContext(permission)
-                .maxIters(props.maxIters())
+                .maxIters(maxIters(connectionId, modelName, 12))
                 .stateStore(stateStore);
         attachSkills(builder, requestedSkills);
         return new AgentSession(builder.build(), closeables);
@@ -291,9 +291,26 @@ public class AgentFactory {
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(deployToolkit)
                 .permissionContext(permission)
-                .maxIters(Math.max(props.maxIters(), 12))
+                .maxIters(maxIters(connectionId, modelName, 16))
                 .stateStore(stateStore)
                 .build();
+    }
+
+    /**
+     * 单轮工具迭代预算：全局配置与「设置页模型连接」取大，并保证下限。
+     *
+     * <p>历史 bug：这里只读全局 {@code agent.model.max-iters}（默认 8），设置页每条连接
+     * 的 maxIters 实际不生效，导致多步排障在落地补丁前就被截断。
+     */
+    private int maxIters(String connectionId, String modelName, int floor) {
+        int configured = props.maxIters();
+        try {
+            configured = Math.max(configured,
+                    modelProvider.activeConfig(connectionId, modelName).maxIters());
+        } catch (RuntimeException ignored) {
+            // 没有可用模型时，让 modelProvider.current 抛统一的配置指引，不在这里抢先报错
+        }
+        return Math.min(30, Math.max(floor, configured));
     }
 
     private String deploySystemPrompt(ProjectContext ctx) {
@@ -305,8 +322,9 @@ public class AgentFactory {
                    （只返回变量名/来源，不含明文值）；缺变量或中间件异常必须先说明，不要急着触发。
                 1.1 部署前置配置不齐时直接补（仅 dev/test）：
                    - 缺变量：env_var_set 写项目环境覆盖（值不回显），写完重新 env_mapping_draft；
-                   - 端口被占用 / 健康检查路径不对：先 ci_definition 看 deploy.port 与 healthPath，
-                     再用 ci_configure_deploy 改 port / container_port / health_path；
+                   - 端口被占用 / 健康检查路径不对：先 ci_definition 看真正生效的 deploy.port 与 healthPath，
+                     再用 ci_configure_deploy 改 port / container_port / health_path（仓库已有 ci/pipeline.yml 时
+                     它会被拒绝，需用 propose_patch 改仓库定义）；
                      Spring Boot 项目的健康端点是 /actuator/health，不是 /healthz；
                    - 工具链镜像缺失（E-209）由平台自动 pull 并 inspect 复核，不要先让用户手动 pull。
                 2. 再调 deploy_env_status 看该环境有没有已固化的脚本与成功证据；有且证据成功 → 直接 deploy_run 重放。
@@ -319,6 +337,10 @@ public class AgentFactory {
                 4. 没有脚本时：deploy_run 触发一次 release；触发后立刻用 wait_run 等待终态
                    （一次最多 90 秒，未结束就再次 wait_run 续等，不要高频调用 ci_status）；
                    失败再用 read_run_log 定位原因。
+                4.1 Docker 目标报 E-501「仓库没有 Dockerfile」或 E-708「缺 image_package」时，
+                    直接调用 ensure_dockerfile（base_sha 用失败运行的 gitSha），不要自己拼 Dockerfile、
+                    也不要要求用户手写：工具会按 Java 模块 / 前端 dist 生成镜像定义，并补齐 image stage
+                    与 ci/actions.yml 配方。产出的是变更卡，必须由用户确认后才会写仓库；确认后再用新提交重跑。
                 5. 根因在仓库配置时，用 propose_patch 修（这是唯一能改仓库的入口）；
                    平台侧流水线定义的部署段用 ci_configure_deploy 修（不涉及仓库）：
                    - 只能改 ci/**、Jenkinsfile、**/pom.xml、**/build.gradle(.kts)、**/src/test/**、
@@ -441,6 +463,9 @@ public class AgentFactory {
                    git_status / git_commits / git_diff / list_files / read_file），不要凭印象回答本项目的配置。
                    需要说明"平台接口怎么调"时用 api_search → api_get → api_schema 查 OpenAPI，
                    需要确认"平台有哪些工具"时用 tool_search，不要编造接口或工具名。
+                   取证必须收敛：同一工具 + 同一参数不要重复调用；最多 3 次证据查询后必须行动
+                   （propose_patch / ci_configure_deploy / request_confirmation）或给出结论。
+                   工具返回"目录不存在/证据失效"是正常结果，换路径或换信息源，不要反复重试同一次调用。
                 2. 只读操作可直接执行；会改变环境的动作必须由人确认，你没有任何"自己确认"的工具：
                    - 构建 / 回滚等动作：先调 request_confirmation 登记变更，把 changeId 告诉用户，
                      请其"在平台的确认卡片上确认"；未经确认不要执行；需要把卡片再次推到用户面前时
@@ -457,9 +482,13 @@ public class AgentFactory {
                 2.2 部署前置配置可以由你直接补齐（dev/test）：
                    - 变量：env_var_set / env_var_unset 维护项目环境覆盖（值不回显）。写完后有效环境
                      哈希变化，旧绑定失效，必须重新 env_mapping_draft 并请人确认；
-                   - 流水线定义：ci_definition 读取平台侧 ci/pipeline.yml；端口被占用或健康检查路径
-                     不对时用 ci_configure_deploy 改 port / container_port / health_path（会重写
-                     health stage 的 url）。仓库里的 ci/pipeline.yml 优先于平台侧定义；
+                   - 流水线定义：ci_definition 读取真正生效的定义（仓库 ci/pipeline.yml 优先于平台侧）；
+                     端口被占用或健康检查路径不对时用 ci_configure_deploy 改 port / container_port / health_path
+                     （会重写 health stage 的 url；仓库已有 ci/pipeline.yml 时该工具会拒绝，需改用 propose_patch）。
+                     部署目标是 docker 但缺少 image_package stage / Dockerfile（E-501、E-708）时，
+                     直接调用 ensure_dockerfile（base_sha 用失败运行的 gitSha）：它会按仓库结构生成
+                     Dockerfile，并自动补齐 image_package 阶段与 ci/actions.yml 配方。不要先让用户手写
+                     Dockerfile；工具产出的是变更卡，仍需用户本人确认后才会写仓库。
                    - 工具链镜像缺失（E-209）由平台自动 docker pull 并复核，不要要求用户先手动 pull；
                      自动拉取仍失败时，再让用户检查 Docker 网络/registry 或换 agent.sandbox.image。
                 3. 引用代码与日志时必须给出 文件:行号 或 时间窗，便于人工复核。

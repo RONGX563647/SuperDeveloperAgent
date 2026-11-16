@@ -167,14 +167,14 @@ agent:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}          # 可选：留空不阻塞启动，设置页可随时补配
     model: ${AGENT_MODEL_NAME:qwen-plus}
-    max-iters: 8
+    max-iters: ${AGENT_MODEL_MAX_ITERS:12}
     temperature: 0.2
     # 前缀缓存：系统提示 + 工具 schema 在多轮之间保持不变，开启后由服务端复用这部分 KV
     #（不支持 cache_control 的兼容服务会忽略该字段，无副作用）
     prefix-cache: ${AGENT_MODEL_PREFIX_CACHE:true}
   # 上下文精益：单次工具输出上限 + 会话历史预算（两层闸门，避免长会话把上下文撑爆）
   tools:
-    max-output-chars: ${AGENT_TOOLS_MAX_OUTPUT_CHARS:12000}
+    max-output-chars: ${AGENT_TOOLS_MAX_OUTPUT_CHARS:16000}
     # 工具目录快照：启动时导出，供 tool_search / tool_get 与外部 MCP 复用
     catalog-path: ${AGENT_TOOLS_CATALOG:./data/api/agent-tools.json}
     # 只读工具结果语义缓存：TTL + LRU + 写操作失效；相似度阈值越高越保守
@@ -187,7 +187,7 @@ agent:
       exclude: ${AGENT_TOOLS_CACHE_EXCLUDE:conversation_wait,conversation_status,conversation_summarize,workspace_snapshot,ci_status}
   context:
     # 落盘前保留的上下文字符预算（不含开头的 SYSTEM 提示）与最少保留消息数
-    max-chars: ${AGENT_CONTEXT_MAX_CHARS:60000}
+    max-chars: ${AGENT_CONTEXT_MAX_CHARS:80000}
     keep-messages: ${AGENT_CONTEXT_KEEP_MESSAGES:24}
 
 logging:
