@@ -847,10 +847,14 @@ watch(() => appStore.projectId, () => void loadServerSessions())
 }
 .ws-group {
   border-radius: var(--radius-sm);
-  transition: background-color var(--dur-fast) ease;
 }
-.ws-group.active {
-  background: var(--accent-faint);
+/*
+ * 选中态只落在「单条会话」上（.session-item.active 的浅灰块 + 左侧蓝条），
+ * 工作区只做轻量标识（图标/名称变色加粗），不再给整块分组铺浅蓝底，
+ * 否则切换会话时整块工作区一起高亮，看起来像选中了整个工作区。
+ */
+.ws-group.active .ws-name {
+  font-weight: 700;
 }
 .ws-group-head {
   display: flex;
