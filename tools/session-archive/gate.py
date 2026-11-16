@@ -598,6 +598,32 @@ def cmd_validate(args) -> int:
     return 0
 
 
+def unarchived_code_commits() -> list[str]:
+    """最近一份归档之后、含代码改动的提交都必须能被某份归档覆盖。
+
+    锚点取最新归档里最后一个提交；若它不在当前分支祖先链上（归档在别的分支）则跳过，
+    避免历史遗留提交误报。
+    """
+    rows = sorted((m for _, m in manifests() if m.get("commits")),
+                  key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
+    if not rows:
+        return []
+    recorded = {c.get("sha") for m in rows for c in m.get("commits", [])}
+    anchor = rows[-1]["commits"][-1]["sha"]
+    probe = subprocess.run(["git", "merge-base", "--is-ancestor", anchor, "HEAD"],
+                           cwd=ROOT, capture_output=True, env=clean_env())
+    if probe.returncode != 0:
+        return []
+    missing = []
+    for sha in git("rev-list", f"{anchor}..HEAD").splitlines():
+        if sha in recorded:
+            continue
+        files = git("diff-tree", "--no-commit-id", "--name-only", "-r", "-M", sha).splitlines()
+        if any(not is_exempt(path) for path in files):
+            missing.append(sha)
+    return missing
+
+
 def cmd_gate_pre_push(args) -> int:
     if ACTIVE.exists():
         active = load_json(ACTIVE)
@@ -605,6 +631,13 @@ def cmd_gate_pre_push(args) -> int:
     dirty = git("status", "--porcelain", "docs/process", "docs/summary")
     if dirty:
         return fail("存在未提交的归档/总结文件，请先提交 docs/ 后再推送")
+    missing = unarchived_code_commits()
+    if missing:
+        return fail(
+            "存在未归档的代码提交，禁止推送：\n  "
+            + "\n  ".join(sha[:7] for sha in missing)
+            + "\n每个代码提交都必须 start → commit → finish 归档；禁止 --no-verify 绕过"
+        )
     return cmd_validate(args)
 
 
