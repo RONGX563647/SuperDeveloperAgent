@@ -19,7 +19,10 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const emit = defineEmits<{ (e: 'copy', text: string): void }>()
+const emit = defineEmits<{
+  (e: 'copy', text: string): void
+  (e: 'retry'): void
+}>()
 
 /** 确认卡是否已展开（由父视图通过 v-model 式同步；展开后隐藏提示条避免信息重复）。 */
 const cardOpen = defineModel<boolean>('cardOpen', { default: false })
@@ -97,7 +100,9 @@ const rows = computed(() => items.value.map((message, index) => ({
         :message="row.message"
         :tool="row.message.toolCallId ? projection.tools[row.message.toolCallId] : undefined"
         :streaming="row.streaming"
+        :can-retry="!streaming"
         @copy="emit('copy', $event)"
+        @retry="emit('retry')"
       />
       <!-- 每轮费用合计：等宽小字，贴在该轮最后一条消息下方 -->
       <div v-if="row.cost" class="turn-cost mono">
@@ -140,9 +145,9 @@ const rows = computed(() => items.value.map((message, index) => ({
   flex-direction: column;
   gap: 4px;
   width: 100%;
-  max-width: 72rem;
+  max-width: var(--reading-max);
   min-height: 100%;
-  padding: 0 0 28px;
+  padding: 0 0 var(--sp-9);
   margin: 0 auto;
 }
 .row.assistant {
@@ -192,7 +197,7 @@ const rows = computed(() => items.value.map((message, index) => ({
   padding: 10px 12px;
   margin-top: 14px;
   background: var(--warn-soft);
-  border: 1px solid rgb(217 164 65 / 26%);
+  border: 1px solid var(--warn-border);
   border-radius: var(--radius-md);
 }
 .tip-title {

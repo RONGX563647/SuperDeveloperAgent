@@ -113,10 +113,10 @@ function onProject(id: string): void {
   margin-left: 6px;
 }
 .cs-project {
-  width: 132px;
+  width: 180px;
 }
 .cs-env {
-  width: 92px;
+  width: 96px;
 }
 .ctx-switch :deep(.el-select__wrapper) {
   min-height: 26px;
@@ -130,8 +130,11 @@ function onProject(id: string): void {
 }
 /* 手机：环境切换收进内容区，顶栏只留项目，避免横向溢出 */
 @media (max-width: 600px) {
+  .ctx-switch {
+    margin-left: 2px;
+  }
   .cs-project {
-    width: 104px;
+    width: clamp(124px, 32vw, 170px);
   }
   .cs-env {
     display: none;

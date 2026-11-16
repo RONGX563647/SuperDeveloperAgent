@@ -142,16 +142,16 @@ onBeforeUnmount(() => {
   display: grid;
   flex: 1;
   place-items: center;
-  font-size: 13px;
-  color: #c45656;
+  font-size: var(--text-sm);
+  color: var(--danger);
 }
 
 /* 移动端抽屉遮罩：只在抽屉打开时渲染 */
 .nav-scrim {
   position: fixed;
   inset: 0;
-  z-index: 70;
-  background: rgb(15 20 28 / 38%);
+  z-index: var(--z-nav);
+  background: rgb(15 23 42 / 38%);
   animation: scrim-in var(--dur-fast) ease;
 }
 

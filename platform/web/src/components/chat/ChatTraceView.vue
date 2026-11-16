@@ -706,30 +706,7 @@ watch(() => `${props.projectId}:${props.env}`, () => {
 .search input::placeholder {
   color: var(--ink-faint);
 }
-.seg {
-  display: flex;
-  flex: none;
-  padding: 2px;
-  background: var(--surface-sunken);
-  border-radius: var(--radius-sm);
-}
-.seg button {
-  height: 22px;
-  padding: 0 10px;
-  font-family: inherit;
-  font-size: 11.5px;
-  color: var(--ink-muted);
-  white-space: nowrap;
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius-xs);
-}
-.seg button.on {
-  color: var(--ink);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-1);
-}
+/* 分段控件沿用全局 .seg */
 
 /* ---- 概览带 ---- */
 .overview {

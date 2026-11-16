@@ -474,7 +474,7 @@ async function publishToTest(): Promise<void> {
   opacity: 0.5;
 }
 .po-btn.primary {
-  color: #fff;
+  color: var(--ink-inverse);
   background: var(--accent);
   border-color: var(--accent);
 }

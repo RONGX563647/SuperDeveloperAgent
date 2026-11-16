@@ -1,14 +1,12 @@
 <script setup lang="ts">
 /**
- * 主区顶部 Header —— 对齐 DSH 的会话标题行：
- * 高度 52px、与页面同色（不另起一层白/灰底）、**不画底部分隔线**（DSH 靠留白分层，
- * 只有内容滚动到 Header 下方时才需要视觉边界，这里由内容区自身的 padding 承担）。
+ * 主区顶部 Header。
  *
- * <p>标题 14px/600；副标题与标题基线对齐、弱化到 --ink-muted；
- * 右侧操作区用 gap 8px 紧凑排布。
+ * 结构：左侧（窄屏菜单按钮 + 标题 + 副标题 + 全局上下文）／右侧操作区。
+ * 高度固定 var(--header-height)，与页面内容共用 --page-gutter 左右留白，
+ * 因此标题始终和下方卡片左边缘对齐。
  *
- * <p>窄屏（≤900px）侧栏变为离屏抽屉，此时 Header 左侧出现菜单按钮打开导航 ——
- * 侧栏消失不等于导航消失。
+ * 视觉上不铺底色、不画分隔线：分层交给内容区自身（白纸画布或卡片）。
  */
 import { Menu } from '@element-plus/icons-vue'
 import { openNav } from '../navDrawer'
@@ -57,29 +55,32 @@ defineProps<{
   flex: none;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-8);
   height: var(--header-height);
-  padding: 0 16px;
-  background: transparent;
+  padding: 0 var(--page-gutter);
 }
+
 .head-left {
   display: flex;
   flex: 1 1 auto;
-  align-items: baseline;
-  gap: 10px;
+  align-items: center;
+  gap: var(--sp-5);
   min-width: 0;
 }
+
 .head-title {
   margin: 0;
   overflow: hidden;
   font-size: var(--text-lg);
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: -0.015em;
   color: var(--ink);
-  text-overflow: ellipsis;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
-/* DSH 的会话标题后面紧跟一串轻量元信息，用竖点分隔而不是胶囊 */
+
+/* 副标题是标题后的轻量元信息，用竖点分隔而不是胶囊 */
 .head-subtitle {
   overflow: hidden;
   font-size: var(--text-xs);
@@ -87,23 +88,29 @@ defineProps<{
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
 .head-subtitle::before {
-  padding-right: 10px;
+  padding-right: var(--sp-5);
   color: var(--ink-faint);
   content: '·';
 }
+
 .head-right {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-3);
 }
+
 /* 全局上下文（项目/环境）：标题后方一行，不另起一块区域 */
 .head-ctx {
   display: flex;
   flex: none;
-  align-self: center;
+  align-items: center;
   min-width: 0;
+  padding-left: var(--sp-2);
+  margin-left: var(--sp-2);
+  border-left: 1px solid var(--line-soft);
 }
 
 /* 窄屏导航按钮：默认隐藏，900px 以下才出现 */
@@ -112,18 +119,17 @@ defineProps<{
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--control-md);
+  height: var(--control-md);
   padding: 0;
-  margin-right: 2px;
   font-size: 16px;
   color: var(--ink-soft);
   cursor: pointer;
   background: none;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
-  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
 }
+
 .nav-switch:hover {
   color: var(--ink);
   background: var(--surface-hover);
@@ -132,11 +138,13 @@ defineProps<{
 @media (max-width: 900px) {
   .nav-switch {
     display: flex;
-    align-self: center;
   }
   .page-header {
-    gap: 8px;
-    padding: 0 12px;
+    gap: var(--sp-4);
+    padding: 0 var(--page-gutter-tight);
+  }
+  .head-left {
+    gap: var(--sp-4);
   }
 }
 
@@ -146,7 +154,7 @@ defineProps<{
     display: none;
   }
   .head-right {
-    gap: 6px;
+    gap: var(--sp-2);
   }
 }
 </style>

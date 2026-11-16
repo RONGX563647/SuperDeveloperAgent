@@ -29,6 +29,8 @@ const router = useRouter()
 
 const projects = ref<ProjectRow[]>([])
 const loading = ref(false)
+/** 列表请求失败原因：交给左栏显示「重试」，而不是伪装成空项目。 */
+const loadError = ref('')
 const leftPct = ref(25)
 const selected = shallowRef<TreeNode | null>(null)
 const tabbed = ref<InstanceType<typeof TabbedFiles> | null>(null)
@@ -116,10 +118,11 @@ async function applyScaffold(): Promise<void> {
 
 async function load(): Promise<void> {
   loading.value = true
+  loadError.value = ''
   try {
     projects.value = await listProjects()
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载项目失败')
+    loadError.value = e instanceof Error ? e.message : '加载项目失败'
   } finally {
     loading.value = false
   }
@@ -191,10 +194,10 @@ const overviewProject = computed(() =>
   <div class="workbench-page">
     <PageHeader title="项目管理" subtitle="文档树 · 详情面板 · 流水线入口">
       <template #actions>
-        <button type="button" class="hdr-btn" @click="openScaffold">
+        <button type="button" class="btn sm" @click="openScaffold">
           <span class="hdr-long">生成流水线脚本</span><span class="hdr-short">生成脚本</span>
         </button>
-        <button type="button" class="hdr-btn primary" @click="router.push('/projects/intake')">
+        <button type="button" class="btn sm primary" @click="router.push('/projects/intake')">
           <span class="hdr-long">接入项目</span><span class="hdr-short">接入</span>
         </button>
       </template>
@@ -206,9 +209,12 @@ const overviewProject = computed(() =>
         <ProjectTree
           :projects="projects"
           :selected-id="selectedId"
+          :loading="loading"
+          :error="loadError"
           @select="onSelect"
           @action="onAction"
           @intake="router.push('/projects/intake')"
+          @retry="load"
         />
       </div>
 
@@ -238,6 +244,7 @@ const overviewProject = computed(() =>
           v-show="selected?.kind === 'file'"
           ref="tabbed"
           class="wb-tabs"
+          @empty="clearSelection"
         >
           <template #default="{ tab }">
             <FilePreview
@@ -250,7 +257,7 @@ const overviewProject = computed(() =>
         </TabbedFiles>
 
         <!-- 空状态：未选中任何节点（TabbedFiles 内部有自己的无 Tab 空态？这里统一处理） -->
-        <div v-if="!selected" class="wb-empty">
+        <div v-if="!selected" class="empty-state wb-empty">
           <div class="we-illus" aria-hidden="true">
             <svg width="96" height="64" viewBox="0 0 96 64" fill="none">
               <rect x="8" y="8" width="36" height="48" rx="6" fill="var(--surface-sunken)" />
@@ -263,11 +270,13 @@ const overviewProject = computed(() =>
               <rect x="58" y="40" width="24" height="10" rx="3" fill="var(--accent-soft)" />
             </svg>
           </div>
-          <p class="we-title">从左侧选择一个项目或文件</p>
-          <p class="we-sub">点击项目名查看配置概览，点击文件打开预览标签页</p>
-          <button v-if="!projects.length" type="button" class="we-btn" @click="router.push('/projects/intake')">
-            接入第一个项目
-          </button>
+          <p class="empty-state-title">从左侧选择一个项目或文件</p>
+          <p class="empty-state-desc">点击项目名查看配置概览，点击文件打开预览标签页</p>
+          <div v-if="!projects.length" class="empty-state-actions">
+            <button type="button" class="btn sm primary" @click="router.push('/projects/intake')">
+              接入第一个项目
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -374,79 +383,15 @@ const overviewProject = computed(() =>
   height: 100%;
 }
 
-/* 空状态 */
+/* 空状态：版式交给全局 .empty-state，这里只负责占满右栏 */
 .wb-empty {
-  display: flex;
   flex: 1;
-  flex-direction: column;
-  align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 40px;
-  text-align: center;
 }
-.we-title {
-  margin: 12px 0 0;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--ink-muted);
-}
-.we-sub {
-  margin: 0;
-  font-size: 12px;
-  color: var(--ink-faint);
-}
-.we-btn {
-  height: 32px;
-  padding: 0 16px;
-  margin-top: 12px;
-  font-family: inherit;
-  font-size: 13px;
-  color: #fff;
-  cursor: pointer;
-  background: var(--accent);
-  border: 0;
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
-  transition: background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
-}
-.we-btn:hover {
-  background: var(--accent-hover);
-  box-shadow: 0 2px 10px rgb(77 130 247 / 28%);
+.we-illus {
+  margin-bottom: var(--sp-4);
 }
 
-.hdr-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 12px;
-  font-family: inherit;
-  font-size: 12.5px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  background: none;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease,
-    border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
-}
-.hdr-btn:hover {
-  color: var(--ink);
-  background: var(--surface-hover);
-  border-color: var(--line);
-}
-.hdr-btn.primary {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: var(--shadow-1);
-}
-.hdr-btn.primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  box-shadow: 0 2px 8px rgb(77 130 247 / 28%);
-}
 /* 顶栏按钮在手机上用短文案，给标题留出空间 */
 .hdr-short {
   display: none;
@@ -457,9 +402,6 @@ const overviewProject = computed(() =>
   }
   .hdr-short {
     display: inline;
-  }
-  .hdr-btn {
-    padding: 0 10px;
   }
 }
 

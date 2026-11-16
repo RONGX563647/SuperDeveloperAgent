@@ -27,6 +27,7 @@ const props = withDefaults(defineProps<Props>(), { depth: 0 })
 const emit = defineEmits<{
   (e: 'select', node: TreeNode): void
   (e: 'toggle', node: TreeNode): void
+  (e: 'retry', node: TreeNode): void
   (e: 'action', action: 'refresh' | 'rename' | 'delete', node: TreeNode): void
 }>()
 
@@ -38,15 +39,27 @@ function onClick(): void {
   if (isDir.value) emit('toggle', props.node)
   emit('select', props.node)
 }
+
+/** 行内操作按钮自己也响应 Enter/Space，这里只处理行本身，避免一次按键触发两个动作。 */
+function onRowKeydown(event: KeyboardEvent): void {
+  if (event.target !== event.currentTarget) return
+  event.preventDefault()
+  onClick()
+}
 </script>
 
 <template>
   <div class="tree-node">
     <div
       class="tree-row"
+      role="treeitem"
+      tabindex="0"
+      :aria-expanded="isDir ? isOpen : undefined"
       :class="{ active: selectedId === node.id, dir: isDir, file: isFile }"
       :style="{ paddingLeft: `${depth * 16 + 10}px` }"
       @click="onClick"
+      @keydown.enter="onRowKeydown"
+      @keydown.space="onRowKeydown"
     >
       <span class="tree-caret">
         <el-icon v-if="isDir" class="caret-btn" :class="{ open: isOpen }">
@@ -78,7 +91,7 @@ function onClick(): void {
         </button>
       </span>
 
-      <button v-if="node.error" type="button" class="ta-retry" @click.stop="emit('toggle', node)">
+      <button v-if="node.error" type="button" class="ta-retry" @click.stop="emit('retry', node)">
         重试
       </button>
     </div>
@@ -96,6 +109,7 @@ function onClick(): void {
         :expanded="expanded"
         @select="emit('select', $event)"
         @toggle="emit('toggle', $event)"
+        @retry="emit('retry', $event)"
         @action="(a, n) => emit('action', a, n)"
       />
     </div>
@@ -104,6 +118,7 @@ function onClick(): void {
 
 <style scoped>
 .tree-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -151,7 +166,7 @@ function onClick(): void {
   flex: none;
   font-size: 14px;
 }
-.tree-icon.dir { color: #e8a33d; }
+.tree-icon.dir { color: var(--warn); }
 .tree-icon.repo { color: var(--accent-ink); }
 .tree-icon.file { color: var(--ink-muted); }
 .tree-icon.error { color: var(--danger); }
@@ -163,16 +178,35 @@ function onClick(): void {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 操作按钮浮在行尾，不占名字宽度；hover 时才出现 */
 .tree-actions {
+  position: absolute;
+  top: 50%;
+  right: 6px;
   display: flex;
   flex: none;
   align-items: center;
   gap: 2px;
+  padding-left: 10px;
+  background: linear-gradient(90deg, transparent, var(--panel) 30%);
+  border-radius: var(--radius-sm);
   opacity: 0;
+  transform: translateY(-50%);
   transition: opacity var(--dur-fast) ease;
 }
-.tree-row:hover .tree-actions {
+.tree-row:hover .tree-actions,
+.tree-row:focus-within .tree-actions {
   opacity: 1;
+}
+/* 触屏没有 hover：常显并回到正常流，避免遮住文件名 */
+@media (hover: none) {
+  .tree-actions {
+    position: static;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
+    transform: none;
+  }
 }
 .ta-btn {
   display: flex;

@@ -295,7 +295,7 @@ function download(): void {
 }
 .search-input:focus {
   background: var(--panel);
-  border-color: rgb(77 130 247 / 55%);
+  border-color: var(--accent-ring);
 }
 .log-actions {
   display: flex;
@@ -400,7 +400,7 @@ function download(): void {
   padding: 5px 12px;
   font-family: inherit;
   font-size: 12px;
-  color: #fff;
+  color: var(--ink-inverse);
   cursor: pointer;
   background: var(--accent);
   border: 0;

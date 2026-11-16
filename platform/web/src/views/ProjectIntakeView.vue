@@ -14,6 +14,7 @@ import {
 import { cancelRun, triggerPipeline } from '../api/pipeline'
 import DirPickerDialog from '../components/DirPickerDialog.vue'
 import GiteeRepoPicker from '../components/GiteeRepoPicker.vue'
+import PageHeader from '../layouts/components/PageHeader.vue'
 import { appStore } from '../stores/app'
 import { applySelection } from '../utils/projectId'
 
@@ -54,6 +55,15 @@ const stepIndex = computed(() => {
   const i = steps.indexOf(status.value.phase as (typeof steps)[number])
   return i < 0 ? steps.length - 1 : i
 })
+
+/** 顶栏标题跟随阶段变化：向导内部不再重复一个大标题。 */
+const headerTitle = computed(() => {
+  if (phase.value === 'FORM') return '接入项目'
+  if (phase.value === 'DONE') return '接入完成'
+  return phase.value === 'FAILED' ? '接入失败' : '正在接入'
+})
+const headerSubtitle = computed(() => (
+  phase.value === 'FORM' ? '本地目录或远程仓库' : status.value?.projectId ?? ''))
 
 const idOk = computed(() => /^[A-Z][A-Z0-9_]{1,15}$/.test(projectId.value))
 const canSubmit = computed(() => {
@@ -331,8 +341,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="intake-page">
-    <div class="intake-column">
+  <div class="intake-shell">
+    <PageHeader :title="headerTitle" :subtitle="headerSubtitle" />
+    <div class="intake-page">
+      <div class="intake-column">
       <!-- Gitee 授权已迁移到「设置 → 代码仓库」；这里只保留状态提示与跳转 -->
       <section v-if="!binding?.bound" class="account-card muted">
         <div class="acct-left">
@@ -363,7 +375,6 @@ onUnmounted(() => {
 
       <!-- Step 1: 表单 -->
       <template v-if="phase === 'FORM'">
-        <h1 class="page-title">接入项目</h1>
         <p class="page-sub">
           本地目录就地收编（平台只读你的目录），或从 Gitee / GitHub / GitLab / 任意 Git 地址 clone。
         </p>
@@ -391,7 +402,7 @@ onUnmounted(() => {
                 </span>
               </div>
               <span class="field-hint">
-                点击会弹出系统文件夹选择框；平台只读你的目录并同步提交，<b>不修改任何文件</b>。
+                点击打开目录选择器（快捷位置 + 面包屑 + 搜索）；平台只读你的目录并同步提交，<b>不修改任何文件</b>。
               </span>
             </div>
             <label v-if="selectedDir && !selectedIsGit" class="check-field">
@@ -456,10 +467,9 @@ onUnmounted(() => {
 
       <!-- Step 2 -->
       <template v-else-if="phase === 'RUNNING' || phase === 'FAILED'">
-        <h1 class="page-title">
-          正在接入 {{ status?.projectId }}
-          <span v-if="phase === 'FAILED'" class="fail-tag">失败</span>
-        </h1>
+        <h2 class="step-title">
+          项目 <span class="mono">{{ status?.projectId }}</span>
+        </h2>
         <ol class="timeline">
           <li
             v-for="(s, i) in steps"
@@ -487,7 +497,6 @@ onUnmounted(() => {
 
       <!-- Step 3 -->
       <template v-else>
-        <h1 class="page-title">接入完成</h1>
         <div class="report-card" v-if="report">
           <div class="report-line">
             <span>自检</span>
@@ -628,12 +637,31 @@ onUnmounted(() => {
       :account="binding?.giteeLogin ?? ''"
       @pick="pickRepo"
     />
+    </div>
   </div>
 </template>
 
 <style scoped src="./intake-shared.css"></style>
 
 <style scoped>
+/* 顶栏 + 可滚动向导区：顶栏固定，窄屏才有导航入口（侧栏在 ≤900px 是抽屉） */
+.intake-shell {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.intake-page {
+  padding-top: var(--sp-5);
+}
+.step-title {
+  margin: var(--sp-2) 0 var(--sp-4);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
 .auto-verify {
   display: flex;
   flex-wrap: wrap;

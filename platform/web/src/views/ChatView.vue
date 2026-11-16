@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
+  ArrowDown, CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../stores/app'
 import type { ChatMessage, TraceTurn } from '../types'
@@ -64,6 +64,46 @@ const projects = ref<ProjectRow[]>([])
 const envText = computed(() => envLabel(env.value))
 
 const input = ref('')
+
+/**
+ * 输入草稿按会话保存到 localStorage：切会话、跳设置再回来都不会丢字。
+ * 发送成功后清空；空草稿直接删除键，不留下无意义记录。
+ */
+const DRAFT_PREFIX = 'agent.chat.draft.'
+const DRAFT_LIMIT = 20_000
+let draftTimer: number | null = null
+
+function persistDraftFor(id: string, text: string): void {
+  if (!id) return
+  try {
+    if (text.trim()) localStorage.setItem(DRAFT_PREFIX + id, text.slice(0, DRAFT_LIMIT))
+    else localStorage.removeItem(DRAFT_PREFIX + id)
+  } catch {
+    // 隐私模式下 localStorage 可能不可写：草稿仅保留在内存
+  }
+}
+
+function persistDraft(): void {
+  persistDraftFor(sessionId.value, input.value)
+}
+
+function restoreDraft(): void {
+  const id = sessionId.value
+  if (!id) {
+    input.value = ''
+    return
+  }
+  try {
+    input.value = localStorage.getItem(DRAFT_PREFIX + id) ?? ''
+  } catch {
+    input.value = ''
+  }
+}
+
+function clearDraft(): void {
+  persistDraftFor(sessionId.value, '')
+}
+
 /** 执行策略提升到全局 store（本地持久化）；三种模式实际影响确认卡的展开行为。 */
 const permission = computed<PermissionMode>({
   get: () => appStore.permission,
@@ -177,6 +217,25 @@ function stop(): void {
   chatEntry.value?.chat.stop()
 }
 
+/** Enter 发送 / Shift+Enter 换行；输入法组合中不拦截，避免破坏候选词上屏。 */
+function onEnter(event: KeyboardEvent): void {
+  if (event.isComposing || composing.value) return
+  event.preventDefault()
+  void send()
+}
+
+/** Esc 停止当前生成（输入法组合中交给输入法自己处理）。 */
+function onEscape(): void {
+  if (composing.value || !streaming.value) return
+  stop()
+}
+
+/** 会话切换后把焦点还给输入框（触屏设备不主动弹键盘）。 */
+function focusComposer(): void {
+  if (!window.matchMedia?.('(pointer: fine)').matches) return
+  inputRef.value?.focus()
+}
+
 function appendMessage(message: ChatMessage): void {
   chatEntry.value?.chat.appendMessage(message)
 }
@@ -252,8 +311,13 @@ function onBindingConfirmed(bindingId: string): void {
 }
 
 const {
-  updateScrollState, followNewContent, scrollToLatest,
+  isNearBottom, hasNewContent, updateScrollState, followNewContent, scrollToLatest,
 } = useFollowScroll(listRef, { bottomThreshold: 40 })
+
+/** 上翻阅读时出现「有新内容 / 回到底部」浮标，流式输出也不打断阅读。 */
+function jumpToBottom(): void {
+  scrollToLatest({ force: true, behavior: 'smooth' })
+}
 
 /**
  * 轨迹：把扁平的消息列按 user 消息切成一「轮」，供右侧定位条与轨迹视图使用。
@@ -354,20 +418,26 @@ const traceTurns = computed<TraceTurn[]>(() => {
 
 /** 当前视口所在轮次：最后一个"顶部已越过容器上沿"的 user 锚点。 */
 const activeTurnId = ref('')
+let activeFrame: number | null = null
 
+/** 滚动事件按帧合并：长会话下逐个 getBoundingClientRect 会拖慢滚动。 */
 function syncActiveTurn(): void {
-  const list = listRef.value
-  const turns = traceTurns.value
-  if (!list || !turns.length) return
-  const listTop = list.getBoundingClientRect().top
-  let current = turns[0].id
-  for (const turn of turns) {
-    const el = document.getElementById(`msg-${turn.id}`)
-    if (!el) continue
-    if (el.getBoundingClientRect().top - listTop <= 96) current = turn.id
-    else break
-  }
-  activeTurnId.value = current
+  if (activeFrame !== null) return
+  activeFrame = requestAnimationFrame(() => {
+    activeFrame = null
+    const list = listRef.value
+    const turns = traceTurns.value
+    if (!list || !turns.length) return
+    const listTop = list.getBoundingClientRect().top
+    let current = turns[0].id
+    for (const turn of turns) {
+      const el = document.getElementById(`msg-${turn.id}`)
+      if (!el) continue
+      if (el.getBoundingClientRect().top - listTop <= 96) current = turn.id
+      else break
+    }
+    activeTurnId.value = current
+  })
 }
 
 /** 点击刻度/轨迹条目：把该轮 user 消息滚到容器顶部附近。 */
@@ -390,9 +460,10 @@ const placeholder = computed(() => {
   if (permission.value === 'readonly') {
     return '只读模式：可以提问与诊断，但不会展开任何变更确认卡'
   }
+  if (streaming.value) return '正在生成…可以先输入下一条，结束后发送'
   return env.value === 'prod'
     ? '生产环境：只能只读诊断；任何变更都需要在确认卡片上确认'
-    : '发消息或描述任务'
+    : '发消息或描述任务（Enter 发送，Shift+Enter 换行）'
 })
 
 const canSend = computed(() => !!input.value.trim() && !streaming.value)
@@ -411,6 +482,7 @@ function startWith(text: string): void {
   if (streaming.value) return
   input.value = text
   void send()
+  void nextTick(focusComposer)
 }
 
 /** 三个平级视图直接铺开；任务看板已上移到工作区，会话页保持纯对话。 */
@@ -428,7 +500,14 @@ function resizeInput(): void {
   el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.3))}px`
 }
 
-watch(input, () => void nextTick(resizeInput))
+watch(input, () => {
+  void nextTick(resizeInput)
+  if (draftTimer !== null) window.clearTimeout(draftTimer)
+  draftTimer = window.setTimeout(() => {
+    draftTimer = null
+    persistDraft()
+  }, 250)
+})
 
 /** 项目名（空状态文案用，比裸 projectId 可读）。 */
 const projectDisplayName = computed(() =>
@@ -456,9 +535,13 @@ async function loadProjects(): Promise<void> {
 
 /** 读取「设置 → 项目环境」的有效配置：由悬浮卡自行加载，本视图不再关心。 */
 
-// 内容变化时粘底滚动（流式增量/新消息都会触发）
+// 内容变化时粘底滚动（正文 / 思考增量、新消息都会触发）
 watch(
-  () => projection.value.messages.length + (projection.value.streamingTurn?.text.length ?? 0),
+  () => [
+    projection.value.messages.length,
+    projection.value.streamingTurn?.text.length ?? 0,
+    projection.value.streamingTurn?.thinking.length ?? 0,
+  ].join(':'),
   () => {
     followNewContent()
     void nextTick(syncActiveTurn)
@@ -476,10 +559,9 @@ watch(error, (msg) => {
   if (msg) console.warn('[chat] stream error:', msg)
 })
 
-async function send() {
-  const text = input.value.trim()
-  if (!text || streaming.value || composing.value) return
-  input.value = ''
+/** 真正提交一轮对话：追加 user 气泡并读流；草稿与输入框由调用方处理。 */
+async function submit(text: string): Promise<void> {
+  if (!text || streaming.value) return
   // 从轨迹页发起的新问题：切回对话，才能看到流式回复
   viewMode.value = 'chat'
   appStore.touchSession(text)
@@ -488,6 +570,24 @@ async function send() {
   // 落盘由 sessionChat 按会话负责：这里切走也不会把内容写进别的会话
   await sendChat(text)
   void scrollToLatest({ force: true })
+}
+
+async function send() {
+  const text = input.value.trim()
+  if (!text || streaming.value || composing.value) return
+  input.value = ''
+  clearDraft()
+  await submit(text)
+}
+
+/** 失败行重试：重发上一条问题（保留输入框里正在写的草稿）。 */
+function retryLast(): void {
+  if (streaming.value) return
+  const lastUser = [...projection.value.messages]
+    .reverse()
+    .find((message) => message.role === 'user')
+  if (!lastUser) return
+  void submit(lastUser.text)
 }
 
 function onListScroll() {
@@ -505,8 +605,18 @@ async function copyMessage(text: string) {
   }
 }
 
+/** 新建会话时跳过「把空输入写回旧会话」的一步，保证旧草稿不被抹掉。 */
+let skipPersistSession = ''
+
 function resetSession() {
   approvalCardOpen.value = false
+  if (draftTimer !== null) {
+    window.clearTimeout(draftTimer)
+    draftTimer = null
+  }
+  // 先把当前草稿存回旧会话：新建会话不应丢掉上一段没发出去的内容
+  persistDraftFor(sessionId.value, input.value)
+  skipPersistSession = sessionId.value
   input.value = ''
   // 只切到新会话：旧会话若仍在后台运行，让它继续跑完（与侧栏「新会话」一致）
   appStore.newSession()
@@ -514,21 +624,30 @@ function resetSession() {
     resizeInput()
     scrollToLatest({ force: true })
     syncActiveTurn()
+    focusComposer()
   })
 }
 
-/** 切换会话：只换绑常驻实例，不中止上一个会话仍在后台运行的读流。 */
-watch(sessionId, () => {
+/** 切换会话：先保存旧会话草稿，再恢复新会话草稿；后台读流不中止。 */
+watch(sessionId, (next, prev) => {
+  if (draftTimer !== null) {
+    window.clearTimeout(draftTimer)
+    draftTimer = null
+  }
+  if (prev && prev !== skipPersistSession) persistDraftFor(prev, input.value)
+  skipPersistSession = ''
   approvalCardOpen.value = false
-  input.value = ''
+  restoreDraft()
   void nextTick(() => {
     resizeInput()
     scrollToLatest({ force: true })
     syncActiveTurn()
+    focusComposer()
   })
 })
 
 onMounted(async () => {
+  restoreDraft()
   await loadProjects()
   void loadSessionMeta()
   void nextTick(() => {
@@ -536,6 +655,18 @@ onMounted(async () => {
     scrollToLatest({ force: true })
     syncActiveTurn()
   })
+})
+
+onBeforeUnmount(() => {
+  if (draftTimer !== null) {
+    window.clearTimeout(draftTimer)
+    draftTimer = null
+  }
+  persistDraft()
+  if (activeFrame !== null) {
+    cancelAnimationFrame(activeFrame)
+    activeFrame = null
+  }
 })
 </script>
 
@@ -621,16 +752,17 @@ onMounted(async () => {
 
     <!-- 视图切换 + 环境状态条：对话/轨迹共用一行工具区，状态条可展开看中间件明细 -->
     <div class="topbar">
-      <div class="view-switch">
+      <div class="seg" role="tablist" aria-label="对话视图">
         <button
           v-for="tab in viewTabs" :key="tab.key" type="button"
-          class="switch-tab" :class="{ on: viewMode === tab.key }"
+          role="tab" :aria-selected="viewMode === tab.key"
+          :class="{ on: viewMode === tab.key }"
           @click="viewMode = tab.key"
         >
           {{ tab.label }}
           <span
             v-if="tab.key === 'capabilities' && selectedSkills.length + selectedMcp.length"
-            class="tab-badge mono"
+            class="seg-count"
           >
             {{ selectedSkills.length + selectedMcp.length }}
           </span>
@@ -705,6 +837,7 @@ onMounted(async () => {
         :projection="projection"
         :streaming="streaming"
         @copy="copyMessage"
+        @retry="retryLast"
       >
         <template #change-action>
           <button
@@ -746,6 +879,20 @@ onMounted(async () => {
         @locate="scrollToTurn"
         @open-trace="viewMode = 'trace'"
       />
+
+      <!-- 上翻阅读时的新内容提示：流式输出不抢滚动，用户主动回到底部 -->
+      <Transition name="scroll-pop">
+        <button
+          v-if="!isNearBottom || hasNewContent"
+          type="button" class="scroll-bottom"
+          :class="{ fresh: hasNewContent }"
+          :title="hasNewContent ? '有新的输出，回到底部' : '回到底部'"
+          @click="jumpToBottom"
+        >
+          <el-icon><ArrowDown /></el-icon>
+          <span>{{ hasNewContent ? '有新内容' : '回到底部' }}</span>
+        </button>
+      </Transition>
     </div>
 
     <!-- 输入区：自然撑开在底部，不 fixed / 不 sticky -->
@@ -757,13 +904,15 @@ onMounted(async () => {
           class="composer-input"
           rows="1"
           :placeholder="placeholder"
+          aria-label="对话输入框"
           @compositionstart="composing = true"
           @compositionend="composing = false"
-          @keydown.enter.exact.prevent="send"
+          @keydown.enter.exact="onEnter"
+          @keydown.esc="onEscape"
         ></textarea>
         <div class="composer-bar">
           <div class="bar-left">
-            <button type="button" class="chip-btn" disabled title="附件功能待接入">
+            <button type="button" class="icon-btn" disabled title="附件功能待接入">
               <el-icon><Paperclip /></el-icon>
             </button>
             <span class="bar-scope mono" :title="projectDisplayName">
@@ -842,24 +991,7 @@ onMounted(async () => {
 }
 
 /* ---- Header 右侧 ---- */
-.icon-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  font-size: 14px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-}
-.icon-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
+/* 图标按钮 / 输入区 / 欢迎页使用全局原语（styles.css） */
 
 /* 会话累计费用 chip：等宽小字，贴着设置键 */
 .session-cost {
@@ -892,46 +1024,8 @@ onMounted(async () => {
   flex: none;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.view-switch {
-  display: flex;
-  flex: none;
-  gap: 16px;
-}
-.switch-tab {
-  padding: 9px 1px 10px;
-  font-family: inherit;
-  font-size: var(--text-sm);
-  color: var(--ink-faint);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-bottom: 1.5px solid transparent;
-  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
-}
-.switch-tab:hover {
-  color: var(--ink-muted);
-}
-.switch-tab.on {
-  font-weight: 600;
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
-.tab-badge {
-  display: inline-block;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  margin-left: 4px;
-  font-size: 9.5px;
-  line-height: 15px;
-  color: var(--ink-muted);
-  text-align: center;
-  background: var(--surface-sunken);
-  border-radius: 8px;
+  gap: var(--sp-6);
+  padding: var(--sp-2) var(--page-gutter) var(--sp-3);
 }
 
 /* ---- 消息区：只有这里滚动；正文明暗靠白纸画布，不加分隔线 ---- */
@@ -945,120 +1039,86 @@ onMounted(async () => {
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
-  padding: 0 clamp(16px, 2.4vw, 40px);
+  padding: var(--sp-4) var(--page-gutter) 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .chat-approval {
-  max-width: 72rem;
-  margin: 0 auto 24px;
+  max-width: var(--reading-max);
+  margin: 0 auto var(--sp-9);
 }
 
-/* ---- 空会话引导：在可视区里垂直居中，内容超出时自然从顶部滚动 ---- */
-.welcome {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  width: 100%;
-  max-width: 72rem;
-  min-height: 100%;
-  padding: 24px 0;
-  margin: 0 auto;
-}
-.welcome-icon {
-  display: flex;
+/* 回到底部：贴消息区底部居中，不遮挡右侧轨迹刻度 */
+.scroll-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 8;
+  display: inline-flex;
+  gap: 5px;
   align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  font-size: 17px;
-  color: var(--ink-soft);
-  background: var(--surface-sunken);
-  border-radius: var(--radius-md);
-}
-.welcome-title {
-  margin: 14px 0 6px;
-  font-size: 19px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--ink);
-}
-.welcome-desc {
-  max-width: 34rem;
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.75;
-  color: var(--ink-muted);
-}
-.welcome-suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 22px;
-}
-/* 一张卡 = 一个常用场景：标题 + 一句说明，点一下直接开跑 */
-.suggestion {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  padding: 12px 14px;
+  height: 28px;
+  padding: 0 12px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 11.5px;
   color: var(--ink-soft);
-  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
   background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-md);
-  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-2);
+  transform: translateX(-50%);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
 }
-.suggestion:hover {
+.scroll-bottom:hover {
   color: var(--ink);
-  border-color: var(--line);
-  box-shadow: var(--shadow-1);
+  background: var(--surface-hover);
 }
-.suggestion-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+.scroll-bottom.fresh {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
-.suggestion-main strong {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--ink);
+.scroll-bottom.fresh::before {
+  width: 5px;
+  height: 5px;
+  content: '';
+  background: var(--accent);
+  border-radius: 50%;
 }
-.suggestion-main small {
-  font-size: 12px;
-  color: var(--ink-muted);
+.scroll-pop-enter-active,
+.scroll-pop-leave-active {
+  transition: opacity var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
-.suggestion .el-icon {
-  flex: none;
-  font-size: 12px;
-  color: var(--ink-faint);
+.scroll-pop-enter-from,
+.scroll-pop-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 6px);
 }
+
+/* ---- 空会话引导：布局与建议卡使用全局 .welcome / .suggestion ---- */
 
 /* 展开确认卡片按钮（在 ConversationTimeline 的 change-action 插槽里） */
 .tip-btn {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 2px;
-  height: 26px;
-  padding: 0 10px;
+  gap: var(--sp-1);
+  height: var(--control-sm);
+  padding: 0 var(--sp-5);
   font-family: inherit;
-  font-size: 12px;
-  color: var(--warn);
+  font-size: var(--text-xs);
+  color: var(--warn-ink);
   cursor: pointer;
-  background: rgb(217 164 65 / 10%);
-  border: 1px solid rgb(217 164 65 / 30%);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
   border-radius: var(--radius-sm);
   transition: background-color var(--dur-fast) ease;
 }
 .tip-btn:hover {
-  background: rgb(217 164 65 / 18%);
+  background: var(--warn-soft-strong);
 }
 .tip-btn:disabled {
   cursor: not-allowed;
@@ -1067,89 +1127,8 @@ onMounted(async () => {
   border-color: var(--line-soft);
 }
 
-/* ---- 输入区：白底浮起的 composer，底部一行工具条 ---- */
-.composer-wrap {
-  flex: none;
-  padding: 0 clamp(16px, 2.4vw, 40px) 12px;
-}
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  max-width: 72rem;
-  padding: 12px 12px 6px 14px;
-  margin: 0 auto;
-  background: var(--surface-raised);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 6px 20px rgb(16 24 40 / 6%);
-  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
-}
-.composer:focus-within {
-  border-color: rgb(77 130 247 / 52%);
-  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 24px rgb(16 24 40 / 9%);
-}
-/* 输入框：原生 textarea，高度由 resizeInput 按内容算，最多 30vh 后内部滚动 */
-.composer-input {
-  width: 100%;
-  min-height: 46px;
-  padding: 2px;
-  overflow-y: auto;
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--ink);
-  resize: none;
-  background: transparent;
-  border: 0;
-  outline: none;
-}
-.composer-input::placeholder {
-  color: var(--ink-faint);
-}
-.composer-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.bar-left,
-.bar-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.chip-btn {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  font-size: 14px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-}
-.chip-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-.bar-scope {
-  overflow: hidden;
-  max-width: 190px;
-  padding: 0 4px;
-  font-size: 11px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-/* 环境选择：并入输入区左下的范围声明，不再占用正文上方的独立信息行 */
+/* ---- 输入区：容器 / 输入框 / 工具条 / 发送键使用全局 .composer 原语 ---- */
+/* 环境选择：并入输入区左下的范围声明 */
 .scope-env {
   width: 88px;
 }
@@ -1166,8 +1145,8 @@ onMounted(async () => {
 }
 /* 状态条内置：发丝线与输入区分隔，浮层向上展开 */
 .composer-status {
-  margin: 0 -12px -6px;
-  padding: 2px 8px 2px 10px;
+  margin: 0 calc(var(--sp-6) * -1) calc(var(--sp-3) * -1);
+  padding: var(--sp-1) var(--sp-4) var(--sp-1) var(--sp-5);
   border-top: 1px solid var(--line-soft);
 }
 .composer :deep(.status-strip) {
@@ -1181,86 +1160,24 @@ onMounted(async () => {
   width: 104px;
 }
 .permission-select :deep(.el-select__wrapper) {
-  min-height: 26px;
-  padding: 0 8px;
-  font-size: 12px;
+  min-height: var(--control-sm);
+  padding: 0 var(--sp-4);
+  font-size: var(--text-xs);
   background: transparent;
   box-shadow: none;
 }
 .permission-select :deep(.el-select__wrapper:hover) {
   background: var(--surface-hover);
 }
-.metric {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-  font-size: 11px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-/* 发送键：有内容才亮成蓝，空态是安静的暗块 */
-.send-btn {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink-muted);
-  cursor: not-allowed;
-  background: var(--surface-hover);
-  border: 0;
-  border-radius: var(--radius-md);
-  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease,
-    transform var(--dur-fast) ease;
-}
-.send-btn.ready {
-  color: #fff;
-  cursor: pointer;
-  background: var(--accent);
-}
-.send-btn.ready:hover {
-  background: var(--accent-hover);
-  transform: translateY(-1px);
-}
-.send-btn.ready:active {
-  transform: translateY(0);
-}
-.send-btn.stop {
-  width: auto;
-  padding: 0 12px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  background: var(--surface-active);
-}
-.send-btn.stop:hover {
-  color: var(--ink);
-}
-.composer-hint {
-  max-width: 54rem;
-  margin: 8px auto 0;
-  font-size: 11px;
-  color: var(--ink-faint);
-  text-align: center;
-}
 
 @media (max-width: 720px) {
-  .chat-list,
-  .composer-wrap {
-    padding-right: 14px;
-    padding-left: 14px;
+  .chat-list {
+    padding-right: var(--page-gutter-tight);
+    padding-left: var(--page-gutter-tight);
   }
   .composer-wrap {
-    padding-bottom: calc(10px + env(safe-area-inset-bottom));
-  }
-  .metric {
-    display: none;
+    padding-right: var(--page-gutter-tight);
+    padding-left: var(--page-gutter-tight);
   }
   .session-cost {
     display: none;
@@ -1269,15 +1186,9 @@ onMounted(async () => {
 
 /* 手机：底栏工具条空间有限，范围说明让位给环境选择与发送按钮 */
 @media (max-width: 480px) {
-  .bar-scope {
-    display: none;
-  }
-  .composer {
-    padding: 10px 10px 6px 12px;
-  }
   .welcome {
-    padding-right: 4px;
-    padding-left: 4px;
+    padding-right: var(--sp-1);
+    padding-left: var(--sp-1);
   }
 }
 </style>

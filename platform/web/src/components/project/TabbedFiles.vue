@@ -13,6 +13,8 @@ export interface TabItem {
 const tabs = shallowRef<TabItem[]>([])
 const active = shallowRef<string | null>(null)
 
+const emit = defineEmits<{ (e: 'empty'): void }>()
+
 function openTab(path: string, name: string): void {
   const next = [...tabs.value]
   if (!next.some((t) => t.path === path)) next.push({ path, name })
@@ -28,6 +30,8 @@ function closeTab(path: string): void {
   if (active.value === path) {
     active.value = next.length ? (next[idx - 1]?.path ?? next[0]?.path ?? null) : null
   }
+  // 关掉最后一个 Tab 后不再留一块空白面板：交给父级回到空状态
+  if (!next.length) emit('empty')
 }
 
 defineExpose({ openTab })
@@ -35,13 +39,15 @@ defineExpose({ openTab })
 
 <template>
   <div class="tabbed-panel">
-    <div v-if="tabs.length" class="tab-bar">
+    <div v-if="tabs.length" class="tab-bar" role="tablist" aria-label="已打开的文件">
       <button
         v-for="t in tabs"
         :key="t.path"
         type="button"
         class="tab"
+        role="tab"
         :class="{ active: active === t.path }"
+        :aria-selected="active === t.path"
         :title="t.path"
         @click="active = t.path"
       >

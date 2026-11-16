@@ -14,18 +14,28 @@ const SettingsView = () => import('./views/SettingsView.vue')
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
+    { path: '/login', name: 'login', component: LoginView, meta: { public: true, title: '登录' } },
     { path: '/', redirect: '/chat' },
-    { path: '/chat', name: 'chat', component: ChatView },
+    { path: '/chat', name: 'chat', component: ChatView, meta: { title: '对话' } },
     // 点击侧栏工作区标题进入：该工作区的调度 Agent + 全部会话
-    { path: '/workspace/:projectId', name: 'workspace', component: WorkspaceHomeView },
-    { path: '/pipeline', name: 'pipeline', component: PipelineView },
-    { path: '/projects', name: 'project-list', component: ProjectListView },
-    { path: '/settings', name: 'settings', component: SettingsView },
-    { path: '/projects/intake', name: 'project-intake', component: ProjectIntakeView },
+    { path: '/workspace/:projectId', name: 'workspace', component: WorkspaceHomeView, meta: { title: '工作区' } },
+    { path: '/pipeline', name: 'pipeline', component: PipelineView, meta: { title: '流水线' } },
+    { path: '/projects', name: 'project-list', component: ProjectListView, meta: { title: '项目' } },
+    { path: '/settings', name: 'settings', component: SettingsView, meta: { title: '设置' } },
+    { path: '/projects/intake', name: 'project-intake', component: ProjectIntakeView, meta: { title: '接入项目' } },
     // 旧详情页已并入工作台「诊断」抽屉；保留旧链接跳转，避免书签失效
-    { path: '/projects/:id', redirect: '/projects' }
+    { path: '/projects/:id', redirect: '/projects' },
+    // 未知路径回对话页：否则主区是一片空白，看起来像页面崩了
+    { path: '/:pathMatch(.*)*', redirect: '/chat' }
   ]
+})
+
+const APP_NAME = '研发运维智能体平台'
+
+/** 标签页标题跟随页面：多开标签时能直接分辨是哪个页面。 */
+router.afterEach((to) => {
+  const title = typeof to.meta.title === 'string' ? to.meta.title : ''
+  document.title = title ? `${title} · ${APP_NAME}` : APP_NAME
 })
 
 /**

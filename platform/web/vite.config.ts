@@ -60,6 +60,19 @@ function mockApi(): Plugin {
 // 开发期把 /api 代理到后端，避免 CORS；生产由 nginx 反代
 export default defineConfig({
   plugins: [vue(), mockApi()],
+  build: {
+    rollupOptions: {
+      output: {
+        // 第三方依赖单独成块：业务代码更新不影响 vendor 缓存命中
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('element-plus')) return 'element-plus'
+          if (id.includes('/vue/') || id.includes('@vue/')) return 'vue-vendor'
+          return 'vendor'
+        },
+      },
+    },
+  },
   server: {
     // 容器/远程预览：双栈监听，localhost 解析到 ::1 时也能连上
     host: '::',

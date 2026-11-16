@@ -184,7 +184,7 @@ function download(): void {
   opacity: 0.5;
 }
 .fv-btn.primary {
-  color: #fff;
+  color: var(--ink-inverse);
   background: var(--accent);
   border-color: var(--accent);
 }

@@ -635,7 +635,7 @@ onMounted(() => {
 <style scoped>
 .status-strip {
   position: relative;
-  max-width: 72rem;
+  max-width: var(--reading-max);
   margin: 0 auto;
 }
 .strip-row {
@@ -872,7 +872,7 @@ onMounted(() => {
   border-radius: var(--radius-sm);
 }
 .panel-action:hover {
-  background: rgb(77 130 247 / 20%);
+  background: var(--accent-soft-strong);
 }
 .panel-action:disabled {
   cursor: not-allowed;
@@ -929,12 +929,12 @@ onMounted(() => {
   height: 14px;
   margin-top: 2px;
   font-size: 11px;
-  color: #fff;
+  color: var(--ink-inverse);
   border: 1px solid var(--line-strong);
   border-radius: 50%;
 }
 .mode-item.active .mode-radio {
-  color: #fff;
+  color: var(--ink-inverse);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -1045,7 +1045,7 @@ onMounted(() => {
   width: 12px;
   height: 12px;
   font-size: 9px;
-  color: #fff;
+  color: var(--ink-inverse);
   border: 1px solid var(--line-strong);
   border-radius: 50%;
 }
@@ -1318,7 +1318,7 @@ onMounted(() => {
 }
 .cap-pill.on {
   color: var(--accent-ink);
-  background: rgb(77 130 247 / 18%);
+  background: var(--accent-soft-strong);
 }
 .cap-warn {
   color: var(--warn);

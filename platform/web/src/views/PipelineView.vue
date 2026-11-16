@@ -1120,6 +1120,10 @@ watch(running, (value) => {
 }, { immediate: true })
 
 watch(projectId, () => {
+  // 切项目必须清掉旧项目的运行详情：否则右栏继续显示上一个项目的阶段/日志，
+  // 还会让「重跑」按旧项目的提交去触发。
+  if (runId.value) closeRun()
+  topError.value = ''
   sha.value = ''
   void Promise.all([
     loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
@@ -1679,17 +1683,18 @@ async function copyDigest(digest: string): Promise<void> {
 }
 .wp-left {
   flex: none;
-  min-width: 0;
+  min-width: 320px;
   height: 100%;
   overflow: hidden;
+  background: var(--bg);
   border-right: 1px solid var(--line-soft);
 }
 .wp-left-inner {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sp-5);
   height: 100%;
-  padding: 12px 12px 12px 14px;
+  padding: var(--sp-6) var(--sp-6) var(--sp-6) var(--sp-7);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1719,11 +1724,12 @@ async function copyDigest(digest: string): Promise<void> {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
 }
 .ctx-project {
   display: flex;
@@ -1758,9 +1764,9 @@ async function copyDigest(digest: string): Promise<void> {
   flex: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: var(--panel);
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--surface-raised);
   border-bottom: 1px solid var(--line-soft);
 }
 .rb-status {
@@ -1796,13 +1802,13 @@ async function copyDigest(digest: string): Promise<void> {
   background: var(--surface-sunken);
 }
 .rb-tag.auto-repair {
-  color: var(--warning, #b26a00);
-  background: color-mix(in srgb, var(--warning, #b26a00) 12%, transparent);
+  color: var(--warn-ink);
+  background: var(--warn-soft);
   cursor: help;
 }
 .rb-tag.auto-repair.ok {
-  color: var(--success, #1a7f4b);
-  background: color-mix(in srgb, var(--success, #1a7f4b) 12%, transparent);
+  color: var(--ok-ink);
+  background: var(--ok-soft);
 }
 .rb-sha {
   font-size: 10.5px;
@@ -1859,9 +1865,9 @@ async function copyDigest(digest: string): Promise<void> {
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sp-5);
   min-height: 0;
-  padding: 12px 14px 14px;
+  padding: var(--sp-6) var(--sp-6) var(--sp-8);
   overflow: hidden;
 }
 
@@ -2021,10 +2027,10 @@ async function copyDigest(digest: string): Promise<void> {
 }
 .artifact-row {
   display: grid;
-  grid-template-columns: 70px minmax(0, 1fr) 76px 170px 96px;
-  gap: 10px;
+  grid-template-columns: 64px minmax(0, 1fr) 68px minmax(90px, 150px) 86px;
+  gap: var(--sp-3);
   align-items: center;
-  padding: 5px 0;
+  padding: var(--sp-3) 0;
   font-size: 11.5px;
   border-top: 1px solid var(--line-soft);
 }
@@ -2359,6 +2365,7 @@ async function copyDigest(digest: string): Promise<void> {
   }
   .wp-left {
     width: 100% !important;
+    min-width: 0;
     height: auto;
     flex: 1 1 0;
     border-right: 0;

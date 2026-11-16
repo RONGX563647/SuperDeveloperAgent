@@ -16,7 +16,8 @@ import { deleteConversation, listConversations } from '../../api/workspace'
  * 品牌行（Logo + 折叠）/「新会话」软底按钮 / 一组入口（对话、流水线、设置）/「工作区」分组标题
  * （带搜索与更多）/ 会话列表（时间 hover 才出现）/ 底部用户行。
  *
- * 层级全靠白度差：侧栏 #f5f6f8 比主区 #f3f4f6 略亮一档，只在对主区一侧画一条发丝线。
+ * 层级全靠白度差：侧栏 --sidebar-background-color 比主区 --bg 略亮一档，
+ * 只在对主区一侧画一条发丝线。
  */
 const props = defineProps<{ collapsed: boolean; mobileOpen?: boolean }>()
 const emit = defineEmits<{
@@ -670,54 +671,27 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   font-size: 12px;
   font-weight: 700;
   color: var(--brand-mark-ink);
   letter-spacing: -0.02em;
   background: var(--brand-mark-bg);
-  border-radius: 7px;
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
 }
 .brand-text {
   overflow: hidden;
   font-size: 13.5px;
   font-weight: 600;
   letter-spacing: -0.01em;
+  color: var(--ink);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-/* 图标按钮（多处复用） */
-.icon-btn {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  font-size: 14px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
-}
-.icon-btn:hover:not(:disabled) {
-  color: var(--ink);
-  background: var(--surface-hover);
-}
-.icon-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-.icon-btn.sm {
-  width: 22px;
-  height: 22px;
-  font-size: 13px;
-}
+/* 图标按钮复用全局 .icon-btn / .icon-btn.sm */
 
 /* ---- 滚动区 ---- */
 .aside-scroll {
@@ -731,17 +705,18 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   overscroll-behavior: contain;
 }
 
-/* 新会话：DSH 用白底卡片做主按钮 —— 比描边按钮实、比实心块轻 */
+/* 新会话：白底卡片做主按钮 —— 比描边按钮实、比实心块轻 */
 .new-chat {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 10px;
-  margin-bottom: 6px;
+  gap: var(--sp-4);
+  height: var(--control-lg);
+  padding: 0 var(--sp-5);
+  margin-bottom: var(--sp-2);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 500;
   color: var(--ink);
   cursor: pointer;
   background: var(--surface-raised);
@@ -753,7 +728,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
 }
 .new-chat:hover {
   border-color: var(--line);
-  box-shadow: 0 2px 6px rgb(16 24 40 / 8%);
+  box-shadow: var(--shadow-2);
 }
 
 /* 入口 */
@@ -762,16 +737,16 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   flex: none;
   flex-direction: column;
   gap: 1px;
-  margin-top: 8px;
+  margin-top: var(--sp-2);
 }
 .nav-entry {
   display: flex;
   align-items: center;
-  gap: 9px;
-  height: 34px;
-  padding: 0 10px;
+  gap: var(--sp-4);
+  height: var(--control-lg);
+  padding: 0 var(--sp-5);
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: var(--text-sm);
   color: var(--ink-soft);
   text-decoration: none;
   cursor: pointer;
@@ -800,24 +775,34 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   display: flex;
   flex: none;
   align-items: center;
-  gap: 6px;
-  padding: 16px 10px 4px;
+  gap: var(--sp-3);
+  padding: var(--sp-7) var(--sp-5) var(--sp-2);
 }
 .group-title {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 600;
   color: var(--ink-muted);
   letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .group-actions {
   display: flex;
   gap: 2px;
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity var(--dur-fast) ease;
 }
-.group-head:hover .group-actions {
+.group-head:hover .group-actions,
+.group-head:focus-within .group-actions {
   opacity: 1;
+}
+/* 触屏没有 hover：操作常显，避免够不到 */
+@media (hover: none) {
+  .group-actions,
+  .ws-group-actions,
+  .session-del {
+    opacity: 1;
+  }
 }
 
 /* 工作区搜索 */
@@ -862,6 +847,10 @@ watch(() => appStore.projectId, () => void loadServerSessions())
 }
 .ws-group {
   border-radius: var(--radius-sm);
+  transition: background-color var(--dur-fast) ease;
+}
+.ws-group.active {
+  background: var(--accent-faint);
 }
 .ws-group-head {
   display: flex;
@@ -938,10 +927,11 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   display: flex;
   flex: none;
   gap: 1px;
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity var(--dur-fast) ease;
 }
-.ws-group-head:hover .ws-group-actions {
+.ws-group-head:hover .ws-group-actions,
+.ws-group-head:focus-within .ws-group-actions {
   opacity: 1;
 }
 .ws-act {
@@ -1146,22 +1136,22 @@ watch(() => appStore.projectId, () => void loadServerSessions())
 .initial-password-tip {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--sp-3);
   width: 100%;
-  padding: 8px 10px;
-  margin-bottom: 6px;
+  padding: var(--sp-4) var(--sp-5);
+  margin-bottom: var(--sp-3);
   font-family: inherit;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--ink-soft);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+  color: var(--warn-ink);
   text-align: left;
   cursor: pointer;
-  background: rgb(230 162 60 / 12%);
-  border: 1px solid rgb(230 162 60 / 28%);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
   border-radius: var(--radius-md);
 }
 .initial-password-tip:hover {
-  background: rgb(230 162 60 / 20%);
+  background: var(--warn-soft-strong);
 }
 .user-chip {
   display: flex;
@@ -1211,18 +1201,19 @@ watch(() => appStore.projectId, () => void loadServerSessions())
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   padding: 0;
   margin-left: auto;
-  color: rgb(0 0 0 / 45%);
+  color: var(--ink-muted);
   cursor: pointer;
   background: none;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
 }
 .logout-btn:hover {
-  color: #f56c6c;
-  background: rgb(0 0 0 / 5%);
+  color: var(--danger);
+  background: var(--surface-hover);
 }
 </style>

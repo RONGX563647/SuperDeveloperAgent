@@ -13,6 +13,10 @@ import type { TreeNode } from './useProjectTree'
 interface Props {
   projects: ProjectRow[]
   selectedId: string | null
+  /** 项目列表请求中：显示骨架而不是「还没有托管项目」。 */
+  loading?: boolean
+  /** 项目列表请求失败：显示失败原因与重试。 */
+  error?: string
 }
 
 const props = defineProps<Props>()
@@ -21,11 +25,12 @@ const emit = defineEmits<{
   (e: 'select', node: TreeNode): void
   (e: 'action', action: 'refresh' | 'rename' | 'delete', node: TreeNode): void
   (e: 'intake'): void
+  (e: 'retry'): void
 }>()
 
 const {
-  nodes, keyword, visibleRoots, loadingProjects,
-  buildRoots, toggle, isExpanded,
+  nodes, keyword, visibleRoots,
+  buildRoots, retryDir, toggle, isExpanded,
 } = useProjectTree(() => props.projects)
 
 onMounted(buildRoots)
@@ -49,7 +54,7 @@ watch(() => props.projects, buildRoots)
       </button>
     </div>
 
-    <div class="tree-body">
+    <div class="tree-body" :aria-busy="loading ? 'true' : undefined">
       <template v-if="visibleRoots.length">
         <TreeNodeRow
           v-for="root in visibleRoots"
@@ -60,12 +65,29 @@ watch(() => props.projects, buildRoots)
           :expanded="isExpanded"
           @select="emit('select', $event)"
           @toggle="toggle"
+          @retry="retryDir"
           @action="(a, n) => emit('action', a, n)"
         />
+        <p v-if="loading" class="tree-hint loading-all">刷新中…</p>
       </template>
 
+      <!-- 首次加载：骨架行，避免先闪一下「还没有托管项目」 -->
+      <div v-else-if="loading" class="tree-skeleton" aria-hidden="true">
+        <i
+          v-for="(w, i) in [78, 62, 88, 54, 70]" :key="i"
+          class="skeleton tree-sk-row" :style="{ width: `${w}%` }"
+        ></i>
+      </div>
+
+      <!-- 加载失败：给出原因与重试，而不是伪装成空清单 -->
+      <div v-else-if="error" class="tree-empty">
+        <p class="te-title">项目加载失败</p>
+        <p class="te-sub">{{ error }}</p>
+        <button type="button" class="te-btn" @click="emit('retry')">重试</button>
+      </div>
+
       <!-- 空状态：无项目 -->
-      <div v-else-if="!loadingProjects && nodes.length === 0" class="tree-empty">
+      <div v-else-if="nodes.length === 0" class="tree-empty">
         <div class="te-illus" aria-hidden="true">
           <svg width="72" height="48" viewBox="0 0 72 48" fill="none">
             <rect x="4" y="6" width="40" height="36" rx="5" fill="var(--surface-sunken)" />
@@ -82,12 +104,10 @@ watch(() => props.projects, buildRoots)
       </div>
 
       <!-- 空状态：搜索无结果 -->
-      <div v-else-if="!loadingProjects && nodes.length > 0" class="tree-empty">
+      <div v-else class="tree-empty">
         <p class="te-title">没有匹配「{{ keyword }}」的项目</p>
         <p class="te-sub">换个关键词试试</p>
       </div>
-
-      <p v-else class="tree-hint loading-all">加载中…</p>
     </div>
   </aside>
 </template>
@@ -140,7 +160,7 @@ watch(() => props.projects, buildRoots)
 }
 .tree-search:focus {
   background: var(--panel);
-  border-color: rgb(77 130 247 / 55%);
+  border-color: var(--accent-ring);
 }
 .tree-add {
   display: flex;
@@ -200,7 +220,7 @@ watch(() => props.projects, buildRoots)
   margin-top: 8px;
   font-family: inherit;
   font-size: 12.5px;
-  color: #fff;
+  color: var(--ink-inverse);
   cursor: pointer;
   background: var(--accent);
   border: 0;
@@ -215,5 +235,18 @@ watch(() => props.projects, buildRoots)
   font-size: 12px;
   color: var(--ink-faint);
   text-align: center;
+}
+
+/* 首次加载骨架：与真实行同高，列表出现时不跳版 */
+.tree-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 4px;
+}
+
+.tree-sk-row {
+  height: 26px;
+  border-radius: var(--radius-sm);
 }
 </style>

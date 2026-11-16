@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Connection, MagicStick, Refresh, Search } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { Connection, MagicStick, Refresh, Search, Warning } from '@element-plus/icons-vue'
 import type { CapabilityOption } from '../../composables/useChatCapabilities'
 import { readSkill } from '../../api/settings'
 import MarkdownView from './MarkdownView.vue'
@@ -8,8 +9,9 @@ import MarkdownView from './MarkdownView.vue'
 /**
  * 会话能力页（顶部 Tab「能力」）。
  *
- * <p>左侧是带搜索的能力列表，右侧是该能力的完整信息：Skill 直接读取并渲染
- * SKILL.md 正文，MCP 展示启动命令 / 服务地址；顶部开关只影响当前会话。
+ * <p>左侧按 Skill / MCP 分组并支持「全部 / 已启用 / Skill / MCP」筛选，已启用项
+ * 以 chips 常驻在顶部可一键移除；右侧展示该能力的完整信息：Skill 直接读取并渲染
+ * SKILL.md 正文，MCP 展示启动命令 / 服务地址；开关只影响当前会话。
  */
 const props = defineProps<{
   skillOptions: CapabilityOption[]
@@ -36,7 +38,17 @@ const items = computed<Item[]>(() => [
   ...props.mcpOptions.map((o) => ({ ...o, kind: 'mcp' as const })),
 ])
 
+type Filter = 'all' | 'on' | 'skill' | 'mcp'
+const FILTERS: Array<{ key: Filter, label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'on', label: '已启用' },
+  { key: 'skill', label: 'Skill' },
+  { key: 'mcp', label: 'MCP' },
+]
+
+const router = useRouter()
 const keyword = ref('')
+const filter = ref<Filter>('all')
 const activeKey = ref('')
 const active = computed(() => items.value.find((i) => keyOf(i) === activeKey.value) ?? null)
 
@@ -44,19 +56,41 @@ function keyOf(item: Item): string {
   return `${item.kind}:${item.key}`
 }
 
-function matches(o: CapabilityOption): boolean {
+const filteredItems = computed(() => {
   const q = keyword.value.trim().toLowerCase()
-  if (!q) return true
-  return `${o.label} ${o.key} ${o.description}`.toLowerCase().includes(q)
-}
+  return items.value.filter((item) => {
+    if (filter.value === 'on' && !isOn(item)) return false
+    if (filter.value === 'skill' && item.kind !== 'skill') return false
+    if (filter.value === 'mcp' && item.kind !== 'mcp') return false
+    if (!q) return true
+    return `${item.label} ${item.key} ${item.description}`.toLowerCase().includes(q)
+  })
+})
 
-const filteredItems = computed(() => items.value.filter(matches))
+/** 分组展示：已启用的排在组内前面，组头带该组的计数与批量操作。 */
+const groups = computed(() => {
+  const build = (kind: 'skill' | 'mcp', label: string) => {
+    const all = items.value.filter((i) => i.kind === kind)
+    const list = filteredItems.value
+      .filter((i) => i.kind === kind)
+      .sort((a, b) => Number(isOn(b)) - Number(isOn(a)) || a.label.localeCompare(b.label))
+    return { kind, label, items: list, on: all.filter(isOn).length, total: all.length }
+  }
+  return [build('skill', 'Skill'), build('mcp', 'MCP')].filter((g) => g.items.length > 0)
+})
+
+/** 已启用 chips：不离开列表即可看到本会话生效了什么，并可一键移除。 */
+const enabledItems = computed(() => items.value.filter(isOn))
 
 watch(items, (list) => {
   if (!list.some((i) => keyOf(i) === activeKey.value)) {
     activeKey.value = list.length ? keyOf(list[0]) : ''
   }
 }, { immediate: true })
+
+function openMarket(section: 'skills' | 'mcp'): void {
+  void router.push(`/settings?section=${section}`)
+}
 
 // ---------------------------------------------------------------- SKILL.md 正文
 
@@ -118,10 +152,17 @@ function toggleActive(on: boolean): void {
   if (active.value) toggle(active.value, on)
 }
 
-/** 全选 / 清空：Skill 与 MCP 一起处理，列表不再分组。 */
+/** 全局全选 / 清空：Skill 与 MCP 一起处理。 */
 function toggleAll(on: boolean): void {
   emit('update:skills', on ? props.skillOptions.map((o) => o.key) : [])
   emit('update:mcp', on ? props.mcpOptions.map((o) => o.key) : [])
+}
+
+/** 按组全选 / 清空：只影响该组的 Skill 或 MCP。 */
+function toggleGroup(kind: 'skill' | 'mcp', on: boolean): void {
+  const options = kind === 'skill' ? props.skillOptions : props.mcpOptions
+  if (kind === 'skill') emit('update:skills', on ? options.map((o) => o.key) : [])
+  else emit('update:mcp', on ? options.map((o) => o.key) : [])
 }
 
 function kindLabel(kind: 'skill' | 'mcp'): string {
@@ -143,7 +184,7 @@ function formatTime(ts?: number): string {
         <div class="cap-head-main">
           <h1 class="cap-title">本会话能力</h1>
           <p class="cap-desc">
-            左侧统一列出全部 Skill 与 MCP，开关只影响本会话；选中后右侧查看完整说明。
+            按 Skill / MCP 分组管理，开关只影响本会话；已启用项会常驻顶部，可随时移除。
           </p>
         </div>
         <div class="cap-head-side">
@@ -157,6 +198,11 @@ function formatTime(ts?: number): string {
         </div>
       </header>
 
+      <p v-if="ready && count > 10" class="cap-warn">
+        <el-icon><Warning /></el-icon>
+        已启用 {{ count }} 项：技能越多系统提示越长、首字延迟越高，建议只保留本轮需要的。
+      </p>
+
       <div class="cap-body">
         <!-- 左栏：搜索 + 分组列表 -->
         <aside class="cap-list">
@@ -164,6 +210,30 @@ function formatTime(ts?: number): string {
             <el-input v-model="keyword" size="default" clearable placeholder="搜索 Skill / MCP">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
+            <div class="cap-filters">
+              <button
+                v-for="f in FILTERS" :key="f.key" type="button"
+                class="cap-filter" :class="{ on: filter === f.key }"
+                @click="filter = f.key"
+              >
+                {{ f.label }}<span v-if="f.key === 'on'" class="mono">{{ count }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="enabledItems.length" class="enabled-bar">
+            <button
+              v-for="i in enabledItems" :key="`on-${keyOf(i)}`" type="button"
+              class="enabled-chip" :class="i.kind" :title="`${i.label} · 点击查看详情`"
+              @click="activeKey = keyOf(i)"
+            >
+              <span class="chip-text">{{ i.label }}</span>
+              <span
+                class="chip-x" role="button" tabindex="0" aria-label="移除"
+                @click.stop="toggle(i, false)"
+                @keydown.enter.stop="toggle(i, false)"
+              >×</span>
+            </button>
           </div>
 
           <div class="cap-scroll">
@@ -176,36 +246,56 @@ function formatTime(ts?: number): string {
             </div>
 
             <div v-if="!items.length" class="group-empty">
-              还没有能力，可在 设置 → Skill / MCP 市场 接入
+              <p>还没有接入任何 Skill / MCP。</p>
+              <div class="empty-actions">
+                <button type="button" class="link strong" @click="openMarket('skills')">
+                  Skill 市场 →
+                </button>
+                <button type="button" class="link strong" @click="openMarket('mcp')">
+                  MCP 市场 →
+                </button>
+              </div>
             </div>
-            <div v-else-if="!filteredItems.length" class="group-empty">没有匹配的能力</div>
+            <div v-else-if="!filteredItems.length" class="group-empty">
+              没有匹配的能力，试试切换筛选或清空搜索。
+            </div>
 
-            <div
-              v-for="i in filteredItems" :key="keyOf(i)"
-              class="cap-item" :class="{ active: activeKey === keyOf(i) }"
-              role="button" tabindex="0"
-              @click="activeKey = keyOf(i)"
-              @keydown.enter="activeKey = keyOf(i)"
-            >
-              <span class="item-icon" :class="i.kind">
-                <el-icon><component :is="i.kind === 'skill' ? MagicStick : Connection" /></el-icon>
-              </span>
-              <span class="item-main">
-                <span class="item-title">
-                  <span class="item-name">{{ i.label }}</span>
-                  <span class="item-type" :class="i.kind">{{ kindLabel(i.kind) }}</span>
+            <section v-for="g in groups" :key="g.kind" class="cap-group">
+              <div class="group-head">
+                <b>{{ g.label }}</b>
+                <span class="mono">{{ g.on }}/{{ g.total }}</span>
+                <span class="group-actions">
+                  <button type="button" class="link" @click="toggleGroup(g.kind, true)">全选</button>
+                  <button type="button" class="link" @click="toggleGroup(g.kind, false)">清空</button>
                 </span>
-                <span class="item-desc">
-                  {{ i.description || (i.kind === 'skill' ? '（无描述）' : '（未配置地址）') }}
+              </div>
+              <div
+                v-for="i in g.items" :key="keyOf(i)"
+                class="cap-item" :class="{ active: activeKey === keyOf(i) }"
+                role="button" tabindex="0"
+                @click="activeKey = keyOf(i)"
+                @keydown.enter="activeKey = keyOf(i)"
+              >
+                <span class="item-icon" :class="i.kind">
+                  <el-icon><component :is="i.kind === 'skill' ? MagicStick : Connection" /></el-icon>
                 </span>
-              </span>
-              <el-switch
-                :model-value="isOn(i)" size="small" class="item-switch"
-                :aria-label="`本次对话启用 ${i.label}`"
-                @click.stop
-                @change="(v: string | number | boolean) => toggle(i, Boolean(v))"
-              />
-            </div>
+                <span class="item-main">
+                  <span class="item-title">
+                    <span class="item-name">{{ i.label }}</span>
+                    <span class="item-type" :class="i.kind">{{ kindLabel(i.kind) }}</span>
+                  </span>
+                  <span class="item-desc">
+                    {{ i.description || (i.kind === 'skill' ? '（无描述）' : '（未配置地址）') }}
+                  </span>
+                </span>
+                <el-switch
+                  :model-value="isOn(i)" size="small" class="item-switch"
+                  :aria-label="`本次对话启用 ${i.label}`"
+                  @click.stop
+                  @change="(v: string | number | boolean) => toggle(i, Boolean(v))"
+                />
+              </div>
+            </section>
           </div>
         </aside>
 
@@ -387,6 +477,20 @@ function formatTime(ts?: number): string {
   background: var(--ok);
   border-radius: 50%;
 }
+.cap-warn {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  padding: 7px 11px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--warn);
+  background: var(--warn-soft, rgb(230 162 60 / 10%));
+  border: 1px solid var(--warn-line, rgb(230 162 60 / 25%));
+  border-radius: var(--radius-sm);
+}
 
 /* 左右两栏：一整块白面，内部只用发丝线分隔 */
 .cap-body {
@@ -410,8 +514,101 @@ function formatTime(ts?: number): string {
 }
 .cap-search {
   flex: none;
-  padding: 11px 10px;
+  padding: 11px 10px 9px;
   border-bottom: 1px solid var(--line-soft);
+}
+.cap-filters {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+.cap-filter {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 23px;
+  padding: 0 9px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.cap-filter:hover {
+  color: var(--ink-soft);
+  background: var(--surface-hover);
+}
+.cap-filter.on {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.cap-filter .mono {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+}
+.cap-filter.on .mono {
+  color: var(--accent-ink);
+}
+
+/* 已启用 chips：常驻在列表顶部，点 × 直接移除 */
+.enabled-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 92px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--line-soft);
+}
+.enabled-chip {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 3px 2px 8px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+}
+.enabled-chip.skill {
+  border-color: var(--accent);
+}
+.enabled-chip:hover {
+  background: var(--surface-hover);
+}
+.chip-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.chip-x {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--ink-faint);
+  border-radius: 50%;
+}
+.chip-x:hover {
+  color: var(--danger, #c45656);
+  background: var(--surface-hover);
 }
 .cap-scroll {
   display: flex;
@@ -431,6 +628,35 @@ function formatTime(ts?: number): string {
   flex: 1;
   font-size: 10px;
   color: var(--ink-faint);
+}
+/* 分组：Skill / MCP 各自一段，组头带计数与批量操作 */
+.cap-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cap-group + .cap-group {
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line-soft);
+}
+.group-head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 6px 4px;
+}
+.group-head b {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.group-head .mono {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+}
+.group-head .group-actions {
+  margin-left: auto;
 }
 .group-actions {
   display: flex;
@@ -452,9 +678,27 @@ function formatTime(ts?: number): string {
   background: var(--surface-hover);
 }
 .group-empty {
-  padding: 8px 7px;
+  padding: 10px 7px;
   font-size: 11px;
+  line-height: 1.7;
   color: var(--ink-faint);
+}
+.group-empty p {
+  margin: 0;
+}
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.link.strong {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.link.strong:hover {
+  color: var(--accent-ink);
+  background: rgb(77 130 247 / 20%);
 }
 .cap-item {
   position: relative;

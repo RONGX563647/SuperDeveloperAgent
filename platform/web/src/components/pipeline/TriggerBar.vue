@@ -312,7 +312,7 @@ const runLabel = computed(() =>
       />
       <span class="rc-version-note">
         {{ tagged
-          ? '新版本独立部署：旧版本容器/进程保留，可同时运行'
+          ? '新版本独立部署，发布成功后同步创建 git 标签；旧版本继续运行'
           : '不打 tag：覆盖该环境上一次成功部署' }}
       </span>
     </div>
@@ -484,22 +484,23 @@ const runLabel = computed(() =>
   border-color: var(--line-soft);
 }
 .pick-card.active {
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+  border-color: var(--accent-ring);
 }
 .pc-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 6px;
+  gap: var(--sp-3);
+  min-width: 0;
 }
 .pc-title {
-  overflow: hidden;
+  min-width: 0;
   font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.4;
   color: var(--ink);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .pick-card.active .pc-title {
   color: var(--accent-ink);
@@ -512,6 +513,7 @@ const runLabel = computed(() =>
 .pc-desc {
   overflow: hidden;
   font-size: 10.5px;
+  line-height: 1.45;
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;

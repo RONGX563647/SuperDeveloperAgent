@@ -17,11 +17,16 @@ interface Props {
   tool?: ToolActivity
   /** 是否为最后一条 assistant：挂流式光标。 */
   streaming?: boolean
+  /** 失败行是否允许重试（生成中不可重试）。 */
+  canRetry?: boolean
 }
 
 const props = defineProps<Props>()
 
-const emit = defineEmits<{ (e: 'copy', text: string): void }>()
+const emit = defineEmits<{
+  (e: 'copy', text: string): void
+  (e: 'retry'): void
+}>()
 
 const isUser = computed(() => props.message.role === 'user')
 const isStep = computed(() => props.message.role === 'step')
@@ -101,13 +106,27 @@ const time = computed(() => {
           {{ toolFailed ? `失败${tool?.code ? ` ${tool.code}` : ''}` : toolRunning ? '执行中' : '完成' }}
         </span>
       </button>
-      <pre v-if="normalizedResult && resultOpen" class="tool-result">{{ normalizedResult }}</pre>
+      <div v-if="normalizedResult && resultOpen" class="tool-result-wrap">
+        <button
+          type="button" class="tool-copy" title="复制完整返回"
+          @click="emit('copy', normalizedResult)"
+        >
+          复制
+        </button>
+        <pre class="tool-result">{{ normalizedResult }}</pre>
+      </div>
     </div>
 
     <!-- 错误行 -->
     <div v-else-if="isError" class="error-line">
       <span class="error-tag">中断</span>
       <span class="error-text">{{ message.text }}</span>
+      <button
+        v-if="canRetry" type="button" class="error-retry"
+        title="重新发送上一条问题" @click="emit('retry')"
+      >
+        重试
+      </button>
     </div>
 
     <template v-else>
@@ -228,7 +247,31 @@ const time = computed(() => {
 .tool-line.running .tool-state { color: var(--accent-ink); }
 .tool-line.bad .tool-state { color: var(--danger); }
 
-/* 工具返回：展开后贴在步骤行下方 */
+/* 工具返回：展开后贴在步骤行下方，悬停出现复制 */
+.tool-result-wrap {
+  position: relative;
+}
+.tool-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 1px 7px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  opacity: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+  transition: opacity var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.tool-result-wrap:hover .tool-copy {
+  opacity: 1;
+}
+.tool-copy:hover {
+  color: var(--ink);
+}
 .tool-result {
   max-height: 340px;
   padding: 6px 9px;
@@ -267,8 +310,25 @@ const time = computed(() => {
   letter-spacing: 0.04em;
 }
 .error-text {
+  flex: 1;
   min-width: 0;
   word-break: break-word;
+}
+.error-retry {
+  flex: none;
+  align-self: center;
+  padding: 3px 9px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--danger);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-pill);
+  transition: background-color var(--dur-fast) ease;
+}
+.error-retry:hover {
+  background: var(--danger-soft);
 }
 
 /* 用户块 */

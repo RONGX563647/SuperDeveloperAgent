@@ -18,13 +18,49 @@ export interface TreeNode {
 
 const expanded = shallowRef<Set<string>>(new Set())
 const nodes = shallowRef<TreeNode[]>([])
-const loadingProjects = shallowRef(false)
 
 export function useProjectTree(projects: () => ProjectRow[]) {
-  async function buildRoots(): Promise<void> {
-    loadingProjects.value = true
+  /**
+   * 重建根节点时沿用旧子树的 loaded/children：
+   * 刷新项目列表（新增/下线项目）不应该把已展开目录里的文件清空，
+   * 否则用户看到的是「目录还展开着，但里面空了」。
+   */
+  function reuseSubtree(prev: TreeNode[], next: TreeNode[]): void {
+    const byId = new Map<string, TreeNode>()
+    const index = (list: TreeNode[]): void => {
+      for (const node of list) {
+        byId.set(node.id, node)
+        index(node.children)
+      }
+    }
+    index(prev)
+    const walk = (list: TreeNode[]): void => {
+      for (const node of list) {
+        const old = byId.get(node.id)
+        if (old) {
+          node.children = old.children
+          node.loaded = old.loaded
+          node.error = old.error
+        }
+        walk(node.children)
+      }
+    }
+    walk(next)
+  }
+
+  /** 已展开但仍未加载的目录（新建节点）补一次懒加载。 */
+  function loadExpanded(list: TreeNode[]): void {
+    for (const node of list) {
+      if (node.kind === 'dir' && expanded.value.has(node.id) && !node.loaded) {
+        void loadDir(node)
+      }
+      if (node.children.length) loadExpanded(node.children)
+    }
+  }
+
+  function buildRoots(): void {
     const rows = projects()
-    nodes.value = rows.map((p) => ({
+    const next = rows.map((p) => ({
       id: `project:${p.id}`,
       kind: 'project' as const,
       name: p.name,
@@ -49,7 +85,9 @@ export function useProjectTree(projects: () => ProjectRow[]) {
       loading: false,
       error: null,
     }))
-    loadingProjects.value = false
+    reuseSubtree(nodes.value, next)
+    nodes.value = next
+    loadExpanded(next)
   }
 
   async function loadDir(node: TreeNode): Promise<void> {
@@ -76,6 +114,14 @@ export function useProjectTree(projects: () => ProjectRow[]) {
     } finally {
       node.loading = false
     }
+  }
+
+  /** 目录加载失败后的重试：清掉错误重新拉一次（不改变展开状态）。 */
+  async function retryDir(node: TreeNode): Promise<void> {
+    if (node.loading) return
+    node.loaded = false
+    node.error = null
+    await loadDir(node)
   }
 
   function toggle(node: TreeNode): void {
@@ -105,7 +151,7 @@ export function useProjectTree(projects: () => ProjectRow[]) {
   })
 
   return {
-    nodes, expanded, keyword, visibleRoots, loadingProjects,
-    buildRoots, loadDir, toggle, isExpanded,
+    nodes, expanded, keyword, visibleRoots,
+    buildRoots, loadDir, retryDir, toggle, isExpanded,
   }
 }

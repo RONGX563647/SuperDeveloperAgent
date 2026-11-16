@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Cpu, Connection, Files, Key, Lock, MagicStick, Monitor, Refresh, SetUp, Tools,
@@ -82,6 +82,8 @@ const mcpRef = ref<InstanceType<typeof McpPanel> | null>(null)
 const skillRef = ref<InstanceType<typeof SkillPanel> | null>(null)
 const gitOauthRef = ref<InstanceType<typeof GitOauthAppsPanel> | null>(null)
 const refreshing = ref(false)
+const bodyRef = ref<HTMLElement | null>(null)
+const navRef = ref<HTMLElement | null>(null)
 
 const current = computed(() => SECTIONS.find((s) => s.key === active.value) ?? SECTIONS[0])
 
@@ -102,6 +104,15 @@ function reloadSection(value: Section): Promise<void> | undefined {
 
 watch(active, (value) => {
   void reloadSection(value)
+  // 换分区是「换一页」而不是「滚到一半的同一页」：内容回到顶部；
+  // 手机端横向分区条把当前项滚进可视区，深链进来也能看到选中态。
+  void nextTick(() => {
+    if (bodyRef.value) bodyRef.value.scrollTop = 0
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      navRef.value?.querySelector<HTMLElement>('.nav-card.active')
+        ?.scrollIntoView({ block: 'nearest', inline: 'center' })
+    }
+  })
 })
 
 /** 侧栏「仍在使用初始密码」提示会带 ?section=account 跳进来，已在设置页时也要切换。 */
@@ -129,14 +140,15 @@ async function refresh(): Promise<void> {
       </template>
     </PageHeader>
 
-    <div class="settings-body">
+    <div ref="bodyRef" class="settings-body">
       <div class="settings-shell">
         <!-- 左：分区导航 -->
-        <aside class="settings-nav" aria-label="设置分区">
+        <aside ref="navRef" class="settings-nav" aria-label="设置分区">
           <button
             v-for="s in BASIC" :key="s.key"
             type="button" class="nav-card"
             :class="{ active: active === s.key }"
+            :aria-current="active === s.key ? 'page' : undefined"
             @click="selectSection(s.key)"
           >
             <span class="nav-icon"><el-icon><component :is="s.icon" /></el-icon></span>
@@ -155,6 +167,7 @@ async function refresh(): Promise<void> {
               v-for="s in ADVANCED_SECTIONS" :key="s.key"
               type="button" class="nav-card sub"
               :class="{ active: active === s.key }"
+              :aria-current="active === s.key ? 'page' : undefined"
               @click="selectSection(s.key)"
             >
               <span class="nav-icon"><el-icon><component :is="s.icon" /></el-icon></span>
@@ -197,18 +210,18 @@ async function refresh(): Promise<void> {
 .settings-body {
   flex: 1 1 0;
   min-height: 0;
-  padding: 4px clamp(16px, 2vw, 32px) 32px;
+  padding: var(--sp-2) var(--page-gutter) var(--sp-10);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .settings-shell {
   display: grid;
   grid-template-columns: 232px minmax(0, 1fr);
-  gap: 20px;
+  gap: var(--sp-7);
   align-items: stretch;
-  max-width: 1440px;
+  max-width: var(--content-max);
   /* 撑满可视区：内容少的分区不再是一张矮卡片 + 一大片空白 */
-  min-height: calc(100vh - 104px);
+  min-height: calc(100dvh - var(--header-height) - var(--sp-11));
   margin: 0 auto;
 }
 .settings-nav {
@@ -344,11 +357,11 @@ async function refresh(): Promise<void> {
 
 @media (max-width: 900px) {
   .settings-body {
-    padding: 4px 16px 24px;
+    padding: var(--sp-2) var(--page-gutter-tight) var(--sp-9);
   }
   .settings-shell {
     grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
+    gap: var(--sp-6);
     min-height: 0;
   }
   /* 分区导航改为顶部横向吸顶条：不再占掉大半屏后再滚动内容 */
