@@ -4,6 +4,9 @@ import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -110,6 +113,10 @@ public class ChatController {
      * @param request 请求体
      * @return SSE 发射器（身份来自 Sa-Token 会话）
      */
+    @Operation(summary = "对话（SSE 事件流）",
+            description = "返回 text/event-stream；事件名含 message/tool/usage/done/error，事件体见 docs/api/overview.md")
+    @ApiResponse(responseCode = "200", description = "SSE 事件流",
+            content = @Content(mediaType = MediaType.TEXT_EVENT_STREAM_VALUE))
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody ChatRequest request) {
         // 1. 认证：身份由 Sa-Token 会话保证（客户端不可伪造）

@@ -36,6 +36,8 @@ stages:
         commands:
           - pip install --quiet 'doc-marshal==0.6.1'
           - doc-marshal check --all
+          # 变更漂移报告：只提示本次改动的文件影响了哪些文档，不阻断构建
+          - doc-marshal drifted --format text || echo "（doc-marshal drifted 仅提示，不阻断）"
 
       - step: build@maven
         name: maven_verify

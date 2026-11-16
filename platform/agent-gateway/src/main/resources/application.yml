@@ -8,6 +8,20 @@ spring:
     virtual:
       enabled: true
 
+# OpenAPI：/v3/api-docs 是唯一规范源，/doc.html 是 Swagger UI（保持 Knife4j 的习惯路径）。
+# Knife4j 4.5 依赖 springdoc 2.x，与 Boot 4 不兼容，因此 UI 由 springdoc 自带页面提供。
+# 生产默认要求登录 + settings:read；AGENT_API_DOCS_PUBLIC=true 仅用于本地联调。
+springdoc:
+  api-docs:
+    enabled: ${AGENT_API_DOCS_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${AGENT_API_DOCS_ENABLED:true}
+    path: /doc.html
+    persist-authorization: true
+  writer-with-order-by-keys: true
+  default-produces-media-type: application/json
+
 management:
   endpoints:
     web:
@@ -32,6 +46,12 @@ sa-token:
   # 未配置时回退环境变量 AGENT_MODEL_API_KEY；两者都没有也能启动，仅调用模型时提示去配置。
   # 明文凭证不入配置库（规约 §8）。
 agent:
+  # OpenAPI 快照与访问控制：
+  # - snapshot：启动时刷新，供 api_search / api_get 与外部 MCP 读取；
+  # - public：默认 false（需登录 + settings:read），仅本地联调可放开。
+  api-docs:
+    public: ${AGENT_API_DOCS_PUBLIC:false}
+    snapshot: ${AGENT_API_DOCS_SNAPSHOT:./data/api/openapi.json}
   # 账号初始化：仅首次启动（users 表为空）使用。三个账号默认共用固定初始密码（见 README），
   # 登录后到「设置 → 账号安全」修改；可用 AGENT_SEED_PASSWORDS=admin=xxx,devops=yyy,viewer=zzz 覆盖。
   # 这里只放环境变量占位，不写实际密码（规约 §8）。
@@ -155,6 +175,8 @@ agent:
   # 上下文精益：单次工具输出上限 + 会话历史预算（两层闸门，避免长会话把上下文撑爆）
   tools:
     max-output-chars: ${AGENT_TOOLS_MAX_OUTPUT_CHARS:12000}
+    # 工具目录快照：启动时导出，供 tool_search / tool_get 与外部 MCP 复用
+    catalog-path: ${AGENT_TOOLS_CATALOG:./data/api/agent-tools.json}
     # 只读工具结果语义缓存：TTL + LRU + 写操作失效；相似度阈值越高越保守
     cache:
       enabled: ${AGENT_TOOLS_CACHE:true}

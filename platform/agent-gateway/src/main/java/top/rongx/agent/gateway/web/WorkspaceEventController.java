@@ -1,5 +1,8 @@
 package top.rongx.agent.gateway.web;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,6 +35,10 @@ public class WorkspaceEventController {
         this.currentUser = currentUser;
     }
 
+    @Operation(summary = "工作区聚合事件（SSE 事件流）",
+            description = "返回 text/event-stream；会话/运行状态变更提示，断线后以 REST 快照为准")
+    @ApiResponse(responseCode = "200", description = "SSE 事件流",
+            content = @Content(mediaType = MediaType.TEXT_EVENT_STREAM_VALUE))
     @GetMapping(value = "/workspaces/{projectId}/events",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter events(@PathVariable String projectId,

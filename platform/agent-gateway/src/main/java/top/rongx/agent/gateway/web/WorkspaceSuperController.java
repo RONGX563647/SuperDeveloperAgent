@@ -1,6 +1,9 @@
 package top.rongx.agent.gateway.web;
 
 import io.agentscope.core.event.AgentEvent;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ScheduledFuture;
@@ -68,6 +71,10 @@ public class WorkspaceSuperController {
         this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
     }
 
+    @Operation(summary = "工作区调度 Agent（SSE 事件流）",
+            description = "返回 text/event-stream；调度 Agent 只用只读工具答题，或编排子会话")
+    @ApiResponse(responseCode = "200", description = "SSE 事件流",
+            content = @Content(mediaType = MediaType.TEXT_EVENT_STREAM_VALUE))
     @PostMapping(value = "/workspaces/{projectId}/super/stream",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable String projectId,

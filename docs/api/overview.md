@@ -6,8 +6,11 @@ code_refs:
 ---
 # API 索引
 
-> **事实源**：控制器代码（`agent-gateway/src/main/java/top/rongx/agent/gateway/web/*Controller.java`）+ [Code Wiki §6](../code-wiki.md) 的接口表。
-> 本平台**未引入 springdoc/OpenAPI**，刻意避免「生成物」与「控制器」双源不一致；如需对外发布，再按控制器手工收敛一版 `openapi.yaml` 并纳入本目录。
+> **事实源**：springdoc 从控制器实时生成的 OpenAPI（`GET /v3/api-docs`），提交副本为
+> `platform/agent-gateway/src/main/resources/api/openapi.json`。文档 UI 在 `GET /doc.html`
+> （springdoc 自带 Swagger UI；Knife4j 4.x 与 Boot 4 不兼容）。两者默认要求登录 + `settings:read`。
+> 快照生成、Agent 查询工具（`api_search` / `api_get` / `api_schema`）与 MCP 服务见
+> [api-tools.md](api-tools.md)。
 
 ## 1. 通用约定
 
@@ -47,6 +50,7 @@ code_refs:
 
 ## 4. 变更流程
 
-1. 改控制器 → 同步 Code Wiki §6 表格（同一 PR）；
-2. 有破坏性变更（删字段/改语义）→ 在 [changelog](../changelog/2026-11.md) 标注，并更新前端 `src/api/*`；
-3. 涉及权限或写操作 → 检查是否绕过 `ActionService` 门禁（规约禁令 R 系列会拦截）。
+1. 改控制器 → 重新生成 `openapi.json`（`ApiDocsSnapshotTest -Dapi.docs.update=true`）；
+2. 同一个 PR 内更新接口表或 [api-tools.md](api-tools.md) 中受影响的事实；新增接口必须写 Javadoc 或 `@Operation(summary)`；
+3. 有破坏性变更（删字段/改语义）→ 在 [changelog](../changelog/2026-11.md) 标注，并更新前端 `src/api/*`；
+4. 涉及权限或写操作 → 检查是否绕过 `ActionService` 门禁（规约禁令 R 系列会拦截）。

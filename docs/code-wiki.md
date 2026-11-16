@@ -273,7 +273,7 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `AppRuntimeInspector` | `RuntimeInspector` 实现（2026-11 新增）：按环境运行时分流——test/prod 用 `docker inspect` 读实例事实（状态/重启数/镜像 digest/端口映射/健康），dev 读平台进程日志尾部；只回答事实，不判失败原因 |
 | `JschSsh` / `SshExec` | 纯 Java SSH 实现（JSch）：连通性探测、远程命令、文件上传；`SshExec` 实现 domain 的 `SshAccess` 端口（探测 docker 版本用 `{{.Server.Version}}` 模板并兜底 `docker info`） |
 
-### 4.5 agent-tools —— 工具层（24 个主源码类，18 个 @Tool 类 / 65 个工具方法）
+### 4.5 agent-tools —— 工具层（26 个主源码类，20 个 @Tool 类 / 76 个工具方法）
 
 | 类 | 职责 |
 |---|---|
@@ -284,6 +284,9 @@ L3 高危：request_confirmation → 人 POST /changes/{id}/confirm 拿一次性
 | `CiCommandTools` | 流水线写（L2）：`ci_run`（内部先 `dryRun`，未通过 E-708）、`ci_cancel`；预检 `ci_dry_run`（L0 只读） |
 | `RepoQueryTools` | 仓库只读取证（L0，2026-11 新增，经 `RepoInspector` 端口）：`git_status`、`grep`（正则检索，跳过构建目录/二进制）、`git_commits`、`git_diff`（from..to 提交+stat）、`list_files`、`read_file`（限仓库内文本，约 8000 字符截断） |
 | `RuntimeTools` | 运行时取证（L0，2026-11 新增，经 `RuntimeInspector` 端口）：`env_runtime_status`（应用容器/进程事实：状态/重启数/镜像 digest/端口/网络）、`app_logs`（test/prod 读 `docker logs` 时间窗；HOST 部署读状态目录持久化的 `app.log`；dev 读平台托管进程日志尾部，均已脱敏）、`port_check`（宿主端口占用与归属） |
+| `ApiDocTools` | API 文档只读（2026-11 新增）：`api_search` / `api_get` / `api_schema`，读运行时 `openapi.json` 快照（mtime 缓存），附 source/generatedAt；不调用业务接口 |
+| `AgentToolCatalog` | 工具目录：应用就绪后把四套 Toolkit 导出为 `data/api/agent-tools.json`（name/description/parameters/readOnly/toolkits），供 `tool_search` 与外部 MCP 复用 |
+| `ToolCatalogTools` | 工具目录只读：`tool_search` / `tool_get`，先缩小候选再调用，避免全量工具 schema 常驻提示词 |
 | `ChangeTools` | `request_confirmation`（L1，登记变更返回 changeId+planHash）与 `confirm`（L1，只把变更单推给当前操作人，返回 PENDING_USER_CONFIRMATION，**不签发令牌、不执行**）；真正的确认/令牌只由已登录用户的 HTTP 请求完成 |
 | `PatchTools` | `propose_patch`（L1，2026-11 新增）：受限补丁——路径白名单（`ci/**`/Jenkinsfile/pom.xml/build.gradle/测试代码）、禁敏感文件、只登记变更单返回 changeId，**永不写仓库/产令牌**；应用须人经 `/changes/{id}/confirm → apply` |
 | `DeployTools` | 部署 agent 专用：`deploy_env_status`、`deploy_run`、`deploy_save_recipe`——「把某个环境跑通并固化」；`deploy_run` 必须携带人工确认过的 `binding_id`（由 `env_mapping_draft` 生成，经 `EnvBindingPort.requireForRun` 校验，E-703） |
@@ -500,6 +503,7 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 | Controller | 方法与路径 | 作用 |
 |---|---|---|
 | AuthController | POST `/auth/login` `/auth/logout` `/auth/me` | 登录/登出/当前身份 |
+| ApiDocsController | GET `/v3/api-docs`、`/doc.html`、`/api/v1/api-docs/snapshot` | OpenAPI 规范 / Swagger UI / 快照导出（默认登录 + `settings:read`；`/v3/api-docs` 与 `/doc.html` 不在 `/api/v1` 前缀下） |
 | ChatController | POST `/chat`（SSE） | 对话，流式 Agent 事件（body：projectId/env/sessionId/message/worktree） |
 | WorkspaceController | GET/POST `/workspaces/{projectId}/conversations`、PATCH/DELETE `/conversations/{id}` | 工作区会话列表 / 新建 / 重命名、置顶、归档 / 删除 |
 | | GET `/workspaces/{projectId}/super` | 获取（或确保存在）该项目的调度 Agent 会话 |
@@ -554,15 +558,17 @@ Sa-Token（`Authorization: Bearer <token>`，30 天会话）：`AuthController` 
 
 ---
 
-## 7. 模型工具（@Tool）一览 —— 65 个方法 / 18 个工具类
+## 7. 模型工具（@Tool）一览 —— 76 个方法 / 20 个工具类
 
-AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 24 个主源码类，其中 18 个是 @Tool 类（合计 65 个 @Tool 方法），另含 `ToolCatalog`、`ActionService`、`ConfigResolver`、`cache/ToolResultCache`、`cache/CachingAgentTool` 等非工具类）：
+AgentScope `Toolkit` 注册（`ToolCatalog` 装配四套无状态单例：`readOnlyToolkit` 生产会话 / `agentToolkit` 非生产全量 / `deployToolkit` 发布 Agent / `supervisorToolkit` 工作区调度 Agent；`agent-tools` 共 26 个主源码类，其中 20 个是 @Tool 类（合计 76 个 @Tool 方法），另含 `ToolCatalog`、`AgentToolCatalog`、`ActionService`、`ConfigResolver`、`cache/ToolResultCache`、`cache/CachingAgentTool` 等非工具类）：
 
 > `supervisorToolkit` = `WorkspaceSupervisorTools`（会话/运行/任务管理）+ 全部只读工具；**不含**任何文件写、命令、补丁、部署工具，保证调度 Agent 只能编排与只读取证。
 
 | 工具 | 级别 | 所在类 | 作用 |
 |---|---|---|---|
 | `project_info` / `list_envs` | L0 只读 | ProjectTools | 项目与环境信息 |
+| `api_search` / `api_get` / `api_schema` | L0 只读 | ApiDocTools | 平台 OpenAPI 快照：搜索接口 / 读参数与响应 / 读模型（附 provenance） |
+| `tool_search` / `tool_get` | L0 只读 | ToolCatalogTools | 工具目录检索与参数定义（目录来自运行时四套 Toolkit） |
 | `ci_list_pipelines` / `ci_status` / `ci_history` | L0 只读 | CiQueryTools | 流水线只读视图 |
 | `read_run_log` | L0 只读 | CiQueryTools | 读某次运行日志尾部（已脱敏） |
 | `wait_run` | L0 只读 | CiQueryTools | 阻塞等运行到终态（替代高频轮询，触发后判断结果的正确方式） |
@@ -778,7 +784,7 @@ npm run typecheck
 
 ### 11.4 CI
 
-`.workflow/build.yml`（Gitee Go）：`doc-marshal check --all` + `cd platform && mvn -B verify`；分支保护 + 两者必须绿。
+`.workflow/build.yml`（Gitee Go）：`doc-marshal check --all` + `cd platform && mvn -B verify`；分支保护 + 两者必须绿。另有 `doc-marshal drifted` 变更漂移报告（非阻塞，提示同步文档）。
 
 ---
 
@@ -792,6 +798,7 @@ npm run typecheck
 | `ForbiddenPatternScanTest` | R01 禁 Runtime.exec、R02 禁 shell 解释器、R03 禁 MyBatis `${}`、R04 禁 new Thread、R05 禁字段注入、R06 金额禁 double、R07 日志禁打印凭证、R08 禁 SELECT *、R09 禁 java.util.Date、R10 禁空 catch、R11 禁 System.out、R12 禁动态脚本、R13 软删用 deleted_at。误报豁免：`// spec-ignore: R06 <原因>`（原因不足 3 字视为无效；现登记豁免仅 `LocalDevHostDeployer` 两处 R02——Windows 的 mvn/npm 是 .cmd 批处理须经 `cmd /c`，参数全常量无拼接，已写入规约 §13）。扫描已剪枝（跳过 target/.git/node_modules/dist/data），避免误扫产物 |
 | `ConfigCredentialScanTest` | 决策面（gateway/runtime/tools/governance）配置不得含写凭证键 |
 | `MigrationGuardTest` | 已发布迁移文件不得修改（基线 `spec-checks/migration-baseline.txt`） |
+| `ApiDocContractTest` | 每个 Mapping 方法必须有 Javadoc 或 `@Operation(summary)`；`api-doc-baseline.txt` 存量棘轮，只减不增 |
 
 ### 12.2 单元测试分布
 
@@ -803,7 +810,7 @@ npm run typecheck
 | agent-infra | `RecipeActionResolverTest`、`GitWorktreeManagerTest`、`IntakeScaffoldTest`、`RecipeCheckTest`、`IntakeProjectStoreTest`、`FileRecipeStoreTest`、`SecretBoxTest`、`SqliteSettingsStoreTest`、`SqliteProjectEnvVarStoreTest`、`RecipeScaffolderTest`（工程根识别/env-required）、`WorkspaceCodePatcherTest`（baseSha/白名单/独立分支三道校验）、`ConversationContextTrimmerTest`（预算裁剪/保留 SYSTEM/不改运行态） |
 | agent-tools | `ToolResultCacheTest`（精确/相似命中、scope 隔离、写失效、TTL、实时工具排除、包装后 schema）、`DispatchNodeParamBindingTest`（嵌套 `List<DispatchNode>` 参数绑定） |
 | agent-runtime | `DynamicModelProviderTest`（含 prefix-cache 开关）、`WorkspaceDispatchSchedulerTest`（并行耗时/依赖顺序/失败跳过/早停可选/全可选不误停/循环依赖/全局超时/参数收敛）、`ConversationManagerTest` |
-| agent-gateway | `PipelineAcceptanceTest`、`DualStackPipelineTest`（Java+Vue 双栈）、`IntakeE2ETest`、`ActionUsabilityTest`、`ToolChainTest`（含断言：调度 Agent 只读面无写工具）、`DeployStageTest`、`DotEnvLoaderTest`、`GiteeWebhookControllerTest`、`SettingsControllerTest`、`ModelProbeTest`、`ChatRunRecoveryAdvisorFormatTest`（恢复建议格式）、`PatchApplierTest`（补丁四种匹配与结构化失败）、`AgentStreamLimiterTest`（内存/jdbc 两种租约）、`ToolEvalBaselineTest`/`LiveModelToolEvalTest`（需真实模型 Key，缺 Key 自动跳过） |
+| agent-gateway | `PipelineAcceptanceTest`、`DualStackPipelineTest`（Java+Vue 双栈）、`IntakeE2ETest`、`ActionUsabilityTest`、`ToolChainTest`（含断言：调度 Agent 只读面无写工具）、`DeployStageTest`、`DotEnvLoaderTest`、`GiteeWebhookControllerTest`、`SettingsControllerTest`、`ModelProbeTest`、`ChatRunRecoveryAdvisorFormatTest`（恢复建议格式）、`PatchApplierTest`（补丁四种匹配与结构化失败）、`AgentStreamLimiterTest`（内存/jdbc 两种租约）、`ApiDocsSnapshotTest`（OpenAPI 快照 golden file）、`ToolEvalBaselineTest`/`LiveModelToolEvalTest`（需真实模型 Key，缺 Key 自动跳过） |
 | web | `state/agentEventReducer.test.ts` + `scripts/*.mjs` 无头浏览器回归 |
 
 ---

@@ -390,7 +390,8 @@ public class AgentFactory {
                 6. 汇总：conversation_summarize 读取某个会话最近一次运行的结论。
                 7. 任务板：task_create、task_update、task_complete、task_list。
                 8. 只读查证：项目/CI/流水线/环境/运行态/配置/仓库/Issue 的查询工具（如 project_info、
-                   ci_list_pipelines、env_status、runtime_status、read_file、grep、git_diff 等）。
+                   ci_list_pipelines、env_status、runtime_status、read_file、grep、git_diff 等），
+                   以及 api_search / api_get（平台接口规范）、tool_search / tool_get（工具目录）。
 
                 工作方式：
                 - 步骤较多的目标（3 步以上）先用 workspace_plan 把计划登记到任务板，
@@ -438,6 +439,8 @@ public class AgentFactory {
                 工作方式：
                 1. 回答前先用工具取证（project_info / list_envs / ci_list_pipelines；代码与提交用
                    git_status / git_commits / git_diff / list_files / read_file），不要凭印象回答本项目的配置。
+                   需要说明"平台接口怎么调"时用 api_search → api_get → api_schema 查 OpenAPI，
+                   需要确认"平台有哪些工具"时用 tool_search，不要编造接口或工具名。
                 2. 只读操作可直接执行；会改变环境的动作必须由人确认，你没有任何"自己确认"的工具：
                    - 构建 / 回滚等动作：先调 request_confirmation 登记变更，把 changeId 告诉用户，
                      请其"在平台的确认卡片上确认"；未经确认不要执行；需要把卡片再次推到用户面前时

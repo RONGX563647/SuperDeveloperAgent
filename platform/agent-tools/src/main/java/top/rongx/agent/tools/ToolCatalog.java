@@ -39,10 +39,13 @@ public class ToolCatalog {
                                    ConfigTools configTools,
                                    EnvQueryTools envQueryTools,
                                    GitIssueQueryTools gitIssueQueryTools,
+                                   ApiDocTools apiDocTools,
+                                   ToolCatalogTools toolCatalogTools,
                                    ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
-                repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools);
+                repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
+                apiDocTools, toolCatalogTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
@@ -56,7 +59,9 @@ public class ToolCatalog {
                                               RuntimeTools runtimeTools,
                                               ConfigTools configTools,
                                               EnvQueryTools envQueryTools,
-                                              GitIssueQueryTools gitIssueQueryTools) {
+                                              GitIssueQueryTools gitIssueQueryTools,
+                                              ApiDocTools apiDocTools,
+                                              ToolCatalogTools toolCatalogTools) {
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
@@ -67,6 +72,9 @@ public class ToolCatalog {
         toolkit.registerTool(envQueryTools);
         // 任务页只读：生产会话也能看到 Issue 任务
         toolkit.registerTool(gitIssueQueryTools);
+        // API 文档与工具目录：只读规范，不调用任何业务接口
+        toolkit.registerTool(apiDocTools);
+        toolkit.registerTool(toolCatalogTools);
     }
 
     @Bean
@@ -88,6 +96,8 @@ public class ToolCatalog {
                                 CapabilityMarketTools capabilityMarketTools,
                                 GitIssueQueryTools gitIssueQueryTools,
                                 GitIssueCommandTools gitIssueCommandTools,
+                                ApiDocTools apiDocTools,
+                                ToolCatalogTools toolCatalogTools,
                                 ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
 
@@ -101,6 +111,9 @@ public class ToolCatalog {
         toolkit.registerTool(repoQueryTools);
         toolkit.registerTool(runtimeTools);
         toolkit.registerTool(configTools);
+        // API 文档与工具目录：只读规范，帮助模型先查再调
+        toolkit.registerTool(apiDocTools);
+        toolkit.registerTool(toolCatalogTools);
 
         // 写操作工具：直接注册，保证非生产会话始终可见（确认交给变更单 / 确认卡）
         toolkit.registerTool(ciCommandTools);
@@ -139,10 +152,13 @@ public class ToolCatalog {
                                      ConfigTools configTools,
                                      EnvQueryTools envQueryTools,
                                      GitIssueQueryTools gitIssueQueryTools,
+                                     ApiDocTools apiDocTools,
+                                     ToolCatalogTools toolCatalogTools,
                                      ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
-                repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools);
+                repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
+                apiDocTools, toolCatalogTools);
         toolkit.registerTool(supervisorTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
@@ -173,6 +189,8 @@ public class ToolCatalog {
                                  ChangeTools changeTools,
                                  ActionCommandTools actionCommandTools,
                                  PatchTools patchTools,
+                                 ApiDocTools apiDocTools,
+                                 ToolCatalogTools toolCatalogTools,
                                  ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(projectTools);
@@ -184,6 +202,8 @@ public class ToolCatalog {
         toolkit.registerTool(deployTools);
         toolkit.registerTool(runtimeTools);
         toolkit.registerTool(configTools);
+        toolkit.registerTool(apiDocTools);
+        toolkit.registerTool(toolCatalogTools);
         toolkit.registerTool(changeTools);
         toolkit.registerTool(actionCommandTools);
         toolkit.registerTool(patchTools);

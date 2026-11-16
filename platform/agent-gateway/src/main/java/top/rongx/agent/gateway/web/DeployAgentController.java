@@ -2,6 +2,9 @@ package top.rongx.agent.gateway.web;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.agentscope.core.event.AgentEvent;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
@@ -73,6 +76,10 @@ public class DeployAgentController {
      * @param request   环境 / 提交 / 流水线 / 已确认的环境绑定
      * @return SSE 发射器
      */
+    @Operation(summary = "自动部署（SSE 事件流）",
+            description = "返回 text/event-stream，流式输出 Agent 执行过程；生产环境必须走确认流程")
+    @ApiResponse(responseCode = "200", description = "SSE 事件流",
+            content = @Content(mediaType = MediaType.TEXT_EVENT_STREAM_VALUE))
     @PostMapping(value = "/{projectId}/agent", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter run(@PathVariable String projectId, @RequestBody DeployAgentRequest request) {
         // 1. 认证：操作人来自 Sa-Token 会话；自动部署属于写操作，只读角色不能触发
