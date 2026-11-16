@@ -4,6 +4,15 @@ import type { SessionCost, UsageCost } from './utils/deepseekPricing'
 
 export type { SessionCost, UsageCost }
 
+/** 本会话 token 累计（所有模型都统计，不区分是否计费）。 */
+export interface SessionTokenUsage {
+  calls: number
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
 export interface ChatRequest {
   projectId: string
   env: string

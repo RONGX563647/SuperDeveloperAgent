@@ -2,12 +2,12 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown, ArrowRight, Check, CircleCheck, Connection, Cpu, Lock, Plus, Refresh, Warning
+  ArrowDown, ArrowRight, Check, Connection, Cpu, Lock, Plus, Refresh, Warning
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../../stores/app'
 import {
-  listModels, modelOptions, setDefaultModel,
-  type ModelConnection, type ModelOptions
+  modelOptions,
+  type ModelConnectionOption, type ModelOptions
 } from '../../api/settings'
 import { gitCheckout, gitStatus, listProjects, type GitStatus, type ProjectRow } from '../../api/project'
 
@@ -18,7 +18,7 @@ import { gitCheckout, gitStatus, listProjects, type GitStatus, type ProjectRow }
  * - 上下文：由 ChatView 传入估算值（服务端目前不回精确 token）；
  * - 权限：登录身份 + 本地执行策略，切换后由 ChatView 决定确认卡行为；
  * - 工作树：分支选择会真实执行 git checkout；工作树只切换会话上下文；
- * - 模型：复用设置页的模型连接，切换即 setDefaultModel（运行时热切换）。
+ * - 模型：按「网关 → 模型」两级选择；选择只跟随本会话保存，不改设置页默认。
  */
 interface Props {
   projectId: string
@@ -26,12 +26,16 @@ interface Props {
   worktree: string
   context: { used: number; limit: number; messages: number; events: number }
   permission: PermissionMode
+  /** 本会话选择的模型连接与模型名（null = 设置页默认） */
+  modelConnectionId: string | null
+  modelName: string | null
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   'update:permission': [value: PermissionMode]
   'update:worktree': [value: string]
+  'update:model': [value: { connectionId: string | null, modelName: string | null }]
   'new-session': []
   navigate: [path: string]
 }>()
@@ -149,28 +153,39 @@ watch(() => props.projectId, () => {
 })
 
 // ---------------------------------------------------------------- 模型
-const models = ref<ModelConnection[]>([])
 const active = ref<ModelOptions | null>(null)
 const modelsLoading = ref(false)
 const modelsError = ref('')
-const switching = ref('')
+
+/** 可选的网关（已启用；按设置页顺序，默认连接在最前）。 */
+const connections = computed<ModelConnectionOption[]>(() => active.value?.connections ?? [])
+
+/** 当前生效的网关：优先本会话选择，其次默认连接。 */
+const selectedConnection = computed<ModelConnectionOption | null>(() => {
+  const list = connections.value
+  if (!list.length) return null
+  if (props.modelConnectionId) {
+    return list.find((c) => c.id === props.modelConnectionId) ?? null
+  }
+  return list.find((c) => c.isDefault) ?? list[0]
+})
+
+const selectedModelName = computed(() =>
+  props.modelName || selectedConnection.value?.modelName || active.value?.modelName || '')
 
 const modelLabel = computed(() => {
   if (modelsError.value) return '模型服务异常'
-  return active.value?.configured && active.value.modelName
-    ? active.value.modelName
-    : '未配置模型'
+  const connection = selectedConnection.value
+  if (!connection || !selectedModelName.value) return '未配置模型'
+  return `${connection.name} · ${selectedModelName.value}`
 })
 
 async function loadModels(): Promise<void> {
   modelsLoading.value = true
   modelsError.value = ''
   try {
-    const [list, options] = await Promise.all([listModels(), modelOptions()])
-    models.value = list
-    active.value = options
+    active.value = await modelOptions()
   } catch (e) {
-    models.value = []
     active.value = null
     modelsError.value = (e instanceof Error ? e.message : '模型接口不可用').slice(0, 120)
   } finally {
@@ -178,19 +193,17 @@ async function loadModels(): Promise<void> {
   }
 }
 
-async function pickModel(id: string): Promise<void> {
-  if (switching.value) return
-  switching.value = id
-  try {
-    await setDefaultModel(id)
-    await loadModels()
-    const picked = models.value.find((m) => m.id === id)
-    ElMessage.success(`已切换模型：${picked?.name ?? id}`)
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '模型切换失败')
-  } finally {
-    switching.value = ''
-  }
+function isPicked(connectionId: string, modelName: string): boolean {
+  const connection = selectedConnection.value
+  return connection?.id === connectionId && selectedModelName.value === modelName
+}
+
+/** 选择只跟随本会话（不再改设置页默认模型）。 */
+function pickModel(connectionId: string, modelName: string): void {
+  if (isPicked(connectionId, modelName)) return
+  emit('update:model', { connectionId, modelName })
+  const connection = connections.value.find((c) => c.id === connectionId)
+  ElMessage.success(`本会话模型：${connection?.name ?? connectionId} · ${modelName}`)
 }
 
 function go(path: string): void {
@@ -388,8 +401,8 @@ onMounted(() => {
       <!-- 模型 -->
       <template v-else-if="panel === 'model'">
         <div class="panel-head">
-          <b>模型快捷切换</b>
-          <span class="panel-sub">默认模型对新会话生效</span>
+          <b>本会话模型</b>
+          <span class="panel-sub">网关 + 模型</span>
         </div>
         <div v-if="modelsError" class="panel-empty">
           <el-icon><Warning /></el-icon>
@@ -403,36 +416,42 @@ onMounted(() => {
             </button>
           </div>
         </div>
-        <div v-else-if="!models.length" class="panel-empty">
+        <div v-else-if="!connections.length" class="panel-empty">
           <el-icon><Warning /></el-icon>
-          <p>还没有配置模型连接。到「设置 → 模型连接」添加后即可在这里一键切换。</p>
+          <p>还没有启用的模型连接。到「设置 → 模型连接」添加并同步模型后即可在这里选择。</p>
           <button type="button" class="panel-action" @click="go('/settings?section=models')">
             去添加模型连接 <el-icon><ArrowRight /></el-icon>
           </button>
         </div>
         <template v-else>
           <div class="model-list">
-            <button
-              v-for="m in models" :key="m.id" type="button"
-              class="model-item"
-              :class="{ active: m.id === active?.activeId, muted: !m.enabled }"
-              :disabled="!m.enabled || !!switching"
-              @click="pickModel(m.id)"
-            >
-              <span class="model-main">
-                <b>{{ m.name }}</b>
-                <em class="mono">{{ m.modelName }}</em>
-              </span>
-              <span class="model-side">
-                <span v-if="m.id === active?.activeId" class="default-tag">
-                  <el-icon><CircleCheck /></el-icon> 当前默认
+            <div v-for="c in connections" :key="c.id" class="model-group">
+              <div class="model-group-head">
+                <b>{{ c.name }}</b>
+                <em>{{ c.provider }}</em>
+              </div>
+              <button
+                v-for="m in c.models" :key="`${c.id}-${m.id}`" type="button"
+                class="model-item"
+                :class="{ active: isPicked(c.id, m.id) }"
+                @click="pickModel(c.id, m.id)"
+              >
+                <span class="model-main">
+                  <b class="mono">{{ m.label }}</b>
                 </span>
-                <span v-else class="model-provider">{{ m.provider }}</span>
-                <el-icon v-if="switching === m.id" class="spin"><Refresh /></el-icon>
-              </span>
-            </button>
+                <span class="model-side">
+                  <span v-if="m.source === 'discover'" class="source-tag">已发现</span>
+                  <span v-else-if="m.source === 'config'" class="source-tag config">当前配置</span>
+                  <el-icon v-if="isPicked(c.id, m.id)" class="picked"><Check /></el-icon>
+                </span>
+              </button>
+              <p v-if="!c.models.length" class="panel-note">该网关还没有可选模型，去设置页同步。</p>
+            </div>
           </div>
-          <p class="panel-note">切换后无需重启，新对话立即使用新模型（运行时热切换）。</p>
+          <p class="panel-note">
+            选择跟随本会话保存；同一网关下可随时换模型，切换后下一轮没有前缀缓存命中，
+            按未命中输入计费。
+          </p>
           <button type="button" class="panel-action" @click="go('/settings?section=models')">
             管理模型连接 <el-icon><ArrowRight /></el-icon>
           </button>
@@ -876,11 +895,46 @@ onMounted(() => {
   color: var(--accent-ink);
 }
 
-/* 模型列表 */
+/* 模型列表：按网关分组 */
 .model-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 10px;
+}
+.model-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.model-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+.model-group-head b {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.model-group-head em {
+  font-size: 9.5px;
+  font-style: normal;
+  color: var(--ink-faint);
+}
+.source-tag {
+  padding: 1px 5px;
+  font-size: 9px;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+}
+.source-tag.config {
+  color: var(--ink-muted);
+}
+.picked {
+  font-size: 11px;
+  color: var(--accent-ink);
 }
 .model-item {
   display: flex;

@@ -1,8 +1,16 @@
-import { shallowRef, watch } from 'vue'
+import { effectScope, watch, type EffectScope } from 'vue'
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
+import { getConversationTranscript, saveConversationTranscript } from '../api/workspace'
 import { useAgentChat } from '../composables/useAgentChat'
-import { loadHistory, saveHistory } from './sessionHistory'
+import {
+  latestMessageAt,
+  loadHistory,
+  parseHistory,
+  saveHistory,
+  serializeHistory,
+  type HistorySnapshot,
+} from './sessionHistory'
 import type { ChatMessage } from '../types'
 
 /**
@@ -21,6 +29,9 @@ export interface SessionChatContext {
   worktree: string
   skills?: string[]
   mcpServers?: string[]
+  /** 本会话选择的模型（null = 设置页默认；选择跟随会话，不写回全局默认） */
+  modelConnectionId?: string | null
+  modelName?: string | null
 }
 
 export interface SessionChatEntry {
@@ -31,12 +42,17 @@ export interface SessionChatEntry {
   dispose: () => void
 }
 
+/** 本地缓存防抖间隔。 */
+const LOCAL_SAVE_DELAY = 400
+/** 服务端入库间隔：流式输出期间按固定节奏写，不在每次增量时重置计时器。 */
+const SERVER_SAVE_DELAY = 1_000
+
 const entries = new Map<string, SessionChatEntry>()
 
-function persist(entry: SessionChatEntry): void {
+/** 时间线快照：已落库的消息 + 流式中的半截正文（刷新后至少能看到已产出内容）。 */
+function snapshotMessages(entry: SessionChatEntry): ChatMessage[] {
   const projection = entry.chat.projection.value
   const messages: ChatMessage[] = [...projection.messages]
-  // 流式中的半截正文也落盘：刷新/关页后至少能看到已经产出的内容
   const turn = projection.streamingTurn
   if (turn && (turn.text || turn.thinking)) {
     messages.push({
@@ -47,12 +63,21 @@ function persist(entry: SessionChatEntry): void {
       at: Date.now(),
     })
   }
-  saveHistory(entry.sessionId, messages, projection.tools)
+  return messages
+}
+
+function persist(entry: SessionChatEntry): void {
+  saveHistory(entry.sessionId, snapshotMessages(entry), entry.chat.projection.value.tools)
 }
 
 function createEntry(sessionId: string, context: SessionChatContext): SessionChatEntry {
   let disposed = false
   let saveTimer: ReturnType<typeof setTimeout> | null = null
+  let saveScope: EffectScope | null = null
+  // 服务端同步状态：拉取完成前只记录待写入，避免用空/旧快照覆盖数据库
+  let serverReady = false
+  let serverPending = false
+  let serverTimer: ReturnType<typeof setTimeout> | null = null
   const entry: SessionChatEntry = {
     sessionId,
     context,
@@ -66,6 +91,8 @@ function createEntry(sessionId: string, context: SessionChatContext): SessionCha
         permission: appStore.permission,
         skills: entry.context.skills,
         mcpServers: entry.context.mcpServers,
+        modelConnectionId: entry.context.modelConnectionId ?? null,
+        modelName: entry.context.modelName ?? null,
       }),
       getHeaders: () => ({ Authorization: `Bearer ${getToken()}` }),
       // 跨路由常驻：离开对话页 / 切换会话都不能中止读流
@@ -75,20 +102,89 @@ function createEntry(sessionId: string, context: SessionChatContext): SessionCha
       disposed = true
       if (saveTimer) clearTimeout(saveTimer)
       saveTimer = null
+      if (serverTimer) clearTimeout(serverTimer)
+      serverTimer = null
+      saveScope?.stop()
       entry.chat.stop()
     },
   }
 
+  function pushServer(): void {
+    if (disposed) return
+    try {
+      const payload = serializeHistory(snapshotMessages(entry), entry.chat.projection.value.tools)
+      void saveConversationTranscript(sessionId, payload).catch(() => {
+        // 后端不可用：本地缓存照旧，下一轮变更会重试
+      })
+    } catch {
+      // 序列化失败（异常数据）：跳过本次服务端写入
+    }
+  }
+
+  function scheduleServerSave(): void {
+    if (disposed) return
+    if (!serverReady) {
+      serverPending = true
+      return
+    }
+    // 流式输出会持续触发投影变化：计时器已在跑就不重置，保证至少每秒落库一次
+    if (serverTimer) return
+    serverTimer = setTimeout(() => {
+      serverTimer = null
+      pushServer()
+    }, SERVER_SAVE_DELAY)
+  }
+
+  /**
+   * 首次进入会话时与服务端对账：
+   * 数据库更新（换了浏览器/设备）就以数据库为准；数据库为空则把本地历史迁进去。
+   */
+  async function syncFromServer(local: HistorySnapshot | null): Promise<void> {
+    try {
+      const remote = await getConversationTranscript(sessionId)
+      if (disposed) return
+      const remoteHistory = remote.found ? parseHistory(remote.payload) : null
+      if (remoteHistory && latestMessageAt(remoteHistory) > latestMessageAt(local)) {
+        entry.chat.hydrate(remoteHistory.messages, remoteHistory.tools)
+        saveHistory(sessionId, remoteHistory.messages, remoteHistory.tools)
+      } else if (local) {
+        // 数据库没有或比本地旧：把当前快照回传，保证两边收敛到最新
+        serverPending = true
+      }
+    } catch {
+      // 接口不可用：退回纯本地模式
+    } finally {
+      serverReady = true
+      if (serverPending) {
+        serverPending = false
+        scheduleServerSave()
+      }
+    }
+  }
+
   const history = loadHistory(sessionId)
   if (history) entry.chat.hydrate(history.messages, history.tools)
+  void syncFromServer(history)
 
-  watch(entry.chat.projection, () => {
-    if (disposed) return
-    if (saveTimer) clearTimeout(saveTimer)
-    saveTimer = setTimeout(() => {
-      saveTimer = null
-      if (!disposed) persist(entry)
-    }, 400)
+  /**
+   * 落盘 watcher 必须挂在独立的 effectScope 上。
+   *
+   * <p>会话实例是模块级常驻的，但 createEntry 通常在某个视图的 setup 里被调用：
+   * watch 会被 Vue 记到该组件的 effectScope 上，离开页面（去流水线/工作区）时自动停止，
+   * 而切回对话页只会复用已有实例、不会重建 watcher —— 之后的消息就再也不会写入
+   * localStorage，表现为「重启后端/刷新后之前发的一些消息没了」。
+   */
+  saveScope = effectScope(true)
+  saveScope.run(() => {
+    watch(entry.chat.projection, () => {
+      if (disposed) return
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = setTimeout(() => {
+        saveTimer = null
+        if (!disposed) persist(entry)
+      }, LOCAL_SAVE_DELAY)
+      scheduleServerSave()
+    })
   })
 
   return entry

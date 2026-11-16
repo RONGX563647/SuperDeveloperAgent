@@ -12,7 +12,14 @@ package top.rongx.agent.domain.conversation;
  * @param archived 是否归档
  */
 public record ConversationPatch(String title, String env, String worktree, String summary,
-                                ConversationStatus status, Boolean pinned, Boolean archived) {
+                                ConversationStatus status, Boolean pinned, Boolean archived,
+                                String modelConnectionId, String modelName) {
+
+    /** 兼容旧调用（不改模型选择）。 */
+    public ConversationPatch(String title, String env, String worktree, String summary,
+                             ConversationStatus status, Boolean pinned, Boolean archived) {
+        this(title, env, worktree, summary, status, pinned, archived, null, null);
+    }
 
     public static ConversationPatch status(ConversationStatus status) {
         return new ConversationPatch(null, null, null, null, status, null, null);

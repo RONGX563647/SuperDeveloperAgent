@@ -114,9 +114,11 @@ public class WorkspaceSuperController {
 
         try {
             Disposable disposable = chatService
-                    .streamSupervisor(ctx, supervisor.id(), request.message())
+                    .streamSupervisor(ctx, supervisor.id(), request.message(),
+                            supervisor.modelConnectionId(), supervisor.modelName())
                     .subscribe(
-                            event -> send(emitter, event, seq, cancel, sendLock),
+                            event -> send(emitter, event, supervisor.modelName(), seq, cancel,
+                                    sendLock),
                             error -> {
                                 log.error("调度对话异常 project={}", projectId, error);
                                 sendError(emitter, error, sendLock);
@@ -140,14 +142,14 @@ public class WorkspaceSuperController {
         return emitter;
     }
 
-    private void send(SseEmitter emitter, AgentEvent event, AtomicLong seq, Runnable cancel,
-                      Object sendLock) {
+    private void send(SseEmitter emitter, AgentEvent event, String modelName, AtomicLong seq,
+                      Runnable cancel, Object sendLock) {
         try {
             synchronized (sendLock) {
                 emitter.send(SseEmitter.event()
                         .id(String.valueOf(seq.incrementAndGet()))
                         .name("agent")
-                        .data(eventMapper.toDto(event), MediaType.APPLICATION_JSON));
+                        .data(eventMapper.toDto(event, modelName), MediaType.APPLICATION_JSON));
             }
         } catch (IOException clientGone) {
             cancel.run();

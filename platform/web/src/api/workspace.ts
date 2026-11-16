@@ -16,6 +16,9 @@ export interface ConversationRow {
   archived: boolean
   lastActivityAt: number
   createdAt: number
+  /** 本会话选择的模型连接与模型名（null = 设置页默认） */
+  modelConnectionId: string | null
+  modelName: string | null
 }
 
 export interface RunRow {
@@ -80,6 +83,8 @@ export function updateConversation(
     worktree?: string
     pinned?: boolean
     archived?: boolean
+    modelConnectionId?: string | null
+    modelName?: string | null
   },
 ): Promise<ConversationRow> {
   return apiFetch(`/api/v1/conversations/${conversationId}`, {
@@ -96,6 +101,26 @@ export function sendToConversation(conversationId: string, message: string): Pro
   return apiFetch(`/api/v1/conversations/${conversationId}/send`, {
     method: 'POST',
     body: JSON.stringify({ message }),
+  })
+}
+
+/** 会话时间线（消息 + 工具结果）从数据库恢复；found=false 表示服务端还没有。 */
+export interface ConversationTranscript {
+  found: boolean
+  payload: string | null
+}
+
+export function getConversationTranscript(conversationId: string): Promise<ConversationTranscript> {
+  return apiFetch(`/api/v1/conversations/${conversationId}/messages`)
+}
+
+export function saveConversationTranscript(
+  conversationId: string,
+  payload: string,
+): Promise<{ saved: boolean }> {
+  return apiFetch(`/api/v1/conversations/${conversationId}/messages`, {
+    method: 'PUT',
+    body: JSON.stringify({ payload }),
   })
 }
 

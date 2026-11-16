@@ -120,6 +120,18 @@ public class AgentFactory {
      */
     public AgentSession createChat(ProjectContext ctx, List<String> requestedSkills,
                                    List<String> requestedMcp) {
+        return createChat(ctx, requestedSkills, requestedMcp, null, null);
+    }
+
+    /**
+     * 同上，但使用会话显式选择的模型连接 / 模型名。
+     *
+     * @param connectionId 模型连接 id；null = 设置页默认连接
+     * @param modelName    模型名；null = 该连接配置里的模型名
+     */
+    public AgentSession createChat(ProjectContext ctx, List<String> requestedSkills,
+                                   List<String> requestedMcp, String connectionId,
+                                   String modelName) {
         // 1. 权限模式按环境决定：生产 DEFAULT（写必 ASK），非生产 BYPASS
         //    非生产不能用 ACCEPT_EDITS：它只放行文件类编辑，readOnly=false 的工具仍走默认 ASK，
         //    而对话链路没有回传"用户已确认"的通道，request_confirmation / ci_run 会永远停在执行中。
@@ -142,7 +154,7 @@ public class AgentFactory {
         ReActAgent.Builder builder = ReActAgent.builder()
                 .name("devops-agent")
                 .sysPrompt(systemPrompt(ctx))
-                .model(modelProvider.current())
+                .model(modelProvider.current(connectionId, modelName))
                 .toolkit(toolkit)
                 .permissionContext(permission)
                 .maxIters(props.maxIters())
@@ -263,6 +275,10 @@ public class AgentFactory {
      * </ul>
      */
     public ReActAgent createDeploy(ProjectContext ctx) {
+        return createDeploy(ctx, null, null);
+    }
+
+    public ReActAgent createDeploy(ProjectContext ctx, String connectionId, String modelName) {
         // 发布 Agent 的入口已由操作人在流水线工作台显式确认（生成并确认环境绑定），
         // 且控制器只放行 dev/test；这里用 BYPASS 避免 Agent 停在"等待确认"，
         // 否则一键自动部署会在 deploy_run 处中断。生产仍保持 DEFAULT（且控制器直接拒绝）。
@@ -272,7 +288,7 @@ public class AgentFactory {
         return ReActAgent.builder()
                 .name("deploy-agent")
                 .sysPrompt(deploySystemPrompt(ctx))
-                .model(modelProvider.current())
+                .model(modelProvider.current(connectionId, modelName))
                 .toolkit(deployToolkit)
                 .permissionContext(permission)
                 .maxIters(Math.max(props.maxIters(), 12))
@@ -338,13 +354,17 @@ public class AgentFactory {
      * 它不挂 MCP、不挂 Skill、没有任何写工具，真正动手仍交给子会话。
      */
     public ReActAgent createSupervisor(ProjectContext ctx) {
+        return createSupervisor(ctx, null, null);
+    }
+
+    public ReActAgent createSupervisor(ProjectContext ctx, String connectionId, String modelName) {
         PermissionContextState permission = PermissionContextState.builder()
                 .mode(PermissionMode.DEFAULT)
                 .build();
         return ReActAgent.builder()
                 .name("workspace-supervisor")
                 .sysPrompt(supervisorSystemPrompt(ctx))
-                .model(modelProvider.current())
+                .model(modelProvider.current(connectionId, modelName))
                 .toolkit(supervisorToolkit.copy())
                 .permissionContext(permission)
                 .maxIters(Math.max(props.maxIters(), 12))

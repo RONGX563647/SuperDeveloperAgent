@@ -81,11 +81,41 @@ export interface TestResult {
   reply?: string
 }
 
+export interface ModelOptionItem {
+  id: string
+  label: string
+  /** discover = /models 自动发现；manual = 手工填写；config = 连接配置里的模型名 */
+  source: string
+}
+
+export interface ModelConnectionOption {
+  id: string
+  name: string
+  provider: string
+  modelName: string
+  isDefault: boolean
+  models: ModelOptionItem[]
+}
+
 export interface ModelOptions {
   activeId: string | null
   activeName: string | null
   modelName: string | null
   configured: boolean
+  /** 按网关分组的可选模型（对话栏两级选择） */
+  connections: ModelConnectionOption[]
+}
+
+export interface DiscoverResult {
+  ok: boolean
+  count: number
+  models: Array<{
+    connectionId: string
+    modelId: string
+    displayName: string
+    source: string
+    updatedAt: number
+  }>
 }
 
 // ---------------------------------------------------------------- 服务器
@@ -165,8 +195,81 @@ export function testModelDraft(input: {
   })
 }
 
-export function modelOptions(): Promise<ModelOptions> {
-  return apiFetch('/api/v1/settings/models/options')
+export function modelOptions(includeDisabled = false): Promise<ModelOptions> {
+  return apiFetch(
+    `/api/v1/settings/models/options${includeDisabled ? '?includeDisabled=true' : ''}`,
+  )
+}
+
+/** 同步网关模型列表（GET {baseUrl}/models）。 */
+export function discoverModels(id: string): Promise<DiscoverResult> {
+  return apiFetch(`/api/v1/settings/models/${encodeURIComponent(id)}/discover`, {
+    method: 'POST'
+  })
+}
+
+// ---------------------------------------------------------------- token 用量
+
+export interface TokenUsageTotals {
+  calls: number
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  totalTokens: number
+  lastAt: number
+}
+
+export interface SessionUsageView {
+  sessionId: string
+  totals: TokenUsageTotals
+  calls: Array<{
+    sessionId: string
+    projectId: string | null
+    userId: string | null
+    connectionId: string | null
+    modelName: string | null
+    inputTokens: number
+    cachedTokens: number
+    outputTokens: number
+    createdAt: number
+  }>
+}
+
+export interface UsageSummaryView {
+  days: number
+  totals: TokenUsageTotals
+  daily: Array<{
+    day: string
+    calls: number
+    inputTokens: number
+    cachedTokens: number
+    outputTokens: number
+    totalTokens: number
+  }>
+  byModel: Array<{
+    modelName: string
+    calls: number
+    inputTokens: number
+    cachedTokens: number
+    outputTokens: number
+    totalTokens: number
+  }>
+  byProject: Array<{
+    projectId: string
+    calls: number
+    inputTokens: number
+    cachedTokens: number
+    outputTokens: number
+    totalTokens: number
+  }>
+}
+
+export function getSessionUsage(sessionId: string): Promise<SessionUsageView> {
+  return apiFetch(`/api/v1/usage/session/${encodeURIComponent(sessionId)}`)
+}
+
+export function getUsageSummary(days = 30): Promise<UsageSummaryView> {
+  return apiFetch(`/api/v1/usage/summary?days=${days}`)
 }
 
 // ---------------------------------------------------------------- 项目环境变量
@@ -1001,14 +1104,27 @@ export interface CapabilityInstallResult {
   message: string
 }
 
+export interface CapabilityMarketPage {
+  items: CapabilityEntry[]
+  total: number
+  hasMore: boolean
+}
+
+/**
+ * 市场分页（懒加载）。
+ *
+ * @param refresh true = 后端清缓存并重新同步远端仓库 / Registry（打开市场、点刷新时用）
+ */
 export function listCapabilityMarket(
-  kind?: 'MCP' | 'SKILL', q?: string
-): Promise<CapabilityEntry[]> {
+  kind: 'MCP' | 'SKILL', q = '', offset = 0, limit = 24, refresh = false,
+): Promise<CapabilityMarketPage> {
   const params = new URLSearchParams()
-  if (kind) params.set('kind', kind)
-  if (q && q.trim()) params.set('q', q.trim())
-  const suffix = params.toString() ? `?${params}` : ''
-  return apiFetch(`/api/v1/settings/capabilities/market${suffix}`)
+  params.set('kind', kind)
+  if (q.trim()) params.set('q', q.trim())
+  params.set('offset', String(offset))
+  params.set('limit', String(limit))
+  if (refresh) params.set('refresh', 'true')
+  return apiFetch(`/api/v1/settings/capabilities/market?${params}`)
 }
 
 export function installCapability(id: string): Promise<CapabilityInstallResult> {

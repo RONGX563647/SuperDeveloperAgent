@@ -19,6 +19,7 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.RunStatus;
@@ -48,11 +49,14 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     private static final int MAX_TITLE = 60;
     private static final int MAX_TEXT = 4_000;
     private static final int MAX_TASK_GOAL = 1_000;
+    /** 单个会话时间线上限 8MB：前端已裁剪到 200 条消息，超出说明客户端异常。 */
+    private static final int MAX_TRANSCRIPT_BYTES = 8_000_000;
     private static final long MAX_WAIT_MILLIS = 60_000L;
 
     private final ConversationRepository conversations;
     private final ConversationRunRepository runs;
     private final WorkspaceTaskRepository tasks;
+    private final ConversationTranscriptRepository transcripts;
     private final ProjectRepository projects;
     private final WorkspaceRunExecutor executor;
     private final UserRolePort userRoles;
@@ -65,6 +69,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     public ConversationManager(ConversationRepository conversations,
                                ConversationRunRepository runs,
                                WorkspaceTaskRepository tasks,
+                               ConversationTranscriptRepository transcripts,
                                ProjectRepository projects,
                                WorkspaceRunExecutor executor,
                                UserRolePort userRoles,
@@ -76,6 +81,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         this.conversations = conversations;
         this.runs = runs;
         this.tasks = tasks;
+        this.transcripts = transcripts;
         this.projects = projects;
         this.executor = executor;
         this.userRoles = userRoles;
@@ -104,6 +110,17 @@ public class ConversationManager implements WorkspaceSupervisorPort {
      * <p>失败不阻断对话：会话元数据是辅助信息，不能因为 SQLite 抖动让聊天不可用。
      */
     public void ensureFromChat(ProjectContext ctx, String sessionId, String message, String worktree) {
+        ensureFromChat(ctx, sessionId, message, worktree, null, null);
+    }
+
+    /**
+     * 普通对话入口的会话登记，并记录本会话选择的模型。
+     *
+     * @param modelConnectionId 模型连接 id；null = 不改变已有选择
+     * @param modelName         模型名；null = 不改变已有选择
+     */
+    public void ensureFromChat(ProjectContext ctx, String sessionId, String message,
+                               String worktree, String modelConnectionId, String modelName) {
         if (!validId(sessionId)) {
             return;
         }
@@ -111,7 +128,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
             Optional<Conversation> existing = conversations.find(sessionId);
             if (existing.isEmpty()) {
                 conversations.save(Conversation.normal(sessionId, ctx.projectId(), ctx.userId(),
-                        titleOf(message), ctx.env(), worktree));
+                        titleOf(message), ctx.env(), worktree, modelConnectionId, modelName));
                 return;
             }
             Conversation conversation = existing.get();
@@ -124,7 +141,8 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 title = titleOf(message);
             }
             conversations.update(sessionId, ctx.userId(),
-                    new ConversationPatch(title, ctx.env(), worktree, null, null, null, null));
+                    new ConversationPatch(title, ctx.env(), worktree, null, null, null, null,
+                            modelConnectionId, modelName));
         } catch (RuntimeException e) {
             // 元数据写入失败不影响对话本身
             log.debug("会话元数据登记失败 session={}：{}", sessionId, e.getMessage());
@@ -186,6 +204,27 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         }
         dataCleaner.purge(ownerUserId, conversationId);
         return true;
+    }
+
+    /** 读取会话时间线（不透明 JSON）；没有保存过时为空。 */
+    public Optional<String> transcript(String conversationId, String ownerUserId) {
+        conversations.findByOwner(conversationId, ownerUserId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或无权访问：" + conversationId));
+        return transcripts.findTranscript(conversationId);
+    }
+
+    /** 保存会话时间线；归属校验在写入前完成，避免越权覆盖别人的会话。 */
+    public void saveTranscript(String conversationId, String ownerUserId, String payload) {
+        conversations.findByOwner(conversationId, ownerUserId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或无权访问：" + conversationId));
+        if (payload == null) {
+            throw new IllegalArgumentException("会话历史不能为空");
+        }
+        if (payload.getBytes(StandardCharsets.UTF_8).length > MAX_TRANSCRIPT_BYTES) {
+            throw new IllegalArgumentException("会话历史过大（上限 "
+                    + MAX_TRANSCRIPT_BYTES + " 字节）");
+        }
+        transcripts.saveTranscript(conversationId, payload);
     }
 
     public List<ConversationRun> runsOfProject(String projectId, int limit) {

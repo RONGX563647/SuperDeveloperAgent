@@ -170,8 +170,13 @@ public class WorkspaceRunExecutor {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Flux<AgentEvent> flux;
         try {
+            // 异步运行沿用会话保存的模型选择（与用户在对话栏看到的一致）
+            top.rongx.agent.domain.conversation.Conversation conversation =
+                    conversations.find(run.conversationId()).orElse(null);
             flux = chatService.getObject().stream(ctx, run.conversationId(), text,
-                    "chat", null, null);
+                    "chat", null, null,
+                    conversation == null ? null : conversation.modelConnectionId(),
+                    conversation == null ? null : conversation.modelName());
         } catch (RuntimeException e) {
             return new Results("", safeMessage(e));
         }

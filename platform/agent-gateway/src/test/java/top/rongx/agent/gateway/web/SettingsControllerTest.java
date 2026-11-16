@@ -171,7 +171,8 @@ class SettingsControllerTest {
     };
 
     private SettingsController controller(CurrentUser user) {
-        return new SettingsController(servers, models, ssh, new ModelProbe(
+        // 本组用例只覆盖部署服务器 CRUD：模型目录/发现能力不参与，传 null 即可
+        return new SettingsController(servers, models, null, null, ssh, new ModelProbe(
                 new com.fasterxml.jackson.databind.ObjectMapper()), user);
     }
 

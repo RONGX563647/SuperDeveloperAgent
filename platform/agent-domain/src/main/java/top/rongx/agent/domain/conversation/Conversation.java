@@ -21,7 +21,19 @@ public record Conversation(
         boolean archived,
         String parentConversationId,
         long lastActivityAt,
-        long createdAt) {
+        long createdAt,
+        String modelConnectionId,
+        String modelName) {
+
+    /** 兼容旧调用（未选择模型 = 使用默认连接）。 */
+    public Conversation(String id, String projectId, String ownerUserId, String title,
+                        ConversationKind kind, String role, String env, String worktree,
+                        ConversationStatus status, String summary, boolean pinned,
+                        boolean archived, String parentConversationId, long lastActivityAt,
+                        long createdAt) {
+        this(id, projectId, ownerUserId, title, kind, role, env, worktree, status, summary,
+                pinned, archived, parentConversationId, lastActivityAt, createdAt, null, null);
+    }
 
     public Conversation {
         if (id == null || id.isBlank()) {
@@ -39,13 +51,24 @@ public record Conversation(
         env = env == null || env.isBlank() ? "test" : env;
         status = status == null ? ConversationStatus.IDLE : status;
         summary = summary == null ? "" : summary;
+        modelConnectionId = modelConnectionId == null || modelConnectionId.isBlank()
+                ? null : modelConnectionId.trim();
+        modelName = modelName == null || modelName.isBlank() ? null : modelName.trim();
     }
 
     /** 新建一条普通会话。 */
     public static Conversation normal(String id, String projectId, String ownerUserId,
                                       String title, String env, String worktree) {
+        return normal(id, projectId, ownerUserId, title, env, worktree, null, null);
+    }
+
+    /** 新建一条普通会话，并带上本会话选择的模型。 */
+    public static Conversation normal(String id, String projectId, String ownerUserId,
+                                      String title, String env, String worktree,
+                                      String modelConnectionId, String modelName) {
         long now = System.currentTimeMillis();
         return new Conversation(id, projectId, ownerUserId, title, ConversationKind.NORMAL,
-                "chat", env, worktree, ConversationStatus.IDLE, "", false, false, null, now, now);
+                "chat", env, worktree, ConversationStatus.IDLE, "", false, false, null, now, now,
+                modelConnectionId, modelName);
     }
 }

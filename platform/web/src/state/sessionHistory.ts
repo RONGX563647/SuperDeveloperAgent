@@ -21,17 +21,45 @@ export interface HistorySnapshot {
   tools: Record<string, ToolActivity>
 }
 
-export function loadHistory(sessionId: string): HistorySnapshot | null {
-  if (!sessionId) return null
+export function parseHistory(raw: string | null | undefined): HistorySnapshot | null {
+  if (!raw) return null
   try {
-    const raw = localStorage.getItem(KEY_PREFIX + sessionId)
-    if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<HistorySnapshot>
     if (!Array.isArray(parsed.messages)) return null
     return {
       messages: parsed.messages,
       tools: parsed.tools && typeof parsed.tools === 'object' ? parsed.tools : {},
     }
+  } catch {
+    return null
+  }
+}
+
+/** 统一裁剪 + 序列化：本地缓存与服务端入库共用同一份快照格式。 */
+export function serializeHistory(
+  messages: ChatMessage[],
+  tools: Record<string, ToolActivity>,
+): string {
+  const trimmed = messages.slice(-MAX_MESSAGES)
+  const safeTools: Record<string, ToolActivity> = {}
+  for (const [id, tool] of Object.entries(tools)) {
+    safeTools[id] = tool.resultText && tool.resultText.length > MAX_TOOL_RESULT
+      ? { ...tool, resultText: tool.resultText.slice(0, MAX_TOOL_RESULT) }
+      : tool
+  }
+  return JSON.stringify({ messages: trimmed, tools: safeTools })
+}
+
+/** 快照里最新一条消息的时间，用来判断本地缓存与服务端历史谁更新。 */
+export function latestMessageAt(snapshot: HistorySnapshot | null): number {
+  if (!snapshot) return 0
+  return snapshot.messages.reduce((max, message) => Math.max(max, message.at || 0), 0)
+}
+
+export function loadHistory(sessionId: string): HistorySnapshot | null {
+  if (!sessionId) return null
+  try {
+    return parseHistory(localStorage.getItem(KEY_PREFIX + sessionId))
   } catch {
     return null
   }
@@ -54,17 +82,7 @@ export function saveHistory(
 ): void {
   if (!sessionId) return
   try {
-    const trimmed = messages.slice(-MAX_MESSAGES)
-    const safeTools: Record<string, ToolActivity> = {}
-    for (const [id, tool] of Object.entries(tools)) {
-      safeTools[id] = tool.resultText && tool.resultText.length > MAX_TOOL_RESULT
-        ? { ...tool, resultText: tool.resultText.slice(0, MAX_TOOL_RESULT) }
-        : tool
-    }
-    localStorage.setItem(
-      KEY_PREFIX + sessionId,
-      JSON.stringify({ messages: trimmed, tools: safeTools }),
-    )
+    localStorage.setItem(KEY_PREFIX + sessionId, serializeHistory(messages, tools))
   } catch {
     // 隐私模式 / 配额满：忽略
   }

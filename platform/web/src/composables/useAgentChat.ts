@@ -1,7 +1,9 @@
 import { computed, onScopeDispose, shallowRef } from 'vue'
 import type { ShallowRef } from 'vue'
 import { streamChatOnce } from '../api/sse'
-import type { AgentEvent, AgentProjection, ChatMessage, ToolActivity } from '../types'
+import type {
+  AgentEvent, AgentProjection, ChatMessage, SessionTokenUsage, ToolActivity,
+} from '../types'
 import { emptyAgentProjection, reduceAgentEvent } from '../state/agentEventReducer'
 import { addSessionCost, emptySessionCost } from '../utils/deepseekPricing'
 
@@ -43,6 +45,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const streaming = shallowRef(false)
   const elapsedMs = shallowRef(0)
   const tokens = shallowRef(0)
+  /** 本会话真实 token 累计（由 model.usage 事件累加，刷新后可从服务端回填）。 */
+  const usage = shallowRef<SessionTokenUsage>(emptyUsage())
   const connection = shallowRef<ConnectionState>('IDLE')
   const error = shallowRef('')
 
@@ -59,6 +63,43 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const pendingChangeId = computed(() => projection.value.pendingChangeId)
   const pendingBindingId = computed(() => projection.value.pendingBindingId)
   const streamingTurn = computed(() => projection.value.streamingTurn)
+
+  function emptyUsage(): SessionTokenUsage {
+    return { calls: 0, inputTokens: 0, cachedTokens: 0, outputTokens: 0, totalTokens: 0 }
+  }
+
+  function addUsage(base: SessionTokenUsage, raw: unknown): SessionTokenUsage {
+    const value = (raw ?? {}) as Record<string, unknown>
+    const num = (v: unknown): number =>
+      typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0
+    const input = num(value.inputTokens ?? value.prompt_tokens)
+    const output = num(value.outputTokens ?? value.completion_tokens)
+    const cached = Math.min(
+      num(value.cachedTokens
+        ?? value.prompt_cache_hit_tokens
+        ?? (value.prompt_tokens_details as { cached_tokens?: number } | undefined)?.cached_tokens),
+      input,
+    )
+    return {
+      calls: base.calls + 1,
+      inputTokens: base.inputTokens + input,
+      cachedTokens: base.cachedTokens + cached,
+      outputTokens: base.outputTokens + output,
+      totalTokens: base.totalTokens + input + output,
+    }
+  }
+
+  /** 用服务端累计覆盖本地（刷新/切换会话后回填真实值）。 */
+  function applyUsage(totals: Partial<SessionTokenUsage> | null): void {
+    if (!totals) return
+    usage.value = {
+      calls: totals.calls ?? 0,
+      inputTokens: totals.inputTokens ?? 0,
+      cachedTokens: totals.cachedTokens ?? 0,
+      outputTokens: totals.outputTokens ?? 0,
+      totalTokens: totals.totalTokens ?? 0,
+    }
+  }
 
   function isAbortError(value: unknown): boolean {
     return value instanceof DOMException
@@ -105,6 +146,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     projection.value = emptyAgentProjection()
     elapsedMs.value = 0
     tokens.value = 0
+    usage.value = emptyUsage()
     connection.value = 'IDLE'
     error.value = ''
   }
@@ -164,6 +206,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
             projection.value = after
             if (event.type !== 'error') tokens.value += 1
           }
+          // 真实 token：每次模型调用结束都带 usage（所有模型都累计）
+          if (event.type === 'model.usage') {
+            usage.value = addUsage(usage.value, event.payload.usage)
+          }
           if (event.type === 'error') {
             error.value = typeof event.payload?.message === 'string'
               ? event.payload.message
@@ -204,6 +250,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
     error.value = ''
   }
 
+  /** 变更已由用户在确认卡上应用（HTTP 侧）：本地清掉待确认标记，时间线不再挂着提示。 */
+  function clearPendingChange(changeId?: string): void {
+    const current = projection.value
+    if (!current.pendingChangeId) return
+    if (changeId && current.pendingChangeId !== changeId) return
+    projection.value = { ...current, pendingChangeId: null }
+  }
+
   if (options.autoDispose !== false) onScopeDispose(stop)
 
   return {
@@ -213,6 +267,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     streaming,
     elapsedMs,
     tokens,
+    usage,
     connection,
     error,
     pendingChangeId,
@@ -222,6 +277,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
     stop,
     appendMessage,
     hydrate,
+    applyUsage,
+    clearPendingChange,
     reset: resetProjection,
   }
 }

@@ -25,6 +25,7 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
@@ -54,7 +55,7 @@ class ConversationManagerTest {
         WorkspaceRunExecutor executor = new WorkspaceRunExecutor(provider(() -> chat), store, store,
                 new WorkspaceEventBus(), top.rongx.agent.domain.run.RunLedgerRepository.noop(),
                 concurrency);
-        return new ConversationManager(store, store, store, projects, executor, userId -> false,
+        return new ConversationManager(store, store, store, store, projects, executor, userId -> false,
                 top.rongx.agent.domain.conversation.SessionDataCleaner.noop(),
                 DispatchPlan.DEFAULT_MAX_PARALLEL, DispatchPlan.DEFAULT_MAX_DURATION_SECONDS);
     }
@@ -127,6 +128,21 @@ class ConversationManagerTest {
     }
 
     @Test
+    @DisplayName("会话时间线按 owner 隔离存取，超限拒绝")
+    void transcriptRoundTrip() {
+        ConversationManager manager = manager(new SilentChat(), 1);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        manager.saveTranscript(c.id(), USER, "{\"messages\":[]}");
+        assertEquals("{\"messages\":[]}", manager.transcript(c.id(), USER).orElseThrow());
+        // 越权读写都被拒绝
+        assertThrows(IllegalArgumentException.class, () -> manager.transcript(c.id(), "bob"));
+        assertThrows(IllegalArgumentException.class,
+                () -> manager.saveTranscript(c.id(), "bob", "{}"));
+        assertThrows(IllegalArgumentException.class,
+                () -> manager.saveTranscript(c.id(), USER, "x".repeat(8_000_001)));
+    }
+
+    @Test
     @DisplayName("任务板：创建、更新、完成；跨项目不可更新")
     void tasks() {
         ConversationManager manager = manager(new SilentChat(), 1);
@@ -159,12 +175,13 @@ class ConversationManagerTest {
     /** 立即结束的对话流。 */
     private static final class SilentChat extends ChatService {
         SilentChat() {
-            super(null, new ChatSessionRegistry());
+            super(null, new ChatSessionRegistry(), null, null);
         }
 
         @Override
         public Flux<AgentEvent> stream(ProjectContext ctx, String sessionId, String text,
-                                       String role, List<String> skills, List<String> mcpServers) {
+                                       String role, List<String> skills, List<String> mcpServers,
+                                       String modelConnectionId, String modelName) {
             return Flux.empty();
         }
     }
@@ -172,12 +189,13 @@ class ConversationManagerTest {
     /** 永不结束的对话流（用于取消）。 */
     private static final class NeverChat extends ChatService {
         NeverChat() {
-            super(null, new ChatSessionRegistry());
+            super(null, new ChatSessionRegistry(), null, null);
         }
 
         @Override
         public Flux<AgentEvent> stream(ProjectContext ctx, String sessionId, String text,
-                                       String role, List<String> skills, List<String> mcpServers) {
+                                       String role, List<String> skills, List<String> mcpServers,
+                                       String modelConnectionId, String modelName) {
             return Flux.never();
         }
     }
@@ -208,10 +226,11 @@ class ConversationManagerTest {
 
     /** 三份仓库接口的内存实现（测试专用）。 */
     private static final class InMemoryStore implements ConversationRepository,
-            ConversationRunRepository, WorkspaceTaskRepository {
+            ConversationRunRepository, WorkspaceTaskRepository, ConversationTranscriptRepository {
         private final Map<String, Conversation> conversations = new ConcurrentHashMap<>();
         private final Map<String, ConversationRun> runs = new ConcurrentHashMap<>();
         private final Map<String, WorkspaceTask> tasks = new ConcurrentHashMap<>();
+        private final Map<String, String> transcripts = new ConcurrentHashMap<>();
         private final AtomicInteger seq = new AtomicInteger();
 
         @Override
@@ -273,8 +292,20 @@ class ConversationManagerTest {
 
         @Override
         public boolean delete(String id, String ownerUserId) {
-            return findByOwner(id, ownerUserId).map(c -> conversations.remove(id) != null)
-                    .orElse(false);
+            return findByOwner(id, ownerUserId).map(c -> {
+                transcripts.remove(id);
+                return conversations.remove(id) != null;
+            }).orElse(false);
+        }
+
+        @Override
+        public Optional<String> findTranscript(String conversationId) {
+            return Optional.ofNullable(transcripts.get(conversationId));
+        }
+
+        @Override
+        public void saveTranscript(String conversationId, String payload) {
+            transcripts.put(conversationId, payload);
         }
 
         @Override

@@ -22,4 +22,12 @@ public interface ModelRegistry {
     }
 
     Optional<ActiveModel> active();
+
+    /**
+     * 解析一次会话选择：连接为空时回退 {@link #active()}。
+     *
+     * @param connectionId 模型连接 id（null/空 = 默认连接）
+     * @param modelName    模型名（null/空 = 该连接配置里的模型名）
+     */
+    Optional<ActiveModel> resolve(String connectionId, String modelName);
 }

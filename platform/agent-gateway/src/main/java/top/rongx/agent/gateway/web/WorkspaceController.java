@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -96,7 +97,8 @@ public class WorkspaceController {
                                    @RequestBody UpdateConversationRequest request) {
         String userId = currentUser.requireUserId();
         ConversationPatch patch = new ConversationPatch(request.title(), request.env(),
-                request.worktree(), null, null, request.pinned(), request.archived());
+                request.worktree(), null, null, request.pinned(), request.archived(),
+                request.modelConnectionId(), request.modelName());
         return conversations.updateOwned(conversationId, userId, patch)
                 .map(ConversationView::from)
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -117,6 +119,23 @@ public class WorkspaceController {
                                     @RequestBody SendRequest request) {
         String userId = currentUser.requireUserId();
         return Map.of("runId", conversations.send(conversationId, userId, request.message()));
+    }
+
+    /** 会话时间线（消息 + 工具结果）：前端换浏览器 / 清缓存后从这里恢复。 */
+    @GetMapping("/conversations/{conversationId}/messages")
+    public TranscriptView transcript(@PathVariable String conversationId) {
+        String userId = currentUser.requireUserId();
+        return conversations.transcript(conversationId, userId)
+                .map(payload -> new TranscriptView(true, payload))
+                .orElseGet(() -> new TranscriptView(false, null));
+    }
+
+    @PutMapping("/conversations/{conversationId}/messages")
+    public Map<String, Object> saveTranscript(@PathVariable String conversationId,
+                                              @RequestBody SaveTranscriptRequest request) {
+        String userId = currentUser.requireUserId();
+        conversations.saveTranscript(conversationId, userId, request.payload());
+        return Map.of("saved", true);
     }
 
     // ------------------------------------------------------------------ 运行
@@ -196,11 +215,13 @@ public class WorkspaceController {
     public record ConversationView(String id, String projectId, String title, String kind,
                                    String role, String env, String worktree, String status,
                                    String summary, boolean pinned, boolean archived,
-                                   long lastActivityAt, long createdAt) {
+                                   long lastActivityAt, long createdAt,
+                                   String modelConnectionId, String modelName) {
         static ConversationView from(Conversation c) {
             return new ConversationView(c.id(), c.projectId(), c.title(), c.kind().name(),
                     c.role(), c.env(), c.worktree(), c.status().name(), c.summary(),
-                    c.pinned(), c.archived(), c.lastActivityAt(), c.createdAt());
+                    c.pinned(), c.archived(), c.lastActivityAt(), c.createdAt(),
+                    c.modelConnectionId(), c.modelName());
         }
     }
 
@@ -228,10 +249,17 @@ public class WorkspaceController {
     }
 
     public record UpdateConversationRequest(String title, String env, String worktree,
-                                            Boolean pinned, Boolean archived) {
+                                            Boolean pinned, Boolean archived,
+                                            String modelConnectionId, String modelName) {
     }
 
     public record SendRequest(String message) {
+    }
+
+    public record TranscriptView(boolean found, String payload) {
+    }
+
+    public record SaveTranscriptRequest(String payload) {
     }
 
     public record SyncRequest(List<SyncSession> sessions) {

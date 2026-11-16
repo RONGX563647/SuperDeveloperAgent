@@ -44,4 +44,29 @@ public class SettingsModelRegistry implements ModelRegistry {
                 "env", "环境变量配置", fallback.baseUrl(), fallback.apiKey(),
                 fallback.model(), fallback.temperature(), fallback.maxIters()));
     }
+
+    @Override
+    public Optional<ActiveModel> resolve(String connectionId, String modelName) {
+        String picked = modelName == null || modelName.isBlank() ? null : modelName.trim();
+        if (connectionId == null || connectionId.isBlank()) {
+            // 只给了模型名：默认连接上覆盖模型；连默认连接都没有时才走环境变量兜底
+            Optional<ModelConnection> configured = connections.findDefault();
+            if (configured.isPresent()) {
+                return Optional.of(toActive(configured.get(), picked));
+            }
+            return active().map(a -> picked == null ? a : new ActiveModel(
+                    a.id(), a.name(), a.baseUrl(), a.apiKey(), picked,
+                    a.temperature(), a.maxIters()));
+        }
+        return connections.find(connectionId)
+                .filter(ModelConnection::enabled)
+                .map(c -> toActive(c, picked));
+    }
+
+    private ActiveModel toActive(ModelConnection c, String modelName) {
+        return new ActiveModel(c.id(), c.name(), c.baseUrl(),
+                connections.apiKeyOf(c.id()).orElse(""),
+                modelName == null ? c.modelName() : modelName,
+                c.temperature(), c.maxIters());
+    }
 }

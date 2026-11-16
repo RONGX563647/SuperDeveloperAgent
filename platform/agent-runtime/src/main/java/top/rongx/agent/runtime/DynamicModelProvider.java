@@ -3,6 +3,8 @@ package top.rongx.agent.runtime;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.ModelRegistry;
@@ -26,11 +28,14 @@ public class DynamicModelProvider {
     /** 没有任何可用模型配置时的统一指引（只在调用模型时抛出，不阻塞启动）。 */
     private static final String NO_MODEL = "没有可用的模型配置：请在「设置 → 模型连接」中配置，"
             + "或通过环境变量 AGENT_MODEL_API_KEY 注入（规约 §8）";
+    /** 缓存上限：模型组合通常只有个位数，超过说明连接被频繁改，清空即可。 */
+    private static final int MAX_CACHED = 32;
 
     private final ModelRegistry registry;
     private final boolean prefixCache;
 
-    private volatile Snapshot snapshot;
+    /** key = 连接 + 模型 + 端点 + 密钥哈希 + 温度；配置未变时复用同一个 Model 实例。 */
+    private final Map<String, Model> cache = new ConcurrentHashMap<>();
 
     public DynamicModelProvider(ModelRegistry registry,
                                 @Value("${agent.model.prefix-cache:true}") boolean prefixCache) {
@@ -38,33 +43,38 @@ public class DynamicModelProvider {
         this.prefixCache = prefixCache;
     }
 
-    private record Snapshot(String fingerprint, Model model, ActiveModel config) {
+    /** 默认连接 / 默认模型（线程安全；配置未变时复用实例）。 */
+    public Model current() {
+        return current(registry.active().orElseThrow(() -> new IllegalStateException(NO_MODEL)));
     }
 
-    /** 当前模型（线程安全；配置未变时复用实例）。 */
-    public Model current() {
-        ActiveModel config = registry.active().orElseThrow(
-                () -> new IllegalStateException(NO_MODEL));
+    /** 会话显式选择的连接 + 模型。 */
+    public Model current(String connectionId, String modelName) {
+        ActiveModel config = registry.resolve(connectionId, modelName).orElseThrow(
+                () -> new IllegalStateException("模型连接不可用或已停用："
+                        + (connectionId == null ? "默认连接" : connectionId)));
+        return current(config);
+    }
+
+    private Model current(ActiveModel config) {
         String fingerprint = fingerprint(config);
-        Snapshot local = snapshot;
-        if (local != null && local.fingerprint().equals(fingerprint)) {
-            return local.model();
+        if (cache.size() > MAX_CACHED) {
+            cache.clear();
         }
-        synchronized (this) {
-            local = snapshot;
-            if (local != null && local.fingerprint().equals(fingerprint)) {
-                return local.model();
-            }
-            Model built = build(config);
-            snapshot = new Snapshot(fingerprint, built, config);
-            return built;
-        }
+        return cache.computeIfAbsent(fingerprint, key -> build(config));
     }
 
     /** 当前生效配置（供对话页展示模型名）。 */
     public ActiveModel activeConfig() {
         return registry.active().orElseThrow(
                 () -> new IllegalStateException(NO_MODEL));
+    }
+
+    /** 会话显式选择对应的生效配置。 */
+    public ActiveModel activeConfig(String connectionId, String modelName) {
+        return registry.resolve(connectionId, modelName).orElseThrow(
+                () -> new IllegalStateException("模型连接不可用或已停用："
+                        + (connectionId == null ? "默认连接" : connectionId)));
     }
 
     private Model build(ActiveModel config) {

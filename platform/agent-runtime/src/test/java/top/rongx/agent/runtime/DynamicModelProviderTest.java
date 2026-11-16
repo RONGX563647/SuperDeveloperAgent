@@ -28,6 +28,12 @@ class DynamicModelProviderTest {
         public Optional<ActiveModel> active() {
             return Optional.ofNullable(value.get());
         }
+
+        @Override
+        public Optional<ActiveModel> resolve(String connectionId, String modelName) {
+            // 测试只覆盖默认连接：显式选择交给 SettingsModelRegistryTest
+            return active();
+        }
     }
 
     @Test

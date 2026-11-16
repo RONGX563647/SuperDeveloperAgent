@@ -19,6 +19,7 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
@@ -35,11 +36,13 @@ import top.rongx.agent.infra.sqlite.SqliteConnections;
  */
 @Repository
 public class SqliteConversationStore
-        implements ConversationRepository, ConversationRunRepository, WorkspaceTaskRepository {
+        implements ConversationRepository, ConversationRunRepository, WorkspaceTaskRepository,
+        ConversationTranscriptRepository {
 
     private static final String CONVERSATION_COLUMNS = """
             id, project_id, owner_user_id, title, kind, role, env, worktree, status, summary,
-            pinned, archived, parent_conversation_id, last_activity_at, created_at
+            pinned, archived, parent_conversation_id, last_activity_at, created_at,
+            model_connection_id, model_name
             """;
 
     private static final String RUN_COLUMNS = """
@@ -68,7 +71,9 @@ public class SqliteConversationStore
                 archived INTEGER NOT NULL DEFAULT 0,
                 parent_conversation_id TEXT,
                 last_activity_at INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                model_connection_id TEXT,
+                model_name TEXT
             )
             """;
 
@@ -123,6 +128,15 @@ public class SqliteConversationStore
             ON workspace_tasks(project_id, status, priority)
             """;
 
+    /** 会话时间线：payload 是前端 timeline JSON（{messages, tools}），服务端不解析。 */
+    private static final String TRANSCRIPT_SCHEMA = """
+            CREATE TABLE IF NOT EXISTS conversation_messages (
+                conversation_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """;
+
     private final Path dbFile;
 
     public SqliteConversationStore(
@@ -141,13 +155,32 @@ public class SqliteConversationStore
         try (Connection conn = open()) {
             for (String ddl : List.of(CONVERSATION_SCHEMA, CONVERSATION_INDEX,
                     RUN_SCHEMA, RUN_INDEX_ACTIVE, RUN_INDEX_CONVERSATION,
-                    TASK_SCHEMA, TASK_INDEX)) {
+                    TASK_SCHEMA, TASK_INDEX, TRANSCRIPT_SCHEMA)) {
                 try (PreparedStatement st = conn.prepareStatement(ddl)) {
                     st.executeUpdate();
                 }
             }
+            // 旧库升级：model_connection_id / model_name 是后加的列，幂等补齐
+            ensureColumn(conn, "conversations", "model_connection_id", "TEXT");
+            ensureColumn(conn, "conversations", "model_name", "TEXT");
         } catch (SQLException e) {
             throw new IllegalStateException("conversations 表初始化失败：" + e.getMessage(), e);
+        }
+    }
+
+    private static void ensureColumn(Connection conn, String table, String column, String type)
+            throws SQLException {
+        try (PreparedStatement st = conn.prepareStatement("PRAGMA table_info(" + table + ")");
+             ResultSet rs = st.executeQuery()) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) {
+                    return;
+                }
+            }
+        }
+        try (PreparedStatement st = conn.prepareStatement(
+                "ALTER TABLE " + table + " ADD COLUMN " + column + " " + type)) {
+            st.executeUpdate();
         }
     }
 
@@ -164,8 +197,8 @@ public class SqliteConversationStore
                      INSERT INTO conversations
                          (id, project_id, owner_user_id, title, kind, role, env, worktree, status,
                           summary, pinned, archived, parent_conversation_id,
-                          last_activity_at, created_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                          last_activity_at, created_at, model_connection_id, model_name)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                      """)) {
             st.setString(1, conversation.id());
             st.setString(2, conversation.projectId());
@@ -182,6 +215,8 @@ public class SqliteConversationStore
             st.setString(13, conversation.parentConversationId());
             st.setLong(14, conversation.lastActivityAt());
             st.setLong(15, conversation.createdAt());
+            st.setString(16, conversation.modelConnectionId());
+            st.setString(17, conversation.modelName());
             st.executeUpdate();
             return conversation;
         } catch (SQLException e) {
@@ -264,7 +299,8 @@ public class SqliteConversationStore
             try (PreparedStatement st = conn.prepareStatement("""
                     UPDATE conversations SET
                         title = ?, env = ?, worktree = ?, status = ?, summary = ?,
-                        pinned = ?, archived = ?, last_activity_at = ?
+                        pinned = ?, archived = ?, last_activity_at = ?,
+                        model_connection_id = ?, model_name = ?
                     WHERE id = ? AND owner_user_id = ?
                     """)) {
                 st.setString(1, merged.title());
@@ -275,8 +311,10 @@ public class SqliteConversationStore
                 st.setInt(6, merged.pinned() ? 1 : 0);
                 st.setInt(7, merged.archived() ? 1 : 0);
                 st.setLong(8, merged.lastActivityAt());
-                st.setString(9, id);
-                st.setString(10, ownerUserId);
+                st.setString(9, merged.modelConnectionId());
+                st.setString(10, merged.modelName());
+                st.setString(11, id);
+                st.setString(12, ownerUserId);
                 st.executeUpdate();
             }
             return Optional.of(merged);
@@ -312,6 +350,11 @@ public class SqliteConversationStore
                     st.setString(1, id);
                     st.executeUpdate();
                 }
+                try (PreparedStatement st = conn.prepareStatement(
+                        "DELETE FROM conversation_messages WHERE conversation_id = ?")) {
+                    st.setString(1, id);
+                    st.executeUpdate();
+                }
                 conn.commit();
                 return true;
             } catch (SQLException e) {
@@ -334,9 +377,18 @@ public class SqliteConversationStore
         String summary = patch.summary() == null ? current.summary() : patch.summary();
         boolean pinned = patch.pinned() == null ? current.pinned() : patch.pinned();
         boolean archived = patch.archived() == null ? current.archived() : patch.archived();
+        String modelConnectionId = patch.modelConnectionId() == null
+                ? current.modelConnectionId() : blankToNull(patch.modelConnectionId());
+        String modelName = patch.modelName() == null
+                ? current.modelName() : blankToNull(patch.modelName());
         return new Conversation(current.id(), current.projectId(), current.ownerUserId(), title,
                 current.kind(), current.role(), env, worktree, status, summary, pinned, archived,
-                current.parentConversationId(), System.currentTimeMillis(), current.createdAt());
+                current.parentConversationId(), System.currentTimeMillis(), current.createdAt(),
+                modelConnectionId, modelName);
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private Optional<Conversation> find(Connection conn, String id) throws SQLException {
@@ -365,7 +417,46 @@ public class SqliteConversationStore
                 rs.getInt("archived") == 1,
                 rs.getString("parent_conversation_id"),
                 rs.getLong("last_activity_at"),
-                rs.getLong("created_at"));
+                rs.getLong("created_at"),
+                rs.getString("model_connection_id"),
+                rs.getString("model_name"));
+    }
+
+    // ------------------------------------------------------------------ 会话时间线
+
+    @Override
+    public Optional<String> findTranscript(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return Optional.empty();
+        }
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "SELECT payload FROM conversation_messages WHERE conversation_id = ?")) {
+            st.setString(1, conversationId);
+            try (ResultSet rs = st.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getString("payload")) : Optional.empty();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("会话历史查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void saveTranscript(String conversationId, String payload) {
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement("""
+                     INSERT INTO conversation_messages (conversation_id, payload, updated_at)
+                     VALUES (?, ?, ?)
+                     ON CONFLICT(conversation_id) DO UPDATE SET
+                         payload = excluded.payload, updated_at = excluded.updated_at
+                     """)) {
+            st.setString(1, conversationId);
+            st.setString(2, payload);
+            st.setLong(3, System.currentTimeMillis());
+            st.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("会话历史保存失败：" + e.getMessage(), e);
+        }
     }
 
     // ------------------------------------------------------------------ 运行

@@ -34,14 +34,27 @@ public class AgentEventMapper {
 
     /** 转成 {@code {type, version, payload}}；序列化失败时退化为文本。 */
     public Map<String, Object> toDto(AgentEvent event) {
+        return toDto(event, modelName);
+    }
+
+    /**
+     * 同上，但由调用方给出本次实际使用的模型名（会话级选择）。
+     *
+     * <p>不能用配置里的静态模型名：同一个网关下不同会话可以选择不同模型，
+     * 用量事件必须标实际模型，前端才能正确区分（例如 DeepSeek 计费）。
+     */
+    public Map<String, Object> toDto(AgentEvent event, String activeModelName) {
         Map<String, Object> dto = new LinkedHashMap<>();
         AgentEventType type = event.getType();
         dto.put("type", wireType(type));
         dto.put("version", PROTOCOL_VERSION);
         try {
             Map<String, Object> payload = objectMapper.convertValue(event, Map.class);
-            if (type == AgentEventType.MODEL_CALL_END && modelName != null && !modelName.isBlank()) {
-                payload.put("model", modelName);
+            String effective = activeModelName == null || activeModelName.isBlank()
+                    ? modelName : activeModelName;
+            if (type == AgentEventType.MODEL_CALL_END
+                    && effective != null && !effective.isBlank()) {
+                payload.put("model", effective);
             }
             // 工具名在 AgentScope 里叫 toolCallName，稳定协议统一为 name，前端无需感知上游字段名
             Object toolName = payload.get("toolCallName");

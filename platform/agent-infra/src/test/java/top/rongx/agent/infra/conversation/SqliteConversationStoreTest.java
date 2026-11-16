@@ -90,6 +90,22 @@ class SqliteConversationStoreTest {
     }
 
     @Test
+    @DisplayName("会话时间线落盘，重启（新实例）后仍可读")
+    void transcriptSurvivesRestart() {
+        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        store.save(Conversation.normal("s-1", "RY", "alice", "t", "test", null));
+        String payload = "{\"messages\":[{\"id\":\"m-1\",\"role\":\"user\",\"text\":\"你好\"}]}";
+        store.saveTranscript("s-1", payload);
+        assertEquals(payload, store.findTranscript("s-1").orElseThrow());
+
+        // 覆盖写入而不是追加新行
+        store.saveTranscript("s-1", "{\"messages\":[]}");
+        SqliteConversationStore reopened = new SqliteConversationStore(root.toString());
+        assertEquals("{\"messages\":[]}", reopened.findTranscript("s-1").orElseThrow());
+        assertTrue(reopened.findTranscript("missing").isEmpty());
+    }
+
+    @Test
     @DisplayName("删除会话时历史运行与任务一并物理删除，不留孤儿行")
     void deleteCascadesRunsAndTasks() {
         SqliteConversationStore store = new SqliteConversationStore(root.toString());
@@ -99,6 +115,7 @@ class SqliteConversationStoreTest {
                 RunStatus.SUCCEEDED, "ok", "", now, now, now));
         store.saveTask(new WorkspaceTask("task-1", "RY", "s-1", "补测试", "单测通过",
                 TaskStatus.DONE, 2, now, now));
+        store.saveTranscript("s-1", "{\"messages\":[]}");
 
         assertTrue(store.delete("s-1", "alice"));
 
@@ -106,6 +123,7 @@ class SqliteConversationStoreTest {
         assertTrue(store.findRun("run-1").isEmpty());
         assertTrue(store.findRunsByConversation("s-1", 10).isEmpty());
         assertTrue(store.findTasksByConversation("s-1").isEmpty());
+        assertTrue(store.findTranscript("s-1").isEmpty());
         // 别人的会话删不掉，也不该误删数据
         store.save(Conversation.normal("s-2", "RY", "alice", "t2", "test", null));
         assertFalse(store.delete("s-2", "bob"));

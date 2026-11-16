@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.conversation.SessionDataCleaner;
 import top.rongx.agent.domain.run.RunLedgerRepository;
+import top.rongx.agent.domain.settings.TokenUsageRepository;
 
 /**
  * 会话删除后的磁盘/账本清理。
@@ -19,10 +20,13 @@ public class SessionDataCleanerImpl implements SessionDataCleaner {
 
     private final RunLedgerRepository ledger;
     private final AgentStateStore agentState;
+    private final TokenUsageRepository tokenUsage;
 
-    public SessionDataCleanerImpl(RunLedgerRepository ledger, AgentStateStore agentState) {
+    public SessionDataCleanerImpl(RunLedgerRepository ledger, AgentStateStore agentState,
+                                  TokenUsageRepository tokenUsage) {
         this.ledger = ledger;
         this.agentState = agentState;
+        this.tokenUsage = tokenUsage;
     }
 
     @Override
@@ -36,6 +40,11 @@ public class SessionDataCleanerImpl implements SessionDataCleaner {
             agentState.delete(ownerUserId, conversationId);
         } catch (RuntimeException e) {
             log.warn("清理 Agent 记忆失败 session={}：{}", conversationId, e.getMessage());
+        }
+        try {
+            tokenUsage.deleteBySession(conversationId);
+        } catch (RuntimeException e) {
+            log.warn("清理用量记录失败 session={}：{}", conversationId, e.getMessage());
         }
     }
 }
