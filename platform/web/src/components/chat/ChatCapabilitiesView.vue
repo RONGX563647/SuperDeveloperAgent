@@ -1,17 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Connection, MagicStick, Refresh, Search, Warning } from '@element-plus/icons-vue'
+import { Connection, MagicStick, Refresh, Setting, Warning } from '@element-plus/icons-vue'
 import type { CapabilityOption } from '../../composables/useChatCapabilities'
-import { readSkill } from '../../api/settings'
-import MarkdownView from './MarkdownView.vue'
 
 /**
  * 会话能力页（顶部 Tab「能力」）。
  *
- * <p>左侧按 Skill / MCP 分组并支持「全部 / 已启用 / Skill / MCP」筛选，已启用项
- * 以 chips 常驻在顶部可一键移除；右侧展示该能力的完整信息：Skill 直接读取并渲染
- * SKILL.md 正文，MCP 展示启动命令 / 服务地址；开关只影响当前会话。
+ * <p>只回答一个问题：**这一轮对话，Agent 能用哪些 Skill / MCP？**
+ * 所以这里是一张「开关清单」而不是市场：每行一个能力（名称 + 什么时候会用 + 开关），
+ * 按 Skill / MCP 分两张卡；不可用的连接态标出来，避免"开了但用不了"。
+ * 会话选择与设置页默认互不影响，开关立即用于下一轮请求。
  */
 const props = defineProps<{
   skillOptions: CapabilityOption[]
@@ -28,1063 +27,438 @@ const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
 
-interface Item extends CapabilityOption {
-  kind: 'skill' | 'mcp'
-}
-
-const count = computed(() => props.skills.length + props.mcp.length)
-const items = computed<Item[]>(() => [
-  ...props.skillOptions.map((o) => ({ ...o, kind: 'skill' as const })),
-  ...props.mcpOptions.map((o) => ({ ...o, kind: 'mcp' as const })),
-])
-
-type Filter = 'all' | 'on' | 'skill' | 'mcp'
-const FILTERS: Array<{ key: Filter, label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'on', label: '已启用' },
-  { key: 'skill', label: 'Skill' },
-  { key: 'mcp', label: 'MCP' },
-]
-
 const router = useRouter()
-const keyword = ref('')
-const filter = ref<Filter>('all')
-const activeKey = ref('')
-const active = computed(() => items.value.find((i) => keyOf(i) === activeKey.value) ?? null)
 
-function keyOf(item: Item): string {
-  return `${item.kind}:${item.key}`
+const skillOn = computed(() => props.skills.length)
+const mcpOn = computed(() => props.mcp.length)
+const total = computed(() => props.skillOptions.length + props.mcpOptions.length)
+
+/** 已启用项会整段进系统提示词；超过这个数量给一句成本提醒。 */
+const noisy = computed(() => skillOn.value + mcpOn.value > 10)
+
+function isOn(kind: 'skill' | 'mcp', key: string): boolean {
+  return (kind === 'skill' ? props.skills : props.mcp).includes(key)
 }
 
-const filteredItems = computed(() => {
-  const q = keyword.value.trim().toLowerCase()
-  return items.value.filter((item) => {
-    if (filter.value === 'on' && !isOn(item)) return false
-    if (filter.value === 'skill' && item.kind !== 'skill') return false
-    if (filter.value === 'mcp' && item.kind !== 'mcp') return false
-    if (!q) return true
-    return `${item.label} ${item.key} ${item.description}`.toLowerCase().includes(q)
-  })
-})
-
-/** 分组展示：已启用的排在组内前面，组头带该组的计数与批量操作。 */
-const groups = computed(() => {
-  const build = (kind: 'skill' | 'mcp', label: string) => {
-    const all = items.value.filter((i) => i.kind === kind)
-    const list = filteredItems.value
-      .filter((i) => i.kind === kind)
-      .sort((a, b) => Number(isOn(b)) - Number(isOn(a)) || a.label.localeCompare(b.label))
-    return { kind, label, items: list, on: all.filter(isOn).length, total: all.length }
-  }
-  return [build('skill', 'Skill'), build('mcp', 'MCP')].filter((g) => g.items.length > 0)
-})
-
-/** 已启用 chips：不离开列表即可看到本会话生效了什么，并可一键移除。 */
-const enabledItems = computed(() => items.value.filter(isOn))
-
-watch(items, (list) => {
-  if (!list.some((i) => keyOf(i) === activeKey.value)) {
-    activeKey.value = list.length ? keyOf(list[0]) : ''
-  }
-}, { immediate: true })
-
-function openMarket(section: 'skills' | 'mcp'): void {
-  void router.push(`/settings?section=${section}`)
-}
-
-// ---------------------------------------------------------------- SKILL.md 正文
-
-const skillContent = ref('')
-const detailLoading = ref(false)
-const detailError = ref('')
-
-function stripFrontmatter(md: string): string {
-  if (!md.startsWith('---')) return md
-  const end = md.indexOf('\n---', 3)
-  if (end < 0) return md
-  return md.slice(end + 4).replace(/^\s*\n/, '')
-}
-
-const skillBody = computed(() => stripFrontmatter(skillContent.value))
-
-const mcpTarget = computed(() => {
-  const item = active.value
-  if (!item) return ''
-  if (item.transport === 'http') return item.url || '未配置服务地址'
-  return [item.command, ...(item.args ?? [])].filter(Boolean).join(' ') || '未配置启动命令'
-})
-
-watch(active, async (item) => {
-  skillContent.value = ''
-  detailError.value = ''
-  detailLoading.value = false
-  if (!item || item.kind !== 'skill') return
-  const requested = keyOf(item)
-  detailLoading.value = true
-  try {
-    const r = await readSkill(item.key)
-    if (active.value && keyOf(active.value) === requested) skillContent.value = r.content
-  } catch (e) {
-    if (active.value && keyOf(active.value) === requested) {
-      detailError.value = e instanceof Error ? e.message : '读取 SKILL.md 失败'
-    }
-  } finally {
-    detailLoading.value = false
-  }
-}, { immediate: true })
-
-// ---------------------------------------------------------------- 选择与展示
-
-function isOn(item: Item): boolean {
-  return (item.kind === 'skill' ? props.skills : props.mcp).includes(item.key)
-}
-
-function toggle(item: Item, on: boolean): void {
-  const current = item.kind === 'skill' ? props.skills : props.mcp
-  const next = on
-    ? Array.from(new Set([...current, item.key]))
-    : current.filter((key) => key !== item.key)
-  if (item.kind === 'skill') emit('update:skills', next)
+function toggle(kind: 'skill' | 'mcp', key: string, on: boolean): void {
+  const current = kind === 'skill' ? props.skills : props.mcp
+  const next = on ? [...current, key] : current.filter((k) => k !== key)
+  if (kind === 'skill') emit('update:skills', next)
   else emit('update:mcp', next)
 }
 
-function toggleActive(on: boolean): void {
-  if (active.value) toggle(active.value, on)
+function toggleAll(kind: 'skill' | 'mcp', on: boolean): void {
+  const list = kind === 'skill' ? props.skillOptions : props.mcpOptions
+  const next = on ? list.map((o) => o.key) : []
+  if (kind === 'skill') emit('update:skills', next)
+  else emit('update:mcp', next)
 }
 
-/** 全局全选 / 清空：Skill 与 MCP 一起处理。 */
-function toggleAll(on: boolean): void {
-  emit('update:skills', on ? props.skillOptions.map((o) => o.key) : [])
-  emit('update:mcp', on ? props.mcpOptions.map((o) => o.key) : [])
+/** MCP 的"它是什么"：stdin 命令或 HTTP 地址，一行说清。 */
+function mcpTarget(option: CapabilityOption): string {
+  if (option.transport === 'http') return option.url ?? 'http'
+  return [option.command, ...(option.args ?? [])].filter(Boolean).join(' ')
 }
 
-/** 按组全选 / 清空：只影响该组的 Skill 或 MCP。 */
-function toggleGroup(kind: 'skill' | 'mcp', on: boolean): void {
-  const options = kind === 'skill' ? props.skillOptions : props.mcpOptions
-  if (kind === 'skill') emit('update:skills', on ? options.map((o) => o.key) : [])
-  else emit('update:mcp', on ? options.map((o) => o.key) : [])
-}
-
-function kindLabel(kind: 'skill' | 'mcp'): string {
-  return kind === 'skill' ? 'Skill' : 'MCP'
-}
-
-function formatTime(ts?: number): string {
-  if (!ts) return ''
-  return new Date(ts).toLocaleString('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  })
+function goSettings(): void {
+  void router.push('/settings?section=skills')
 }
 </script>
 
 <template>
   <div class="cap-view">
-    <div class="cap-shell">
+    <div class="cap-page">
       <header class="cap-head">
-        <div class="cap-head-main">
-          <h1 class="cap-title">本会话能力</h1>
-          <p class="cap-desc">
-            按 Skill / MCP 分组管理，开关只影响本会话；已启用项会常驻顶部，可随时移除。
+        <div class="cap-head-text">
+          <h1>本会话能力</h1>
+          <p>
+            开关只影响当前会话，下一轮对话立即生效；设置页的默认值不会被改动。
           </p>
         </div>
-        <div class="cap-head-side">
-          <span class="cap-stat">
-            <span class="stat-dot" />
-            已启用 <b class="mono">{{ ready ? count : '…' }}</b>
-          </span>
-          <el-button size="small" :loading="loading" @click="emit('refresh')">
-            <el-icon><Refresh /></el-icon> 刷新
-          </el-button>
-        </div>
+        <button type="button" class="icon-btn" title="重新读取 Skill / MCP 列表" @click="emit('refresh')">
+          <el-icon :class="{ spin: loading }"><Refresh /></el-icon>
+        </button>
       </header>
 
-      <p v-if="ready && count > 10" class="cap-warn">
+      <div class="cap-summary">
+        <span class="sum-item">
+          <el-icon><MagicStick /></el-icon>
+          Skill <b class="mono">{{ ready ? `${skillOn}/${skillOptions.length}` : '…' }}</b>
+        </span>
+        <span class="sum-item">
+          <el-icon><Connection /></el-icon>
+          MCP <b class="mono">{{ ready ? `${mcpOn}/${mcpOptions.length}` : '…' }}</b>
+        </span>
+        <span class="sum-note">
+          已启用 {{ ready ? skillOn + mcpOn : '…' }} 项
+          <template v-if="noisy">· 偏多，首字延迟会变长</template>
+        </span>
+      </div>
+
+      <p v-if="ready && noisy" class="cap-warn">
         <el-icon><Warning /></el-icon>
-        已启用 {{ count }} 项：技能越多系统提示越长、首字延迟越高，建议只保留本轮需要的。
+        启用越多，系统提示词越长、首字延迟越高。只保留这轮真正需要的就好。
       </p>
 
-      <div class="cap-body">
-        <!-- 左栏：搜索 + 分组列表 -->
-        <aside class="cap-list">
-          <div class="cap-search">
-            <el-input v-model="keyword" size="default" clearable placeholder="搜索 Skill / MCP">
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-            <div class="cap-filters">
-              <button
-                v-for="f in FILTERS" :key="f.key" type="button"
-                class="cap-filter" :class="{ on: filter === f.key }"
-                @click="filter = f.key"
-              >
-                {{ f.label }}<span v-if="f.key === 'on'" class="mono">{{ count }}</span>
-              </button>
-            </div>
-          </div>
-
-          <div v-if="enabledItems.length" class="enabled-bar">
-            <button
-              v-for="i in enabledItems" :key="`on-${keyOf(i)}`" type="button"
-              class="enabled-chip" :class="i.kind" :title="`${i.label} · 点击查看详情`"
-              @click="activeKey = keyOf(i)"
-            >
-              <span class="chip-text">{{ i.label }}</span>
-              <span
-                class="chip-x" role="button" tabindex="0" aria-label="移除"
-                @click.stop="toggle(i, false)"
-                @keydown.enter.stop="toggle(i, false)"
-              >×</span>
-            </button>
-          </div>
-
-          <div class="cap-scroll">
-            <div class="list-head">
-              <span class="list-count mono">{{ count }}/{{ items.length }} 已启用</span>
-              <span class="group-actions">
-                <button type="button" class="link" @click="toggleAll(true)">全选</button>
-                <button type="button" class="link" @click="toggleAll(false)">清空</button>
-              </span>
-            </div>
-
-            <div v-if="!items.length" class="group-empty">
-              <p>还没有接入任何 Skill / MCP。</p>
-              <div class="empty-actions">
-                <button type="button" class="link strong" @click="openMarket('skills')">
-                  Skill 市场 →
-                </button>
-                <button type="button" class="link strong" @click="openMarket('mcp')">
-                  MCP 市场 →
-                </button>
-              </div>
-            </div>
-            <div v-else-if="!filteredItems.length" class="group-empty">
-              没有匹配的能力，试试切换筛选或清空搜索。
-            </div>
-
-            <section v-for="g in groups" :key="g.kind" class="cap-group">
-              <div class="group-head">
-                <b>{{ g.label }}</b>
-                <span class="mono">{{ g.on }}/{{ g.total }}</span>
-                <span class="group-actions">
-                  <button type="button" class="link" @click="toggleGroup(g.kind, true)">全选</button>
-                  <button type="button" class="link" @click="toggleGroup(g.kind, false)">清空</button>
-                </span>
-              </div>
-              <div
-                v-for="i in g.items" :key="keyOf(i)"
-                class="cap-item" :class="{ active: activeKey === keyOf(i) }"
-                role="button" tabindex="0"
-                @click="activeKey = keyOf(i)"
-                @keydown.enter="activeKey = keyOf(i)"
-              >
-                <span class="item-icon" :class="i.kind">
-                  <el-icon><component :is="i.kind === 'skill' ? MagicStick : Connection" /></el-icon>
-                </span>
-                <span class="item-main">
-                  <span class="item-title">
-                    <span class="item-name">{{ i.label }}</span>
-                    <span class="item-type" :class="i.kind">{{ kindLabel(i.kind) }}</span>
-                  </span>
-                  <span class="item-desc">
-                    {{ i.description || (i.kind === 'skill' ? '（无描述）' : '（未配置地址）') }}
-                  </span>
-                </span>
-                <el-switch
-                  :model-value="isOn(i)" size="small" class="item-switch"
-                  :aria-label="`本次对话启用 ${i.label}`"
-                  @click.stop
-                  @change="(v: string | number | boolean) => toggle(i, Boolean(v))"
-                />
-              </div>
-            </section>
-          </div>
-        </aside>
-
-        <!-- 右栏：选中能力的完整信息 -->
-        <section class="cap-detail">
-          <template v-if="active">
-            <div class="hero">
-              <span class="hero-icon" :class="active.kind">
-                <el-icon><component :is="active.kind === 'skill' ? MagicStick : Connection" /></el-icon>
-              </span>
-              <div class="hero-main">
-                <div class="hero-eyebrow">
-                  <span class="type-pill" :class="active.kind">{{ kindLabel(active.kind) }}</span>
-                  <span class="hero-key mono">{{ active.key }}</span>
-                </div>
-                <h2 class="hero-title">{{ active.label }}</h2>
-                <p class="hero-desc">
-                  {{ active.kind === 'mcp'
-                    ? (active.transport === 'http' ? '远程 HTTP MCP 服务，按需连接' : '本地 stdio MCP 进程，由平台按需启动')
-                    : (active.description || '暂无描述') }}
-                </p>
-                <div class="chips">
-                  <span v-if="active.kind === 'skill'" class="chip">{{ active.fileCount ?? 0 }} 个文件</span>
-                  <span v-if="active.kind === 'skill' && active.updatedAt" class="chip">
-                    更新 {{ formatTime(active.updatedAt) }}
-                  </span>
-                  <span v-if="active.kind === 'mcp'" class="chip">
-                    {{ active.transport === 'http' ? 'HTTP 服务' : 'stdio 进程' }}
-                  </span>
-                  <span class="chip" :class="{ on: active.enabled }">
-                    {{ active.enabled ? '设置页默认启用' : '设置页默认停用' }}
-                  </span>
-                </div>
-              </div>
-              <div class="hero-switch">
-                <el-switch
-                  :model-value="isOn(active)" class="cap-switch"
-                  :aria-label="`本次对话启用 ${active.label}`"
-                  @change="(v: string | number | boolean) => toggleActive(Boolean(v))"
-                />
-                <span class="switch-text">{{ isOn(active) ? '已启用' : '未启用' }}</span>
-              </div>
-            </div>
-
-            <div class="detail-block" :class="{ compact: active.kind === 'mcp' }">
-              <div class="block-head">
-                <span class="block-title">{{ active.kind === 'skill' ? 'SKILL.md' : '连接方式' }}</span>
-                <span class="block-sub mono">
-                  {{ active.kind === 'skill' ? `${active.key}/SKILL.md` : (active.transport ?? 'stdio') }}
-                </span>
-              </div>
-
-              <template v-if="active.kind === 'skill'">
-                <div v-if="detailLoading" class="block-empty">读取中…</div>
-                <div v-else-if="detailError" class="block-empty error">{{ detailError }}</div>
-                <div v-else-if="!skillBody" class="block-empty">SKILL.md 为空</div>
-                <div v-else class="skill-content">
-                  <MarkdownView :content="skillBody" />
-                </div>
-              </template>
-
-              <pre v-else class="conn mono">{{ mcpTarget }}</pre>
-            </div>
-
-            <div v-if="active.kind === 'mcp'" class="meta-grid">
-              <div class="meta-item">
-                <span>类型</span><b>MCP</b>
-              </div>
-              <div class="meta-item">
-                <span>标识</span><b class="mono">{{ active.key }}</b>
-              </div>
-              <div class="meta-item">
-                <span>传输</span><b>{{ active.transport === 'http' ? 'HTTP' : 'stdio' }}</b>
-              </div>
-              <div class="meta-item">
-                <span>设置页默认</span><b>{{ active.enabled ? '启用' : '停用' }}</b>
-              </div>
-              <div v-if="active.headerNames?.length" class="meta-item">
-                <span>请求头</span><b class="mono">{{ active.headerNames.join(', ') }}</b>
-              </div>
-            </div>
-
-            <div v-if="active.kind === 'mcp'" class="facts">
-              <div class="fact">
-                <span>作用范围</span><b>仅当前会话</b>
-              </div>
-              <div class="fact">
-                <span>初始化时机</span><b>每轮对话开始时连接</b>
-              </div>
-              <div class="fact">
-                <span>失败策略</span><b>自动跳过，不影响其他工具</b>
-              </div>
-            </div>
-
-            <p v-else class="detail-note">
-              勾选后按 SKILL.md 的指令注入本轮系统提示；未勾选的技能不会加载。
-            </p>
-          </template>
-
-          <div v-else class="detail-empty">
-            <span class="empty-icon"><el-icon><MagicStick /></el-icon></span>
-            <span>{{ ready ? '从左侧选择一个能力' : '正在加载能力…' }}</span>
-          </div>
-        </section>
+      <div v-if="ready && !total" class="cap-empty">
+        <p>还没有可用的能力。</p>
+        <button type="button" class="link" @click="goSettings">
+          <el-icon><Setting /></el-icon>去设置页添加 Skill / MCP
+        </button>
       </div>
+
+      <template v-else>
+        <!-- Skill：每个目录一份说明，按需加载 -->
+        <section v-if="skillOptions.length" class="cap-card">
+          <header class="card-head">
+            <span class="card-icon skill"><el-icon><MagicStick /></el-icon></span>
+            <span class="card-title">
+              <b>Skill</b>
+              <em>按需读取的知识包，命中相关任务时才会展开</em>
+            </span>
+            <span class="card-actions">
+              <span class="mono">{{ skillOn }}/{{ skillOptions.length }}</span>
+              <button type="button" class="link" @click="toggleAll('skill', true)">全选</button>
+              <button type="button" class="link" @click="toggleAll('skill', false)">清空</button>
+            </span>
+          </header>
+          <ul class="cap-rows">
+            <li v-for="option in skillOptions" :key="`skill-${option.key}`" class="cap-row" :class="{ on: isOn('skill', option.key) }">
+              <span class="row-main">
+                <span class="row-name">
+                  {{ option.label }}
+                  <span v-if="option.fileCount" class="row-tag mono">{{ option.fileCount }} 文件</span>
+                </span>
+                <span class="row-desc">{{ option.description || '（Skill 未写描述，模型只能靠名称判断用途）' }}</span>
+              </span>
+              <el-switch
+                :model-value="isOn('skill', option.key)"
+                size="small"
+                :aria-label="`本次对话启用 ${option.label}`"
+                @change="(v: string | number | boolean) => toggle('skill', option.key, Boolean(v))"
+              />
+            </li>
+          </ul>
+        </section>
+
+        <!-- MCP：外部工具服务，启用后会多出一批工具 -->
+        <section v-if="mcpOptions.length" class="cap-card">
+          <header class="card-head">
+            <span class="card-icon mcp"><el-icon><Connection /></el-icon></span>
+            <span class="card-title">
+              <b>MCP</b>
+              <em>外部工具服务，启用后工具会出现在本轮可调用列表里</em>
+            </span>
+            <span class="card-actions">
+              <span class="mono">{{ mcpOn }}/{{ mcpOptions.length }}</span>
+              <button type="button" class="link" @click="toggleAll('mcp', true)">全选</button>
+              <button type="button" class="link" @click="toggleAll('mcp', false)">清空</button>
+            </span>
+          </header>
+          <ul class="cap-rows">
+            <li v-for="option in mcpOptions" :key="`mcp-${option.key}`" class="cap-row" :class="{ on: isOn('mcp', option.key) }">
+              <span class="row-main">
+                <span class="row-name">
+                  {{ option.label }}
+                  <span class="row-tag mono">{{ option.transport === 'http' ? 'HTTP' : 'stdio' }}</span>
+                </span>
+                <span class="row-desc" :title="option.description">{{ mcpTarget(option) || option.description }}</span>
+              </span>
+              <el-switch
+                :model-value="isOn('mcp', option.key)"
+                size="small"
+                :aria-label="`本次对话启用 ${option.label}`"
+                @change="(v: string | number | boolean) => toggle('mcp', option.key, Boolean(v))"
+              />
+            </li>
+          </ul>
+        </section>
+      </template>
+
+      <p class="cap-foot">
+        想改默认值或新增能力，去
+        <button type="button" class="link" @click="goSettings">设置 · Skill / MCP</button>
+        ；这里的选择按会话单独保存。
+      </p>
     </div>
   </div>
 </template>
 
 <style scoped>
 .cap-view {
-  display: flex;
   flex: 1 1 0;
   min-height: 0;
-  padding: 22px 26px 26px;
+  overflow-y: auto;
+  background: var(--surface-sunken);
 }
-.cap-shell {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 16px;
-  width: 100%;
-  max-width: 1160px;
-  min-height: 0;
+
+.cap-page {
+  width: min(100%, 48rem);
+  padding: var(--sp-6) var(--page-gutter) var(--sp-10);
   margin: 0 auto;
 }
 
-/* 页头 */
+/* ---- 页头 ---- */
 .cap-head {
   display: flex;
-  flex: none;
   align-items: flex-start;
-  gap: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line-soft);
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
 }
-.cap-head-main {
-  flex: 1;
-  min-width: 0;
-}
-.cap-title {
+
+.cap-head-text h1 {
   margin: 0;
   font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-  color: var(--ink);
-}
-.cap-desc {
-  margin: 5px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ink-muted);
-}
-.cap-head-side {
-  display: flex;
-  flex: none;
-  gap: 10px;
-  align-items: center;
-}
-.cap-stat {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--ink-muted);
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-pill);
-}
-.cap-stat b {
-  font-size: 12px;
   font-weight: 600;
   color: var(--ink);
-}
-.stat-dot {
-  width: 6px;
-  height: 6px;
-  background: var(--ok);
-  border-radius: 50%;
-}
-.cap-warn {
-  display: flex;
-  flex: none;
-  gap: 6px;
-  align-items: center;
-  padding: 7px 11px;
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--warn);
-  background: var(--warn-soft, rgb(230 162 60 / 10%));
-  border: 1px solid var(--warn-line, rgb(230 162 60 / 25%));
-  border-radius: var(--radius-sm);
 }
 
-/* 左右两栏：一整块白面，内部只用发丝线分隔 */
-.cap-body {
-  display: grid;
-  flex: 1;
-  grid-template-columns: 304px minmax(0, 1fr);
-  min-height: 0;
-  overflow: hidden;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
-}
-.cap-list {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--sidebar-background-color);
-  border-right: 1px solid var(--line-soft);
-}
-.cap-search {
-  flex: none;
-  padding: 11px 10px 9px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.cap-filters {
-  display: flex;
-  gap: 4px;
-  margin-top: 8px;
-}
-.cap-filter {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-  height: 23px;
-  padding: 0 9px;
-  font-family: inherit;
-  font-size: 10.5px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-pill);
-  transition: color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-.cap-filter:hover {
-  color: var(--ink-soft);
-  background: var(--surface-hover);
-}
-.cap-filter.on {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-.cap-filter .mono {
-  font-size: 9.5px;
-  color: var(--ink-faint);
-}
-.cap-filter.on .mono {
-  color: var(--accent-ink);
-}
-
-/* 已启用 chips：常驻在列表顶部，点 × 直接移除 */
-.enabled-bar {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-height: 92px;
-  padding: 8px 10px;
-  overflow-y: auto;
-  background: var(--surface-sunken);
-  border-bottom: 1px solid var(--line-soft);
-}
-.enabled-chip {
-  display: inline-flex;
-  gap: 2px;
-  align-items: center;
-  max-width: 100%;
-  padding: 2px 3px 2px 8px;
-  font-family: inherit;
-  font-size: 10px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-pill);
-}
-.enabled-chip.skill {
-  border-color: var(--accent);
-}
-.enabled-chip:hover {
-  background: var(--surface-hover);
-}
-.chip-text {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.chip-x {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--ink-faint);
-  border-radius: 50%;
-}
-.chip-x:hover {
-  color: var(--danger, #c45656);
-  background: var(--surface-hover);
-}
-.cap-scroll {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 8px 12px;
-  overflow-y: auto;
-}
-.list-head {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 0 6px 8px;
-}
-.list-count {
-  flex: 1;
-  font-size: 10px;
-  color: var(--ink-faint);
-}
-/* 分组：Skill / MCP 各自一段，组头带计数与批量操作 */
-.cap-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.cap-group + .cap-group {
-  padding-top: 8px;
-  margin-top: 4px;
-  border-top: 1px solid var(--line-soft);
-}
-.group-head {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  padding: 2px 6px 4px;
-}
-.group-head b {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--ink-soft);
-}
-.group-head .mono {
-  font-size: 9.5px;
-  color: var(--ink-faint);
-}
-.group-head .group-actions {
-  margin-left: auto;
-}
-.group-actions {
-  display: flex;
-  gap: 8px;
-}
-.link {
-  padding: 2px 6px;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius-xs);
-  transition: color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out);
-}
-.link:hover {
-  color: var(--ink-soft);
-  background: var(--surface-hover);
-}
-.group-empty {
-  padding: 10px 7px;
-  font-size: 11px;
-  line-height: 1.7;
-  color: var(--ink-faint);
-}
-.group-empty p {
-  margin: 0;
-}
-.empty-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-}
-.link.strong {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-.link.strong:hover {
-  color: var(--accent-ink);
-  background: rgb(77 130 247 / 20%);
-}
-.cap-item {
-  position: relative;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  padding: 7px 8px;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  outline: none;
-  transition: background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
-}
-.cap-item:focus-visible {
-  border-color: var(--accent);
-}
-.cap-item:hover {
-  background: var(--surface-raised);
-}
-.cap-item.active {
-  background: var(--surface-raised);
-  border-color: var(--line);
-  box-shadow: var(--shadow-1), inset 2px 0 var(--accent);
-}
-.item-icon {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  font-size: 13px;
-  border-radius: 7px;
-}
-.item-icon.skill {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-.item-icon.mcp {
-  color: var(--ink-soft);
-  background: var(--surface-sunken);
-}
-.item-main {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-.item-name {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  color: var(--ink);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cap-item.active .item-name {
-  font-weight: 600;
-}
-.item-desc {
-  overflow: hidden;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.item-title {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  min-width: 0;
-}
-.item-type {
-  flex: none;
-  padding: 0 5px;
-  font-size: 9.5px;
-  line-height: 15px;
-  border-radius: 4px;
-}
-.item-type.skill {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-.item-type.mcp {
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-}
-.item-switch {
-  flex: none;
-  --el-switch-on-color: var(--accent);
-  --el-switch-off-color: var(--line-strong);
-}
-
-/* 右栏详情 */
-.cap-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-  min-height: 0;
-  padding: 22px 24px;
-  overflow-y: auto;
-}
-.hero {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.hero-icon {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  font-size: 20px;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-radius: 12px;
-}
-.hero-icon.mcp {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-.hero-main {
-  flex: 1;
-  min-width: 0;
-}
-.hero-eyebrow {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.type-pill {
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  color: var(--accent-ink);
-  text-transform: uppercase;
-}
-.type-pill.mcp {
-  color: var(--ink-muted);
-}
-.hero-key {
-  overflow: hidden;
-  font-size: 10px;
-  color: var(--ink-faint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hero-title {
-  margin: 3px 0 0;
-  overflow: hidden;
-  font-size: 19px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-  color: var(--ink);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hero-desc {
+.cap-head-text p {
   margin: 4px 0 0;
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--ink-muted);
 }
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 9px;
-}
-.chip {
-  padding: 2px 9px;
-  font-size: 10.5px;
-  color: var(--ink-muted);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-}
-.chip.on {
-  color: var(--ok-ink);
-  background: var(--ok-soft);
-  border-color: transparent;
-}
-.hero-switch {
-  display: flex;
-  flex: none;
-  gap: 9px;
-  align-items: center;
-  padding-top: 2px;
-}
-/* 滑动开关：沿用 Element 开关，状态文字固定宽度避免行内跳动 */
-.cap-switch {
-  flex: none;
-  --el-switch-on-color: var(--accent);
-  --el-switch-off-color: var(--line-strong);
-}
-.switch-text {
-  min-width: 3em;
-  font-size: 12px;
-  color: var(--ink-muted);
-  white-space: nowrap;
+
+.cap-head .icon-btn {
+  margin-left: auto;
 }
 
-/* SKILL.md / 连接方式 */
-.detail-block {
+.spin {
+  animation: cap-spin 1s linear infinite;
+}
+
+@keyframes cap-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- 计数条 ---- */
+.cap-summary {
   display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  min-height: 140px;
-  overflow: hidden;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  padding: 8px 12px;
+  margin-bottom: var(--sp-4);
+  font-size: 12px;
+  color: var(--ink-muted);
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
-/* MCP 连接信息通常只有一行，不再撑满整栏 */
-.detail-block.compact {
-  flex: 0 0 auto;
-  min-height: 0;
+
+.sum-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-soft);
 }
-.block-head {
-  display: flex;
-  flex: none;
-  gap: 8px;
-  align-items: baseline;
-  padding: 10px 14px;
-  background: var(--code-bg);
-  border-bottom: 1px solid var(--line-soft);
-}
-.block-title {
-  font-size: 12px;
+
+.sum-item b {
   font-weight: 600;
   color: var(--ink);
 }
-.block-sub {
-  overflow: hidden;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.block-empty {
-  padding: 16px 13px;
-  font-size: 11px;
-  color: var(--ink-faint);
-}
-.block-empty.error {
-  color: var(--danger, #c45656);
-}
-.skill-content {
-  flex: 1;
-  padding: 16px 18px;
-  overflow: visible;
-}
-.skill-content :deep(.markdown-view) {
-  font-size: 12.5px;
-  line-height: 1.75;
-}
-.skill-content :deep(.markdown-view h1) {
-  font-size: 16px;
-}
-.skill-content :deep(.markdown-view h2) {
-  font-size: 14.5px;
-}
-.skill-content :deep(.markdown-view h3) {
-  font-size: 13px;
-}
-.skill-content :deep(.markdown-view pre) {
+
+.sum-note {
+  margin-left: auto;
   font-size: 11.5px;
+  color: var(--ink-faint);
 }
-.conn {
-  padding: 12px 14px;
-  margin: 12px 14px;
-  overflow: auto;
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: var(--ink-soft);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  background: var(--code-bg);
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-}
-.meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
-}
-.meta-item {
+
+.cap-warn {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 9px 11px;
-  background: var(--code-bg);
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-}
-.meta-item span {
-  font-size: 10px;
-  color: var(--ink-faint);
-}
-.meta-item b {
-  overflow: hidden;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 0 0 var(--sp-4);
   font-size: 12px;
-  font-weight: 500;
-  color: var(--ink);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.detail-note {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.65;
-  color: var(--ink-faint);
-}
-.facts {
-  overflow: hidden;
+  line-height: 1.6;
+  color: var(--ink-muted);
+  background: var(--warn-faint, var(--surface-raised));
   border: 1px solid var(--line-soft);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
-.fact {
+
+/* ---- 能力卡 ---- */
+.cap-card {
+  margin-bottom: var(--sp-4);
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+}
+
+.card-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 9px 12px;
-  font-size: 11.5px;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-soft);
 }
-.fact + .fact {
+
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 14px;
+  border-radius: var(--radius-sm);
+}
+
+.card-icon.skill {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.card-icon.mcp {
+  color: var(--ink-soft);
+  background: var(--surface-hover);
+}
+
+.card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.card-title b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.card-title em {
+  font-size: 11.5px;
+  font-style: normal;
+  color: var(--ink-faint);
+}
+
+.card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.cap-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cap-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
   border-top: 1px solid var(--line-soft);
 }
-.fact span {
-  color: var(--ink-faint);
+
+.cap-row:first-child {
+  border-top: 0;
 }
-.fact b {
-  font-weight: 500;
-  color: var(--ink-soft);
+
+.cap-row:hover {
+  background: var(--surface-hover);
 }
-.detail-empty {
+
+.row-main {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 10px;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--ink-faint);
+  gap: 2px;
+  min-width: 0;
 }
-.empty-icon {
+
+.row-name {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  font-size: 19px;
-  color: var(--ink-muted);
-  background: var(--code-bg);
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.cap-row.on .row-name {
+  color: var(--ink);
+}
+
+.row-tag {
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-faint);
+  background: var(--surface-hover);
+  border-radius: 4px;
+}
+
+.row-desc {
+  overflow: hidden;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cap-foot {
+  margin: var(--sp-4) 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+}
+
+/* ---- 空态 ---- */
+.cap-empty {
+  padding: 32px 16px;
+  text-align: center;
+  background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 13px;
+  border-radius: var(--radius-lg);
 }
 
-/* 窄屏：列表在上，详情在下 */
-@media (max-width: 900px) {
-  .cap-body {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
-  }
-  .cap-list {
-    max-height: 280px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line-soft);
-  }
-  .cap-detail {
-    overflow: visible;
-  }
+.cap-empty p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink-muted);
 }
 
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+@media (max-width: 640px) {
+  .cap-page {
+    padding: var(--sp-4) var(--page-gutter-tight) var(--sp-8);
+  }
+
+  .sum-note {
+    margin-left: 0;
+  }
+
+  .row-desc {
+    white-space: normal;
+  }
 }
 </style>
