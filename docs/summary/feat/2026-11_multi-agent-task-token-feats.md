@@ -1,3 +1,20 @@
+---
+canonical: docs/summary/2026-11/2026-11-17_multi-agent-task-token-feats.md
+schema: session-summary/v1
+period: 2026-11
+createdAt: 2026-11-17T00:00:00+08:00
+refs: []
+metrics:
+  sessions: 0
+  casesAdded: 0
+  casesTotal: 0
+  passRate: "N/A"
+  lineCoverage: "N/A"
+  coverageDelta: "N/A"
+  patchCoverage: "N/A"
+  gate: "N/A"
+---
+
 # FEAT 项分析与实施方案（任务编码 / 多 Agent / 自动执行 / token 优化）
 
 > 基线：`0.1.0-snapshot`（2026-11-17）。本文只做现状分析与方案设计，不包含代码改动。
