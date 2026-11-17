@@ -8,15 +8,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import top.rongx.agent.domain.action.ActionId;
+import top.rongx.agent.domain.action.ActionResult;
+import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.RecipeStore;
@@ -42,7 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>夹具必须产出 {@code image} 产物：引擎的「部署目标自愈」会在既无镜像又无可运行 jar
  * 时诚实失败（E-504），不允许假部署。这里用一个无副作用的 image_package 动作
- * （只跑 {@code git status}）登记镜像产物，不真的构建镜像。
+ * （宿主执行器替身把它换成 {@code git status}）登记镜像产物，不真的构建镜像。
  */
 class DeployStageTest {
 
@@ -143,7 +149,6 @@ class DeployStageTest {
                   - id: deploy
                     type: deploy
                 """);
-        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
@@ -152,7 +157,7 @@ class DeployStageTest {
         deployer = new RecordingDeployer();
         recipes = new EvidenceRecipeStore();
         engine = new BuiltInPipelineEngine(new RecipeActionResolver(),
-                new ProcessActionRunner(), new ProcessActionRunner(),
+                new ProcessActionRunner(), new FixtureHostRunner(),
                 workspaces, RunHistoryStore.disabled(), "ci", null, deployer, null, recipes);
     }
 
@@ -207,7 +212,6 @@ class DeployStageTest {
                   - id: deploy
                     type: deploy
                 """);
-        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
@@ -244,7 +248,6 @@ class DeployStageTest {
                   - id: rollback
                     type: rollback
                 """);
-        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
@@ -286,7 +289,6 @@ class DeployStageTest {
                   - id: deploy
                     type: deploy
                 """);
-        writeActions(repo);
         sh(repo, "git", "init", "-q");
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "main");
@@ -359,14 +361,38 @@ class DeployStageTest {
         Files.writeString(repo.resolve("ci/pipeline.yml"), yaml, StandardCharsets.UTF_8);
     }
 
-    /** 无副作用的镜像打包动作：只登记 image 产物，不真的调用 docker build。 */
-    private static void writeActions(Path repo) throws Exception {
-        Files.writeString(repo.resolve("ci/actions.yml"), """
-                actions:
-                  image_package:
-                    run: ["git", "status", "--short"]
-                    timeout: 1m
-                """, StandardCharsets.UTF_8);
+    /**
+     * 宿主执行器替身：夹具里没有 Dockerfile，image_package 的内置配方（docker build）不能真跑，
+     * 这里把它换成等价的只读命令 {@code git status --short}，其余动作照常走真实宿主执行。
+     *
+     * <p>配方必须用内置的：仓库自定义的 docker 配方已被引擎拒绝上宿主
+     * （见 {@code BuiltInPipelineEngine#trustedForHost}），所以夹具不再写 ci/actions.yml。
+     */
+    private static final class FixtureHostRunner implements ActionRunner {
+        private final ActionRunner delegate = new ProcessActionRunner();
+
+        @Override
+        public ActionResult run(Path workspace, ActionSpec spec) {
+            return run(workspace, spec, () -> false, output -> { });
+        }
+
+        @Override
+        public ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled) {
+            return run(workspace, spec, cancelled, output -> { });
+        }
+
+        @Override
+        public ActionResult run(Path workspace, ActionSpec spec, BooleanSupplier cancelled,
+                                Consumer<String> live) {
+            boolean dockerBuild = spec.action() == ActionId.IMAGE_PACKAGE
+                    && spec.steps().stream().flatMap(List::stream).anyMatch("build"::equals);
+            ActionSpec effective = dockerBuild
+                    ? new ActionSpec(ActionId.IMAGE_PACKAGE,
+                            List.of(List.of("git", "status", "--short")),
+                            spec.produce(), spec.timeout(), spec.source())
+                    : spec;
+            return delegate.run(workspace, effective, cancelled, live);
+        }
     }
 
     /** 有界执行：并行排空输出 + 硬超时，避免 readAllBytes 让 waitFor 的超时形同虚设。 */

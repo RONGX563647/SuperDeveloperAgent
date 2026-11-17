@@ -62,7 +62,11 @@ public class RecipeActionResolver implements ActionResolver {
             ActionId.FRONTEND_BUILD, List.of(
                     List.of("pnpm", "install", "--frozen-lockfile", "--ignore-scripts"),
                     List.of("pnpm", "build")),
-            ActionId.FRONTEND_TEST, List.of(List.of("pnpm", "test")));
+            ActionId.FRONTEND_TEST, List.of(List.of("pnpm", "test")),
+            // 镜像打包没有"仓库必须自定义"的理由：标准做法就是 docker build，
+            // 给一份内置配方后，仓库里的同名配方反而可以被引擎拒绝上宿主（见 trustedForHost）。
+            ActionId.IMAGE_PACKAGE, List.of(
+                    List.of("docker", "build", "-q", "-t", "${tag}", ".")));
 
     /** 动作级默认超时：测试给足 20m，构建/镜像 10~20m，其余 15m。 */
     private static final Map<ActionId, Duration> DEFAULT_TIMEOUTS = Map.of(
