@@ -1,0 +1,314 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-17_1704_error-code-contract",
+  "category": "chore",
+  "title": "异常码契约与提交门禁",
+  "createdAt": "2026-11-17T17:04:34+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "异常码改造不全：枚举业务异常类、按业务归类，并设置禁止提交的强制契约",
+    "toolCallCount": 0
+  },
+  "problem": "异常码改造不全：存在 throw new 通用异常(ErrorCode) 的写法，缺少按业务归类的异常类型与提交门禁",
+  "solution": "新增 ErrorGroup/PlatformException 与 8 个分组业务异常，错误码与分组强绑定；迁移全部携带 ErrorCode 的通用 throw；响应体新增 errorCode；spec-checks 增加 EC1/EC2/EC3/EC5 契约与只减不增基线",
+  "commits": [
+    {
+      "sha": "525fd71a7cd8e35dd39364a072dd6d05d2023a46",
+      "subject": "feat: 业务异常按业务分组并落地异常码强制契约",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "e962bd3381e0a8489c7f4e49c73f28af79ec4495"
+        },
+        {
+          "path": "docs/handbook/l3/gateway-deploy-gate.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "04495506fa6aad5c77e9af8b7d89dc62844198e0"
+        },
+        {
+          "path": "docs/handbook/l3/infra-git-worktree.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "265453154cbb4da1f92711b947f5276c44e0862b"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 8,
+          "deletions": 8,
+          "blobHash": "6bc06a49314b14cbc08d97d9fa73739c7022eda9"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/ArtifactException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "005991f267469fade4efef277554e7b67171b926"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/BuildException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "14cd6ac3000d0e9afcbd97242f9141a647ebd3f5"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/DeployException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "820edbd41a750e22b309755f98b7b173e8c2181a"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/EnvironmentException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "680da9b782d5c7dc1f6abc8c9b9e982789099568"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/ErrorCode.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 2,
+          "blobHash": "2d4052740fdd9a048cfa561be330f456cea63cf9"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/ErrorGroup.java",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "d5250c40951a3c4a56457e5c054124126df0e97b"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/IntakeException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "37b18f518c75e177c238170107c43bdc4f27ca72"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/PlatformException.java",
+          "status": "A",
+          "additions": 37,
+          "deletions": 0,
+          "blobHash": "8f8f39098effbafe4d4a6f11304f77467d9a0082"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/PromotionException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "79bfd529e65842ae8f1b9d4170cef6fb3069c322"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/RecipeException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "5b96f9a2695fc1daecbdc0e61b17c1b570ab333d"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/RunException.java",
+          "status": "A",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "616057a728771f78536c857bd41361b635219a0a"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/policy/ConfirmationRequiredException.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 2,
+          "blobHash": "da147ab4f0d8b07c348a03fe95aa7e9150c24cbe"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/policy/PolicyDeniedException.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 8,
+          "blobHash": "e73f39ea230a6cdae3a34779dcfd88924163a580"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/error/PlatformExceptionTest.java",
+          "status": "A",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "2a33e866463d677a8665b67fd9e8a868abd62072"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 8,
+          "blobHash": "56788132a7911e52834bd3c8b45d4702f4ea18b7"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployRecipeFlowTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 5,
+          "blobHash": "7265600302fcbc114cf8893d49270e88de31c467"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 3,
+          "blobHash": "8f7f6d0942f28f4e3b19adfb4aae5486bec3dfbe"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/EnvBindingService.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 6,
+          "blobHash": "b1190d8994d5f9b89eb05a10af42c5ad3d10546f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/AgentExecutionException.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 5,
+          "blobHash": "171f01411bd04806356c36316fb658a12b371fd7"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ErrorStatusMapper.java",
+          "status": "A",
+          "additions": 34,
+          "deletions": 0,
+          "blobHash": "c7752d361b53af4186a911c128ee5f2f6718a3dc"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GlobalExceptionHandler.java",
+          "status": "M",
+          "additions": 29,
+          "deletions": 6,
+          "blobHash": "87b14f27c86a859febcd7fbaef22596bb8c88259"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 3,
+          "blobHash": "fce3a814e41ae0d9f2861f99bf81a273ac17e17c"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ActionUsabilityTest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "aa4f5d26aff5bab45041969a9ea75b1c7cf644ce"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/ErrorStatusMapperTest.java",
+          "status": "A",
+          "additions": 31,
+          "deletions": 0,
+          "blobHash": "987a35f6a3e7805c26d00ca06ac9b09b1798a680"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 2,
+          "blobHash": "1680fc91e95d877013c9068129c7cf93cea3aaf9"
+        },
+        {
+          "path": "platform/spec-checks/README.md",
+          "status": "M",
+          "additions": 35,
+          "deletions": 3,
+          "blobHash": "da60ee2fe394be576180c7fca95830f85f6c86a7"
+        },
+        {
+          "path": "platform/spec-checks/error-code-baseline.txt",
+          "status": "A",
+          "additions": 108,
+          "deletions": 0,
+          "blobHash": "0391ce66356794aeae5d0c0fcc99640823fa27b6"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ErrorCodeContractTest.java",
+          "status": "A",
+          "additions": 264,
+          "deletions": 0,
+          "blobHash": "59d748b5c2fd3836c30d551e9cd5ecb4e2cbdef0"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/error/PlatformExceptionTest.java",
+        "status": "A",
+        "additions": 23,
+        "deletions": 0,
+        "blobHash": "2a33e866463d677a8665b67fd9e8a868abd62072"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployRecipeFlowTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 5,
+        "blobHash": "7265600302fcbc114cf8893d49270e88de31c467"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ActionUsabilityTest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 1,
+        "blobHash": "aa4f5d26aff5bab45041969a9ea75b1c7cf644ce"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/ErrorStatusMapperTest.java",
+        "status": "A",
+        "additions": 31,
+        "deletions": 0,
+        "blobHash": "987a35f6a3e7805c26d00ca06ac9b09b1798a680"
+      },
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ErrorCodeContractTest.java",
+        "status": "A",
+        "additions": 264,
+        "deletions": 0,
+        "blobHash": "59d748b5c2fd3836c30d551e9cd5ecb4e2cbdef0"
+      }
+    ],
+    "casesAdded": 8,
+    "command": "mvn -s /tmp/maven-settings.xml -B -pl spec-checks -am test -Dtest=\"!DockerDaemonRepairTest,!DeployEnvPrecheckTest,!DeployRecipeFlowTest\"",
+    "result": "PASSED",
+    "evidence": "Tests run: 536, Failures: 0, Errors: 0, Skipped: 4"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "spec-checks"
+    ],
+    "verification": "mvn -pl spec-checks -am test（排除无 Docker 环境依赖的 DockerDaemonRepairTest/DeployEnvPrecheckTest/DeployRecipeFlowTest）：536 用例通过；EC 契约测试全绿；错误码响应与 HTTP 映射单测通过"
+  },
+  "followUps": [
+    "全部实现改造并验收成功后合并到main分支并推送"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1704_error-code-contract"
+    ]
+  },
+  "chain": {
+    "prev": "4fe9fe32121c4fa37f4a3b43f82c3cb3740044424598d868f080d963363e0453",
+    "self": "b5a219bc973c2507c3abe93aac3d9c6881805ddac730505cb2470266e7d13568"
+  }
+}
