@@ -104,7 +104,8 @@ export function triggerPipeline(
   env?: string,
   confirmToken?: string,
   version?: string,
-  tag?: boolean
+  tag?: boolean,
+  branch?: string
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
@@ -115,7 +116,8 @@ export function triggerPipeline(
       deployTarget: deployTarget ?? null,
       confirmToken: confirmToken ?? null,
       version: version ?? null,
-      tag: tag === true
+      tag: tag === true,
+      branch: branch ?? null
     })
   })
 }
@@ -238,9 +240,11 @@ export interface HistoryItem {
   env: string
   pipelineId: string
   gitSha: string
+  /** 发布分支（版本线分支 x.y.0-snapshot）；空 = 旧记录。 */
+  branch?: string
   /** 触发时填写的标签版本号（打 tag 时会同步为 git 标签）；空 = 未填写。 */
   version: string
-  /** 打 tag 结果：PUSHED=远端可见 / LOCAL=仅本地 / FAILED=失败；空=未打标签。 */
+  /** 打 tag 结果：PUSHED=远端可见 / LOCAL=仅本地 / FAILED=失败 / SNAPSHOT=快照；空=未填写版本。 */
   tagStatus?: string
   status: string
   /** 触发时间（epoch 毫秒，0 表示旧格式文件）。 */

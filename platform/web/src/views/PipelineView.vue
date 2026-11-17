@@ -19,7 +19,7 @@ import {
   type RunView, type StageView,
 } from '../api/pipeline'
 import { apiBlob } from '../api/http'
-import { gitCommits, type GitCommit } from '../api/project'
+import { gitBranches, gitCommits, type GitCommit } from '../api/project'
 import { deployConfirm, deployEnvs, deployReplay, streamDeployAgent, type EnvStatus } from '../api/deploy'
 import { confirmEnvBinding, draftEnvBinding } from '../api/settings'
 import type { AgentEvent, AgentProjection } from '../types'
@@ -62,6 +62,9 @@ const ENV_STRATEGIES: EnvStrategy[] = [
 
 const commits = ref<GitCommit[]>([])
 const commitsLoading = ref(false)
+/** 发布分支：版本线与分支强绑定（0.1 版本线 = 0.1.0-snapshot）。 */
+const branch = ref('')
+const branches = ref<string[]>([])
 
 const pipelines = ref<string[]>([])
 const engine = ref('')
@@ -201,8 +204,8 @@ async function loadTags(): Promise<void> {
     gitTags.value = []
   }
 }
-/** 只有测试环境支持多版本并存（dev 固定本机单槽、prod 走服务器发布）。 */
-const showVersionControls = computed(() => env.value === 'test')
+/** 只有非开发环境走版本发布（dev 固定本机单槽；test/prod 都按版本+分支发布）。 */
+const showVersionControls = computed(() => env.value !== 'dev')
 /** 用户是否手动切过部署方式：切过后不再被 pipeline 定义的默认值覆盖。 */
 const targetTouched = ref(false)
 
@@ -267,6 +270,7 @@ const activeMeta = ref<{
   sha: string
   version?: string
   tagStatus?: string
+  branch?: string
 } | null>(null)
 
 const {
@@ -745,15 +749,14 @@ async function loadImages(): Promise<void> {
  */
 async function deployVersion(img: ImageVersionView): Promise<void> {
   const version = deployVersionInput.value.trim()
-  if (showVersionControls.value && deployTagged.value && !version) {
-    ElMessage.warning('打 tag 时必须填写版本号（例如 v1.2.0）')
+  const tagged = showVersionControls.value && deployTagged.value
+  try {
+    assertReleaseVersion(version, tagged)
+  } catch (e) {
+    ElMessage.warning(e instanceof Error ? e.message : String(e))
     return
   }
-  if (showVersionControls.value && deployTagged.value && gitTags.value.includes(version)) {
-    ElMessage.warning(`标签 ${version} 已存在，请换一个版本号`)
-    return
-  }
-  const versionNote = showVersionControls.value && deployTagged.value
+  const versionNote = tagged
     ? `\n版本 ${version}：打 tag 独立部署，旧版本继续运行。`
     : `\n将覆盖 ${env.value} 环境当前部署。`
   try {
@@ -777,10 +780,36 @@ async function deployVersion(img: ImageVersionView): Promise<void> {
   }
 }
 
+async function loadBranches(): Promise<void> {
+  try {
+    const view = await gitBranches(projectId.value)
+    branches.value = view.branches
+    if (!branch.value || !view.branches.includes(branch.value)) {
+      // 默认当前分支；不是版本分支时优先选已有的版本线分支
+      branch.value = view.current && isVersionBranch(view.current)
+        ? view.current
+        : (view.branches.find(isVersionBranch) ?? view.current ?? '')
+    }
+  } catch {
+    branches.value = []
+  }
+}
+
+/** 版本线分支：x.y.0-snapshot（一个版本线一个分支）。 */
+function isVersionBranch(name: string): boolean {
+  return /^\d+\.\d+\.0-snapshot$/.test(name)
+}
+
+/** 版本号所属的版本线（0.1.2 → 0.1）；非版本分支返回空。 */
+function branchLine(name: string): string {
+  const m = /^(\d+)\.(\d+)\.0-snapshot$/.exec(name)
+  return m ? `${m[1]}.${m[2]}` : ''
+}
+
 async function loadCommits(): Promise<void> {
   commitsLoading.value = true
   try {
-    const page = await gitCommits(projectId.value, 30)
+    const page = await gitCommits(projectId.value, 30, 0, branch.value)
     commits.value = page.commits
     if (page.commits.length && !page.commits.some((c) => c.sha === sha.value)) {
       sha.value = page.commits[0].sha
@@ -792,6 +821,11 @@ async function loadCommits(): Promise<void> {
   }
 }
 
+watch(branch, () => {
+  sha.value = ''
+  void loadCommits()
+})
+
 function applyEnv(key: string): void {
   if (!ENV_STRATEGIES.some((s) => s.key === key)) return
   appStore.env = key
@@ -800,7 +834,8 @@ function applyEnv(key: string): void {
 
 /* ---------------------------------------------------------------- 触发 */
 function attachRun(result: { runId: string, status: string },
-                   meta: { env: string, pipelineId: string, sha: string }): void {
+                   meta: { env: string, pipelineId: string, sha: string,
+                           version?: string, tagStatus?: string, branch?: string }): void {
   const initial: RunView = {
     runId: result.runId,
     status: result.status,
@@ -815,18 +850,54 @@ function attachRun(result: { runId: string, status: string },
   void loadEnvs()
 }
 
+/**
+ * 正式发布的版本约束（前端先拦一次，后端还会再校验）：
+ * 版本必须 x.y.z（不带 v）、与所选分支版本线一致、标签不重复、补丁号不跳号。
+ */
+function assertReleaseVersion(version: string, tagged: boolean): void {
+  if (!tagged) return
+  if (!version) {
+    throw new Error('打 tag 时必须填写版本号（例如 0.1.0）')
+  }
+  if (!/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(version)) {
+    throw new Error('版本号必须是 x.y.z（例如 0.1.0，不带 v 前缀）')
+  }
+  const line = branchLine(branch.value)
+  if (!line) {
+    throw new Error('正式发布必须选择版本分支（例如 0.1.0-snapshot）')
+  }
+  const versionLine = version.split('.').slice(0, 2).join('.')
+  if (versionLine !== line) {
+    throw new Error(`版本 ${version} 属于版本线 ${versionLine}，只能发布到 ${versionLine}.0-snapshot`)
+  }
+  if (gitTags.value.includes(version)) {
+    throw new Error(`标签 ${version} 已存在，请递增补丁号`)
+  }
+  let max = -1
+  const re = new RegExp(`^${line.replace('.', '\\.')}\\.(\\d+)$`)
+  for (const tag of gitTags.value) {
+    const m = re.exec(tag)
+    if (m) max = Math.max(max, Number(m[1]))
+  }
+  const patch = Number(version.split('.')[2])
+  if (max < 0 && patch !== 0) {
+    throw new Error(`${line} 的首个版本必须是 ${line}.0`)
+  }
+  if (max >= 0 && patch !== max + 1) {
+    throw new Error(`补丁号不能跳号：${line} 已发布到 ${line}.${max}，下一个版本必须是 ${line}.${max + 1}`)
+  }
+}
+
 async function triggerSelected(): Promise<void> {
   const version = deployVersionInput.value.trim()
-  if (showVersionControls.value && deployTagged.value && !version) {
-    throw new Error('打 tag 时必须填写版本号（例如 v1.2.0）')
-  }
-  if (showVersionControls.value && deployTagged.value && gitTags.value.includes(version)) {
-    throw new Error(`标签 ${version} 已存在，请换一个版本号`)
-  }
+  assertReleaseVersion(version, showVersionControls.value && deployTagged.value)
   const result = await triggerPipeline(
     pipelineId.value, projectId.value, sha.value, targetForTrigger(), env.value,
-    undefined, version || undefined, showVersionControls.value && deployTagged.value)
-  attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: sha.value })
+    undefined, version || undefined, showVersionControls.value && deployTagged.value,
+    branch.value || undefined)
+  attachRun(result, {
+    env: env.value, pipelineId: pipelineId.value, sha: sha.value, branch: branch.value,
+  })
   ElMessage.success('已触发运行')
 }
 
@@ -892,7 +963,8 @@ async function doVerify(): Promise<void> {
   topError.value = ''
   try {
     const result = await triggerPipeline(
-      'verify', projectId.value, sha.value, targetForTrigger(), env.value)
+      'verify', projectId.value, sha.value, targetForTrigger(), env.value,
+      undefined, undefined, false, branch.value || undefined)
     attachRun(result, { env: env.value, pipelineId: 'verify', sha: sha.value })
     ElMessage.success('已触发检查构建')
   } catch (e) {
@@ -1086,7 +1158,7 @@ async function pushTag(): Promise<void> {
 function openedRun(item: HistoryItem): void {
   activeMeta.value = {
     env: item.env, pipelineId: item.pipelineId, sha: item.gitSha,
-    version: item.version, tagStatus: item.tagStatus,
+    version: item.version, tagStatus: item.tagStatus, branch: item.branch,
   }
   void openRun(item.runId, { startedAt: item.createdAt })
   syncUrl(item.runId)
@@ -1097,7 +1169,8 @@ async function rerun(item: HistoryItem): Promise<void> {
   topError.value = ''
   try {
     const result = await triggerPipeline(
-      item.pipelineId, projectId.value, item.gitSha, targetForTrigger(), item.env)
+      item.pipelineId, projectId.value, item.gitSha, targetForTrigger(), item.env,
+      undefined, undefined, false, item.branch || branch.value || undefined)
     attachRun(result, { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha })
     ElMessage.success('已用该提交重跑')
   } catch (e) {
@@ -1149,7 +1222,8 @@ async function rerunActive(): Promise<void> {
   topError.value = ''
   try {
     const result = await triggerPipeline(
-      meta.pipelineId, projectId.value, meta.sha, targetForTrigger(), meta.env)
+      meta.pipelineId, projectId.value, meta.sha, targetForTrigger(), meta.env,
+      undefined, undefined, false, meta.branch || branch.value || undefined)
     attachRun(result, { env: meta.env, pipelineId: meta.pipelineId, sha: meta.sha })
     ElMessage.success('已用相同参数重跑')
   } catch (e) {
@@ -1195,9 +1269,10 @@ watch(projectId, () => {
   if (runId.value) closeRun()
   topError.value = ''
   sha.value = ''
-  void Promise.all([
+  // 先取分支再取提交：提交列表按分支拉取，顺序不能反
+  void loadBranches().then(() => Promise.all([
     loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(), loadTags(),
-  ]).then(() => loadPreview())
+  ])).then(() => loadPreview())
 })
 
 watch(pipelineId, () => void loadPreview())
@@ -1225,6 +1300,7 @@ onMounted(async () => {
     deployTarget.value = qTarget
     targetTouched.value = true
   }
+  await loadBranches()
   await Promise.all([
     loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(), loadTags(),
   ])
@@ -1241,7 +1317,7 @@ onMounted(async () => {
     if (item) {
       activeMeta.value = {
         env: item.env, pipelineId: item.pipelineId, sha: item.gitSha,
-        version: item.version, tagStatus: item.tagStatus,
+        version: item.version, tagStatus: item.tagStatus, branch: item.branch,
       }
     }
     void openRun(fromUrl)
@@ -1349,6 +1425,8 @@ async function copyDigest(digest: string): Promise<void> {
             v-model:action="action"
             v-model:version="deployVersionInput"
             v-model:tagged="deployTagged"
+            v-model:branch="branch"
+            :branches="branches"
             :show-version="showVersionControls"
             :existing-tags="gitTags"
             :env-label="envLabel(env)"

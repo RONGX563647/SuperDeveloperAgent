@@ -352,6 +352,50 @@ public class ProjectIntakeController {
         return Path.of(list.get(0).path());
     }
 
+    /**
+     * 本地分支列表 + 当前分支：发布前先选分支，版本线与分支强绑定。
+     */
+    @GetMapping("/{id}/git/branches")
+    public Map<String, Object> branches(@PathVariable String id) {
+        RepoContext ctx = repoContext(id);
+        if (!ctx.initialized()) {
+            return Map.of("branches", List.of(), "current", "");
+        }
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("branches", git.localBranches(ctx.dir()));
+        out.put("current", git.currentBranch(ctx.dir()));
+        return out;
+    }
+
+    /**
+     * 创建版本线分支（body {@code {branch, from?}}）：只建引用，不切工作区。
+     *
+     * <p>起点通常是上一条版本线的最后一个补丁标签；不传时用当前 HEAD。
+     */
+    @PostMapping("/{id}/git/branches")
+    public Map<String, Object> createBranch(@PathVariable String id,
+                                            @RequestBody(required = false) Map<String, Object> body) {
+        currentUser.requireUserId();
+        Map<String, Object> payload = body == null ? Map.of() : body;
+        String branch = str(payload, "branch");
+        if (branch == null || branch.isBlank()) {
+            throw new IllegalArgumentException("branch 不能为空");
+        }
+        RepoContext ctx = repoContext(id);
+        if (!ctx.initialized()) {
+            throw new IllegalArgumentException("该项目尚未完成 git 接入，无法创建分支。");
+        }
+        String from = str(payload, "from");
+        boolean created = git.createBranchAt(ctx.dir(), branch,
+                from == null || from.isBlank() ? "HEAD" : from);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("created", created);
+        out.put("branch", branch);
+        out.put("head", git.revParse(ctx.dir(), "refs/heads/" + branch));
+        return out;
+    }
+
     /** 远程分支列表（UI 选择对比目标用）。 */
     @GetMapping("/{id}/git/remotes")
     public List<Map<String, Object>> remotes(@PathVariable String id) {
@@ -371,20 +415,21 @@ public class ProjectIntakeController {
     }
 
     /**
-     * 提交历史（分页）：{@code ?limit=20&skip=0}。
+     * 提交历史（分页）：{@code ?limit=20&skip=0&branch=0.1.0-snapshot}。
      * 供"最近提交"面板展示更长历史（limit 上限 200）。
      */
     @GetMapping("/{id}/git/commits")
     public Map<String, Object> commits(@PathVariable String id,
                                        @RequestParam(defaultValue = "20") int limit,
-                                       @RequestParam(defaultValue = "0") int skip) {
+                                       @RequestParam(defaultValue = "0") int skip,
+                                       @RequestParam(required = false) String branch) {
         RepoContext ctx = repoContext(id);
         if (!ctx.initialized()) {
             return Map.of("commits", List.of(), "hasMore", false, "skip", 0);
         }
         int safeLimit = Math.min(Math.max(1, limit), 200);
         List<GitWorktreeManager.CommitInfo> commits =
-                git.commits(ctx.dir(), Math.max(0, skip), safeLimit + 1);
+                git.commits(ctx.dir(), branch, Math.max(0, skip), safeLimit + 1);
         boolean hasMore = commits.size() > safeLimit;
         List<GitWorktreeManager.CommitInfo> page =
                 hasMore ? commits.subList(0, safeLimit) : commits;

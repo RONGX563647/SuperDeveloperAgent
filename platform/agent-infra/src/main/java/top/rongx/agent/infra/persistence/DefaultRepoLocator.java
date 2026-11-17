@@ -109,6 +109,48 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
     }
 
     @Override
+    public java.util.List<String> listBranches(String projectId) {
+        var repo = repoDir(projectId);
+        return repo.map(git::localBranches).orElse(java.util.List.of());
+    }
+
+    @Override
+    public boolean isCommitOnBranch(String projectId, String branch, String sha) {
+        var repo = repoDir(projectId);
+        return repo.map(dir -> git.isAncestor(dir, sha, "refs/heads/" + branch)).orElse(false);
+    }
+
+    @Override
+    public BranchOutcome createBranchFrom(String projectId, String branch, String startPoint,
+                                          String userId) {
+        var repo = repoDir(projectId);
+        if (repo.isEmpty()) {
+            return new BranchOutcome(false, false, "项目仓库不存在，无法创建分支 " + branch);
+        }
+        Path dir = repo.get();
+        boolean created;
+        try {
+            created = git.createBranchAt(dir, branch, startPoint);
+        } catch (GitWorktreeManager.GitIntakeException e) {
+            return new BranchOutcome(false, false, "创建分支失败：" + e.getMessage());
+        }
+        String remoteUrl = originUrl(dir);
+        if (remoteUrl == null) {
+            return new BranchOutcome(created, false,
+                    (created ? "已创建本地分支 " : "分支已存在 ") + branch + "（仓库没有 origin，未推送）");
+        }
+        try {
+            git.pushBranchTo(dir, branch, remoteUrl, authFor(userId, remoteUrl));
+            return new BranchOutcome(created, true, "分支 " + branch + " 已推送到 " + remoteUrl);
+        } catch (GitWorktreeManager.GitIntakeException e) {
+            String detail = e.getMessage() == null ? "" : e.getMessage().lines()
+                    .filter(line -> !line.isBlank()).findFirst().orElse("");
+            return new BranchOutcome(created, false,
+                    (created ? "已创建本地分支 " : "分支已存在 ") + branch + "，推送失败：" + detail);
+        }
+    }
+
+    @Override
     public TagOutcome createTag(String projectId, String tag, String sha) {
         return createTag(projectId, tag, sha, null);
     }

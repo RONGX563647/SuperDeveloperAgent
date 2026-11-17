@@ -51,6 +51,7 @@ class RunHistoryStoreSeqTest {
     private static RunHistoryStore.RunSnapshot snapshot(String runId, int seq, long createdAt,
                                                         StageStatus status) {
         return new RunHistoryStore.RunSnapshot(runId, "P", "test", "release", "abcdef1234",
-                status, createdAt, seq, List.of(), List.of(), "", "PLATFORM", null, null, null);
+                status, createdAt, seq, List.of(), List.of(), "", "PLATFORM", null, null, null,
+                null);
     }
 }

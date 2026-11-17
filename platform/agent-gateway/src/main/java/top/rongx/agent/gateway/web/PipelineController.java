@@ -243,24 +243,36 @@ public class PipelineController {
         // 版本号 + 是否打 tag：打 tag 时版本号必填，且本次部署不覆盖旧版本
         String version = params.get("version");
         if (version != null && !version.isBlank()) {
-            version = version.trim();
-            if (!version.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,31}")) {
-                throw new IllegalArgumentException(
-                        "版本号只能包含字母、数字、. _ -，且以字母或数字开头（最长 32）：" + version);
-            }
+            version = top.rongx.agent.domain.release.ReleaseVersion.parse(version).toString();
             triggerParams.put("version", version);
+        }
+        // 发布分支：正式发布必须与版本线一致（引擎再校验提交归属与标签序列）
+        String branch = params.get("branch");
+        if (branch != null && !branch.isBlank()) {
+            branch = branch.trim();
+            if (!branch.matches("[A-Za-z0-9._/-]{1,120}")
+                    || branch.startsWith("-") || branch.contains("..")) {
+                throw new IllegalArgumentException("分支名不合法：" + branch);
+            }
+            triggerParams.put("branch", branch);
         }
         boolean tagged = "true".equalsIgnoreCase(String.valueOf(params.get("tag")))
                 || "1".equals(String.valueOf(params.get("tag")));
         if (tagged) {
             if (version == null || version.isBlank()) {
-                throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 v1.2.0）");
+                throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 0.1.0）");
             }
             triggerParams.put("tag", "true");
         }
         String runId = engine.trigger(projectId, pipelineId, triggerParams);
-        return Map.of("runId", runId, "env", normalizedEnv, "status", engine.status(runId),
-                "version", version == null ? "" : version, "tagged", tagged);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("runId", runId);
+        out.put("env", normalizedEnv);
+        out.put("status", engine.status(runId));
+        out.put("version", version == null ? "" : version);
+        out.put("tagged", tagged);
+        out.put("branch", branch == null ? "" : branch);
+        return out;
     }
 
     /**
@@ -385,6 +397,8 @@ public class PipelineController {
                     row.put("env", h.env());
                     row.put("pipelineId", h.pipelineId());
                     row.put("gitSha", h.gitSha());
+                    // 发布分支：一个版本线一个分支，列表能直接看出这次发的是哪条线
+                    row.put("branch", h.branch() == null ? "" : h.branch());
                     // 用户填写的版本号（打 tag 时同时同步为 git 标签），列表直接展示
                     row.put("version", h.version() == null ? "" : h.version());
                     // 打 tag 结果：PUSHED / LOCAL / FAILED，空表示这次没打标签

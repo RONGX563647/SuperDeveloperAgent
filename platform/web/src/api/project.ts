@@ -464,14 +464,36 @@ export interface GitCommitsPage {
   skip: number
 }
 
-/** 提交历史（分页，limit 上限 200）。 */
+/** 提交历史（分页，limit 上限 200）。branch 为空 = 当前 HEAD。 */
 export function gitCommits(
   projectId: string,
   limit = 20,
-  skip = 0
+  skip = 0,
+  branch = ''
 ): Promise<GitCommitsPage> {
   const q = new URLSearchParams({ limit: String(limit), skip: String(skip) })
+  if (branch) q.set('branch', branch)
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/commits?${q}`)
+}
+
+/** 本地分支列表 + 当前分支（发布前选择分支）。 */
+export interface GitBranchesView {
+  branches: string[]
+  current: string
+}
+
+export function gitBranches(projectId: string): Promise<GitBranchesView> {
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/branches`)
+}
+
+/** 创建版本线分支（只建引用，不切工作区）；from 为空 = 当前 HEAD。 */
+export function createGitBranch(
+  projectId: string, branch: string, from = ''
+): Promise<{ ok: boolean; created: boolean; branch: string; head: string }> {
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/branches`, {
+    method: 'POST',
+    body: JSON.stringify({ branch, from })
+  })
 }
 
 // ---------------------------------------------------------------- worktree

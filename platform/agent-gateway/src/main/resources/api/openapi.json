@@ -2887,6 +2887,70 @@
         }
       }
     },
+    "/api/v1/projects/{id}/git/branches" : {
+      "get" : {
+        "tags" : [ "project-intake-controller" ],
+        "summary" : "branches",
+        "operationId" : "branches",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "project-intake-controller" ],
+        "summary" : "create branch",
+        "operationId" : "createBranch",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/dockerfile" : {
       "post" : {
         "tags" : [ "project-readiness-controller" ],
@@ -5413,6 +5477,13 @@
             "format" : "int32",
             "default" : 0
           }
+        }, {
+          "name" : "branch",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "responses" : {
           "200" : {
@@ -7154,6 +7225,9 @@
         "type" : "object",
         "properties" : {
           "id" : {
+            "type" : "string"
+          },
+          "code" : {
             "type" : "string"
           },
           "userId" : {

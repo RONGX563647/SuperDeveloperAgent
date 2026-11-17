@@ -1084,6 +1084,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/git/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** branches */
+        get: operations["branches"];
+        put?: never;
+        /** create branch */
+        post: operations["createBranch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/dockerfile": {
         parameters: {
             query?: never;
@@ -3136,6 +3154,7 @@ export interface components {
         };
         GitIssue: {
             id?: string;
+            code?: string;
             userId?: string;
             projectId?: string;
             provider?: string;
@@ -5815,6 +5834,60 @@ export interface operations {
             };
         };
     };
+    branches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    createBranch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     generateDockerfile: {
         parameters: {
             query?: {
@@ -7655,6 +7728,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 skip?: number;
+                branch?: string;
             };
             header?: never;
             path: {

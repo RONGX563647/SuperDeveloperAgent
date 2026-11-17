@@ -648,6 +648,44 @@ public class GitWorktreeManager {
     }
 
     /**
+     * 从指定起点创建分支（{@code git branch <name> <start>}）：已存在时直接复用。
+     *
+     * <p>版本线分支从上一个版本线的最新补丁标签切出，只建引用、不切工作区，
+     * 因此对 bare 与普通仓库都适用。
+     *
+     * @return true = 本次新建；false = 分支已存在
+     */
+    public boolean createBranchAt(Path repoDir, String branch, String startPoint) {
+        String name = validBranch(branch);
+        String base = startPoint == null || startPoint.isBlank() ? "HEAD" : startPoint.trim();
+        Raw existing = exec(repoDir, List.of("git", "rev-parse", "-q", "--verify",
+                "refs/heads/" + name), "git rev-parse branch " + name, 30, null);
+        if (existing.exit() == 0) {
+            return false;
+        }
+        run(repoDir, List.of("git", "branch", name, base), "git branch " + name);
+        return true;
+    }
+
+    /**
+     * 提交是否位于指定分支上（{@code git merge-base --is-ancestor}）。
+     *
+     * <p>发布前用它校验"所选提交确实来自所选分支"，避免把版本标签打到别的分支。
+     */
+    public boolean isAncestor(Path repoDir, String ancestor, String ref) {
+        if (ancestor == null || !ancestor.matches("[0-9a-fA-F]{4,40}")) {
+            return false;
+        }
+        String target = ref == null ? "" : ref.trim();
+        if (target.isEmpty() || target.startsWith("-") || target.contains("..")) {
+            return false;
+        }
+        Raw raw = exec(repoDir, List.of("git", "merge-base", "--is-ancestor", ancestor, target),
+                "git merge-base --is-ancestor", 30, null);
+        return raw.exit() == 0;
+    }
+
+    /**
      * 把本地分支推送到指定远端地址（HTTPS，凭据经 askpass 注入）。
      *
      * <p>显式指定远端地址而不是依赖 origin：修复分支必须落到任务所属仓库，
@@ -1055,6 +1093,15 @@ public class GitWorktreeManager {
      * 供"最近提交"面板展示更长历史（默认 5 条，面板可到 200）。
      */
     public List<CommitInfo> commits(Path repoDir, int skip, int limit) {
+        return commits(repoDir, null, skip, limit);
+    }
+
+    /**
+     * 指定分支/引用的提交历史；{@code ref} 为空时用 HEAD。
+     *
+     * <p>发布前先选分支，提交列表必须只列该分支的提交，避免拿别的分支的提交打版本标签。
+     */
+    public List<CommitInfo> commits(Path repoDir, String ref, int skip, int limit) {
         try {
             int safeLimit = Math.min(Math.max(1, limit), 200);
             int safeSkip = Math.max(0, skip);
@@ -1064,6 +1111,14 @@ public class GitWorktreeManager {
             if (safeSkip > 0) {
                 argv.add("--skip");
                 argv.add(String.valueOf(safeSkip));
+            }
+            if (ref != null && !ref.isBlank()) {
+                String target = ref.trim();
+                if (!target.matches("[A-Za-z0-9._/-]+") || target.startsWith("-")
+                        || target.contains("..")) {
+                    throw new GitIntakeException("分支名不合法：" + ref);
+                }
+                argv.add(target);
             }
             ActionResult out = run(repoDir, argv, "git log");
             List<CommitInfo> result = new ArrayList<>();

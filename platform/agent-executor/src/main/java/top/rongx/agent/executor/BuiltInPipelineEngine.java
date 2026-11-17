@@ -55,6 +55,7 @@ import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.ImageVersion;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.StagePreview;
+import top.rongx.agent.domain.release.ReleaseVersion;
 import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
@@ -1164,8 +1165,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.deployVersion = normalizeDeployVersion(params.get("version"));
         state.deployTagged = "true".equalsIgnoreCase(String.valueOf(params.get("tag")))
                 || "1".equals(String.valueOf(params.get("tag")));
+        state.branch = normalizeBranchName(params.get("branch"));
         if (state.deployTagged && state.deployVersion == null) {
-            throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 v1.2.0）");
+            throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 0.1.0）");
+        }
+        if (state.deployVersion != null) {
+            ReleaseVersion version = ReleaseVersion.parse(state.deployVersion);
+            if (state.deployTagged) {
+                requireVersionBranch(state, version, sha);
+            } else {
+                state.log.append("[deploy] 快照构建 ").append(version.snapshotLabel())
+                        .append("：不打 tag，仅在该环境独立部署\n");
+            }
         }
         if (state.deployTagged) {
             state.log.append("[deploy] 版本 ").append(state.deployVersion)
@@ -1373,7 +1384,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return history.summaries(null, 0, Integer.MAX_VALUE).stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
                         h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs(),
-                        h.version(), h.tagStatus()))
+                        h.version(), h.tagStatus(), h.branch()))
                 .toList();
     }
 
@@ -1383,7 +1394,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return history.summaries(projectId, offset, limit).stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
                         h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs(),
-                        h.version(), h.tagStatus()))
+                        h.version(), h.tagStatus(), h.branch()))
                 .toList();
     }
 
@@ -1676,10 +1687,32 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      *
      * <p>失败只记日志，不影响已经成功的部署；历史里仍会显示用户填写的版本号。
      */
+    /**
+     * 把本次版本号同步到构建 worktree 的根 pom.xml。
+     *
+     * <p>快照构建写 {@code x.y.z-SNAPSHOT}，正式发布写 {@code x.y.z}；
+     * 失败只记日志，不能让版本展示问题阻断发布。
+     */
+    private void syncPomVersion(Path runDir, RunState state) {
+        PomVersionSync.apply(runDir, state.deployVersion, !state.deployTagged)
+                .ifPresent(result -> {
+                    if (result.oldVersion() == null) {
+                        state.log.append("[version] 没有根 pom.xml，跳过版本同步\n");
+                    } else if (result.changed()) {
+                        state.log.append("[version] pom.xml ").append(result.oldVersion())
+                                .append(" → ").append(result.newVersion()).append('\n');
+                    } else {
+                        state.log.append("[version] pom.xml 已是 ")
+                                .append(result.newVersion()).append('\n');
+                    }
+                });
+    }
+
     private void syncGitTag(RunState state) {
         if (!state.deployTagged || state.deployVersion == null
                 || state.deployVersion.isBlank() || repoLocator == null) {
-            state.tagStatus = null;
+            // 未打 tag 的构建是快照版：历史里要能和正式版本区分开
+            state.tagStatus = state.deployVersion == null ? null : "SNAPSHOT";
             return;
         }
         try {
@@ -2184,6 +2217,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 checkout(bare, runDir, state);
                 worktreeCreated = true;
             }
+            // 版本号是发布动作的唯一来源：在一次性构建 worktree 里同步 pom，不动用户工作区
+            if (state.deployVersion != null) {
+                syncPomVersion(runDir, state);
+            }
             if (state.cancelled) {
                 state.status = StageStatus.CANCELLED;
                 return;
@@ -2486,11 +2523,84 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (raw == null || raw.isBlank()) {
             return null;
         }
+        // 统一走版本模型：严格 x.y.z，不接受 v 前缀，标签名即版本号
+        return ReleaseVersion.parse(raw.trim()).toString();
+    }
+
+    private static String normalizeBranchName(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
         String value = raw.trim();
-        if (!value.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,31}")) {
-            throw new IllegalArgumentException("版本号只能包含字母、数字、. _ -，且以字母或数字开头（最长 32）：" + raw);
+        if (!value.matches("[A-Za-z0-9._/-]{1,120}") || value.startsWith("-") || value.contains("..")) {
+            throw new IllegalArgumentException("分支名不合法：" + raw);
         }
         return value;
+    }
+
+    /**
+     * 正式发布的版本/分支/标签约束（在触发时就拒绝，避免跑完构建才发现版本不对）。
+     *
+     * <p>规则：版本线必须与分支一致；提交必须在该分支上；补丁号必须连续，
+     * 且同版本号不能重复打标签。
+     */
+    private void requireVersionBranch(RunState state, ReleaseVersion version, String sha) {
+        String branch = state.branch;
+        if (branch == null) {
+            throw new IllegalArgumentException("正式发布必须选择版本分支（例如 "
+                    + version.branchName() + "）");
+        }
+        if (!ReleaseVersion.isVersionBranch(branch)) {
+            throw new IllegalArgumentException("正式发布只能使用版本分支 x.y.0-snapshot（当前："
+                    + branch + "）");
+        }
+        if (!version.onBranch(branch)) {
+            throw new IllegalArgumentException("版本 " + version + " 属于版本线 " + version.line()
+                    + "，只能发布到分支 " + version.branchName() + "（当前：" + branch + "）");
+        }
+        if (repoLocator == null || !repoLocator.isCommitOnBranch(state.projectId, branch, sha)) {
+            throw new IllegalArgumentException("提交 " + shortSha(sha) + " 不在分支 "
+                    + branch + " 上，无法在该分支打版本标签");
+        }
+        String problem = versionSequenceProblem(version,
+                repoLocator.listTags(state.projectId, 500));
+        if (problem != null) {
+            throw new IllegalArgumentException(problem);
+        }
+    }
+
+    /** 补丁序列校验：不重复、不倒退、不跳号；第一条版本必须是 x.y.0。 */
+    static String versionSequenceProblem(ReleaseVersion version, java.util.List<String> tags) {
+        if (tags != null && tags.contains(version.tagName())) {
+            return "标签 " + version.tagName() + " 已存在，请递增补丁号";
+        }
+        ReleaseVersion max = null;
+        if (tags != null) {
+            for (String tag : tags) {
+                ReleaseVersion candidate = ReleaseVersion.tryParse(tag).orElse(null);
+                if (candidate == null || !candidate.line().equals(version.line())) {
+                    continue;
+                }
+                if (max == null || candidate.compareTo(max) > 0) {
+                    max = candidate;
+                }
+            }
+        }
+        if (max == null) {
+            if (version.patch() != 0) {
+                return "版本线 " + version.line() + " 还没有基础版本，第一个版本必须是 "
+                        + version.line() + ".0";
+            }
+            return null;
+        }
+        if (version.compareTo(max) <= 0) {
+            return "版本 " + version + " 必须大于已发布的最大版本 " + max;
+        }
+        if (version.patch() != max.patch() + 1) {
+            return "补丁号不能跳号：" + version.line() + " 已发布到 " + max
+                    + "，下一个版本必须是 " + max.nextPatch();
+        }
+        return null;
     }
 
     /** 版本槽目录（HOST 的专属状态目录 / Docker 的端口记录），与 HostDeployer 保持一致。 */
@@ -4554,6 +4664,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile String deployVersion;
         /** true = 打 tag：新版本独立部署，不覆盖该环境的上一版。 */
         volatile boolean deployTagged;
+        /** 发布分支（版本线分支 x.y.0-snapshot）：一个版本线一个分支。 */
+        volatile String branch;
         /** 打 tag 结果：PUSHED=远端可见 / LOCAL=仅本地 / FAILED=失败；null=未打标签。 */
         volatile String tagStatus;
         /** 端口租约分配出的宿主端口（0 = 尚未分配，health 用 pipeline 里的端口）。 */
@@ -4610,7 +4722,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     status, createdAt, seq, List.copyOf(stages), List.copyOf(artifacts),
                     ProcessExecutor.redact(log.toString(), sensitiveValues),
                     definitionSource == null ? null : definitionSource.name(), definitionNote,
-                    deployVersion, tagStatus);
+                    deployVersion, tagStatus, branch);
         }
 
         RunState(String runId, String projectId, String env, String pipelineId, String gitSha) {

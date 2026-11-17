@@ -70,10 +70,10 @@ function countOf(key: StatusKey): number {
 }
 
 /** 打 tag 结果徽标：远端可见 / 仅本机 / 失败，避免"以为打了但远端没有"。 */
-function tagSyncLabel(status: string): string {
-  if (status === 'PUSHED') return 'tag ✓'
+function tagSyncLabel(status: string): string {  if (status === 'PUSHED') return 'tag ✓'
   if (status === 'LOCAL') return 'tag 仅本地'
   if (status === 'FAILED') return 'tag 失败'
+  if (status === 'SNAPSHOT') return '快照'
   return ''
 }
 
@@ -81,6 +81,7 @@ function tagSyncTitle(status: string): string {
   if (status === 'PUSHED') return '标签已推送到 origin，可在 Git 远端看到'
   if (status === 'LOCAL') return '标签只在平台本机：没有 origin 或推送失败，请检查远端凭据'
   if (status === 'FAILED') return '标签创建失败，查看本次运行日志的 [tag] 行'
+  if (status === 'SNAPSHOT') return '快照构建：不打标签，用于验证版本内容'
   return ''
 }
 
@@ -266,6 +267,9 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
               <span class="hist-status" :class="statusTone(h.status)">{{ statusLabel(h.status) }}</span>
             </span>
             <span class="hist-line2">
+              <span v-if="h.branch" class="hist-branch mono" :title="`发布分支 ${h.branch}`">
+                {{ h.branch }}
+              </span>
               <span class="mono">{{ h.gitSha.slice(0, 8) }}</span>
               <span>{{ h.stageCount }} 阶段</span>
               <span v-if="h.durationMs">{{ formatDuration(h.durationMs) }}</span>
@@ -607,6 +611,13 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
 .hist-line2 {
   font-size: 10.5px;
   color: var(--ink-faint);
+}
+.hist-branch {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-soft);
 }
 .hist-time {
   margin-left: auto;

@@ -46,11 +46,14 @@ interface Props {
   /** 发布 Agent：不可用原因（如生产环境、只读角色）。 */
   agentDisabled?: boolean
   agentHint?: string
-  /** 版本号（打 tag 时必填；不打 tag 时作为展示标签）。 */
+  /** 版本号（打 tag 时必填；不打 tag 时作为快照版本展示）。 */
   version: string
-  /** 是否打 tag：true = 新版本独立部署，不覆盖旧版本。 */
+  /** 是否打 tag：true = 正式版本独立部署；false = 快照构建。 */
   tagged: boolean
-  /** 是否展示版本控制（开发/生产环境不展示多版本部署）。 */
+  /** 发布分支（版本线分支 x.y.0-snapshot）：版本与分支强绑定。 */
+  branch: string
+  branches?: string[]
+  /** 是否展示版本控制（正式发布/快照二分）。 */
   showVersion?: boolean
   /** 仓库现有 git 标签（版本降序）：版本号候选 + 重复校验。 */
   existingTags?: string[]
@@ -64,6 +67,7 @@ const emit = defineEmits<{
   (e: 'update:action', v: 'release' | 'verify'): void
   (e: 'update:version', v: string): void
   (e: 'update:tagged', v: boolean): void
+  (e: 'update:branch', v: string): void
   (e: 'run'): void
   (e: 'dryrun'): void
   (e: 'refreshCommits'): void
@@ -163,31 +167,27 @@ const verifyMeta = computed(() => cardMeta(props.verifyPreview ?? []))
 
 // ---------------------------------------------------------------- 版本号 / tag
 
-/**
- * 推荐版本号：在已有标签里取最大的 vX.Y.Z 并递增补丁位。
- *
- * <p>没有标签时给 v0.1.0，保证"打开开关就有可用建议"，不用用户自己想。
- */
-const suggestedTag = computed(() => {
-  let best: number[] | null = null
-  for (const tag of props.existingTags ?? []) {
-    const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(tag.trim())
-    if (!m) continue
-    const nums = [Number(m[1]), Number(m[2]), Number(m[3])]
-    if (!best || compareNums(nums, best) > 0) best = nums
-  }
-  if (!best) {
-    return 'v0.1.0'
-  }
-  return `v${best[0]}.${best[1]}.${best[2] + 1}`
+/** 版本线分支：0.1.0-snapshot → 0.1（一个版本线一个分支）。 */
+const branchLine = computed(() => {
+  const m = /^(\d+)\.(\d+)\.0-snapshot$/.exec(props.branch.trim())
+  return m ? `${m[1]}.${m[2]}` : ''
 })
 
-function compareNums(a: number[], b: number[]): number {
-  for (let i = 0; i < 3; i++) {
-    if (a[i] !== b[i]) return a[i] - b[i]
+/**
+ * 推荐版本号：当前分支版本线上最大的补丁号 +1，不跳号、不带 v 前缀。
+ *
+ * <p>没有标签时用版本线的 x.y.0；不在版本分支上时退回 0.1.0。
+ */
+const suggestedTag = computed(() => {
+  const line = branchLine.value || '0.1'
+  let best = -1
+  for (const tag of props.existingTags ?? []) {
+    const m = new RegExp(`^${line.replace('.', '\\.')}\\.(\\d+)$`).exec(tag.trim())
+    if (!m) continue
+    best = Math.max(best, Number(m[1]))
   }
-  return 0
-}
+  return best < 0 ? `${line}.0` : `${line}.${best + 1}`
+})
 
 /** 候选标签：推荐版本（若还不存在）+ 已有标签，便于直接点选。 */
 const tagOptions = computed(() => {
@@ -224,6 +224,24 @@ const runLabel = computed(() =>
       <span class="rc-env">{{ envLabel }}</span>
       <span v-if="hint" class="rc-hint">{{ hint }}</span>
     </header>
+
+    <div class="rc-commit">
+      <label class="rc-label" for="branch-select">分支</label>
+      <el-select
+        id="branch-select"
+        :model-value="branch"
+        class="rc-sha" size="default" filterable
+        placeholder="选择发布分支（版本线 x.y.0-snapshot）"
+        @update:model-value="(v: string) => emit('update:branch', v)"
+      >
+        <el-option v-for="b in branches ?? []" :key="b" :label="b" :value="b" />
+      </el-select>
+      <span class="rc-version-note" :class="{ bad: !branchLine && tagged }">
+        {{ branchLine
+          ? `版本线 ${branchLine}：补丁版本共用该分支`
+          : '非版本分支：只能做快照构建' }}
+      </span>
+    </div>
 
     <div class="rc-commit">
       <label class="rc-label" for="commit-select">提交</label>
@@ -358,7 +376,7 @@ const runLabel = computed(() =>
         allow-create
         default-first-option
         clearable
-        placeholder="版本号，例如 v1.2.0"
+        placeholder="版本号，例如 0.1.0（不带 v）"
         @update:model-value="(v: string) => emit('update:version', v)"
       >
         <el-option v-for="t in tagOptions" :key="t" :label="t" :value="t">
@@ -380,10 +398,10 @@ const runLabel = computed(() =>
       </span>
       <span class="rc-version-note" :class="{ bad: tagConflict }">
         {{ tagConflict
-          ? `标签 ${version.trim()} 已存在，请换一个版本号`
+          ? `标签 ${version.trim()} 已存在，请换一个补丁版本`
           : tagged
-            ? `发布成功后创建 git 标签并推送 origin；已有 ${(existingTags ?? []).length} 个标签`
-            : '不打 tag：覆盖该环境上一次成功部署' }}
+            ? `正式版本：发布成功后创建标签 ${version.trim() || suggestedTag} 并推送 origin（补丁不新建分支）`
+            : `快照构建：不打 tag，按 ${(version.trim() || suggestedTag)}-snapshot 独立部署` }}
       </span>
     </div>
 

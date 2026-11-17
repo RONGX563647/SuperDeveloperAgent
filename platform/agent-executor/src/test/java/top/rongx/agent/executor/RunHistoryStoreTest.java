@@ -22,7 +22,7 @@ class RunHistoryStoreTest {
                 StageStatus.SUCCEEDED, createdAt, seq, List.of(),
                 List.of(new ArtifactRef("image", TAG, "sha256:deadbeef", 12L,
                         Map.of("version", "test-v1", "localImage", TAG))),
-                "log", "repo", null, "v1.2.0", null);
+                "log", "repo", null, "v1.2.0", null, null);
     }
 
     @Test

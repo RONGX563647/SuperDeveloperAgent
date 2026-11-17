@@ -17,9 +17,10 @@ agent-domain/src/main/java/top/rongx/agent/domain/port/PipelineEngine.java 1
 agent-domain/src/main/java/top/rongx/agent/domain/process/CommandShell.java 2
 agent-domain/src/main/java/top/rongx/agent/domain/project/Project.java 2
 agent-domain/src/main/java/top/rongx/agent/domain/project/ProjectContext.java 3
+agent-domain/src/main/java/top/rongx/agent/domain/release/ReleaseVersion.java 2
 agent-domain/src/main/java/top/rongx/agent/domain/settings/ModelCatalogEntry.java 2
 agent-executor/src/main/java/top/rongx/agent/executor/AppRuntimeInspector.java 3
-agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java 20
+agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java 25
 agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvProvisioner.java 8
 agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java 4
 agent-executor/src/main/java/top/rongx/agent/executor/PipelineDefinition.java 11
@@ -57,7 +58,7 @@ agent-gateway/src/main/java/top/rongx/agent/gateway/web/McpSettingsController.ja
 agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java 9
 agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectContextResolver.java 2
 agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectEnvController.java 1
-agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectIntakeController.java 11
+agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectIntakeController.java 13
 agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectReadinessController.java 3
 agent-gateway/src/main/java/top/rongx/agent/gateway/web/SettingsController.java 8
 agent-gateway/src/main/java/top/rongx/agent/gateway/web/SseHeartbeat.java 1

@@ -66,6 +66,34 @@ public interface ProjectRepoLocator {
         return List.of();
     }
 
+    /** 本地分支列表（发布时选择分支）；仓库不可用时返回空列表。 */
+    default List<String> listBranches(String projectId) {
+        return List.of();
+    }
+
+    /**
+     * 该提交是否位于指定分支上（含分支尖端）。
+     *
+     * <p>默认返回 true（无法校验时不阻断），具体仓库实现应覆盖为真实祖先检查。
+     */
+    default boolean isCommitOnBranch(String projectId, String branch, String sha) {
+        return true;
+    }
+
+    /**
+     * 从指定起点创建版本线分支，并推送到 origin。
+     *
+     * <p>起点通常是上一条版本线的最后一个补丁标签；分支已存在时只尝试推送。
+     */
+    default BranchOutcome createBranchFrom(String projectId, String branch, String startPoint,
+                                           String userId) {
+        return new BranchOutcome(false, false, "当前仓库模式不支持创建分支");
+    }
+
+    /** 创建分支结果：created = 本地新建；pushed = 已推送到远端。 */
+    record BranchOutcome(boolean created, boolean pushed, String message) {
+    }
+
     enum StorageMode {
         /** 仓库在用户本地目录，平台就地操作。 */
         DIRECT,
