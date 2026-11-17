@@ -3647,7 +3647,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 deployEnv,
                 network,
                 state.env,
-                rollback ? null : state.deployVersion,
+                // 未打 tag 的普通部署也要带上构建版本号（test-v3），否则环境矩阵只能显示 latest
+                rollback ? null : versionLabel(state),
                 tagged,
                 spec.volume());
 
@@ -3814,7 +3815,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             DeployResult result = dockerDeployer.deployService(runDir, state.projectId, state.env,
                     state.runId, state.gitSha, namespace, service.name(), service.image(),
                     hostPort, service.containerPort(), net, svcEnv, service.volumePath(),
-                    state.deployVersion, state.deployTagged);
+                    versionLabel(state), state.deployTagged);
             state.log.append('[').append(stageId).append("] ").append(service.name())
                     .append(" → ").append(result.endpoint()).append('\n')
                     .append(result.log()).append('\n');

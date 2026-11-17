@@ -396,6 +396,10 @@ onUnmounted(() => {
                 <dd>{{ selectedCell.target }}</dd>
               </div>
               <div>
+                <dt>版本号</dt>
+                <dd><code>{{ selectedCell.version || '—' }}</code></dd>
+              </div>
+              <div>
                 <dt>发布提交</dt>
                 <dd><code>{{ selectedCell.release || '—' }}</code></dd>
               </div>
