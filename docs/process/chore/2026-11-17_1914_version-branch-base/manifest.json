@@ -1,0 +1,55 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-17_1914_version-branch-base",
+  "category": "chore",
+  "title": "新版本线默认从上一补丁标签切出",
+  "createdAt": "2026-11-17T19:14:51+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "新版本线默认从上一补丁标签切出",
+    "toolCallCount": 0
+  },
+  "problem": "创建新版本线分支时默认从当前 HEAD 切出，会和「新版本线从上一条版本线最后一个补丁发布开始切」的规则不一致；操作者必须手工记住上一条线发布了哪个补丁。",
+  "solution": "项目分支创建接口在未显式传 from 时自动取上一条版本线的最后一个补丁标签（0.2.0-snapshot ← 0.1 系列最大补丁；0.1.0-snapshot ← main），找不到标签时退回 main/HEAD，并在返回体里给出实际起点 from。",
+  "commits": [
+    {
+      "sha": "155b7fd2439ac878581fee8dd493a41dcc7a51c3",
+      "subject": "feat(release): 新版本线默认从上一版本最后一个补丁标签切出",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectIntakeController.java",
+          "status": "M",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "a65fde5e6e9c16a46b7d26207b0d97c28755bfdd"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 572, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "mvn -B -pl spec-checks -am test：572 个用例通过、0 失败；ApiDocsSnapshotTest 通过（接口返回体为 Map，契约不变）；projectIntake 分支接口编译通过。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1914_version-branch-base"
+    ]
+  },
+  "chain": {
+    "prev": "4469a7b28f94819c7c19e8ef7af2a1415ecad1adcb8ecfbde1646ccb0000750e",
+    "self": "dac3e75f4b46d31e5f73e7187d7491dbefd14b6a6b760bf11f4d9a3efde9fabb"
+  }
+}
