@@ -2395,9 +2395,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /** 展示版本：用户填写的版本号优先，否则回落到构建序号（test-v3）。 */
+    static String versionLabel(String deployVersion, String env, int seq, String gitSha) {
+        if (deployVersion != null && !deployVersion.isBlank()) {
+            return deployVersion;
+        }
+        return seq > 0
+                ? env + "-v" + seq
+                : gitSha.substring(0, Math.min(7, gitSha.length()));
+    }
+
     private static String versionLabel(RunState state) {
-        return state.deployVersion == null || state.deployVersion.isBlank()
-                ? versionOf(state) : state.deployVersion;
+        return versionLabel(state.deployVersion, state.env, state.seq, state.gitSha);
     }
 
     /** 版本槽：打 tag 时用版本号，否则 null（覆盖默认槽）。 */
