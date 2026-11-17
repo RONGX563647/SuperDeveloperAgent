@@ -158,6 +158,21 @@ public class DockerDeployer implements Deployer {
         return removed;
     }
 
+    /**
+     * 本机是否已有指定镜像。
+     *
+     * <p>回滚前用它区分「上一版镜像已被清理」和「本次发布失败」：前者跳过回滚即可，
+     * 不应额外制造一条 E-501。
+     */
+    public boolean imageExists(Path dir, String image) {
+        if (image == null || image.isBlank()) {
+            return false;
+        }
+        BooleanSupplier never = () -> false;
+        return executor.exec(dir, List.of("docker", "image", "inspect", image), 15_000,
+                new StringBuilder(), never).exitCode() == 0;
+    }
+
     private DeployResult run(Path dir, String name, String image, int hostPort, int containerPort,
                              Map<String, String> env, String network, String healthPath,
                              List<String> extraArgs, StringBuilder log, String endpointHost) {

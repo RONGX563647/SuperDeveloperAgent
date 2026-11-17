@@ -3470,6 +3470,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         target = reconciled;
 
+        // 上一版镜像可能已被清理（删除构建历史 / 手动清理）：回滚是失败后的兜底，
+        // 兜底做不到不应再报一条 E-501，否则一次构建失败会被展示成两个故障。
+        if (rollback && target == DeployTarget.DOCKER && !dockerDeployer.imageExists(runDir, image)) {
+            state.log.append('[').append(stageId)
+                    .append("] 上一版镜像 ").append(image)
+                    .append(" 已不在本机（可能已被清理），跳过回滚；本次运行状态不受影响\n");
+            state.stages.add(StageResult.success(stageId, 0, List.of(), elapsed(start)));
+            return true;
+        }
+
         // 环境容器自愈（E-509 之前）：必填变量指向的中间件缺失时按需创建，
         // 连接信息写入项目覆盖；密钥类必填变量缺失时自动生成。失败才 fail-closed。
         if (envProvisioner != null && envStore != null && spec.envRequired() != null
