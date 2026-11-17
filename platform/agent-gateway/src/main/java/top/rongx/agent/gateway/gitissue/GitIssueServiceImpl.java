@@ -68,7 +68,8 @@ public class GitIssueServiceImpl implements GitIssueService {
         String repo = GitIssueRemoteClient.cleanRepo(resolved.repo());
         GitIssue issue = new GitIssue(newId("task"), userId, resolved.projectId(), resolved.provider(),
                 repo, "", resolved.title(), resolved.body(), resolved.state(), resolved.kind(),
-                resolved.labels(), "", "PLATFORM", "LOCAL", "", resolved.assignee(), now, now);
+                resolved.priority(), resolved.labels(), "", "PLATFORM", "LOCAL", "",
+                resolved.assignee(), now, now);
         if (shouldPush(resolved.provider(), repo)) {
             issue = pushCreate(issue, userId);
         } else if (!resolved.provider().isBlank() && !repo.isBlank()) {
@@ -96,9 +97,11 @@ public class GitIssueServiceImpl implements GitIssueService {
         String number = repoChanged ? "" : current.number();
         String url = repoChanged ? "" : current.url();
         long now = System.currentTimeMillis();
+        String priority = draft.priority().isBlank() ? current.priority() : draft.priority();
         GitIssue updated = new GitIssue(current.id(), current.userId(), resolved.projectId(),
                 provider, repo, number, draft.title(), draft.body(), draft.state(), resolved.kind(),
-                draft.labels(), url, "PLATFORM", repoChanged ? "LOCAL" : current.syncStatus(),
+                priority, draft.labels(), url, "PLATFORM",
+                repoChanged ? "LOCAL" : current.syncStatus(),
                 repoChanged ? "" : current.syncError(),
                 draft.assignee().isBlank() ? current.assignee() : draft.assignee(),
                 current.createdAt(), now);
@@ -125,7 +128,7 @@ public class GitIssueServiceImpl implements GitIssueService {
         GitIssue current = require(userId, id);
         GitIssue.Draft draft = new GitIssue.Draft(current.projectId(), current.provider(),
                 current.repo(), current.title(), current.body(), state, current.kind(),
-                current.labels(), current.assignee());
+                current.priority(), current.labels(), current.assignee());
         return update(userId, id, draft);
     }
 
@@ -196,17 +199,20 @@ public class GitIssueServiceImpl implements GitIssueService {
         if (!needDerive) {
             return new GitIssue.Draft(projectId, draft.provider(),
                     GitIssueRemoteClient.cleanRepo(draft.repo()), draft.title(), draft.body(),
-                    draft.state(), draft.kind(), draft.labels(), draft.assignee());
+                    draft.state(), draft.kind(), draft.priority(), draft.labels(),
+                    draft.assignee());
         }
         return projects.findById(projectId)
                 .filter(p -> p.repoUrl() != null && !p.repoUrl().isBlank())
                 .map(p -> new GitIssue.Draft(projectId, providerOf(p),
                         GitIssueRemoteClient.cleanRepo(p.repoUrl()), draft.title(), draft.body(),
-                        draft.state(), draft.kind(), draft.labels(), draft.assignee()))
+                        draft.state(), draft.kind(), draft.priority(), draft.labels(),
+                        draft.assignee()))
                 .filter(d -> !d.provider().isBlank())
                 .orElseGet(() -> new GitIssue.Draft(projectId, draft.provider(),
                         GitIssueRemoteClient.cleanRepo(draft.repo()), draft.title(), draft.body(),
-                        draft.state(), draft.kind(), draft.labels(), draft.assignee()));
+                        draft.state(), draft.kind(), draft.priority(), draft.labels(),
+                        draft.assignee()));
     }
 
     private static String providerOf(Project project) {
@@ -302,8 +308,8 @@ public class GitIssueServiceImpl implements GitIssueService {
                                  String syncStatus, String syncError, String source) {
         return new GitIssue(issue.id(), issue.userId(), issue.projectId(), issue.provider(),
                 issue.repo(), number, issue.title(), issue.body(), state, issue.kind(),
-                issue.labels(), url, source, syncStatus, syncError, issue.assignee(),
-                issue.createdAt(), System.currentTimeMillis());
+                issue.priority(), issue.labels(), url, source, syncStatus, syncError,
+                issue.assignee(), issue.createdAt(), System.currentTimeMillis());
     }
 
     private static String message(RuntimeException e) {

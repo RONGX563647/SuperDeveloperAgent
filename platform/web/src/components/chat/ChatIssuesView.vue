@@ -9,7 +9,7 @@ import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
   listGitIssueComments, listGitIssues, reopenGitIssue, syncGitIssue, updateGitIssue,
   uploadIssueImage,
-  type GitIssueCommentRow, type GitIssueRow,
+  type GitIssueCommentRow, type GitIssuePriority, type GitIssueRow,
 } from '../../api/issues'
 import {
   cancelBugFix, getBugFixPolicy, getBugFixRun, listBugFixRuns, retryBugFix,
@@ -35,6 +35,7 @@ const error = ref('')
 const keyword = ref('')
 const stateFilter = ref('')
 const kindFilter = ref('')
+const priorityFilter = ref<GitIssuePriority | ''>('')
 const selectedId = ref('')
 const comments = ref<GitIssueCommentRow[]>([])
 const commentsLoading = ref(false)
@@ -330,20 +331,161 @@ const kindOptions = [
   { label: 'Feat', value: 'FEAT' },
 ]
 
-/** 列表排序：默认最近更新优先；任务多时按状态/标题更好找。 */
-const sortBy = ref<'updated' | 'created' | 'title'>('updated')
+/** 任务页视图：列表（默认）/ 量化看板。 */
+const taskView = ref<'list' | 'board'>('list')
 
-/** 分类与排序在前端处理：数据量小，切换无需再请求。 */
+/** 优先级：P0 最高，P2 普通。 */
+const PRIORITY_VALUES: GitIssuePriority[] = ['P0', 'P1', 'P2']
+const PRIORITY_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2 }
+const priorityTabs: { label: string; value: GitIssuePriority | '' }[] = [
+  { label: '全部', value: '' },
+  { label: 'P0', value: 'P0' },
+  { label: 'P1', value: 'P1' },
+  { label: 'P2', value: 'P2' },
+]
+
+/** 列表排序：默认最近更新优先；任务多时按状态/标题更好找。 */
+const sortBy = ref<'updated' | 'created' | 'title' | 'priority'>('updated')
+
+/** 分类、优先级与排序在前端处理：数据量小，切换无需再请求。 */
 const visibleItems = computed(() => {
-  const rows = kindFilter.value
-    ? items.value.filter((i) => (i.kind ?? 'BUG') === kindFilter.value)
-    : [...items.value]
+  let rows = [...items.value]
+  if (kindFilter.value) rows = rows.filter((i) => (i.kind ?? 'BUG') === kindFilter.value)
+  if (priorityFilter.value) {
+    rows = rows.filter((i) => (i.priority ?? 'P2') === priorityFilter.value)
+  }
   return rows.sort((a, b) => {
+    if (sortBy.value === 'priority') {
+      const diff = (PRIORITY_RANK[a.priority ?? 'P2'] ?? 2)
+        - (PRIORITY_RANK[b.priority ?? 'P2'] ?? 2)
+      if (diff) return diff
+      return b.updatedAt - a.updatedAt
+    }
     if (sortBy.value === 'title') return a.title.localeCompare(b.title, 'zh-CN')
     if (sortBy.value === 'created') return b.createdAt - a.createdAt
     return b.updatedAt - a.updatedAt
   })
 })
+
+/** 看板量化：完成率、优先级分布、类型构成。 */
+const stats = computed(() => {
+  const rows = items.value
+  const total = rows.length
+  const open = rows.filter((r) => r.state === 'OPEN').length
+  const closed = total - open
+  const countOf = (p: GitIssuePriority) => rows.filter((r) => (r.priority ?? 'P2') === p).length
+  const p0 = countOf('P0')
+  const p1 = countOf('P1')
+  const p2 = Math.max(0, total - p0 - p1)
+  const bug = rows.filter((r) => (r.kind ?? 'BUG') === 'BUG').length
+  const feat = total - bug
+  const percent = total ? Math.round((closed / total) * 100) : 0
+  return { total, open, closed, p0, p1, p2, bug, feat, percent }
+})
+
+/** 近 7 天按天分桶：新增（按类型）与完成数，用于趋势/吞吐图。 */
+const daily = computed(() => {
+  const buckets: { label: string; start: number; bug: number; feat: number; done: number }[] = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  for (let i = 6; i >= 0; i -= 1) {
+    const start = today.getTime() - i * 86_400_000
+    buckets.push({
+      label: `${new Date(start).getMonth() + 1}/${new Date(start).getDate()}`,
+      start, bug: 0, feat: 0, done: 0,
+    })
+  }
+  const bucketOf = (ts: number) => buckets.find((b) => ts >= b.start && ts < b.start + 86_400_000)
+  for (const row of items.value) {
+    const created = bucketOf(row.createdAt)
+    if (created) {
+      if ((row.kind ?? 'BUG') === 'BUG') created.bug += 1
+      else created.feat += 1
+    }
+    if (row.state === 'CLOSED') {
+      const done = bucketOf(row.updatedAt)
+      if (done) done.done += 1
+    }
+  }
+  return {
+    buckets,
+    maxCreated: Math.max(1, ...buckets.map((b) => b.bug + b.feat)),
+    maxDone: Math.max(1, ...buckets.map((b) => b.done)),
+  }
+})
+
+/** 近 7 天完成总数与平均闭环时长（小时，近似用 updatedAt - createdAt）。 */
+const weeklyDone = computed(() => daily.value.buckets.reduce((sum, b) => sum + b.done, 0))
+const avgCycleHours = computed(() => {
+  const closed = items.value.filter((i) => i.state === 'CLOSED')
+  if (!closed.length) return 0
+  const total = closed.reduce((sum, i) => sum + Math.max(0, i.updatedAt - i.createdAt), 0)
+  return Math.round((total / closed.length / 3_600_000) * 10) / 10
+})
+
+/** 未完成任务的优先级 × 类型矩阵。 */
+const priorityMatrix = computed(() => PRIORITY_VALUES.map((key) => {
+  const openRows = items.value.filter(
+    (i) => i.state === 'OPEN' && (i.priority ?? 'P2') === key)
+  return {
+    key,
+    bug: openRows.filter((i) => (i.kind ?? 'BUG') === 'BUG').length,
+    feat: openRows.filter((i) => (i.kind ?? 'BUG') === 'FEAT').length,
+    total: openRows.length,
+  }
+}))
+
+/** 风险项：同步失败的任务（远端推送失败需要重试）。 */
+const riskTasks = computed(() => items.value.filter((i) => i.syncStatus === 'FAILED').slice(0, 5))
+
+const priorityBars = computed(() => {
+  const total = stats.value.total || 1
+  return PRIORITY_VALUES.map((key) => {
+    const count = stats.value[key.toLowerCase() as 'p0' | 'p1' | 'p2']
+    return { key, count, percent: Math.round((count / total) * 100) }
+  })
+})
+
+/** 大环：看板里的完成率主视觉。 */
+const RING_RADIUS = 82
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+const ringDash = RING_CIRCUMFERENCE.toFixed(1)
+const ringOffset = computed(
+  () => (RING_CIRCUMFERENCE * (1 - stats.value.percent / 100)).toFixed(1))
+
+/** 同步状态：已同步 / 仅本地 / 失败。 */
+const syncStats = computed(() => ({
+  synced: items.value.filter((i) => i.syncStatus === 'SYNCED').length,
+  local: items.value.filter((i) => i.syncStatus !== 'SYNCED' && i.syncStatus !== 'FAILED').length,
+  failed: items.value.filter((i) => i.syncStatus === 'FAILED').length,
+}))
+
+/** 看板「优先处理」：未关闭任务按优先级取前 6 条。 */
+const focusTasks = computed(() => items.value
+  .filter((i) => i.state === 'OPEN')
+  .sort((a, b) => (PRIORITY_RANK[a.priority ?? 'P2'] ?? 2)
+    - (PRIORITY_RANK[b.priority ?? 'P2'] ?? 2) || b.updatedAt - a.updatedAt)
+  .slice(0, 6))
+
+/** 看板点优先级：带筛选切回列表，形成「看板 → 明细」闭环。 */
+function focusPriority(priority: GitIssuePriority | '') {
+  priorityFilter.value = priority
+  taskView.value = 'list'
+}
+
+/** 看板点状态指标：按状态切回列表。 */
+function focusState(state: '' | 'OPEN' | 'CLOSED') {
+  stateFilter.value = state
+  priorityFilter.value = ''
+  taskView.value = 'list'
+}
+
+/** 看板点任务卡片：切回列表并选中详情。 */
+async function openFromBoard(row: GitIssueRow): Promise<void> {
+  taskView.value = 'list'
+  selectedId.value = ''
+  await select(row)
+}
 
 /** 概览并进页头：只保留两个关键数字，不再占一整块统计卡片。 */
 const openCount = computed(() => items.value.filter((i) => i.state === 'OPEN').length)
@@ -442,6 +584,14 @@ async function load(silent = false): Promise<void> {
     if (!rows.some((r) => r.id === selectedId.value)) {
       selectedId.value = ''
     }
+    if (pendingFocusId.value) {
+      const target = rows.find((r) => r.id === pendingFocusId.value)
+      pendingFocusId.value = ''
+      if (target) {
+        selectedId.value = ''
+        void select(target)
+      }
+    }
   } catch (e) {
     if (seq === loadSeq) error.value = e instanceof Error ? e.message : '加载任务失败'
   } finally {
@@ -455,6 +605,11 @@ watch(keyword, () => {
 })
 watch(stateFilter, () => void load())
 watch(kindFilter, () => {
+  if (selectedId.value && !visibleItems.value.some((i) => i.id === selectedId.value)) {
+    selectedId.value = ''
+  }
+})
+watch(priorityFilter, () => {
   if (selectedId.value && !visibleItems.value.some((i) => i.id === selectedId.value)) {
     selectedId.value = ''
   }
@@ -536,7 +691,13 @@ async function removeComment(comment: GitIssueCommentRow): Promise<void> {
 const editorOpen = ref(false)
 const editingId = ref('')
 const saving = ref(false)
-const form = reactive({ title: '', body: '', labels: '', kind: 'BUG' as 'BUG' | 'FEAT' })
+const form = reactive({
+  title: '',
+  body: '',
+  labels: '',
+  kind: 'BUG' as 'BUG' | 'FEAT',
+  priority: 'P2' as GitIssuePriority,
+})
 
 const editorTarget = computed(() => {
   const row = editingId.value
@@ -549,8 +710,9 @@ const editorTarget = computed(() => {
 })
 
 function openCreate(): void {
+  taskView.value = 'list'
   editingId.value = ''
-  Object.assign(form, { title: '', body: '', labels: '', kind: 'BUG' })
+  Object.assign(form, { title: '', body: '', labels: '', kind: 'BUG', priority: 'P2' })
   editorOpen.value = true
   selectedId.value = ''
 }
@@ -559,6 +721,7 @@ function openEdit(row: GitIssueRow): void {
   editingId.value = row.id
   Object.assign(form, {
     title: row.title, body: row.body, labels: row.labels, kind: row.kind ?? 'BUG',
+    priority: row.priority ?? 'P2',
   })
   editorOpen.value = true
 }
@@ -648,6 +811,7 @@ async function submit(): Promise<void> {
       body: form.body,
       labels: form.labels.trim(),
       kind: form.kind,
+      priority: form.priority,
       state: editingRow?.state ?? ('OPEN' as const),
     }
     const row = editingId.value
@@ -738,6 +902,24 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
     actionBusy.value = ''
   }
 }
+
+// ---------------------------------------------------------------- 对外能力
+
+/** 首次加载完成前收到的定位请求，等列表回来后再选中。 */
+const pendingFocusId = ref('')
+
+/** 工作区右栏点任务：切到列表视图并定位到这条工单。 */
+async function focus(id: string): Promise<void> {
+  taskView.value = 'list'
+  const row = items.value.find((i) => i.id === id)
+  if (row) {
+    await select(row)
+    return
+  }
+  pendingFocusId.value = id
+}
+
+defineExpose({ openCreate, focus })
 </script>
 
 <template>
@@ -751,6 +933,16 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
         <div class="issues-head-main">
           <div class="issues-title-row">
             <h1 class="issues-title">任务</h1>
+            <div class="view-switch">
+              <button
+                type="button" class="view-switch-btn" :class="{ active: taskView === 'list' }"
+                @click="taskView = 'list'"
+              >列表</button>
+              <button
+                type="button" class="view-switch-btn" :class="{ active: taskView === 'board' }"
+                @click="taskView = 'board'"
+              >看板</button>
+            </div>
             <span class="issues-sub">
               {{ openCount }} 待处理 · {{ closedCount }} 已完成 · Git 双向同步
             </span>
@@ -776,6 +968,231 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
           </el-button>
         </div>
       </header>
+
+      <!-- 量化看板：只在「看板」Tab 下展示 -->
+      <section v-if="taskView === 'board'" class="board-view">
+        <div class="board-hero">
+          <div class="hero-ring">
+            <svg viewBox="0 0 200 200" aria-hidden="true">
+              <defs>
+                <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#4d82f7" />
+                  <stop offset="55%" stop-color="#6e8cff" />
+                  <stop offset="100%" stop-color="#2ea36b" />
+                </linearGradient>
+                <filter id="ringGlow" x="-30%" y="-30%" width="160%" height="160%">
+                  <feGaussianBlur stdDeviation="6" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+              <circle class="ring-track" cx="100" cy="100" :r="RING_RADIUS" />
+              <circle
+                class="ring-value" cx="100" cy="100" :r="RING_RADIUS"
+                :stroke-dasharray="ringDash"
+                :stroke-dashoffset="ringOffset" filter="url(#ringGlow)"
+              />
+            </svg>
+            <div class="ring-center">
+              <b class="mono">{{ stats.percent }}%</b>
+              <span>完成率</span>
+              <em class="mono">{{ stats.closed }} / {{ stats.total }}</em>
+            </div>
+          </div>
+
+          <div class="hero-side">
+            <div class="hero-head">
+              <h2>任务健康度</h2>
+              <p>实时汇总任务页的全部工单，点任意指标可跳回列表查看明细。</p>
+            </div>
+            <div class="hero-metrics">
+              <button type="button" class="metric" @click="focusState('OPEN')">
+                <span class="metric-label">待处理</span>
+                <b class="metric-value mono">{{ stats.open }}</b>
+                <span class="metric-foot">全部未关闭</span>
+              </button>
+              <button type="button" class="metric ok" @click="focusState('CLOSED')">
+                <span class="metric-label">已完成</span>
+                <b class="metric-value mono">{{ stats.closed }}</b>
+                <span class="metric-foot">闭环工单</span>
+              </button>
+              <button type="button" class="metric p0" @click="focusPriority('P0')">
+                <span class="metric-label">P0 紧急</span>
+                <b class="metric-value mono">{{ stats.p0 }}</b>
+                <span class="metric-foot">立即处理</span>
+              </button>
+              <button type="button" class="metric fail" @click="focusState('')">
+                <span class="metric-label">同步失败</span>
+                <b class="metric-value mono">{{ syncStats.failed }}</b>
+                <span class="metric-foot">需要重试</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 趋势：新增（Bug/Feat 堆叠）与完成吞吐 -->
+        <div class="board-grid wide">
+          <div class="bpanel">
+            <div class="bpanel-head">
+              <span class="bpanel-title">新增任务趋势</span>
+              <span class="bpanel-hint">近 7 天 · Bug / Feat</span>
+            </div>
+            <div class="stack-legend">
+              <span><i class="dot bug" />Bug</span>
+              <span><i class="dot feat" />Feat</span>
+            </div>
+            <div class="stack-chart">
+              <div v-for="day in daily.buckets" :key="day.label" class="stack-col">
+                <span class="stack-total mono">{{ day.bug + day.feat }}</span>
+                <div class="stack-bar-area">
+                  <i
+                    class="stack-bar feat"
+                    :style="{ height: `${(day.feat / daily.maxCreated) * 100}%` }"
+                  />
+                  <i
+                    class="stack-bar bug"
+                    :style="{ height: `${(day.bug / daily.maxCreated) * 100}%` }"
+                  />
+                </div>
+                <span class="stack-label">{{ day.label }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="bpanel">
+            <div class="bpanel-head">
+              <span class="bpanel-title">完成吞吐</span>
+              <span class="bpanel-hint">近 7 天完成 {{ weeklyDone }} 个</span>
+            </div>
+            <div class="throughput-stats">
+              <div class="tp-stat">
+                <b class="mono">{{ weeklyDone }}</b>
+                <span>7 天完成</span>
+              </div>
+              <div class="tp-stat">
+                <b class="mono">{{ avgCycleHours }}</b>
+                <span>平均闭环 / 小时</span>
+              </div>
+            </div>
+            <div class="done-chart">
+              <div v-for="day in daily.buckets" :key="day.label" class="done-col">
+                <span class="done-count mono">{{ day.done }}</span>
+                <span class="done-bar-wrap">
+                  <i
+                    class="done-bar"
+                    :style="{ height: `${Math.max(5, (day.done / daily.maxDone) * 100)}%` }"
+                  />
+                </span>
+                <span class="done-label">{{ day.label }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 分布：优先级 / 未完成矩阵 / 类型与同步 -->
+        <div class="board-grid">
+          <div class="bpanel">
+            <div class="bpanel-head">
+              <span class="bpanel-title">优先级分布</span>
+              <span class="bpanel-hint">点击切换列表</span>
+            </div>
+            <button
+              v-for="bar in priorityBars" :key="bar.key" type="button"
+              class="pbar-row" @click="focusPriority(bar.key)"
+            >
+              <span class="pbar-key" :class="bar.key.toLowerCase()">{{ bar.key }}</span>
+              <span class="pbar-track">
+                <i :class="bar.key.toLowerCase()" :style="{ width: `${bar.percent}%` }" />
+              </span>
+              <span class="pbar-num mono">{{ bar.count }}</span>
+              <span class="pbar-pct mono">{{ bar.percent }}%</span>
+            </button>
+          </div>
+
+          <div class="bpanel">
+            <div class="bpanel-head">
+              <span class="bpanel-title">未完成优先级矩阵</span>
+              <span class="bpanel-hint">优先级 × 类型</span>
+            </div>
+            <div class="matrix-head">
+              <span />
+              <span>Bug</span>
+              <span>Feat</span>
+            </div>
+            <button
+              v-for="cell in priorityMatrix" :key="cell.key" type="button"
+              class="matrix-row" @click="focusPriority(cell.key)"
+            >
+              <span class="pbar-key" :class="cell.key.toLowerCase()">{{ cell.key }}</span>
+              <span class="matrix-cell mono">{{ cell.bug }}</span>
+              <span class="matrix-cell mono">{{ cell.feat }}</span>
+            </button>
+          </div>
+
+          <div class="bpanel">
+            <div class="bpanel-head">
+              <span class="bpanel-title">类型构成</span>
+              <span class="bpanel-hint">Bug / Feat</span>
+            </div>
+            <div class="type-split">
+              <span class="type-bar bug" :style="{ flexGrow: stats.bug }" />
+              <span class="type-bar feat" :style="{ flexGrow: stats.feat }" />
+            </div>
+            <div class="type-legend">
+              <span><i class="dot bug" />Bug <b class="mono">{{ stats.bug }}</b></span>
+              <span><i class="dot feat" />Feat <b class="mono">{{ stats.feat }}</b></span>
+            </div>
+            <div class="sync-list">
+              <span><i class="dot synced" />已同步 <b class="mono">{{ syncStats.synced }}</b></span>
+              <span><i class="dot local" />仅本地 <b class="mono">{{ syncStats.local }}</b></span>
+              <span><i class="dot failed" />失败 <b class="mono">{{ syncStats.failed }}</b></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 行动：优先处理 + 风险项 -->
+        <div class="board-grid wide">
+          <div class="bpanel focus-panel">
+            <div class="bpanel-head">
+              <span class="bpanel-title">优先处理</span>
+              <span class="bpanel-hint">未关闭任务按优先级排序</span>
+            </div>
+            <div v-if="!focusTasks.length" class="board-empty">暂无未关闭任务</div>
+            <button
+              v-for="row in focusTasks" :key="row.id" type="button"
+              class="focus-row" @click="openFromBoard(row)"
+            >
+              <span class="prio-pill" :class="(row.priority ?? 'P2').toLowerCase()">
+                {{ row.priority ?? 'P2' }}
+              </span>
+              <span class="focus-title">{{ row.title }}</span>
+              <span class="focus-meta">{{ kindLabel(row.kind) }} · {{ formatTime(row.updatedAt) }}</span>
+              <span class="focus-arrow">→</span>
+            </button>
+          </div>
+
+          <div class="bpanel">
+            <div class="bpanel-head">
+              <span class="bpanel-title">风险项</span>
+              <span class="bpanel-hint">同步失败需重试</span>
+            </div>
+            <div v-if="!riskTasks.length" class="risk-ok">
+              <span class="risk-ok-dot" />
+              所有任务同步正常
+            </div>
+            <button
+              v-for="row in riskTasks" :key="row.id" type="button"
+              class="focus-row" @click="openFromBoard(row)"
+            >
+              <span class="risk-badge">同步失败</span>
+              <span class="focus-title">{{ row.title }}</span>
+              <span class="focus-arrow">→</span>
+            </button>
+          </div>
+        </div>
+      </section>
 
       <!-- 自动修复策略：页内卡片，说明清楚“PR 必须人工合并” -->
       <section v-if="policyOpen" class="policy-card">
@@ -850,7 +1267,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
         </div>
       </section>
 
-      <div class="issues-body">
+      <div v-if="taskView === 'list'" class="issues-body">
         <!-- 左列：搜索 / 过滤 / 任务列表 -->
         <aside class="issues-side">
           <div class="side-toolbar">
@@ -876,8 +1293,20 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                   :label="opt.label" :value="opt.value"
                 />
               </el-select>
+            </div>
+            <div class="filter-row">
+              <div class="prio-tabs">
+                <button
+                  v-for="opt in priorityTabs" :key="opt.value" type="button"
+                  class="prio-tab" :class="[opt.value.toLowerCase() || 'all', { active: priorityFilter === opt.value }]"
+                  @click="priorityFilter = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
               <el-select v-model="sortBy" size="small" class="sort-select">
                 <el-option label="最近更新" value="updated" />
+                <el-option label="优先级" value="priority" />
                 <el-option label="最新创建" value="created" />
                 <el-option label="按标题" value="title" />
               </el-select>
@@ -904,6 +1333,9 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
             >
               <span class="item-line">
                 <span class="state-dot" :class="row.state.toLowerCase()" />
+                <span class="prio-chip" :class="(row.priority ?? 'P2').toLowerCase()">
+                  {{ row.priority ?? 'P2' }}
+                </span>
                 <span class="kind-chip" :class="row.kind === 'FEAT' ? 'feat' : 'bug'">
                   {{ kindLabel(row.kind) }}
                 </span>
@@ -993,6 +1425,18 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
                     </button>
                   </div>
                 </div>
+                <div class="editor-field priority-field">
+                  <span class="editor-label">优先级</span>
+                  <div class="prio-picker">
+                    <button
+                      v-for="p in PRIORITY_VALUES" :key="p" type="button"
+                      class="prio-option" :class="[p.toLowerCase(), { active: form.priority === p }]"
+                      @click="form.priority = p"
+                    >
+                      {{ p }}
+                    </button>
+                  </div>
+                </div>
                 <div class="editor-field grow">
                   <span class="editor-label">标签</span>
                   <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
@@ -1021,6 +1465,9 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
             <header class="detail-head">
               <div class="detail-head-main">
                 <div class="detail-kicker">
+                  <span class="prio-pill" :class="(selectedRow.priority ?? 'P2').toLowerCase()">
+                    {{ selectedRow.priority ?? 'P2' }}
+                  </span>
                   <span class="kind-chip" :class="selectedRow.kind === 'FEAT' ? 'feat' : 'bug'">
                     {{ kindLabel(selectedRow.kind) }}
                   </span>
@@ -1301,7 +1748,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   display: flex;
   flex: 1 1 0;
   min-height: 0;
-  padding: 20px 26px 24px;
+  padding: 18px 22px 22px;
 }
 .issues-shell {
   display: flex;
@@ -1309,9 +1756,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   flex-direction: column;
   gap: 14px;
   width: 100%;
-  max-width: 1200px;
   min-height: 0;
-  margin: 0 auto;
 }
 
 /* ---- 页头 ---- */
@@ -1327,7 +1772,7 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
 }
 .issues-title-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
 }
 .issues-title {
@@ -1336,6 +1781,35 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   font-weight: 650;
   letter-spacing: -0.015em;
   color: var(--ink);
+}
+/* 列表 / 看板切换 */
+.view-switch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.view-switch-btn {
+  padding: 3px 12px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.view-switch-btn:hover {
+  color: var(--ink);
+}
+.view-switch-btn.active {
+  color: var(--accent-ink, #4a6cf7);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
 }
 .issues-sub {
   font-size: 11px;
@@ -1374,6 +1848,386 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   height: 6px;
   background: var(--accent);
   border-radius: 50%;
+}
+
+/* ---- 量化看板视图 ---- */
+.board-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding-bottom: 4px;
+  overflow-y: auto;
+}
+
+/* 主视觉：完成率大环 + 关键指标 */
+.board-hero {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 18px;
+  padding: 20px 22px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgb(77 130 247 / 10%), transparent 55%),
+    radial-gradient(120% 140% at 100% 0%, rgb(46 163 107 / 9%), transparent 55%),
+    linear-gradient(160deg, var(--surface-raised), var(--surface-sunken));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg, 16px);
+}
+.hero-ring {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 224px;
+}
+.hero-ring svg {
+  width: 224px;
+  height: 224px;
+  transform: rotate(-90deg);
+}
+.ring-track {
+  fill: none;
+  stroke: var(--line-soft);
+  stroke-width: 14;
+  opacity: 0.55;
+}
+.ring-value {
+  fill: none;
+  stroke: url(#ringGrad);
+  stroke-width: 14;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.8s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.ring-center {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.ring-center b {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+.ring-center span {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.ring-center em {
+  margin-top: 3px;
+  padding: 1px 8px;
+  font-size: 9.5px;
+  font-style: normal;
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+.hero-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  justify-content: center;
+  min-width: 0;
+}
+.hero-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.hero-head p {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+.hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.metric:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: 0 8px 20px rgb(77 130 247 / 12%);
+}
+.metric-label {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.metric-value {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.metric-foot {
+  font-size: 9px;
+  color: var(--ink-faint);
+}
+.metric.ok .metric-value { color: var(--ok); }
+.metric.p0 .metric-value { color: var(--danger); }
+.metric.fail .metric-value { color: var(--warn); }
+
+/* 三块量化面板 */
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.bpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg, 16px);
+}
+.bpanel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.bpanel-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.bpanel-hint {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+}
+
+/* 优先级分布 */
+.pbar-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 0;
+  font-family: inherit;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.pbar-key {
+  flex: none;
+  width: 26px;
+  height: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  border-radius: 6px;
+}
+.pbar-key.p0 { color: #c23a3a; background: rgb(229 77 77 / 14%); }
+.pbar-key.p1 { color: #96660f; background: rgb(184 130 27 / 16%); }
+.pbar-key.p2 { color: var(--accent-ink, #4a6cf7); background: rgb(77 130 247 / 13%); }
+.pbar-track {
+  flex: 1;
+  height: 8px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+.pbar-track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.pbar-track i.p0 { background: linear-gradient(90deg, #ff9d9d, var(--danger)); }
+.pbar-track i.p1 { background: linear-gradient(90deg, #e8c46a, var(--warn)); }
+.pbar-track i.p2 { background: linear-gradient(90deg, #8fb2ff, var(--accent)); }
+.pbar-num {
+  flex: none;
+  width: 22px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: right;
+}
+.pbar-pct {
+  flex: none;
+  width: 34px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-align: right;
+}
+
+/* 类型构成 + 同步状态 */
+.type-split {
+  display: flex;
+  gap: 3px;
+  height: 10px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+.type-bar {
+  flex-basis: 0;
+  min-width: 0;
+}
+.type-bar.bug { background: linear-gradient(90deg, #d47272, #b54a4a); }
+.type-bar.feat { background: linear-gradient(90deg, #7e9cff, var(--accent)); }
+.type-legend,
+.sync-list {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.sync-list {
+  padding-top: 10px;
+  margin-top: auto;
+  border-top: 1px dashed var(--line-soft);
+}
+.type-legend b,
+.sync-list b {
+  margin-left: 2px;
+  color: var(--ink);
+}
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+}
+.dot.bug { background: #b54a4a; }
+.dot.feat { background: var(--accent); }
+.dot.synced { background: var(--ok); }
+.dot.local { background: var(--line); }
+.dot.failed { background: var(--danger); }
+
+/* 近 7 天活动 */
+.trend {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  align-items: stretch;
+  height: 112px;
+}
+.trend-col {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+.trend-count {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+}
+.trend-bar-wrap {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  min-height: 0;
+}
+.trend-bar {
+  width: 100%;
+  max-width: 20px;
+  min-height: 4px;
+  background: linear-gradient(180deg, #6e8cff, rgb(77 130 247 / 18%));
+  border-radius: 5px 5px 2px 2px;
+  box-shadow: 0 0 12px rgb(77 130 247 / 18%);
+  transition: height 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.trend-label {
+  font-size: 9px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* 优先处理 */
+.focus-panel {
+  gap: 2px;
+}
+.focus-panel .bpanel-head {
+  margin-bottom: 6px;
+}
+.focus-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 8px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  transition: background-color 0.15s ease;
+}
+.focus-row:hover {
+  background: var(--surface-sunken);
+}
+.focus-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.focus-meta {
+  flex: none;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.focus-arrow {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-faint);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+.focus-row:hover .focus-arrow {
+  color: var(--accent);
+  transform: translateX(2px);
+}
+.board-empty {
+  padding: 18px 6px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+@media (max-width: 1000px) {
+  .board-hero {
+    grid-template-columns: 1fr;
+  }
+  .hero-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .board-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---- 左右分栏 ---- */
@@ -1466,6 +2320,41 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--surface-raised);
   box-shadow: var(--shadow-1);
 }
+/* 优先级快捷筛选：P0 / P1 / P2 各自配色，选中时整颗点亮 */
+.prio-tabs {
+  display: flex;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.prio-tab {
+  flex: 1;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.prio-tab:hover {
+  color: var(--ink);
+}
+.prio-tab.active {
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+.prio-tab.active.p0 { color: var(--danger); }
+.prio-tab.active.p1 { color: var(--warn); }
+.prio-tab.active.p2 { color: var(--accent); }
 .toolbar-count {
   font-size: 10px;
   color: var(--ink-faint);
@@ -1567,6 +2456,36 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   line-height: 16px;
   letter-spacing: 0.02em;
   border-radius: 4px;
+}
+/* 优先级徽标：P0 红 / P1 琥珀 / P2 蓝，列表与详情共用 */
+.prio-chip,
+.prio-pill {
+  flex: none;
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: 0.03em;
+  border-radius: 4px;
+}
+.prio-pill {
+  line-height: 17px;
+  border-radius: var(--radius-pill);
+}
+.prio-chip.p0,
+.prio-pill.p0 {
+  color: #c23a3a;
+  background: rgb(229 77 77 / 14%);
+}
+.prio-chip.p1,
+.prio-pill.p1 {
+  color: #96660f;
+  background: rgb(184 130 27 / 16%);
+}
+.prio-chip.p2,
+.prio-pill.p2 {
+  color: var(--accent-ink, #4a6cf7);
+  background: rgb(77 130 247 / 13%);
 }
 .kind-chip.bug {
   color: #b54a4a;
@@ -1905,6 +2824,34 @@ async function removeIssue(row: GitIssueRow): Promise<void> {
   background: var(--surface-raised);
   box-shadow: var(--shadow-1);
 }
+.priority-field {
+  flex: none;
+}
+.prio-picker {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+.prio-option {
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+}
+.prio-option.active {
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+.prio-option.p0.active { color: var(--danger); }
+.prio-option.p1.active { color: var(--warn); }
+.prio-option.p2.active { color: var(--accent); }
 .editor-label {
   font-size: 11px;
   font-weight: 600;

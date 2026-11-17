@@ -25,11 +25,7 @@ public class GitIssueQueryTools {
         this.issues = issues;
     }
 
-    @Tool(name = "list_git_issues",
-            description = """
-                    列出平台任务页的 Issue 任务（含从 Gitee/GitHub/GitLab 同步来的工单）。
-                    只读。可按关键词、状态(OPEN/CLOSED)、平台(GITEE/GITHUB/GITLAB)过滤。
-                    用户提到「任务」「工单」「issue」「bug 单」时先用它查看。""",
+    @Tool(name = "list_git_issues", description = "List task-page issues.",
             readOnly = true, concurrencySafe = true)
     public String listGitIssues(
             @ToolParam(name = "keyword", description = "标题/描述/仓库关键词，可空",
@@ -44,8 +40,8 @@ public class GitIssueQueryTools {
             return "当前没有匹配的任务。evidence: user:" + ctx.userId();
         }
         return list.stream()
-                .map(i -> "- [%s/%s] %s  %s%s  %s/%s#%s  labels:%s  id:%s"
-                        .formatted(i.state(), i.kind(), i.title(), i.syncStatus(),
+                .map(i -> "- [%s/%s/%s] %s  %s%s  %s/%s#%s  labels:%s  id:%s"
+                        .formatted(i.state(), i.kind(), i.priority(), i.title(), i.syncStatus(),
                                 i.syncError().isBlank() ? "" : "(" + i.syncError() + ")",
                                 i.provider(), i.repo().isBlank() ? "-" : i.repo(),
                                 i.number().isBlank() ? "-" : i.number(),
@@ -53,8 +49,7 @@ public class GitIssueQueryTools {
                 .collect(Collectors.joining("\n", "tasks:\n", "\nevidence: user:" + ctx.userId()));
     }
 
-    @Tool(name = "get_git_issue",
-            description = "读取单个 Issue 任务的详情与评论。只读。需要操作任务前先确认其内容。",
+    @Tool(name = "get_git_issue", description = "Read an issue with its comments.",
             readOnly = true, concurrencySafe = true)
     public String getGitIssue(
             @ToolParam(name = "issue_id", description = "任务 ID，形如 task-xxxx") String issueId,
@@ -69,6 +64,7 @@ public class GitIssueQueryTools {
                 title: %s
                 state: %s
                 kind: %s
+                priority: %s
                 provider/repo/number: %s / %s / %s
                 sync: %s %s
                 url: %s
@@ -79,7 +75,8 @@ public class GitIssueQueryTools {
                 comments:
                 %s
                 evidence: task:%s
-                """.formatted(issue.id(), issue.title(), issue.state(), issue.kind(), issue.provider(),
+                """.formatted(issue.id(), issue.title(), issue.state(), issue.kind(),
+                issue.priority(), issue.provider(),
                 issue.repo(), issue.number().isBlank() ? "-" : issue.number(),
                 issue.syncStatus(), issue.syncError(), issue.url(),
                 issue.labels().isBlank() ? "-" : issue.labels(),

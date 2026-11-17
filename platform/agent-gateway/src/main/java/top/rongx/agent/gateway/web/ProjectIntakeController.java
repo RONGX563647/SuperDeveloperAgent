@@ -278,6 +278,52 @@ public class ProjectIntakeController {
         return out;
     }
 
+    /**
+     * 把 Agent/修复分支快进合并进主分支（body {@code {branch, into?}}）。
+     *
+     * <p>只做快进：主分支已有新提交时直接报错，交给用户手动合并，平台不自动解冲突。
+     * {@code into} 缺省时取 main / master / 当前分支。
+     */
+    @PostMapping("/{id}/git/merge")
+    public Map<String, Object> gitMerge(@PathVariable String id,
+                                        @RequestBody(required = false) Map<String, Object> body) {
+        currentUser.requireUserId();
+        Map<String, Object> payload = body == null ? Map.of() : body;
+        String branch = str(payload, "branch");
+        if (branch == null || branch.isBlank()) {
+            throw new IllegalArgumentException("branch 不能为空");
+        }
+        if (!branch.matches("[A-Za-z0-9._/-]{1,120}") || branch.contains("..")) {
+            throw new IllegalArgumentException("分支名不合法：" + branch);
+        }
+        RepoContext ctx = repoContext(id);
+        if (!ctx.initialized()) {
+            throw new IllegalArgumentException("该项目尚未完成 git 接入，无法合并分支。");
+        }
+        String into = str(payload, "into");
+        if (into == null || into.isBlank()) {
+            into = defaultBranch(ctx);
+        }
+        String head = git.mergeFastForward(ctx.dir(), branch, into);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("branch", into);
+        out.put("merged", branch);
+        out.put("head", head);
+        return out;
+    }
+
+    /** 主分支：优先 main，其次 master，最后当前分支。 */
+    private String defaultBranch(RepoContext ctx) {
+        for (String candidate : List.of("main", "master")) {
+            if (!git.revParse(ctx.dir(), "refs/heads/" + candidate).isBlank()) {
+                return candidate;
+            }
+        }
+        String current = git.currentBranch(ctx.dir());
+        return current.isBlank() ? "main" : current;
+    }
+
     private Path checkoutTarget(String id, RepoContext ctx, String worktree) {
         if (worktree != null && !worktree.isBlank() && !"main".equals(worktree)) {
             if (worktree.contains("..") || worktree.contains("/") || worktree.contains("\\")) {

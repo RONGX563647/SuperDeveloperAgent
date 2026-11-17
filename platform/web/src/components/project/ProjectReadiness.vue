@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, CircleCloseFilled, RefreshRight } from '@element-plus/icons-vue'
 import {
-  generateDockerfile, projectReadiness, scaffoldApply,
+  generateDockerfile, gitMerge, projectReadiness, scaffoldApply,
   type Readiness, type ReadinessStep,
 } from '../../api/project'
 import { applyChange, confirmChange } from '../../api/change'
@@ -109,9 +109,9 @@ async function fixDockerfile(step: ReadinessStep): Promise<void> {
   try {
     await ElMessageBox.confirm(
       '将按仓库结构生成 Dockerfile（需要时补 image_package 阶段），'
-      + '并提交到独立分支 agent/fix-*，不会改动当前分支。',
+      + '并快进合并到主分支（main/master）；主分支已有新提交时会转人工合并。',
       '生成 Dockerfile',
-      { confirmButtonText: '生成并提交', cancelButtonText: '取消', type: 'info' },
+      { confirmButtonText: '生成并合并', cancelButtonText: '取消', type: 'info' },
     )
   } catch {
     return // 用户取消
@@ -124,11 +124,17 @@ async function fixDockerfile(step: ReadinessStep): Promise<void> {
     } else {
       const { confirmToken } = await confirmChange(plan.changeId)
       const applied = await applyChange(plan.changeId, confirmToken)
-      const sha = /commit:\s*([0-9a-f]{7,40})/.exec(applied.logTail ?? '')?.[1] ?? ''
-      ElMessage.success(
-        `已生成 ${plan.dockerfile ?? 'Dockerfile'} 并提交${sha ? `（${sha.slice(0, 7)}）` : ''}；`
-        + '用该提交发布即可',
-      )
+      const branch = /branch:\s*(\S+)/.exec(applied.logTail ?? '')?.[1] ?? ''
+      if (!branch) {
+        ElMessage.warning('变更已应用，但没拿到分支名：请到 git 里手动合并')
+      } else {
+        // 补丁默认落在 agent/fix-*；这里直接快进合并进主分支，部署不必再手动切分支
+        const merged = await gitMerge(props.projectId, branch)
+        ElMessage.success(
+          `已生成 ${plan.dockerfile ?? 'Dockerfile'} 并合并到 ${merged.branch}`
+          + `${merged.head ? `（${merged.head.slice(0, 7)}）` : ''}`,
+        )
+      }
     }
     await load()
   } catch (e) {

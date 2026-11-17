@@ -2692,6 +2692,44 @@
         }
       }
     },
+    "/api/v1/projects/{id}/git/merge" : {
+      "post" : {
+        "tags" : [ "project-intake-controller" ],
+        "summary" : "git merge",
+        "operationId" : "gitMerge",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/git/checkout" : {
       "post" : {
         "tags" : [ "project-intake-controller" ],
@@ -6989,6 +7027,9 @@
             "type" : "string"
           },
           "kind" : {
+            "type" : "string"
+          },
+          "priority" : {
             "type" : "string"
           },
           "labels" : {

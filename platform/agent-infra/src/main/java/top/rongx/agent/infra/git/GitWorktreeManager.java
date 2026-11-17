@@ -481,6 +481,41 @@ public class GitWorktreeManager {
                 .logTail().trim().lines().findFirst().orElse("").trim();
     }
 
+    /**
+     * 把分支快进合并进目标分支（不做非快进合并，平台不自动解冲突）。
+     *
+     * <p>目标分支正好是当前工作区分支时用 {@code git merge --ff-only}（顺带更新工作区）；
+     * bare 仓库没有工作区，校验完快进关系后直接 {@code git update-ref}。
+     *
+     * @return 合并后目标分支的提交号
+     */
+    public String mergeFastForward(Path repoDir, String branch, String into) {
+        String target = revParse(repoDir, "refs/heads/" + into);
+        if (target.isBlank()) {
+            throw new IllegalArgumentException("目标分支不存在：" + into);
+        }
+        String source = revParse(repoDir, "refs/heads/" + branch);
+        if (source.isBlank()) {
+            throw new IllegalArgumentException("分支不存在：" + branch);
+        }
+        if (!target.equals(source)) {
+            Raw check = exec(repoDir, List.of("git", "merge-base", "--is-ancestor", target, source),
+                    "git merge-base", GIT_TIMEOUT_SECONDS, null);
+            if (check.exit() != 0) {
+                throw new IllegalArgumentException("分支 " + branch + " 无法快进合并进 " + into
+                        + "（" + into + " 已有新提交），请手动合并");
+            }
+            if (into.equals(currentBranch(repoDir))) {
+                run(repoDir, List.of("git", "merge", "--ff-only", branch),
+                        "git merge --ff-only " + branch);
+            } else {
+                run(repoDir, List.of("git", "update-ref", "refs/heads/" + into, source),
+                        "git update-ref " + into);
+            }
+        }
+        return revParse(repoDir, "refs/heads/" + into);
+    }
+
     /** 用户目录工作区状态（未提交改动）：porcelain 行列表。 */
     public List<String> statusPorcelain(Path localDir) {
         try {

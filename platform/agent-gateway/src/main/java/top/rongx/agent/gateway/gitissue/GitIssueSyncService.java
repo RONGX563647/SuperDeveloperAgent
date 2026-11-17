@@ -113,7 +113,8 @@ public class GitIssueSyncService {
         GitIssue issue = new GitIssue("task-" + randomHex(), owner, matchingProject(event.repo()),
                 event.provider(), event.repo(), event.number(),
                 event.title().isBlank() ? "Git Issue " + event.number() : event.title(),
-                event.body(), event.state(), kind, event.labels(), event.url(), "GIT", "SYNCED", "",
+                event.body(), event.state(), kind, GitIssue.priorityOfLabels(event.labels()),
+                event.labels(), event.url(), "GIT", "SYNCED", "",
                 "", now, now);
         log.info("Git Issue 已映射为平台任务：{} {}#{} → {}", event.provider(), event.repo(),
                 event.number(), issue.id());
@@ -142,6 +143,7 @@ public class GitIssueSyncService {
                 event.body().isBlank() ? issue.body() : event.body(),
                 event.state().isBlank() ? issue.state() : event.state(),
                 kind,
+                issue.priority(),
                 event.labels().isBlank() ? issue.labels() : event.labels(),
                 event.url().isBlank() ? issue.url() : event.url(),
                 "GIT", "SYNCED", "", issue.assignee(), issue.createdAt(),

@@ -24,6 +24,34 @@ class GitWorktreeManagerTest {
     @TempDir
     Path userSpace;
 
+    @Test
+    @DisplayName("修复分支快进合并进主分支；主分支有新提交时拒绝自动合并")
+    void mergeFastForwardIntoDefaultBranch() throws Exception {
+        makeUserRepo("merge-demo");
+        Path dir = userSpace.resolve("merge-demo");
+        GitWorktreeManager m = manager();
+        String base = m.currentBranch(dir);
+
+        exec(dir, "git", "checkout", "-q", "-b", "agent/fix-1");
+        Files.writeString(dir.resolve("Dockerfile"), "FROM eclipse-temurin:21\n");
+        exec(dir, "git", "add", "-A");
+        exec(dir, "git", "-c", "user.name=t", "-c", "user.email=t@t",
+                "commit", "-q", "-m", "add dockerfile");
+        String fixSha = m.revParse(dir, "refs/heads/agent/fix-1");
+
+        // 当前工作区就在主分支：走真实 merge --ff-only，文件同时落到工作区
+        exec(dir, "git", "checkout", "-q", base);
+        assertEquals(fixSha, m.mergeFastForward(dir, "agent/fix-1", base));
+        assertTrue(Files.exists(dir.resolve("Dockerfile")));
+
+        // 主分支再前进后，修复分支已不是快进关系
+        Files.writeString(dir.resolve("README.md"), "v2\n");
+        exec(dir, "git", "add", "-A");
+        exec(dir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v2");
+        assertThrows(IllegalArgumentException.class,
+                () -> m.mergeFastForward(dir, "agent/fix-1", base));
+    }
+
     /** 在用户空间造一个真实开发中的项目：git init + 一次提交。返回 HEAD。 */
     private String makeUserRepo(String name) throws Exception {
         Path dir = userSpace.resolve(name);

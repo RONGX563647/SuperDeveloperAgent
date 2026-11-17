@@ -444,6 +444,20 @@ export function gitCheckout(
   })
 }
 
+/**
+ * 把分支快进合并进主分支（默认 main / master）。
+ *
+ * <p>平台不做非快进合并：主分支已有新提交时后端会报错，需要手动处理。
+ */
+export function gitMerge(
+  projectId: string, branch: string, into = ''
+): Promise<{ ok: boolean; branch: string; merged: string; head: string }> {
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ branch, into })
+  })
+}
+
 export interface GitCommitsPage {
   commits: GitCommit[]
   hasMore: boolean

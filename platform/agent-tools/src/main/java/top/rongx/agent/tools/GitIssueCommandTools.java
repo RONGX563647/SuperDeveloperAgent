@@ -23,11 +23,7 @@ public class GitIssueCommandTools {
         this.issues = issues;
     }
 
-    @Tool(name = "create_git_issue",
-            description = """
-                    在任务页新建 Issue 任务。若配置了 Git 集成并填写 provider/repo，
-                    会同时在 Gitee/GitHub/GitLab 创建 Issue；失败时任务仍保留在本地并标记 FAILED。
-                    provider 为空表示只建平台本地任务。""",
+    @Tool(name = "create_git_issue", description = "Create a task-page issue.",
             readOnly = false, concurrencySafe = false)
     public String createGitIssue(
             @ToolParam(name = "title", description = "任务标题") String title,
@@ -38,18 +34,19 @@ public class GitIssueCommandTools {
             @ToolParam(name = "repo", description = "owner/repo，可空", required = false) String repo,
             @ToolParam(name = "kind", description = "分类：BUG 或 FEAT（需求），可空", required = false)
             String kind,
+            @ToolParam(name = "priority", description = "优先级 P0 / P1 / P2，可空（默认 P2）",
+                    required = false) String priority,
             @ToolParam(name = "labels", description = "标签，逗号分隔，可空", required = false)
             String labels,
             ProjectContext ctx) {
         GitIssue issue = issues.create(ctx.userId(), new GitIssue.Draft(ctx.projectId(),
-                provider, repo, title, body, "OPEN", kind, labels, ""));
+                provider, repo, title, body, "OPEN", kind, priority, labels, ""));
         return "已创建任务 %s（%s，同步状态 %s%s）。evidence: task:%s".formatted(
                 issue.id(), issue.title(), issue.syncStatus(),
                 issue.syncError().isBlank() ? "" : "：" + issue.syncError(), issue.id());
     }
 
-    @Tool(name = "update_git_issue",
-            description = "更新 Issue 任务的标题/描述/标签；已绑定 Git 时会回写远端。空参数表示保持不变。",
+    @Tool(name = "update_git_issue", description = "Update an issue title, body or labels.",
             readOnly = false, concurrencySafe = false)
     public String updateGitIssue(
             @ToolParam(name = "issue_id", description = "任务 ID") String issueId,
@@ -57,6 +54,8 @@ public class GitIssueCommandTools {
             @ToolParam(name = "body", description = "新描述，可空", required = false) String body,
             @ToolParam(name = "kind", description = "新分类：BUG / FEAT，可空", required = false)
             String kind,
+            @ToolParam(name = "priority", description = "新优先级 P0 / P1 / P2，可空", required = false)
+            String priority,
             @ToolParam(name = "labels", description = "新标签，可空", required = false) String labels,
             ProjectContext ctx) {
         GitIssue current = issues.get(ctx.userId(), issueId);
@@ -66,14 +65,14 @@ public class GitIssueCommandTools {
                 blank(body) ? current.body() : body,
                 current.state(),
                 blank(kind) ? current.kind() : kind,
+                blank(priority) ? current.priority() : priority,
                 blank(labels) ? current.labels() : labels,
                 current.assignee()));
         return "已更新任务 %s（同步状态 %s）。evidence: task:%s"
                 .formatted(updated.id(), updated.syncStatus(), updated.id());
     }
 
-    @Tool(name = "comment_git_issue",
-            description = "给 Issue 任务追加评论；已绑定 Git 时会回写为远端评论。",
+    @Tool(name = "comment_git_issue", description = "Add a comment to an issue.",
             readOnly = false, concurrencySafe = false)
     public String commentGitIssue(
             @ToolParam(name = "issue_id", description = "任务 ID") String issueId,
@@ -84,8 +83,7 @@ public class GitIssueCommandTools {
                 .formatted(issueId, comment.id(), issueId);
     }
 
-    @Tool(name = "close_git_issue",
-            description = "关闭 Issue 任务；已绑定 Git 时会同步关闭远端 Issue。",
+    @Tool(name = "close_git_issue", description = "Close an issue and sync to Git.",
             readOnly = false, concurrencySafe = false)
     public String closeGitIssue(
             @ToolParam(name = "issue_id", description = "任务 ID") String issueId,
@@ -95,8 +93,7 @@ public class GitIssueCommandTools {
                 .formatted(issue.id(), issue.syncStatus(), issue.id());
     }
 
-    @Tool(name = "reopen_git_issue",
-            description = "重新打开 Issue 任务；已绑定 Git 时会同步重开远端 Issue。",
+    @Tool(name = "reopen_git_issue", description = "Reopen an issue and sync to Git.",
             readOnly = false, concurrencySafe = false)
     public String reopenGitIssue(
             @ToolParam(name = "issue_id", description = "任务 ID") String issueId,
@@ -106,8 +103,7 @@ public class GitIssueCommandTools {
                 .formatted(issue.id(), issue.syncStatus(), issue.id());
     }
 
-    @Tool(name = "sync_git_issue",
-            description = "把任务的最新内容重试推送到 Git（用于修复同步失败）。",
+    @Tool(name = "sync_git_issue", description = "Retry pushing an issue to Git.",
             readOnly = false, concurrencySafe = false)
     public String syncGitIssue(
             @ToolParam(name = "issue_id", description = "任务 ID") String issueId,

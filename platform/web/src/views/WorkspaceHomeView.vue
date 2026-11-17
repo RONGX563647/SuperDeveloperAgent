@@ -15,10 +15,11 @@ import { clearHistory } from '../state/sessionHistory'
 import ConversationTimeline from '../components/chat/ConversationTimeline.vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import {
-  cancelRun, createConversation, createTask, listConversations, listRunLedger,
-  listRuns, listTasks, sendToConversation, syncConversations, updateTask,
-  type ConversationRow, type RunLedgerRow, type RunRow, type TaskRow,
+  cancelRun, createConversation, listConversations, listRunLedger, listRuns,
+  sendToConversation, syncConversations,
+  type ConversationRow, type RunLedgerRow, type RunRow,
 } from '../api/workspace'
+import { closeGitIssue, listGitIssues, type GitIssueRow } from '../api/issues'
 import { envLabel } from '../utils/pipelineLabels'
 import ChatIssuesView from '../components/chat/ChatIssuesView.vue'
 import DeploymentMatrix from '../components/workspace/DeploymentMatrix.vue'
@@ -56,7 +57,7 @@ const streaming = computed(() => entry.value.chat.streaming.value)
 const elapsedMs = computed(() => entry.value.chat.elapsedMs.value)
 const tokens = computed(() => entry.value.chat.tokens.value)
 const error = computed(() => entry.value.chat.error.value)
-const tasks = ref<TaskRow[]>([])
+const tasks = ref<GitIssueRow[]>([])
 const runs = ref<RunRow[]>([])
 const input = ref('')
 
@@ -103,9 +104,8 @@ const paletteInputRef = ref<HTMLInputElement | null>(null)
 const createOpen = ref(false)
 const createForm = reactive({ title: '', env: appStore.env, worktree: '', advanced: false })
 
-const taskDialog = ref(false)
-const editingTask = ref<TaskRow | null>(null)
-const taskForm = reactive({ goal: '', expectedOutput: '', status: 'TODO' })
+/** 任务看板实例：右栏点任务/新建时切到任务视图并定位。 */
+const issuesView = ref<InstanceType<typeof ChatIssuesView> | null>(null)
 
 const runDialog = ref(false)
 const runDetail = ref<RunRow | null>(null)
@@ -131,11 +131,15 @@ const recentLedgerRuns = computed(() => ledgerRuns.value
 const ledgerFailures = computed(() => ledgerRuns.value
   .filter((run) => run.state === 'FAILED').length)
 
+const PRIORITY_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2 }
+
+/** 待办任务：直接复用任务页的 Git 工单数据，按优先级再按更新时间排序。 */
 const openTasks = computed(() => tasks.value
-  .filter((t) => t.status === 'TODO' || t.status === 'RUNNING' || t.status === 'BLOCKED')
-  .sort((a, b) => (a.priority || 0) - (b.priority || 0) || a.createdAt - b.createdAt))
+  .filter((t) => t.state === 'OPEN')
+  .sort((a, b) => (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2)
+    || b.updatedAt - a.updatedAt))
 const doneTasks = computed(() => tasks.value
-  .filter((t) => t.status === 'DONE')
+  .filter((t) => t.state === 'CLOSED')
   .sort((a, b) => b.updatedAt - a.updatedAt))
 
 const kpis = computed(() => ({
@@ -144,9 +148,9 @@ const kpis = computed(() => ({
   openTasks: openTasks.value.length,
 }))
 
-/** 计划进度：调度 Agent 用任务板当 Plan/Todo，顶部直接给完成率。 */
+/** 计划进度：任务页工单完成率（Agent 的 Plan/Todo 也登记在这里）。 */
 const planProgress = computed(() => {
-  const total = tasks.value.filter((t) => t.status !== 'CANCELLED').length
+  const total = tasks.value.length
   const done = doneTasks.value.length
   return {
     total,
@@ -245,7 +249,7 @@ async function loadAll(): Promise<void> {
   try {
     const [list, taskList, runList, ledgerList] = await Promise.all([
       listConversations(id, true),
-      listTasks(id),
+      listGitIssues().then((rows) => projectIssues(rows, id)),
       listRuns(id, 30),
       // 账本不可用时不影响主视图（例如后端版本较旧）
       listRunLedger(id, 50).catch(() => [] as RunLedgerRow[]),
@@ -366,52 +370,31 @@ function openRunConversation(run: RunRow): void {
   openConversation(conversation)
 }
 
-async function setTaskStatus(task: TaskRow, status: string): Promise<void> {
+/** 任务页数据是按用户查询的，工作区里收敛到当前项目（未归属项目的任务也保留）。 */
+function projectIssues(rows: GitIssueRow[], id: string): GitIssueRow[] {
+  return rows.filter((issue) => !issue.projectId || issue.projectId === id)
+}
+
+async function completeTask(issue: GitIssueRow): Promise<void> {
   try {
-    await updateTask(projectId.value, task.id, { status })
-    await loadAll()
+    const next = await closeGitIssue(issue.id)
+    const index = tasks.value.findIndex((row) => row.id === next.id)
+    if (index >= 0) tasks.value[index] = next
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '更新任务失败')
   }
 }
 
+/** 右栏「+」：切到任务视图并直接打新建表单。 */
 function openTaskCreate(): void {
-  editingTask.value = null
-  taskForm.goal = ''
-  taskForm.expectedOutput = ''
-  taskForm.status = 'TODO'
-  taskDialog.value = true
+  viewMode.value = 'tasks'
+  void nextTick(() => issuesView.value?.openCreate())
 }
 
-function openTaskEdit(task: TaskRow): void {
-  editingTask.value = task
-  taskForm.goal = task.goal
-  taskForm.expectedOutput = task.expectedOutput
-  taskForm.status = task.status
-  taskDialog.value = true
-}
-
-async function saveTask(): Promise<void> {
-  const goal = taskForm.goal.trim()
-  if (!goal) return
-  try {
-    if (editingTask.value) {
-      await updateTask(projectId.value, editingTask.value.id, {
-        goal,
-        expectedOutput: taskForm.expectedOutput.trim(),
-        status: taskForm.status,
-      })
-    } else {
-      await createTask(projectId.value, {
-        goal,
-        expectedOutput: taskForm.expectedOutput.trim() || undefined,
-      })
-    }
-    taskDialog.value = false
-    await loadAll()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存任务失败')
-  }
+/** 右栏点任务：切到任务视图并选中这条工单。 */
+function openTask(issue: GitIssueRow): void {
+  viewMode.value = 'tasks'
+  void nextTick(() => issuesView.value?.focus(issue.id))
 }
 
 async function submit(): Promise<void> {
@@ -721,11 +704,11 @@ watch(() => appStore.projectId, (id) => {
 let boardTimer: number | undefined
 async function refreshBoard(): Promise<void> {
   try {
-    const [taskList, runList] = await Promise.all([
-      listTasks(projectId.value),
+    const [issueList, runList] = await Promise.all([
+      listGitIssues().then((rows) => projectIssues(rows, projectId.value)),
       listRuns(projectId.value, 30),
     ])
-    tasks.value = taskList
+    tasks.value = issueList
     runs.value = runList
   } catch {
     // 轮询失败不打断对话，下一轮继续
@@ -971,23 +954,23 @@ onUnmounted(() => {
         <div class="side-body">
           <template v-if="sideTab === 'tasks'">
             <div
-              v-for="task in openTasks" :key="task.id"
-              class="list-item" @click="openTaskEdit(task)"
+              v-for="issue in openTasks" :key="issue.id"
+              class="list-item" @click="openTask(issue)"
             >
-              <button type="button" class="check" title="标记完成" @click.stop="setTaskStatus(task, 'DONE')">
+              <button type="button" class="check" title="标记完成" @click.stop="completeTask(issue)">
                 <el-icon><Check /></el-icon>
               </button>
               <div class="item-main">
-                <span class="item-title">{{ task.goal }}</span>
+                <span class="item-title">{{ issue.title }}</span>
                 <span class="item-meta">
-                  <em v-if="task.priority" class="prio">P{{ task.priority }}</em>
-                  <span v-if="task.conversationId">{{ conversationTitle(task.conversationId) }}</span>
-                  <span v-if="task.expectedOutput">{{ task.expectedOutput }}</span>
+                  <em class="prio" :class="issue.priority.toLowerCase()">{{ issue.priority }}</em>
+                  <span>{{ issue.kind === 'FEAT' ? 'Feat' : 'Bug' }}</span>
+                  <span class="mono">{{ issue.number ? `#${issue.number}` : '仅本地' }}</span>
                 </span>
               </div>
-              <span class="item-status" :data-s="task.status">{{ statusLabel(task.status) }}</span>
+              <span class="item-status" data-s="RUNNING">待处理</span>
             </div>
-            <p v-if="!openTasks.length" class="empty">暂无待办，点右上角 + 登记</p>
+            <p v-if="!openTasks.length" class="empty">暂无待办，点右上角 + 新建工单</p>
 
             <button
               v-if="doneTasks.length" type="button" class="done-toggle"
@@ -995,13 +978,13 @@ onUnmounted(() => {
             >{{ showDoneTasks ? '收起已完成' : `已完成 ${doneTasks.length}` }}</button>
             <template v-if="showDoneTasks">
               <div
-                v-for="task in doneTasks" :key="task.id"
-                class="list-item done" @click="openTaskEdit(task)"
+                v-for="issue in doneTasks" :key="issue.id"
+                class="list-item done" @click="openTask(issue)"
               >
                 <span class="done-mark">✓</span>
                 <div class="item-main">
-                  <span class="item-title">{{ task.goal }}</span>
-                  <span class="item-meta">{{ timeAgo(task.updatedAt) }}</span>
+                  <span class="item-title">{{ issue.title }}</span>
+                  <span class="item-meta">{{ issue.priority }} · {{ timeAgo(issue.updatedAt) }}</span>
                 </div>
               </div>
             </template>
@@ -1066,7 +1049,7 @@ onUnmounted(() => {
 
     <!-- 任务看板：原会话页「任务」Tab，上移为项目级视图 -->
     <section v-else-if="viewMode === 'tasks'" class="task-shell">
-      <ChatIssuesView @count="issueCount = $event" />
+      <ChatIssuesView ref="issuesView" @count="issueCount = $event" />
     </section>
 
     <!-- 环境矩阵：流水线部署出的版本，按环境启停应用（不含中间件） -->
@@ -1103,41 +1086,6 @@ onUnmounted(() => {
             type="button" class="btn primary"
             :disabled="!createForm.title.trim()" @click="createNew"
           >创建并打开</button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <!-- 任务 -->
-    <el-dialog
-      v-model="taskDialog" :title="editingTask ? '编辑任务' : '新建任务'"
-      width="460px" align-center
-    >
-      <div class="form">
-        <label>
-          <span>目标</span>
-          <el-input v-model="taskForm.goal" placeholder="要完成什么" />
-        </label>
-        <label>
-          <span>期望产出</span>
-          <el-input v-model="taskForm.expectedOutput" placeholder="可选的验收标准" />
-        </label>
-        <label v-if="editingTask">
-          <span>状态</span>
-          <el-select v-model="taskForm.status">
-            <el-option label="待办" value="TODO" />
-            <el-option label="进行中" value="RUNNING" />
-            <el-option label="阻塞" value="BLOCKED" />
-            <el-option label="完成" value="DONE" />
-          </el-select>
-        </label>
-      </div>
-      <template #footer>
-        <div class="dialog-actions">
-          <button type="button" class="btn ghost" @click="taskDialog = false">取消</button>
-          <button
-            type="button" class="btn primary"
-            :disabled="!taskForm.goal.trim()" @click="saveTask"
-          >保存</button>
         </div>
       </template>
     </el-dialog>
@@ -1365,9 +1313,13 @@ onUnmounted(() => {
 .item-meta .prio {
   padding: 0 4px;
   font-style: normal;
+  font-weight: 600;
   background: var(--surface-sunken);
   border-radius: 3px;
 }
+.item-meta .prio.p0 { color: var(--danger); background: var(--danger-soft); }
+.item-meta .prio.p1 { color: var(--warn-ink, #8a5a12); background: var(--warn-soft); }
+.item-meta .prio.p2 { color: var(--accent-ink); background: var(--accent-soft); }
 /* .empty 由全局 styles.css 提供 */
 
 /* 对话区：与对话页同一套白纸画布 + 居中阅读列 */

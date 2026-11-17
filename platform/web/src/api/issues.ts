@@ -6,6 +6,8 @@ export type GitIssueProvider = 'GITEE' | 'GITHUB' | 'GITLAB' | ''
 export type GitIssueState = 'OPEN' | 'CLOSED'
 /** 任务分类：缺陷 / 需求。 */
 export type GitIssueKind = 'BUG' | 'FEAT'
+/** 任务优先级：P0 最高。 */
+export type GitIssuePriority = 'P0' | 'P1' | 'P2'
 
 export interface GitIssueRow {
   id: string
@@ -19,6 +21,7 @@ export interface GitIssueRow {
   body: string
   state: GitIssueState
   kind: GitIssueKind
+  priority: GitIssuePriority
   labels: string
   url: string
   source: 'PLATFORM' | 'AGENT' | 'GIT' | string
@@ -46,6 +49,7 @@ export interface GitIssueInput {
   body?: string
   state?: GitIssueState
   kind?: GitIssueKind
+  priority?: GitIssuePriority
   labels?: string
   assignee?: string
 }

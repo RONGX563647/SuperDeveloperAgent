@@ -17,7 +17,6 @@ import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspacePlanItem;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
-import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.gitissue.GitIssue;
 import top.rongx.agent.domain.gitissue.GitIssueService;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -54,16 +53,21 @@ public class WorkspaceSupervisorTools {
         this.cache = cache;
     }
 
-    @Tool(name = "workspace_snapshot",
-            description = "工作区总览：会话数量、运行中/失败数、任务统计与活动运行。只读。先看这个再决定下一步。",
+    @Tool(name = "workspace_snapshot", description = "Workspace overview: sessions and runs.",
             readOnly = true, concurrencySafe = true)
     public String snapshot(ProjectContext ctx) {
-        return guard(() -> supervisor.snapshot(ctx.projectId(), ctx.userId())
-                + "\ntool_cache: " + cache.stats());
+        return guard(() -> {
+            List<GitIssue> board = projectIssues(ctx);
+            long open = board.stream().filter(GitIssue::open).count();
+            long p0 = board.stream().filter(i -> i.open() && "P0".equals(i.priority())).count();
+            return supervisor.snapshot(ctx.projectId(), ctx.userId())
+                    + "\ntasks: " + board.size() + "  open=" + open
+                    + "  p0=" + p0 + "  closed=" + (board.size() - open)
+                    + "\ntool_cache: " + cache.stats();
+        });
     }
 
-    @Tool(name = "conversation_list",
-            description = "列出当前工作区的会话（默认不含归档）。只读。",
+    @Tool(name = "conversation_list", description = "List workspace conversations.",
             readOnly = true, concurrencySafe = true)
     public String list(ProjectContext ctx,
                        @ToolParam(name = "include_archived", required = false,
@@ -73,8 +77,7 @@ public class WorkspaceSupervisorTools {
                 Boolean.TRUE.equals(includeArchived))));
     }
 
-    @Tool(name = "conversation_search",
-            description = "按标题/摘要关键词搜索当前工作区的会话。只读。",
+    @Tool(name = "conversation_search", description = "Search conversations by keyword.",
             readOnly = true, concurrencySafe = true)
     public String search(ProjectContext ctx,
                          @ToolParam(name = "keyword", description = "关键词")
@@ -83,10 +86,7 @@ public class WorkspaceSupervisorTools {
                 keyword)));
     }
 
-    @Tool(name = "conversation_create",
-            description = """
-                    在当前工作区新建一个普通会话。只创建元数据，不会自动发送消息。
-                    创建后用 conversation_send 派发目标。不能创建调度会话（调度深度固定为 1）。""",
+    @Tool(name = "conversation_create", description = "Create a plain conversation.",
             readOnly = false, concurrencySafe = false)
     public String create(ProjectContext ctx,
                          @ToolParam(name = "title", description = "会话标题，不超过 60 字")
@@ -106,8 +106,7 @@ public class WorkspaceSupervisorTools {
         });
     }
 
-    @Tool(name = "conversation_rename",
-            description = "重命名会话。",
+    @Tool(name = "conversation_rename", description = "Rename a conversation.",
             readOnly = false, concurrencySafe = false)
     public String rename(ProjectContext ctx,
                          @ToolParam(name = "conversation_id", description = "会话 id")
@@ -119,8 +118,7 @@ public class WorkspaceSupervisorTools {
                 : "err: 会话不存在或无权访问：" + conversationId);
     }
 
-    @Tool(name = "conversation_archive",
-            description = "归档/恢复会话：归档只从默认列表隐藏，不影响会话数据。",
+    @Tool(name = "conversation_archive", description = "Archive or restore a conversation.",
             readOnly = false, concurrencySafe = false)
     public String archive(ProjectContext ctx,
                           @ToolParam(name = "conversation_id", description = "会话 id")
@@ -133,8 +131,7 @@ public class WorkspaceSupervisorTools {
                 : "err: 会话不存在或无权访问：" + conversationId);
     }
 
-    @Tool(name = "conversation_pin",
-            description = "置顶/取消置顶会话。",
+    @Tool(name = "conversation_pin", description = "Pin or unpin a conversation.",
             readOnly = false, concurrencySafe = false)
     public String pin(ProjectContext ctx,
                       @ToolParam(name = "conversation_id", description = "会话 id")
@@ -147,11 +144,7 @@ public class WorkspaceSupervisorTools {
                 : "err: 会话不存在或无权访问：" + conversationId);
     }
 
-    @Tool(name = "conversation_send",
-            description = """
-                    异步给某个普通会话发送一条消息，立即返回 runId（不会阻塞你）。
-                    同一会话有运行未结束时会被拒绝；重复目标会直接返回已有 runId。
-                    派发后用 conversation_wait 或 conversation_status 跟踪。""",
+    @Tool(name = "conversation_send", description = "Send a message to a conversation.",
             readOnly = false, concurrencySafe = false)
     public String send(ProjectContext ctx,
                        @ToolParam(name = "conversation_id", description = "目标会话 id")
@@ -165,8 +158,7 @@ public class WorkspaceSupervisorTools {
         });
     }
 
-    @Tool(name = "conversation_status",
-            description = "查询一次运行的状态与最近结果。只读。",
+    @Tool(name = "conversation_status", description = "Get a run status and latest result.",
             readOnly = true, concurrencySafe = true)
     public String status(ProjectContext ctx,
                          @ToolParam(name = "run_id", description = "运行 id（conversation_send 返回）")
@@ -174,10 +166,7 @@ public class WorkspaceSupervisorTools {
         return guard(() -> formatRun(supervisor.runStatus(runId, ctx.userId())));
     }
 
-    @Tool(name = "conversation_wait",
-            description = """
-                    等待一次运行结束，最多 60 秒。未结束就返回 RUNNING，稍后再查；
-                    不要连续高频调用。""",
+    @Tool(name = "conversation_wait", description = "Wait up to 60s for a run to finish.",
             readOnly = true, concurrencySafe = true)
     public String waitRun(ProjectContext ctx,
                           @ToolParam(name = "run_id", description = "运行 id")
@@ -190,8 +179,7 @@ public class WorkspaceSupervisorTools {
         return guard(() -> formatRun(supervisor.waitForRun(runId, ctx.userId(), timeout)));
     }
 
-    @Tool(name = "conversation_cancel",
-            description = "取消一次排队中/运行中的任务。",
+    @Tool(name = "conversation_cancel", description = "Cancel a queued or running run.",
             readOnly = false, concurrencySafe = false)
     public String cancel(ProjectContext ctx,
                          @ToolParam(name = "run_id", description = "运行 id")
@@ -201,8 +189,7 @@ public class WorkspaceSupervisorTools {
                 : "err: 运行不存在、无权访问或已结束：" + runId);
     }
 
-    @Tool(name = "conversation_summarize",
-            description = "读取某个会话最近一次运行的结论（成功摘要或失败原因）。只读。",
+    @Tool(name = "conversation_summarize", description = "Read a conversation last conclusion.",
             readOnly = true, concurrencySafe = true)
     public String summarize(ProjectContext ctx,
                             @ToolParam(name = "conversation_id", description = "会话 id")
@@ -210,17 +197,7 @@ public class WorkspaceSupervisorTools {
         return guard(() -> supervisor.summarize(conversationId, ctx.userId()));
     }
 
-    @Tool(name = "workspace_dispatch",
-            description = """
-                    把多个子目标按 DAG 一次性并行派发并等待汇总（替代逐个 send + wait 的串行方式）。
-                    无依赖的节点会同时运行；有依赖的节点用 depends_on 指定前置节点。
-                    节点失败可按 retries 自动重试（复用同一会话重发同一指令，最多 3 次）。
-                    必需节点失败、必需节点全部成功、或连续失败达到 max_consecutive_failures 时会提前终止。
-                    nodes 示例：
-                    [{"id":"build","message":"构建并修复编译错误","required":true,"retries":1},
-                     {"id":"test","message":"跑单测并汇总失败用例","depends_on":["build"]},
-                     {"id":"docs","message":"更新相关文档","required":false}]
-                    只有需要"边跑边改"或依赖人工确认时才退回 conversation_send。""",
+    @Tool(name = "workspace_dispatch", description = "Dispatch sub-goals as a parallel DAG.",
             readOnly = false, concurrencySafe = false)
     public String dispatch(ProjectContext ctx,
                            @ToolParam(name = "nodes",
@@ -250,17 +227,12 @@ public class WorkspaceSupervisorTools {
                                 : maxConsecutiveFailures))));
     }
 
-    @Tool(name = "workspace_plan",
-            description = """
-                    把计划清单（Plan/Todo）一次登记到工作区任务板，返回每个计划项的 task id。
-                    已有 task_id 的项按 goal/expected_output/status 更新，其余新建；之后用 task_update 推进状态。
-                    适合多步骤目标开工前先让用户看见完整计划，再逐步派发执行。""",
+    @Tool(name = "workspace_plan", description = "Register a plan on the task board.",
             readOnly = false, concurrencySafe = false)
     public String plan(ProjectContext ctx,
                        @ToolParam(name = "items",
                                description = "计划项数组；每项必填 goal，可选 task_id、expected_output、"
-                                       + "priority(1-5)、status(TODO/RUNNING/BLOCKED/DONE/CANCELLED)、"
-                                       + "conversation_id")
+                                       + "priority(P0/P1/P2)、status(TODO/RUNNING/BLOCKED/DONE/CANCELLED)")
                        List<WorkspacePlanItem> items) {
         return guard(() -> {
             if (items == null || items.isEmpty()) {
@@ -272,35 +244,35 @@ public class WorkspaceSupervisorTools {
                     return "err: 每个计划项都必须有 goal";
                 }
                 TaskStatus status = parseStatus(item.status());
-                WorkspaceTask task;
+                String state = status == null ? null : issueState(status);
+                GitIssue issue;
                 if (item.taskId() != null && !item.taskId().isBlank()) {
-                    task = supervisor.updateTask(ctx.projectId(), ctx.userId(), item.taskId().trim(),
-                            item.goal(), item.expectedOutput(), status);
+                    GitIssue current = issues.get(ctx.userId(), item.taskId().trim());
+                    issue = issues.update(ctx.userId(), current.id(), new GitIssue.Draft(
+                            current.projectId(), current.provider(), current.repo(),
+                            item.goal(),
+                            blank(item.expectedOutput()) ? current.body() : item.expectedOutput(),
+                            state == null ? current.state() : state,
+                            current.kind(),
+                            item.priority() == null ? "" : item.priority(),
+                            current.labels(), current.assignee()));
                 } else {
-                    task = supervisor.createTask(ctx.projectId(), ctx.userId(), item.goal(),
-                            item.expectedOutput(),
-                            item.priority() == null ? 3 : item.priority(),
-                            item.conversationId());
-                    if (status != null && status != TaskStatus.TODO) {
-                        task = supervisor.updateTask(ctx.projectId(), ctx.userId(), task.id(),
-                                null, null, status);
-                    }
+                    // 计划项按 FEAT（需求）登记，不触发 Bug 自动修复
+                    issue = issues.create(ctx.userId(), new GitIssue.Draft(ctx.projectId(), "", "",
+                            item.goal(), item.expectedOutput(), state == null ? "OPEN" : state,
+                            "FEAT", item.priority(), "", ""));
                 }
-                sb.append("- ").append(task.id())
-                        .append("  [").append(task.status()).append(']')
-                        .append("  p").append(task.priority())
-                        .append("  ").append(oneLine(task.goal(), 120))
+                sb.append("- ").append(issue.id())
+                        .append("  [").append(issue.state()).append(']')
+                        .append("  ").append(issue.priority())
+                        .append("  ").append(oneLine(issue.title(), 120))
                         .append('\n');
             }
             return sb.toString().trim();
         });
     }
 
-    @Tool(name = "workspace_recall",
-            description = """
-                    跨会话记忆检索：在当前项目的历史运行里按关键词匹配目标/结论/错误，
-                    返回会话 id、时间、状态与摘要。关键词为空时返回最近运行。
-                    开工前用它回忆"上次这类问题怎么解决的"，避免重复踩坑。只读。""",
+    @Tool(name = "workspace_recall", description = "Search past runs across sessions.",
             readOnly = true, concurrencySafe = true)
     public String recall(ProjectContext ctx,
                          @ToolParam(name = "keyword", required = false,
@@ -332,12 +304,7 @@ public class WorkspaceSupervisorTools {
         });
     }
 
-    @Tool(name = "dispatch_issue",
-            description = """
-                    把任务页的一张 Git 工单直接派发成子会话：校验工单属于当前项目且未关闭，
-                    新建会话、发送包含工单标题/描述/链接的目标，并在任务板登记关联任务。
-                    子会话拿到目标后按环境策略执行，完成后由它自己用 comment_git_issue 回写工单。
-                    返回 task/conversation/run 三个 id。""",
+    @Tool(name = "dispatch_issue", description = "Dispatch an issue to a new session.",
             readOnly = false, concurrencySafe = false)
     public String dispatchIssue(ProjectContext ctx,
                                 @ToolParam(name = "issue_id", description = "任务/工单 id")
@@ -366,10 +333,7 @@ public class WorkspaceSupervisorTools {
             if (runId.startsWith("err:")) {
                 return runId;
             }
-            WorkspaceTask task = supervisor.createTask(ctx.projectId(), ctx.userId(),
-                    issueTitle(issue), issue.url().isBlank() ? "工单 " + issue.id() : issue.url(),
-                    2, conversation.id());
-            return "ok: task=" + task.id()
+            return "ok: issue=" + issue.id()
                     + "  conversation=" + conversation.id()
                     + "  run=" + runId
                     + "\n工单已派发，子会话完成后会回写评论；用 conversation_status 跟踪结果。";
@@ -411,31 +375,45 @@ public class WorkspaceSupervisorTools {
         }
     }
 
-    @Tool(name = "task_create",
-            description = "在工作区任务板登记一个任务（不执行）。",
+    /** Git 工单只有 OPEN / CLOSED：完成与取消都折叠为关闭。 */
+    private static String issueState(TaskStatus status) {
+        return status == TaskStatus.DONE || status == TaskStatus.CANCELLED ? "CLOSED" : "OPEN";
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    /** 任务页数据按用户查询，再收敛到当前项目（未归属项目的任务也展示）。 */
+    private List<GitIssue> projectIssues(ProjectContext ctx) {
+        return issues.list(ctx.userId(), null, null, null).stream()
+                .filter(i -> i.projectId().isBlank() || i.projectId().equals(ctx.projectId()))
+                .toList();
+    }
+
+    @Tool(name = "task_create", description = "Create a task on the task board.",
             readOnly = false, concurrencySafe = false)
     public String createTask(ProjectContext ctx,
-                             @ToolParam(name = "goal", description = "任务目标")
+                             @ToolParam(name = "goal", description = "任务目标（标题）")
                              String goal,
                              @ToolParam(name = "expected_output", required = false,
-                                     description = "期望产出")
+                                     description = "期望产出（描述）")
                              String expectedOutput,
                              @ToolParam(name = "priority", required = false,
-                                     description = "优先级 1-5，1 最高，默认 3")
-                             Integer priority,
-                             @ToolParam(name = "conversation_id", required = false,
-                                     description = "关联会话 id（可空）")
-                             String conversationId) {
+                                     description = "优先级 P0/P1/P2，默认 P2")
+                             String priority,
+                             @ToolParam(name = "kind", required = false,
+                                     description = "类型 BUG / FEAT，默认 FEAT")
+                             String kind) {
         return guard(() -> {
-            WorkspaceTask task = supervisor.createTask(ctx.projectId(), ctx.userId(), goal,
-                    expectedOutput, priority == null ? 3 : priority, conversationId);
-            return "ok: task " + task.id() + "  priority=" + task.priority()
-                    + "  status=" + task.status();
+            GitIssue issue = issues.create(ctx.userId(), new GitIssue.Draft(ctx.projectId(),
+                    "", "", goal, expectedOutput, "OPEN", kind, priority, "", ""));
+            return "ok: task " + issue.id() + "  priority=" + issue.priority()
+                    + "  state=" + issue.state();
         });
     }
 
-    @Tool(name = "task_update",
-            description = "更新任务目标/期望产出/状态（TODO/RUNNING/BLOCKED/DONE/CANCELLED）。",
+    @Tool(name = "task_update", description = "Update task goal, output or status.",
             readOnly = false, concurrencySafe = false)
     public String updateTask(ProjectContext ctx,
                              @ToolParam(name = "task_id", description = "任务 id")
@@ -447,7 +425,10 @@ public class WorkspaceSupervisorTools {
                              String expectedOutput,
                              @ToolParam(name = "status", required = false,
                                      description = "TODO/RUNNING/BLOCKED/DONE/CANCELLED")
-                             String status) {
+                             String status,
+                             @ToolParam(name = "priority", required = false,
+                                     description = "P0/P1/P2，可空表示不变")
+                             String priority) {
         TaskStatus parsed;
         try {
             parsed = status == null || status.isBlank()
@@ -456,42 +437,49 @@ public class WorkspaceSupervisorTools {
             return "err: 非法任务状态：" + status;
         }
         return guard(() -> {
-            WorkspaceTask task = supervisor.updateTask(ctx.projectId(), ctx.userId(), taskId,
-                    goal, expectedOutput, parsed);
-            return "ok: task " + task.id() + "  status=" + task.status();
+            GitIssue current = issues.get(ctx.userId(), taskId);
+            GitIssue updated = issues.update(ctx.userId(), taskId, new GitIssue.Draft(
+                    current.projectId(), current.provider(), current.repo(),
+                    blank(goal) ? current.title() : goal,
+                    blank(expectedOutput) ? current.body() : expectedOutput,
+                    parsed == null ? current.state() : issueState(parsed),
+                    current.kind(), priority, current.labels(), current.assignee()));
+            return "ok: task " + updated.id() + "  state=" + updated.state()
+                    + "  priority=" + updated.priority();
         });
     }
 
-    @Tool(name = "task_complete",
-            description = "把任务标记为 DONE。",
+    @Tool(name = "task_complete", description = "Mark a task DONE.",
             readOnly = false, concurrencySafe = false)
     public String completeTask(ProjectContext ctx,
                                @ToolParam(name = "task_id", description = "任务 id")
                                String taskId) {
         return guard(() -> {
-            WorkspaceTask task = supervisor.updateTask(ctx.projectId(), ctx.userId(), taskId,
-                    null, null, TaskStatus.DONE);
-            return "ok: task " + task.id() + "  status=" + task.status();
+            GitIssue issue = issues.setState(ctx.userId(), taskId, "CLOSED");
+            return "ok: task " + issue.id() + "  state=" + issue.state();
         });
     }
 
-    @Tool(name = "task_list",
-            description = "列出工作区任务板。只读。",
+    @Tool(name = "task_list", description = "List the workspace task board.",
             readOnly = true, concurrencySafe = true)
     public String listTasks(ProjectContext ctx) {
         return guard(() -> {
-            List<WorkspaceTask> tasks = supervisor.listTasks(ctx.projectId(), ctx.userId());
+            List<GitIssue> tasks = projectIssues(ctx);
             if (tasks.isEmpty()) {
                 return "tasks: （空）";
             }
             StringBuilder sb = new StringBuilder("tasks:\n");
-            for (WorkspaceTask task : tasks) {
+            for (GitIssue task : tasks) {
                 sb.append("- ").append(task.id())
-                        .append("  [").append(task.status()).append("]")
-                        .append("  p").append(task.priority())
-                        .append("  ").append(oneLine(task.goal(), 120));
-                if (task.conversationId() != null) {
-                    sb.append("  conversation=").append(task.conversationId());
+                        .append("  [").append(task.state()).append("]")
+                        .append("  ").append(task.priority())
+                        .append("  ").append(task.kind())
+                        .append("  ").append(oneLine(task.title(), 120));
+                if (task.number().isBlank()) {
+                    sb.append("  local");
+                } else {
+                    sb.append("  ").append(task.provider()).append('/').append(task.repo())
+                            .append('#').append(task.number());
                 }
                 sb.append('\n');
             }

@@ -40,6 +40,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 body         TEXT,
                 state        TEXT NOT NULL,
                 kind         TEXT NOT NULL DEFAULT 'BUG',
+                priority     TEXT NOT NULL DEFAULT 'P2',
                 labels       TEXT,
                 url          TEXT,
                 source       TEXT NOT NULL,
@@ -87,7 +88,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
 
     private static final String ISSUE_COLUMNS = """
             id, user_id, project_id, provider, repo, issue_number, title, body, state, kind,
-            labels, url, source, sync_status, sync_error, assignee, created_at, updated_at
+            priority, labels, url, source, sync_status, sync_error, assignee, created_at, updated_at
             """;
 
     private static final String INTEGRATION_COLUMNS = """
@@ -116,18 +117,20 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                     st.executeUpdate(statement);
                 }
             }
-            // 旧库补列：kind 是后加的分类字段，CREATE TABLE IF NOT EXISTS 不会补
-            boolean hasKind = false;
+            // 旧库补列：kind / priority 是后加字段，CREATE TABLE IF NOT EXISTS 不会补
+            java.util.Set<String> columns = new java.util.HashSet<>();
             try (ResultSet rs = st.executeQuery("PRAGMA table_info(git_issues)")) {
                 while (rs.next()) {
-                    if ("kind".equalsIgnoreCase(rs.getString("name"))) {
-                        hasKind = true;
-                    }
+                    columns.add(rs.getString("name").toLowerCase(Locale.ROOT));
                 }
             }
-            if (!hasKind) {
+            if (!columns.contains("kind")) {
                 st.executeUpdate(
                         "ALTER TABLE git_issues ADD COLUMN kind TEXT NOT NULL DEFAULT 'BUG'");
+            }
+            if (!columns.contains("priority")) {
+                st.executeUpdate(
+                        "ALTER TABLE git_issues ADD COLUMN priority TEXT NOT NULL DEFAULT 'P2'");
             }
         } catch (SQLException e) {
             throw new IllegalStateException("git issue 表初始化失败：" + e.getMessage(), e);
@@ -230,9 +233,9 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 try (PreparedStatement st = conn.prepareStatement("""
                         INSERT INTO git_issues
                             (id, user_id, project_id, provider, repo, issue_number, title, body,
-                             state, kind, labels, url, source, sync_status, sync_error, assignee,
-                             created_at, updated_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             state, kind, priority, labels, url, source, sync_status, sync_error,
+                             assignee, created_at, updated_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """)) {
                     bindIssue(st, issue, now);
                     st.executeUpdate();
@@ -241,7 +244,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 try (PreparedStatement st = conn.prepareStatement("""
                         UPDATE git_issues SET
                             project_id=?, provider=?, repo=?, issue_number=?, title=?, body=?,
-                            state=?, kind=?, labels=?, url=?, source=?, sync_status=?,
+                            state=?, kind=?, priority=?, labels=?, url=?, source=?, sync_status=?,
                             sync_error=?, assignee=?, updated_at=?
                         WHERE id=?
                         """)) {
@@ -253,21 +256,22 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                     st.setString(6, issue.body());
                     st.setString(7, issue.state());
                     st.setString(8, issue.kind());
-                    st.setString(9, issue.labels());
-                    st.setString(10, issue.url());
-                    st.setString(11, issue.source());
-                    st.setString(12, issue.syncStatus());
-                    st.setString(13, issue.syncError());
-                    st.setString(14, issue.assignee());
-                    st.setLong(15, now);
-                    st.setString(16, issue.id());
+                    st.setString(9, issue.priority());
+                    st.setString(10, issue.labels());
+                    st.setString(11, issue.url());
+                    st.setString(12, issue.source());
+                    st.setString(13, issue.syncStatus());
+                    st.setString(14, issue.syncError());
+                    st.setString(15, issue.assignee());
+                    st.setLong(16, now);
+                    st.setString(17, issue.id());
                     st.executeUpdate();
                 }
             }
             GitIssue saved = new GitIssue(issue.id(), issue.userId(), issue.projectId(),
                     issue.provider(), issue.repo(), issue.number(), issue.title(), issue.body(),
-                    issue.state(), issue.kind(), issue.labels(), issue.url(), issue.source(),
-                    issue.syncStatus(), issue.syncError(), issue.assignee(),
+                    issue.state(), issue.kind(), issue.priority(), issue.labels(), issue.url(),
+                    issue.source(), issue.syncStatus(), issue.syncError(), issue.assignee(),
                     issue.createdAt() > 0 ? issue.createdAt() : now, now);
             return saved;
         } catch (SQLException e) {
@@ -286,14 +290,15 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
         st.setString(8, issue.body());
         st.setString(9, issue.state());
         st.setString(10, issue.kind());
-        st.setString(11, issue.labels());
-        st.setString(12, issue.url());
-        st.setString(13, issue.source());
-        st.setString(14, issue.syncStatus());
-        st.setString(15, issue.syncError());
-        st.setString(16, issue.assignee());
-        st.setLong(17, issue.createdAt() > 0 ? issue.createdAt() : now);
-        st.setLong(18, now);
+        st.setString(11, issue.priority());
+        st.setString(12, issue.labels());
+        st.setString(13, issue.url());
+        st.setString(14, issue.source());
+        st.setString(15, issue.syncStatus());
+        st.setString(16, issue.syncError());
+        st.setString(17, issue.assignee());
+        st.setLong(18, issue.createdAt() > 0 ? issue.createdAt() : now);
+        st.setLong(19, now);
     }
 
     @Override
@@ -547,6 +552,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 rs.getString("body"),
                 rs.getString("state"),
                 rs.getString("kind"),
+                rs.getString("priority"),
                 rs.getString("labels"),
                 rs.getString("url"),
                 rs.getString("source"),

@@ -183,6 +183,7 @@ public class GitIssueController {
                 str(body, "body"),
                 str(body, "state"),
                 str(body, "kind"),
+                str(body, "priority"),
                 str(body, "labels"),
                 str(body, "assignee"));
     }

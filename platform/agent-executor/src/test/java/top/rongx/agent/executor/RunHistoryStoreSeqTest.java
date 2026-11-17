@@ -34,6 +34,20 @@ class RunHistoryStoreSeqTest {
                 "重启后残留的运行不能一直挂在进行中");
     }
 
+    @Test
+    @DisplayName("序号本来就连续时归一化不改写，nextSeq 接着最大值递增")
+    void keepsContiguousSeqUntouched() {
+        RunHistoryStore store = RunHistoryStore.file(dir);
+        store.save(snapshot("a", 1, 1_000, StageStatus.SUCCEEDED));
+        store.save(snapshot("b", 2, 2_000, StageStatus.SUCCEEDED));
+
+        store.normalizeSeq();
+
+        assertEquals(List.of(2, 1),
+                store.summaries(null, 0, 10).stream().map(RunHistoryStore.Summary::seq).toList());
+        assertEquals(3, store.nextSeq("P", "test"));
+    }
+
     private static RunHistoryStore.RunSnapshot snapshot(String runId, int seq, long createdAt,
                                                         StageStatus status) {
         return new RunHistoryStore.RunSnapshot(runId, "P", "test", "release", "abcdef1234",

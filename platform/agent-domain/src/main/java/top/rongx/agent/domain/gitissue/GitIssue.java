@@ -18,6 +18,7 @@ import java.util.Locale;
  * @param number    远端 Issue 编号；空 = 未绑定远端
  * @param state     OPEN / CLOSED
  * @param kind      BUG / FEAT，任务分类
+ * @param priority  P0 / P1 / P2，任务优先级
  * @param source    PLATFORM / AGENT / GIT，最近一次变更来源
  * @param syncStatus SYNCED / LOCAL / PENDING / FAILED
  */
@@ -32,6 +33,7 @@ public record GitIssue(
         String body,
         String state,
         String kind,
+        String priority,
         String labels,
         String url,
         String source,
@@ -51,11 +53,23 @@ public record GitIssue(
         url = url == null ? "" : url.trim();
         state = "CLOSED".equalsIgnoreCase(state) ? "CLOSED" : "OPEN";
         kind = kind == null || kind.isBlank() ? kindOfLabels(labels) : normalizeKind(kind);
+        String normalizedPriority = normalizePriority(priority);
+        priority = normalizedPriority.isBlank() ? priorityOfLabels(labels) : normalizedPriority;
         source = source == null || source.isBlank() ? "PLATFORM" : source.toUpperCase(Locale.ROOT);
         syncStatus = syncStatus == null || syncStatus.isBlank()
                 ? "LOCAL" : syncStatus.toUpperCase(Locale.ROOT);
         syncError = syncError == null ? "" : syncError;
         assignee = assignee == null ? "" : assignee;
+    }
+
+    /** 兼容旧调用：未显式给优先级时按标签推导（Git 同步来的 Issue 走这里）。 */
+    public GitIssue(String id, String userId, String projectId, String provider, String repo,
+                    String number, String title, String body, String state, String kind,
+                    String labels, String url, String source, String syncStatus, String syncError,
+                    String assignee, long createdAt, long updatedAt) {
+        this(id, userId, projectId, provider, repo, number, title, body, state, kind,
+                priorityOfLabels(labels), labels, url, source, syncStatus, syncError, assignee,
+                createdAt, updatedAt);
     }
 
     /** 兼容旧调用：未显式给分类时按标签推导（Git 同步来的 Issue 走这里）。 */
@@ -64,8 +78,8 @@ public record GitIssue(
                     String url, String source, String syncStatus, String syncError,
                     String assignee, long createdAt, long updatedAt) {
         this(id, userId, projectId, provider, repo, number, title, body, state,
-                kindOfLabels(labels), labels, url, source, syncStatus, syncError, assignee,
-                createdAt, updatedAt);
+                kindOfLabels(labels), priorityOfLabels(labels), labels, url, source,
+                syncStatus, syncError, assignee, createdAt, updatedAt);
     }
 
     /** 是否已经绑定远端 Issue。 */
@@ -89,6 +103,32 @@ public record GitIssue(
         return "FEAT".equals(value) || "FEATURE".equals(value) ? "FEAT" : "BUG";
     }
 
+    /** 按标签识别优先级：含 p0/紧急 → P0，含 p1/高优 → P1，其余 P2。 */
+    public static String priorityOfLabels(String labels) {
+        String text = labels == null ? "" : labels.toLowerCase(Locale.ROOT);
+        if (text.contains("p0") || text.contains("紧急") || text.contains("urgent")) {
+            return "P0";
+        }
+        if (text.contains("p1") || text.contains("高优") || text.contains("high")) {
+            return "P1";
+        }
+        return "P2";
+    }
+
+    /**
+     * 归一化优先级：只接受 P0/P1/P2（兼容旧任务的 1-5 数字，1 最高）。
+     * 无法识别时返回空串，由调用方决定默认值。
+     */
+    public static String normalizePriority(String priority) {
+        String value = priority == null ? "" : priority.trim().toUpperCase(Locale.ROOT);
+        return switch (value) {
+            case "0", "1", "P0", "HIGHEST" -> "P0";
+            case "2", "P1", "HIGH" -> "P1";
+            case "3", "4", "5", "P2", "NORMAL", "LOW" -> "P2";
+            default -> "";
+        };
+    }
+
     /** 写入模型（创建/更新共用）。 */
     public record Draft(
             String projectId,
@@ -98,6 +138,7 @@ public record GitIssue(
             String body,
             String state,
             String kind,
+            String priority,
             String labels,
             String assignee) {
 
@@ -109,14 +150,22 @@ public record GitIssue(
             state = "CLOSED".equalsIgnoreCase(state) ? "CLOSED" : "OPEN";
             labels = labels == null ? "" : labels.trim();
             kind = kind == null || kind.isBlank() ? kindOfLabels(labels) : normalizeKind(kind);
+            // 空串表示「沿用当前值」，由服务层决定；无法识别的取值也按空串处理
+            priority = normalizePriority(priority);
             assignee = assignee == null ? "" : assignee.trim();
             projectId = projectId == null ? "" : projectId.trim();
+        }
+
+        /** 兼容旧调用：未指定优先级时沿用当前值。 */
+        public Draft(String projectId, String provider, String repo, String title, String body,
+                     String state, String kind, String labels, String assignee) {
+            this(projectId, provider, repo, title, body, state, kind, "", labels, assignee);
         }
 
         /** 兼容旧调用：未指定分类时按标签推导。 */
         public Draft(String projectId, String provider, String repo, String title, String body,
                      String state, String labels, String assignee) {
-            this(projectId, provider, repo, title, body, state, "", labels, assignee);
+            this(projectId, provider, repo, title, body, state, "", "", labels, assignee);
         }
     }
 }
