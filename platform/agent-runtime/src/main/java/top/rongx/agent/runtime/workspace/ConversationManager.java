@@ -33,6 +33,8 @@ import top.rongx.agent.domain.port.UserRolePort;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 工作区会话管理：会话元数据、任务、异步运行与调度 Agent 的工具能力。
@@ -153,7 +155,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     public Conversation importSession(String projectId, String ownerUserId, String id,
                                       String title, Long at) {
         if (!validId(id)) {
-            throw new IllegalArgumentException("会话 id 不合法：" + id);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "会话 id 不合法：" + id);
         }
         return conversations.find(id)
                 .filter(c -> c.ownerUserId().equals(ownerUserId)
@@ -209,19 +211,19 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     /** 读取会话时间线（不透明 JSON）；没有保存过时为空。 */
     public Optional<String> transcript(String conversationId, String ownerUserId) {
         conversations.findByOwner(conversationId, ownerUserId)
-                .orElseThrow(() -> new IllegalArgumentException("会话不存在或无权访问：" + conversationId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId));
         return transcripts.findTranscript(conversationId);
     }
 
     /** 保存会话时间线；归属校验在写入前完成，避免越权覆盖别人的会话。 */
     public void saveTranscript(String conversationId, String ownerUserId, String payload) {
         conversations.findByOwner(conversationId, ownerUserId)
-                .orElseThrow(() -> new IllegalArgumentException("会话不存在或无权访问：" + conversationId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId));
         if (payload == null) {
-            throw new IllegalArgumentException("会话历史不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "会话历史不能为空");
         }
         if (payload.getBytes(StandardCharsets.UTF_8).length > MAX_TRANSCRIPT_BYTES) {
-            throw new IllegalArgumentException("会话历史过大（上限 "
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "会话历史过大（上限 "
                     + MAX_TRANSCRIPT_BYTES + " 字节）");
         }
         transcripts.saveTranscript(conversationId, payload);
@@ -235,7 +237,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     public List<ConversationRun> runsOfConversation(String conversationId, String ownerUserId,
                                                     int limit) {
         findOwned(conversationId, ownerUserId)
-                .orElseThrow(() -> new IllegalArgumentException("会话不存在或无权访问"));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问"));
         return runs.findRunsByConversation(conversationId, limit);
     }
 
@@ -319,7 +321,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     @Override
     public boolean renameConversation(String conversationId, String ownerUserId, String title) {
         if (title == null || title.isBlank()) {
-            throw new IllegalArgumentException("标题不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "标题不能为空");
         }
         return conversations.update(conversationId, ownerUserId,
                 ConversationPatch.title(title)).isPresent();
@@ -341,13 +343,13 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     public String send(String conversationId, String ownerUserId, String text) {
         requireUser(ownerUserId);
         if (text == null || text.isBlank()) {
-            throw new IllegalArgumentException("消息不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "消息不能为空");
         }
         if (text.length() > MAX_TEXT) {
-            throw new IllegalArgumentException("消息不能超过 " + MAX_TEXT + " 字");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "消息不能超过 " + MAX_TEXT + " 字");
         }
         Conversation conversation = conversations.findByOwner(conversationId, ownerUserId)
-                .orElseThrow(() -> new IllegalArgumentException("会话不存在或无权访问：" + conversationId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId));
         if (conversation.kind() == ConversationKind.SUPERVISOR) {
             return "err: 不能给调度会话本身派发任务（调度深度固定为 1）";
         }
@@ -359,11 +361,11 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 return "err: 该会话已有相同目标的运行（runId=" + current.id()
                         + "），请等待完成或取消后再派发";
             }
-            throw new IllegalArgumentException("会话正在运行，请先等待或取消：runId=" + current.id());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT,
+                    "会话正在运行，请先等待或取消：runId=" + current.id());
         }
         Project project = projects.findById(conversation.projectId())
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "项目不存在: " + conversation.projectId()));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "项目不存在: " + conversation.projectId()));
         boolean readOnly = userRoles.isReadOnly(ownerUserId);
         ProjectContext ctx = new ProjectContext(project.id(),
                 resolveEnv(project.id(), conversation.env()), ownerUserId, project.repoUrl(),
@@ -383,7 +385,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     public ConversationRun runStatus(String runId, String ownerUserId) {
         return runs.findRun(runId)
                 .filter(r -> r.ownerUserId().equals(ownerUserId))
-                .orElseThrow(() -> new IllegalArgumentException("运行不存在或无权访问：" + runId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "运行不存在或无权访问：" + runId));
     }
 
     @Override
@@ -467,7 +469,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     @Override
     public String summarize(String conversationId, String ownerUserId) {
         Conversation conversation = conversations.findByOwner(conversationId, ownerUserId)
-                .orElseThrow(() -> new IllegalArgumentException("会话不存在或无权访问：" + conversationId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId));
         List<ConversationRun> history = runs.findRunsByConversation(conversationId, 1);
         StringBuilder sb = new StringBuilder();
         sb.append("conversation: ").append(conversation.id()).append('\n')
@@ -495,15 +497,14 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         requireProject(projectId);
         requireUser(ownerUserId);
         if (goal == null || goal.isBlank()) {
-            throw new IllegalArgumentException("任务目标不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "任务目标不能为空");
         }
         if (goal.length() > MAX_TASK_GOAL) {
-            throw new IllegalArgumentException("任务目标不能超过 " + MAX_TASK_GOAL + " 字");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "任务目标不能超过 " + MAX_TASK_GOAL + " 字");
         }
         if (conversationId != null && !conversationId.isBlank()) {
             conversations.findByOwner(conversationId, ownerUserId)
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "关联会话不存在或无权访问：" + conversationId));
+                    .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "关联会话不存在或无权访问：" + conversationId));
         }
         long now = System.currentTimeMillis();
         return tasks.saveTask(new WorkspaceTask("task-" + shortId(), projectId,
@@ -518,10 +519,10 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         requireUser(ownerUserId);
         WorkspaceTask task = tasks.findTask(taskId)
                 .filter(t -> t.projectId().equals(projectId))
-                .orElseThrow(() -> new IllegalArgumentException("任务不存在：" + taskId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "任务不存在：" + taskId));
         String nextGoal = goal == null || goal.isBlank() ? task.goal() : goal.trim();
         if (nextGoal.length() > MAX_TASK_GOAL) {
-            throw new IllegalArgumentException("任务目标不能超过 " + MAX_TASK_GOAL + " 字");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "任务目标不能超过 " + MAX_TASK_GOAL + " 字");
         }
         WorkspaceTask updated = new WorkspaceTask(task.id(), task.projectId(),
                 task.conversationId(), nextGoal,
@@ -546,13 +547,13 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         List<ProjectEnv> envs = projects.findEnvs(projectId);
         if (envs.isEmpty()) {
             if (!List.of("dev", "test", "prod").contains(env)) {
-                throw new IllegalArgumentException("环境不合法：" + env);
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "环境不合法：" + env);
             }
             return env;
         }
         boolean known = envs.stream().map(ProjectEnv::env).anyMatch(env::equals);
         if (!known) {
-            throw new IllegalArgumentException("环境不属于该项目：" + env);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "环境不属于该项目：" + env);
         }
         return env;
     }
@@ -594,13 +595,13 @@ public class ConversationManager implements WorkspaceSupervisorPort {
 
     private static void requireProject(String projectId) {
         if (projectId == null || !projectId.matches("[A-Za-z0-9_-]{1,32}")) {
-            throw new IllegalArgumentException("非法项目 ID：" + projectId);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "非法项目 ID：" + projectId);
         }
     }
 
     private static void requireUser(String userId) {
         if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("用户不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "用户不能为空");
         }
     }
 }

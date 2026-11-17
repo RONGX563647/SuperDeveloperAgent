@@ -21,6 +21,9 @@ import top.rongx.agent.domain.gitissue.GitIssue;
 import top.rongx.agent.domain.gitissue.GitIssueService;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.tools.cache.ToolResultCache;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 工作区调度 Agent 的工具面。
@@ -370,8 +373,8 @@ public class WorkspaceSupervisorTools {
         }
         try {
             return TaskStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("非法任务状态：" + status);
+        } catch (PlatformException | IllegalArgumentException e) {
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "非法任务状态：" + status);
         }
     }
 
@@ -433,7 +436,7 @@ public class WorkspaceSupervisorTools {
         try {
             parsed = status == null || status.isBlank()
                     ? null : TaskStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return "err: 非法任务状态：" + status;
         }
         return guard(() -> {

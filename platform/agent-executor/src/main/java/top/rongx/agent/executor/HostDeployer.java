@@ -13,6 +13,7 @@ import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.Deployer;
 import top.rongx.agent.domain.process.JavaRuntime;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 本机直接运行部署器（HOST）。
@@ -347,7 +348,7 @@ public class HostDeployer implements Deployer {
     private static String rel(Path root, Path path) {
         try {
             return root.relativize(path).toString();
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return path.toString();
         }
     }

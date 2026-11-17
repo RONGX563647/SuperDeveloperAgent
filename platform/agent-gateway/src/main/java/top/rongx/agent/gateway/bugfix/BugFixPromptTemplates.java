@@ -9,6 +9,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 阶段提示词模板：提示词放在 {@code classpath:bugfix/prompts/*.md}，不再硬编码在 Java 里。
@@ -35,7 +37,7 @@ public class BugFixPromptTemplates {
         while (matcher.find()) {
             String key = matcher.group(1);
             if (!resolved.containsKey(key)) {
-                throw new IllegalStateException("提示词模板 " + name + " 缺少参数：" + key);
+                throw new RunException(ErrorCode.RUN_INVALID_STATE, "提示词模板 " + name + " 缺少参数：" + key);
             }
         }
         StringBuilder rendered = new StringBuilder(template);
@@ -47,7 +49,7 @@ public class BugFixPromptTemplates {
 
     private String template(String name) {
         if (name == null || name.isBlank()) {
-            throw new IllegalArgumentException("提示词模板名不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "提示词模板名不能为空");
         }
         return cache.computeIfAbsent(name, key -> read(ROOT + key + ".md"));
     }
@@ -59,12 +61,12 @@ public class BugFixPromptTemplates {
             stream = BugFixPromptTemplates.class.getClassLoader().getResourceAsStream(path);
         }
         if (stream == null) {
-            throw new IllegalStateException("提示词模板不存在：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "提示词模板不存在：" + path);
         }
         try (InputStream in = stream) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new IllegalStateException("读取提示词模板失败：" + path + "（" + e.getMessage() + "）",
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "读取提示词模板失败：" + path + "（" + e.getMessage() + "）",
                     e);
         }
     }

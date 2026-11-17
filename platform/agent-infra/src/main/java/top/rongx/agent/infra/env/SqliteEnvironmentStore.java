@@ -31,6 +31,8 @@ import top.rongx.agent.domain.env.SecretRefs;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 环境模板 / 中间件资源 / 环境变量 / 项目覆盖 / 绑定 / 端口租约的 SQLite 实现。
@@ -170,7 +172,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             seedTemplates(st);
             migrateLegacy(st);
         } catch (SQLException e) {
-            throw new IllegalStateException("环境表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -257,7 +259,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境模板查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -274,7 +276,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return rs.next() ? Optional.of(mapTemplate(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境模板查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -312,7 +314,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setLong(9, System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("环境模板保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -345,7 +347,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("中间件资源查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -363,7 +365,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return rs.next() ? Optional.of(mapResource(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("中间件资源查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -417,7 +419,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setLong(i, now);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("中间件资源保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源保存失败：" + e.getMessage(), e);
         }
         return resource(id).orElseThrow();
     }
@@ -429,7 +431,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(1, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("中间件资源删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -447,7 +449,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(5, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("健康检查结果写入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "健康检查结果写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -499,7 +501,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -513,7 +515,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         try (Connection conn = open()) {
             boolean keep = value == null || value.isEmpty();
             if (keep && !exists(conn, "env_vars", "env", env, "var_key", key)) {
-                throw new IllegalArgumentException("新变量必须提供值：" + key);
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新变量必须提供值：" + key);
             }
             if (keep) {
                 try (PreparedStatement st = conn.prepareStatement(
@@ -551,7 +553,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 }
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量保存失败：" + e.getMessage(), e);
         }
         return envVars(env).stream().filter(v -> v.key().equals(key)).findFirst().orElseThrow();
     }
@@ -573,7 +575,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                         rs.getString("value_iv")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -624,7 +626,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量来源查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量来源查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -639,7 +641,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(2, key);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -663,7 +665,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("项目覆盖查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -680,7 +682,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -715,7 +717,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("项目覆盖查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -730,7 +732,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         try (Connection conn = open()) {
             boolean keep = value == null || value.isEmpty();
             if (keep && !overrideExists(conn, projectId, env, key)) {
-                throw new IllegalArgumentException("新覆盖项必须提供值：" + key);
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新覆盖项必须提供值：" + key);
             }
             if (keep) {
                 try (PreparedStatement st = conn.prepareStatement("""
@@ -769,7 +771,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 }
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("项目覆盖保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖保存失败：" + e.getMessage(), e);
         }
         return overrides(projectId, env).stream()
                 .filter(v -> v.key().equals(key)).findFirst().orElseThrow();
@@ -788,7 +790,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(3, key);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("项目覆盖删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -815,7 +817,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("密钥查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -825,7 +827,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireEnv(env);
         requireSecretName(name);
         if (value == null || value.isEmpty()) {
-            throw new IllegalArgumentException("密钥值不能为空：" + name);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "密钥值不能为空：" + name);
         }
         long now = System.currentTimeMillis();
         SecretBox.Sealed sealed = secretBox.encrypt(value);
@@ -847,7 +849,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setLong(7, now);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("密钥保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥保存失败：" + e.getMessage(), e);
         }
         return secrets(projectId, env).stream()
                 .filter(s -> s.name().equals(name)).findFirst().orElseThrow();
@@ -859,7 +861,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireEnv(env);
         requireSecretName(name);
         if (secretValue(projectId, env, name).isEmpty()) {
-            throw new IllegalArgumentException("密钥不存在，无法轮换：" + name);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "密钥不存在，无法轮换：" + name);
         }
         return saveSecret(projectId, env, name, value);
     }
@@ -877,7 +879,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(3, name);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("密钥删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -900,7 +902,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                         rs.getString("value_iv")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("密钥读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -915,13 +917,13 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return rs.next() ? rs.getInt("version") : 0;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("密钥版本读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥版本读取失败：" + e.getMessage(), e);
         }
     }
 
     private void requireSecretName(String name) {
         if (!SecretRefs.validName(name)) {
-            throw new IllegalArgumentException("密钥引用名只允许字母、数字、点、下划线与短横线：" + name);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "密钥引用名只允许字母、数字、点、下划线与短横线：" + name);
         }
     }
 
@@ -953,7 +955,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("项目覆盖查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -973,7 +975,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -1159,7 +1161,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setLong(i, now);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("环境绑定保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定保存失败：" + e.getMessage(), e);
         }
         return binding(id).orElseThrow();
     }
@@ -1184,7 +1186,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                         rs.getString("status")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境绑定查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -1212,7 +1214,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                         rs.getString("status")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境绑定查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -1230,7 +1232,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(4, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("环境绑定确认失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定确认失败：" + e.getMessage(), e);
         }
     }
 
@@ -1256,7 +1258,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                         rs.getInt("host_port"), rs.getString("run_id"), rs.getLong("updated_at")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("端口租约查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "端口租约查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -1281,7 +1283,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("端口租约查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "端口租约查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -1306,7 +1308,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setLong(6, System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("端口租约保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "端口租约保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -1346,7 +1348,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("本地服务租约查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "本地服务租约查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -1373,7 +1375,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setLong(7, System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("本地服务租约保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "本地服务租约保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -1391,7 +1393,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
             st.setString(3, service);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("本地服务租约删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "本地服务租约删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -1432,7 +1434,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
 
     private static void requireProject(String projectId) {
         if (projectId == null || !projectId.matches("[A-Za-z0-9_-]{1,32}")) {
-            throw new IllegalArgumentException("非法项目 ID：" + projectId);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "非法项目 ID：" + projectId);
         }
     }
 
@@ -1442,13 +1444,13 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
 
     private static void requireKey(String key) {
         if (key == null || !key.matches("[A-Za-z_][A-Za-z0-9_]{0,63}")) {
-            throw new IllegalArgumentException("变量名不合法（需 [A-Za-z_][A-Za-z0-9_]*）：" + key);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量名不合法（需 [A-Za-z_][A-Za-z0-9_]*）：" + key);
         }
     }
 
     private static void requireService(String service) {
         if (!List.of(ServiceLease.BACKEND, ServiceLease.FRONTEND).contains(service)) {
-            throw new IllegalArgumentException("服务只能是 backend / frontend：" + service);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "服务只能是 backend / frontend：" + service);
         }
     }
 }

@@ -25,6 +25,8 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 仓库只读工具：git 状态 / 提交 / 对比，以及项目内文件浏览与读取。
@@ -141,7 +143,7 @@ public class RepoQueryTools {
                                description = "是否区分大小写，默认 false")
                        Boolean caseSensitive) {
         if (isBlank(pattern)) {
-            throw new IllegalArgumentException("pattern 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "pattern 不能为空");
         }
         int limit = maxResults == null ? 50 : Math.max(1, Math.min(200, maxResults));
         int flags = Boolean.TRUE.equals(caseSensitive) ? 0 : Pattern.CASE_INSENSITIVE;
@@ -149,12 +151,12 @@ public class RepoQueryTools {
         try {
             compiled = Pattern.compile(pattern, flags);
         } catch (PatternSyntaxException e) {
-            throw new IllegalArgumentException("正则非法：" + e.getDescription());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "正则非法：" + e.getDescription());
         }
         Path root = repoRoot(ctx);
         Path target = resolveInside(root, path);
         if (!Files.exists(target)) {
-            throw new IllegalArgumentException("路径不存在：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径不存在：" + path);
         }
         List<String> matches = new ArrayList<>();
         int[] scanned = {0};
@@ -194,7 +196,7 @@ public class RepoQueryTools {
                 });
             }
         } catch (IOException e) {
-            throw new IllegalArgumentException("检索失败：" + e.getMessage());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "检索失败：" + e.getMessage());
         }
         String base = root.relativize(target).toString().replace('\\', '/');
         String scanNote = scanned[0] >= MAX_SCAN_FILES
@@ -323,7 +325,7 @@ public class RepoQueryTools {
                           @ToolParam(name = "to", description = "结束提交（sha / 分支 / HEAD）")
                           String to) {
         if (isBlank(from) || isBlank(to)) {
-            throw new IllegalArgumentException("from / to 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "from / to 不能为空");
         }
         List<String> commits = repo.logRange(ctx.projectId(), from, to);
         List<String> stat = repo.diffStat(ctx.projectId(), from, to);
@@ -368,7 +370,7 @@ public class RepoQueryTools {
                 }
             }
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法读取目录：" + e.getMessage());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "无法读取目录：" + e.getMessage());
         }
         entries.sort(Comparator
                 .comparing((Path p) -> !Files.isDirectory(p))
@@ -397,12 +399,11 @@ public class RepoQueryTools {
         Path root = repoRoot(ctx);
         Path target = resolveInside(root, path);
         if (!Files.isRegularFile(target)) {
-            throw new IllegalArgumentException("文件不存在：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件不存在：" + path);
         }
         String relative = root.relativize(target).toString().replace('\\', '/');
         if (redactor.isSensitiveFile(relative)) {
-            throw new IllegalArgumentException(
-                    "该文件可能包含凭据（.env / 私钥 / 凭据文件），平台不返回原文：" + relative
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "该文件可能包含凭据（.env / 私钥 / 凭据文件），平台不返回原文：" + relative
                             + "；请用 env_summary / env_var_probe 查看变量数量与指向");
         }
         try {
@@ -413,7 +414,7 @@ public class RepoQueryTools {
             }
             for (int i = 0; i < read; i++) {
                 if (head[i] == 0) {
-                    throw new IllegalArgumentException("这是二进制文件，无法按文本读取：" + path);
+                    throw new RunException(ErrorCode.RUN_INVALID_INPUT, "这是二进制文件，无法按文本读取：" + path);
                 }
             }
             String text = redactor.redact(Files.readString(target, StandardCharsets.UTF_8), ctx);
@@ -444,7 +445,7 @@ public class RepoQueryTools {
                     ---
                     evidence: project:%s""".formatted(relative, rangeNote, body, ctx.projectId());
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法读取文件：" + e.getMessage());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "无法读取文件：" + e.getMessage());
         }
     }
 
@@ -458,21 +459,20 @@ public class RepoQueryTools {
      */
     private Path repoRoot(ProjectContext ctx) {
         Path base = locator.repoDir(ctx.projectId()).orElseThrow(() ->
-                new IllegalArgumentException("项目尚未接入 git 仓库，无法浏览文件：" + ctx.projectId()));
+                new RunException(ErrorCode.RUN_INVALID_INPUT, "项目尚未接入 git 仓库，无法浏览文件：" + ctx.projectId()));
         if (ctx.worktree() == null) {
             return realDirectory(base, "仓库目录");
         }
         Path worktreeRoot = locator.worktreeRoot(ctx.projectId())
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "找不到工作树根：" + ctx.worktree()))
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "找不到工作树根：" + ctx.worktree()))
                 .toAbsolutePath().normalize();
         Path worktree = worktreeRoot.resolve(ctx.worktree()).normalize();
         // 兜底：即使上游校验被绕过，也不允许工作树路径跳出工作树根
         if (!worktree.startsWith(worktreeRoot) || worktree.equals(worktreeRoot)) {
-            throw new IllegalArgumentException("工作树路径超出仓库范围：" + ctx.worktree());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "工作树路径超出仓库范围：" + ctx.worktree());
         }
         if (!Files.isDirectory(worktree)) {
-            throw new IllegalArgumentException("工作树不存在：" + ctx.worktree());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "工作树不存在：" + ctx.worktree());
         }
         return realDirectory(worktree, "工作树");
     }
@@ -482,7 +482,7 @@ public class RepoQueryTools {
         try {
             return dir.toRealPath();
         } catch (IOException e) {
-            throw new IllegalArgumentException(label + "不可读：" + dir + "（" + e.getMessage() + "）");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, label + "不可读：" + dir + "（" + e.getMessage() + "）");
         }
     }
 
@@ -503,15 +503,15 @@ public class RepoQueryTools {
         try {
             candidate = Path.of(relative);
         } catch (RuntimeException e) {
-            throw new IllegalArgumentException("路径非法：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径非法：" + path);
         }
         // 绝对路径会直接丢弃 root，必须显式拒绝
         if (candidate.isAbsolute()) {
-            throw new IllegalArgumentException("路径超出仓库范围：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + path);
         }
         Path resolved = root.resolve(candidate).normalize();
         if (!resolved.startsWith(root)) {
-            throw new IllegalArgumentException("路径超出仓库范围：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + path);
         }
         // 找到最近一个存在的祖先（目标可能尚不存在），用真实路径做范围校验
         Path existing = resolved;
@@ -519,16 +519,16 @@ public class RepoQueryTools {
             existing = existing.getParent();
         }
         if (existing == null) {
-            throw new IllegalArgumentException("路径超出仓库范围：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + path);
         }
         Path real;
         try {
             real = existing.toRealPath();
         } catch (IOException e) {
-            throw new IllegalArgumentException("路径不可读：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径不可读：" + path);
         }
         if (!real.startsWith(root)) {
-            throw new IllegalArgumentException("路径经符号链接超出仓库范围：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径经符号链接超出仓库范围：" + path);
         }
         return resolved;
     }

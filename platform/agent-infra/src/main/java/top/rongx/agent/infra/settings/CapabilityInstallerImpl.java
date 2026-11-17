@@ -5,6 +5,8 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.settings.CapabilityInstaller;
 import top.rongx.agent.domain.settings.CapabilityMarket;
 import top.rongx.agent.domain.settings.McpServerRepository;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 能力安装器实现：MCP 落 SQLite，Skill 落 {@code _platform/skills/<name>/SKILL.md}。
@@ -44,7 +46,7 @@ public class CapabilityInstallerImpl implements CapabilityInstaller {
     @Override
     public Result install(String capabilityId) {
         CapabilityMarket.Entry entry = market.find(capabilityId)
-                .orElseThrow(() -> new IllegalArgumentException("能力不存在或已下架：" + capabilityId));
+                .orElseThrow(() -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "能力不存在或已下架：" + capabilityId));
         String name = entry.name();
         String kind = entry.kind().name();
 
@@ -73,7 +75,7 @@ public class CapabilityInstallerImpl implements CapabilityInstaller {
                             + " 个文件，含脚本/参考资料），可在对话工具栏勾选");
         }
         if (entry.content() == null || entry.content().isBlank()) {
-            throw new IllegalStateException("技能内容为空，无法安装：" + capabilityId);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能内容为空，无法安装：" + capabilityId);
         }
         skills.create(name, entry.description(), entry.content());
         return new Result(kind, name, false, "已接入 Skill「" + name + "」，可在对话工具栏勾选");

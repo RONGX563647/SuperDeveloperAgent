@@ -28,6 +28,8 @@ import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.domain.error.DeployException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 部署 Agent 的工具：**专用于"把某个环境跑通并固化"**。
@@ -239,7 +241,7 @@ public class DeployTools {
         String updated;
         try {
             updated = applyDeployConfig(yaml, wireTarget, port, containerPort, path, url, volumePath);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
         if (!defStore.write(ctx.projectId(), updated, null)) {
@@ -273,11 +275,10 @@ public class DeployTools {
         } catch (org.yaml.snakeyaml.error.YAMLException e) {
             // ParserException / ScannerException 是 RuntimeException 但不是 IllegalArgumentException：
             // 不包装就会绕过工具层 "err: ..." 契约，把原始堆栈抛给模型，且可能继续写坏定义。
-            throw new IllegalArgumentException(
-                    "现有流水线定义不是合法 YAML：" + e.getMessage(), e);
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "现有流水线定义不是合法 YAML：" + e.getMessage(), e);
         }
         if (!(loaded instanceof Map<?, ?> rootRaw)) {
-            throw new IllegalArgumentException("现有流水线定义不是合法 YAML 映射");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "现有流水线定义不是合法 YAML 映射");
         }
         Map<String, Object> root = copyMap(rootRaw);
         Map<String, Object> deploy = root.get("deploy") instanceof Map<?, ?> deployRaw
@@ -596,8 +597,7 @@ public class DeployTools {
     private static String normalize(String env) {
         String value = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
         if (!EnvNames.ALL.contains(value)) {
-            throw new IllegalArgumentException(
-                    "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
         }
         return value;
     }

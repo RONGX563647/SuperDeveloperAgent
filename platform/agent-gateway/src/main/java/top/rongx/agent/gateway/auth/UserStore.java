@@ -17,6 +17,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.bcrypt.BCrypt;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.UserRolePort;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 用户仓库（SQLite 持久化）。
@@ -99,7 +102,7 @@ public class UserStore implements UserRolePort {
                 st.executeUpdate();
             }
         } catch (SQLException | java.io.IOException e) {
-            throw new IllegalStateException("users 表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "users 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -189,7 +192,7 @@ public class UserStore implements UserRolePort {
              ResultSet rs = st.executeQuery()) {
             return rs.next() ? rs.getInt(1) : 0;
         } catch (SQLException e) {
-            throw new IllegalStateException("用户查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "用户查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -206,7 +209,7 @@ public class UserStore implements UserRolePort {
             st.setString(5, String.join(",", user.projects()));
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("用户写入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "用户写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -219,7 +222,7 @@ public class UserStore implements UserRolePort {
             st.setString(2, userId);
             return st.executeUpdate() > 0;
         } catch (SQLException e) {
-            throw new IllegalStateException("用户更新失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "用户更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -233,7 +236,7 @@ public class UserStore implements UserRolePort {
     private static boolean matches(String hash, String raw) {
         try {
             return BCrypt.checkpw(raw, hash);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return false;
         }
     }
@@ -253,14 +256,14 @@ public class UserStore implements UserRolePort {
     public synchronized void changePassword(String userId, String current, String next) {
         User user = find(userId);
         if (user == null || !matches(user.bcryptHash(), current == null ? "" : current)) {
-            throw new IllegalArgumentException("原密码不正确");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "原密码不正确");
         }
         if (next == null || next.length() < MIN_PASSWORD_LENGTH) {
-            throw new IllegalArgumentException("新密码至少 " + MIN_PASSWORD_LENGTH + " 位");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新密码至少 " + MIN_PASSWORD_LENGTH + " 位");
         }
         if (next.equals(initialPasswords.getOrDefault(userId, DEFAULT_INITIAL_PASSWORD))
                 || matches(user.bcryptHash(), next)) {
-            throw new IllegalArgumentException("新密码不能与初始密码或当前密码相同");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新密码不能与初始密码或当前密码相同");
         }
         updateHash(userId, next);
     }
@@ -289,7 +292,7 @@ public class UserStore implements UserRolePort {
                         rs.getString("bcrypt_hash"), Role.of(rs.getString("role")), list);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("用户查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "用户查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -319,7 +322,7 @@ public class UserStore implements UserRolePort {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("用户查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "用户查询失败：" + e.getMessage(), e);
         }
     }
 }

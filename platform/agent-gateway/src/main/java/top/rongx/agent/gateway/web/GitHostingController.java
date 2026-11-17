@@ -24,6 +24,8 @@ import top.rongx.agent.domain.settings.GitHostingAccount;
 import top.rongx.agent.domain.settings.GitHostingAccountRepository;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.infra.git.GitWorktreeManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * 代码托管接入（GitHub / GitLab / 自定义 Git 服务）。
@@ -82,7 +84,7 @@ public class GitHostingController {
     public Map<String, Object> test(@PathVariable String id) {
         String userId = requireWrite();
         GitHostingAccount account = accounts.find(id, userId).orElseThrow(
-                () -> new IllegalArgumentException("代码托管账号不存在：" + id));
+                () -> new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "代码托管账号不存在：" + id));
         String token = accounts.tokenOf(id, userId).orElse("");
         long start = System.nanoTime();
         try {
@@ -111,13 +113,13 @@ public class GitHostingController {
         String userId = requireWrite();
         String repoUrl = str(body, "repoUrl");
         if (repoUrl == null || repoUrl.isBlank()) {
-            throw new IllegalArgumentException("repoUrl 必填");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "repoUrl 必填");
         }
         String accountId = str(body, "accountId");
         GitWorktreeManager.GitAuth auth = null;
         if (accountId != null && !accountId.isBlank()) {
             GitHostingAccount account = accounts.find(accountId, userId).orElseThrow(
-                    () -> new IllegalArgumentException("代码托管账号不存在：" + accountId));
+                    () -> new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "代码托管账号不存在：" + accountId));
             String token = accounts.tokenOf(accountId, userId).orElse(null);
             auth = new GitWorktreeManager.GitAuth(account.username(), token);
         } else {

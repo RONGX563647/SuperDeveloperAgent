@@ -17,6 +17,7 @@ import top.rongx.agent.domain.bugfix.BugFixEdit;
 import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.infra.git.GitWorktreeManager;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 修复补丁落库测试：真实本地 git 仓库上验证「基线 worktree → 写文件 → 独立分支提交」，
@@ -58,11 +59,11 @@ class WorkspaceBugFixGitTest {
         WorkspaceBugFixGit git = new WorkspaceBugFixGit(manager, direct(repo), null);
         BugFixRun run = run(manager.revParse(repo, "HEAD"), "agent/bugfix-test002");
 
-        assertThrows(IllegalArgumentException.class, () -> git.commitFix(run,
+        assertThrows(PlatformException.class, () -> git.commitFix(run,
                 List.of(BugFixEdit.full("../outside.txt", "x")), "bad"));
-        assertThrows(IllegalArgumentException.class, () -> git.commitFix(run,
+        assertThrows(PlatformException.class, () -> git.commitFix(run,
                 List.of(BugFixEdit.full(".env", "TOKEN=x")), "bad"));
-        assertThrows(IllegalArgumentException.class, () -> git.commitFix(run,
+        assertThrows(PlatformException.class, () -> git.commitFix(run,
                 List.of(BugFixEdit.full(".git/config", "x")), "bad"));
     }
 
@@ -89,7 +90,7 @@ class WorkspaceBugFixGitTest {
         WorkspaceBugFixGit git = new WorkspaceBugFixGit(manager, direct(repo), null);
         BugFixRun run = run(manager.revParse(repo, "HEAD"), "agent/bugfix-test004");
 
-        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+        PlatformException missing = assertThrows(PlatformException.class,
                 () -> git.commitFix(run,
                         List.of(BugFixEdit.replace("src/main/App.java", "not-found", "x")), "bad"));
         assertTrue(missing.getMessage().contains("片段替换失败"), missing.getMessage());
@@ -103,7 +104,7 @@ class WorkspaceBugFixGitTest {
         String base = manager.revParse(repo, "HEAD");
         BugFixRun dupRun = run(base, "agent/bugfix-test005");
 
-        IllegalArgumentException ambiguous = assertThrows(IllegalArgumentException.class,
+        PlatformException ambiguous = assertThrows(PlatformException.class,
                 () -> git.commitFix(dupRun,
                         List.of(BugFixEdit.replace("src/main/App.java", "return 0;", "return 1;")),
                         "bad"));
@@ -117,7 +118,7 @@ class WorkspaceBugFixGitTest {
         GitWorktreeManager manager = new GitWorktreeManager(temp.resolve("workspace"));
         WorkspaceBugFixGit git = new WorkspaceBugFixGit(manager, direct(plain), null);
 
-        IllegalStateException error = assertThrows(IllegalStateException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> git.headSha("p1"));
         assertTrue(error.getMessage().contains("不是 git 仓库根目录"), error.getMessage());
     }

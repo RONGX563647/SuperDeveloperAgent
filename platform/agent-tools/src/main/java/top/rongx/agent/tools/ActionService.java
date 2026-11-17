@@ -22,6 +22,8 @@ import top.rongx.agent.domain.tool.ToolLevel;
 import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.policy.ConfirmationRequiredException;
 import top.rongx.agent.domain.policy.DangerousActionPolicy;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 
 /**
  * 动作编排服务（工具与 HTTP 共用同一套门禁，避免两条路径行为不一致）。
@@ -83,8 +85,7 @@ public class ActionService {
      */
     public ActionSpec plan(ProjectContext ctx, ActionId action) {
         return resolver.resolve(workspace(ctx), action)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "动作 " + action.wireName() + " 没有配方。可在仓库提供 ci/actions.yml（推荐）或 Makefile。"));
+                .orElseThrow(() -> new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "动作 " + action.wireName() + " 没有配方。可在仓库提供 ci/actions.yml（推荐）或 Makefile。"));
     }
 
     /**
@@ -100,7 +101,7 @@ public class ActionService {
      */
     public ActionResult run(ProjectContext ctx, ActionId action, Map<String, String> overrides) {
         if (!action.autoExecutable()) {
-            throw new IllegalStateException(action.wireName()
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, action.wireName()
                     + " 属 L3（影响生产），不能直接执行。请先 request → confirm → apply。");
         }
         policy.requireNotDenied(ctx, ToolLevel.L2_EXECUTE_ISOLATED, action.wireName());
@@ -132,7 +133,7 @@ public class ActionService {
      */
     public ChangePlan requestApproval(ProjectContext ctx, ActionId action) {
         if (action.autoExecutable()) {
-            throw new IllegalArgumentException(action.wireName() + " 属 L2，可直接执行，无需审批。");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, action.wireName() + " 属 L2，可直接执行，无需审批。");
         }
         policy.requireNotDenied(ctx, ToolLevel.L3_EXECUTE_PROD, action.wireName());
         ActionSpec spec = plan(ctx, action);
@@ -159,14 +160,14 @@ public class ActionService {
     public ActionResult apply(ProjectContext ctx, ActionId action, String confirmedPlanHash,
                               Map<String, String> overrides) {
         if (action.autoExecutable()) {
-            throw new IllegalStateException(action.wireName() + " 属 L2，请直接执行。");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, action.wireName() + " 属 L2，请直接执行。");
         }
         policy.requireNotDenied(ctx, ToolLevel.L3_EXECUTE_PROD, action.wireName());
         Path root = requireWorkspace(ctx);
         ActionSpec spec = plan(ctx, action);
         String actual = specHash(ctx, spec);
         if (!actual.equals(confirmedPlanHash)) {
-            throw new IllegalStateException("配方在确认后已被修改，请重新确认（planHash 不匹配）");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, "配方在确认后已被修改，请重新确认（planHash 不匹配）");
         }
         ActionSpec bound = bindParams(spec, overrides);
         assertHostSafe(ctx, bound);
@@ -181,7 +182,7 @@ public class ActionService {
      */
     public ActionResult applyConfirmed(ProjectContext ctx, ActionId action, String confirmedPlanHash) {
         if (!action.autoExecutable()) {
-            throw new IllegalArgumentException(action.wireName() + " 属 L3，请走 L3 的 apply 流程");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, action.wireName() + " 属 L3，请走 L3 的 apply 流程");
         }
         Path root = requireWorkspace(ctx);
         ActionSpec spec = plan(ctx, action);
@@ -189,11 +190,11 @@ public class ActionService {
                 .map(argv -> String.join(" ", argv))
                 .collect(java.util.stream.Collectors.joining("\n"));
         if (!dangerous.requiresConfirmation(action.wireName(), commands)) {
-            throw new IllegalArgumentException(action.wireName() + " 不是破坏性动作，可直接执行");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, action.wireName() + " 不是破坏性动作，可直接执行");
         }
         policy.requireNotDenied(ctx, ToolLevel.L2_EXECUTE_ISOLATED, action.wireName());
         if (!specHash(ctx, spec).equals(confirmedPlanHash)) {
-            throw new IllegalStateException("配方在确认后已被修改，请重新确认（planHash 不匹配）");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, "配方在确认后已被修改，请重新确认（planHash 不匹配）");
         }
         assertHostSafe(ctx, spec);
         return runner.run(root, spec);
@@ -211,12 +212,12 @@ public class ActionService {
         for (Map.Entry<String, String> e : overrides.entrySet()) {
             String name = e.getKey();
             if (!spec.allowed().containsKey(name)) {
-                throw new IllegalArgumentException("动作 " + spec.action().wireName()
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "动作 " + spec.action().wireName()
                         + " 不接受参数 " + name + "；可用：" + spec.allowed().keySet());
             }
             List<String> allowed = spec.allowed().get(name);
             if (!allowed.isEmpty() && !allowed.contains(e.getValue())) {
-                throw new IllegalArgumentException("参数 " + name + " 取值 " + e.getValue()
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "参数 " + name + " 取值 " + e.getValue()
                         + " 不在允许范围 " + allowed);
             }
             merged.put(name, e.getValue());
@@ -262,7 +263,7 @@ public class ActionService {
                 || spec.source().kind() == ActionSource.Kind.TASKFILE;
         boolean affectsProd = !spec.action().autoExecutable();
         if (untrusted || affectsProd) {
-            throw new IllegalStateException("宿主进程无隔离，拒绝执行 " + spec.action().wireName()
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, "宿主进程无隔离，拒绝执行 " + spec.action().wireName()
                     + "（来源=" + spec.source().ref() + "）：不可审计或影响生产。"
                     + "请启用 Docker 沙箱，或改用 ci/actions.yml 直写命令（L2 且仅非生产）。");
         }
@@ -271,7 +272,7 @@ public class ActionService {
     private Path requireWorkspace(ProjectContext ctx) {
         Path root = workspace(ctx);
         if (!Files.isDirectory(root)) {
-            throw new IllegalArgumentException("项目工作区不存在：" + root + "（请先接入项目或克隆仓库）");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "项目工作区不存在：" + root + "（请先接入项目或克隆仓库）");
         }
         return root;
     }

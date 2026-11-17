@@ -10,6 +10,7 @@ import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixPolicyStore;
 import top.rongx.agent.domain.bugfix.BugFixTrigger;
 import top.rongx.agent.domain.gitissue.GitIssue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * Bug 任务自动修复触发器：webhook 新建/更新任务与平台新建/编辑任务都经过这里。
@@ -55,7 +56,7 @@ public class BugFixTriggerService implements BugFixTrigger {
             }
             orchestrator.getObject().start(issue);
             log.info("Bug 任务 {} 已触发自动修复", issue.id());
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             // 已有活动运行 / 已提过 PR：webhook 重投、编辑重开时属于正常情况
             log.debug("Bug 任务 {} 跳过自动修复：{}", issue.id(), e.getMessage());
         } catch (RuntimeException e) {

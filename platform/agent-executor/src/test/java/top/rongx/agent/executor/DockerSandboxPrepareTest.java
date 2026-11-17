@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 准备阶段回归：缓存卷初始化曾经藏在 {@code wrap()} 里无限等待 docker CLI，
@@ -95,7 +96,7 @@ class DockerSandboxPrepareTest {
         Recorder recorder = new Recorder(cmd -> timeout());
         DockerSandbox sandbox = sandbox(recorder);
 
-        IllegalStateException error = assertThrows(IllegalStateException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, null));
         assertTrue(error.getMessage().contains("缓存卷初始化失败"), error.getMessage());
         assertTrue(error.getMessage().contains("E-302"), error.getMessage());
@@ -147,7 +148,7 @@ class DockerSandboxPrepareTest {
                 1, "E-101", "命令失败（exit 1）"));
         DockerSandbox sandbox = sandbox(recorder);
 
-        IllegalStateException error = assertThrows(IllegalStateException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> sandbox.ensureImageReady(() -> false, null));
         assertTrue(error.getMessage().contains("构建镜像未就绪"), error.getMessage());
         assertTrue(error.getMessage().contains("自动拉取失败"), error.getMessage());

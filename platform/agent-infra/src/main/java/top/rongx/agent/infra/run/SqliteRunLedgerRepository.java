@@ -16,6 +16,8 @@ import top.rongx.agent.domain.run.RunLedgerRepository;
 import top.rongx.agent.domain.run.RunRecord;
 import top.rongx.agent.domain.run.RunState;
 import top.rongx.agent.infra.sqlite.SqliteConnections;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 统一运行账本的 SQLite 实现（{@code _platform/run_ledger.db}）。
@@ -65,7 +67,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
         try {
             java.nio.file.Files.createDirectories(dbFile.getParent());
         } catch (java.io.IOException e) {
-            throw new IllegalStateException("运行账本目录创建失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本目录创建失败：" + e.getMessage(), e);
         }
         initSchema();
     }
@@ -76,7 +78,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
             st.execute(INDEX_PROJECT);
             st.execute(INDEX_STATE);
         } catch (SQLException e) {
-            throw new IllegalStateException("run_ledger 表初始化失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "run_ledger 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -103,7 +105,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
             st.setLong(10, record.updatedAt());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("运行账本写入失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -116,7 +118,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("运行账本读取失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -152,7 +154,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
             st.setLong(4, staleBefore);
             return st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("运行账本恢复失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本恢复失败：" + e.getMessage(), e);
         }
     }
 
@@ -167,7 +169,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
             st.setLong(1, updatedBefore);
             return st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("运行账本清理失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本清理失败：" + e.getMessage(), e);
         }
     }
 
@@ -182,7 +184,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
             st.setString(1, subjectId);
             return st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("运行账本删除失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -197,7 +199,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
             }
             return result;
         } catch (SQLException e) {
-            throw new IllegalStateException("运行账本查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本查询失败：" + e.getMessage(), e);
         }
     }
 

@@ -20,6 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
 import top.rongx.agent.gateway.gitissue.GitIssueSyncService;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * Git Issue Webhook 入口（Gitee / GitHub / GitLab 各一套签名规则）。
@@ -157,7 +159,7 @@ public class GitIssueWebhookController {
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
-            throw new IllegalStateException("HMAC 初始化失败", e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "HMAC 初始化失败", e);
         }
     }
 

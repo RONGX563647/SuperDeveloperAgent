@@ -7,6 +7,8 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 应用容器只读巡检：回答"应用起没起来、健康检查过没过、日志里报了什么"。
@@ -38,7 +40,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
         Cmd list = docker(List.of("docker", "ps", "-a",
                 "--filter", "label=agent.project", "--format", "{{.Names}}"));
         if (list.exitCode() != 0 && list.output().isBlank()) {
-            throw new IllegalStateException("docker 不可用：" + firstLine(list.output()));
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "docker 不可用：" + firstLine(list.output()));
         }
         List<ContainerStatus> result = new ArrayList<>();
         for (String name : list.output().split("\\R")) {
@@ -68,7 +70,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
     public List<PortOwner> portOwners(int hostPort) {
         Cmd list = docker(List.of("docker", "ps", "--format", "{{.Names}}|{{.Ports}}"));
         if (list.exitCode() != 0 && list.output().isBlank()) {
-            throw new IllegalStateException("docker 不可用：" + firstLine(list.output()));
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "docker 不可用：" + firstLine(list.output()));
         }
         String needle = ":" + hostPort + "->";
         List<PortOwner> owners = new ArrayList<>();
@@ -109,7 +111,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
             }
         }
         if (cmd.exitCode() != 0 && lines.isEmpty()) {
-            throw new IllegalStateException("docker logs 失败：" + firstLine(cmd.output()));
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "docker logs 失败：" + firstLine(cmd.output()));
         }
         return lines;
     }

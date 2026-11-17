@@ -1,5 +1,8 @@
 package top.rongx.agent.domain.project;
 
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
+
 /**
  * 一个被托管项目（规约 §1 / 多项目托管 v4）。
  *
@@ -22,10 +25,10 @@ public record Project(
 
     public Project {
         if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("project id 不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "project id 不能为空");
         }
         if (portRangeStart > portRangeEnd) {
-            throw new IllegalArgumentException("端口段不合法: " + portRangeStart + ">" + portRangeEnd);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "端口段不合法: " + portRangeStart + ">" + portRangeEnd);
         }
     }
 

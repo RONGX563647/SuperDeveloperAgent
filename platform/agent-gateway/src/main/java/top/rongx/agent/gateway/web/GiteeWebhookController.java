@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.ProjectRepository;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * Gitee webhook 接入：push 事件自动触发流水线。
@@ -118,7 +120,7 @@ public class GiteeWebhookController {
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             return HexFormat.of().formatHex(mac.doFinal(body.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
-            throw new IllegalStateException("HMAC 初始化失败", e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "HMAC 初始化失败", e);
         }
     }
 

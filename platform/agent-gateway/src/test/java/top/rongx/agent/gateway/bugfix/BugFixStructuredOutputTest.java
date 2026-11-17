@@ -13,6 +13,7 @@ import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
 import top.rongx.agent.gateway.bugfix.structured.FixOutput;
 import top.rongx.agent.gateway.bugfix.structured.ReproduceOutput;
 import top.rongx.agent.gateway.bugfix.structured.VerifyOutput;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 结构化输出的两道防线：
@@ -56,9 +57,9 @@ class BugFixStructuredOutputTest {
 
     @Test
     void rejectsBothEmptyAndBothPresent() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> BugFixOutputValidation.edits(new FixOutput("说明", null, null)));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> BugFixOutputValidation.edits(new FixOutput("说明",
                         List.of(edit("a.java", "old", "new")),
                         List.of(new FixOutput.FileOutput("a.java", "content")))));
@@ -77,17 +78,17 @@ class BugFixStructuredOutputTest {
     void rejectsUnsafePaths() {
         for (String path : List.of("/etc/passwd", "C:\\windows\\system.ini", "../outside.java",
                 "src/../../outside.java", ".git/config")) {
-            assertThrows(IllegalArgumentException.class,
+            assertThrows(PlatformException.class,
                     () -> BugFixOutputValidation.safePath(path), "应拒绝路径：" + path);
         }
     }
 
     @Test
     void rejectsBlankOldTextAndDuplicateFiles() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> BugFixOutputValidation.edits(new FixOutput("说明",
                         List.of(edit("a.java", "", "new")), null)));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> BugFixOutputValidation.edits(new FixOutput("说明", null,
                         List.of(new FixOutput.FileOutput("a.java", "1"),
                                 new FixOutput.FileOutput("a.java", "2")))));
@@ -99,14 +100,14 @@ class BugFixStructuredOutputTest {
         for (int i = 0; i <= BugFixOutputValidation.MAX_EDITS; i++) {
             edits.add(edit("f" + i + ".java", "old", "new"));
         }
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> BugFixOutputValidation.edits(new FixOutput("说明", edits, null)));
 
         List<FixOutput.FileOutput> files = new ArrayList<>();
         for (int i = 0; i <= BugFixOutputValidation.MAX_FILES; i++) {
             files.add(new FixOutput.FileOutput("f" + i + ".java", "content"));
         }
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> BugFixOutputValidation.edits(new FixOutput("说明", null, files)));
     }
 

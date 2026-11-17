@@ -10,6 +10,7 @@ import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.tool.ToolLevel;
 import top.rongx.agent.domain.policy.PolicyPort;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 流水线写工具（编排层入口，L2：仅测试环境）。
@@ -67,7 +68,7 @@ public class CiCommandTools {
             runId = engine.trigger(ctx.projectId(), pipelineId,
                     Map.of("gitSha", gitSha, "env", ctx.env(),
                             "dryRunHash", dryRun.reportHash()));
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             // 前置校验（缺定义/参数非法）应作为可读错误回给模型，而不是抛异常打断对话
             return "err: " + e.getMessage();
         }
@@ -94,7 +95,7 @@ public class CiCommandTools {
         PipelineEngine.DryRunReport report;
         try {
             report = engine.dryRun(ctx.projectId(), pipelineId, ctx.env(), gitSha);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
         StringBuilder sb = new StringBuilder();

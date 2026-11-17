@@ -3,6 +3,8 @@ package top.rongx.agent.domain.action;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 
 /**
  * 解析后的动作规格（确定性、可复现、可审计）。
@@ -45,16 +47,16 @@ public record   ActionSpec(
 
     public ActionSpec {
         if (steps == null || steps.isEmpty()) {
-            throw new IllegalArgumentException("动作 " + action + " 没有可执行命令");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "动作 " + action + " 没有可执行命令");
         }
         steps = steps.stream().map(List::copyOf).toList();
         produce = produce == null ? List.of() : List.copyOf(produce);
         timeout = timeout == null ? Duration.ofMinutes(15) : timeout;
         if (timeout.isNegative() || timeout.isZero()) {
-            throw new IllegalArgumentException("超时必须为正");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "超时必须为正");
         }
         if (source == null) {
-            throw new IllegalArgumentException("来源不能为空（审计需要）");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "来源不能为空（审计需要）");
         }
         params = params == null ? Map.of() : Map.copyOf(params);
         allowed = allowed == null ? Map.of() : Map.copyOf(allowed);

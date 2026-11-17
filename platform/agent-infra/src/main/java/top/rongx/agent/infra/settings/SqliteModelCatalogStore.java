@@ -13,6 +13,8 @@ import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.ModelCatalogEntry;
 import top.rongx.agent.domain.settings.ModelCatalogRepository;
 import top.rongx.agent.infra.sqlite.SqliteConnections;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 模型目录（SQLite）：与模型连接共用 {@code _platform/projects.db}。
@@ -50,7 +52,7 @@ public class SqliteModelCatalogStore implements ModelCatalogRepository {
         try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("model_catalog 表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "model_catalog 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -75,7 +77,7 @@ public class SqliteModelCatalogStore implements ModelCatalogRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("模型目录查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型目录查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -94,7 +96,7 @@ public class SqliteModelCatalogStore implements ModelCatalogRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("模型目录查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型目录查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -135,7 +137,7 @@ public class SqliteModelCatalogStore implements ModelCatalogRepository {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("模型目录同步失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型目录同步失败：" + e.getMessage(), e);
         }
     }
 
@@ -158,7 +160,7 @@ public class SqliteModelCatalogStore implements ModelCatalogRepository {
             st.setLong(5, System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("模型目录写入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型目录写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -170,7 +172,7 @@ public class SqliteModelCatalogStore implements ModelCatalogRepository {
             st.setString(1, connectionId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("模型目录删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型目录删除失败：" + e.getMessage(), e);
         }
     }
 

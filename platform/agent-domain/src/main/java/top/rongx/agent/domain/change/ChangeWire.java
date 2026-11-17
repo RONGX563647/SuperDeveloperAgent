@@ -2,6 +2,8 @@ package top.rongx.agent.domain.change;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PromotionException;
 
 /**
  * 工具输出与网关之间的变更单「线格式」。
@@ -34,7 +36,7 @@ public final class ChangeWire {
     /** 生产端：输出一行可被 {@link #extract(String)} 识别的变更单号。 */
     public static String line(String changeId) {
         if (changeId == null || changeId.isBlank()) {
-            throw new IllegalArgumentException("changeId 不能为空");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "changeId 不能为空");
         }
         return FIELD + ": " + changeId.trim();
     }

@@ -17,6 +17,8 @@ import top.rongx.agent.domain.gitissue.GitIssueService;
 import top.rongx.agent.domain.bugfix.BugFixTrigger;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * Issue 任务服务实现：本地 CRUD + 按集成配置把变更推送到 Git。
@@ -60,7 +62,7 @@ public class GitIssueServiceImpl implements GitIssueService {
     @Override
     public GitIssue create(String userId, GitIssue.Draft draft) {
         if (draft.title().isBlank()) {
-            throw new IllegalArgumentException("任务标题不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "任务标题不能为空");
         }
         long now = System.currentTimeMillis();
         // 任务归属项目时自动使用项目托管的仓库，不再让用户手选平台/仓库
@@ -86,7 +88,7 @@ public class GitIssueServiceImpl implements GitIssueService {
     public GitIssue update(String userId, String id, GitIssue.Draft draft) {
         GitIssue current = require(userId, id);
         if (draft.title().isBlank()) {
-            throw new IllegalArgumentException("任务标题不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "任务标题不能为空");
         }
         GitIssue.Draft resolved = resolveRemote(draft, current);
         String provider = resolved.provider().isBlank() ? current.provider() : resolved.provider();
@@ -142,7 +144,7 @@ public class GitIssueServiceImpl implements GitIssueService {
     public GitIssueComment comment(String userId, String issueId, String body) {
         GitIssue issue = require(userId, issueId);
         if (body == null || body.isBlank()) {
-            throw new IllegalArgumentException("评论内容不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "评论内容不能为空");
         }
         GitIssueComment comment = new GitIssueComment(newId("c"), issueId, userId,
                 body.trim(), "PLATFORM", System.currentTimeMillis());
@@ -170,7 +172,7 @@ public class GitIssueServiceImpl implements GitIssueService {
     public GitIssue sync(String userId, String id) {
         GitIssue issue = require(userId, id);
         if (issue.provider().isBlank() || issue.repo().isBlank()) {
-            throw new IllegalArgumentException("任务未配置 Git 仓库，无法同步");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "任务未配置 Git 仓库，无法同步");
         }
         GitIssue pushed = issue.bound() ? pushUpdate(issue, userId) : pushCreate(issue, userId);
         return issues.save(pushed);
@@ -280,8 +282,7 @@ public class GitIssueServiceImpl implements GitIssueService {
 
     private GitIssueRemoteClient.Credentials credentials(String userId, GitIssue issue) {
         return remote.credentials(userId, issue.provider(), issue.repo())
-                .orElseThrow(() -> new IllegalStateException(
-                        "未绑定 " + issue.provider() + " 账号，无法同步到 Git"));
+                .orElseThrow(() -> new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "未绑定 " + issue.provider() + " 账号，无法同步到 Git"));
     }
 
     /** 把分类写进远端标签，Git 侧也能按 bug / feat 筛选。 */
@@ -301,7 +302,7 @@ public class GitIssueServiceImpl implements GitIssueService {
 
     private GitIssue require(String userId, String id) {
         return issues.find(id, userId)
-                .orElseThrow(() -> new IllegalArgumentException("任务不存在：" + id));
+                .orElseThrow(() -> new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "任务不存在：" + id));
     }
 
     private static GitIssue copy(GitIssue issue, String number, String url, String state,

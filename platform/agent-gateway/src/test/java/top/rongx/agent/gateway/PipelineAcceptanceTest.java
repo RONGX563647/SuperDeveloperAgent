@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 「自研替代 Jenkins」的真实端到端验收：**不 mock 任何一步**。
@@ -236,9 +237,9 @@ class PipelineAcceptanceTest {
     @DisplayName("A4 未登记流水线与非法 sha 被拒")
     void inputValidation() {
         PipelineEngine current = engine;
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> current.trigger("RY", "deploy-everything", Map.of("gitSha", "abcdef1")));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> current.trigger("RY", "release", Map.of("gitSha", "not-a-sha")));
         assertEquals(List.of("release", "verify"), current.pipelines("RY"));
         assertEquals("builtin-pipeline", current.id());

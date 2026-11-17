@@ -20,6 +20,8 @@ import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.McpServer;
 import top.rongx.agent.domain.settings.McpServerRepository;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * MCP 服务器配置（SQLite）。
@@ -80,7 +82,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
             st.executeUpdate();
             tools.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("mcp_servers 表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "mcp_servers 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -101,7 +103,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("MCP 列表查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 列表查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -115,7 +117,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("MCP 查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -124,10 +126,10 @@ public class SqliteMcpServerStore implements McpServerRepository {
         String transport = normalizeTransport(view.transport());
         String name = requireName(view.name());
         if ("stdio".equals(transport) && blank(view.command())) {
-            throw new IllegalArgumentException("stdio 传输必须填写启动命令（如 npx）");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "stdio 传输必须填写启动命令（如 npx）");
         }
         if ("http".equals(transport) && blank(view.url())) {
-            throw new IllegalArgumentException("http 传输必须填写服务 URL");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "http 传输必须填写服务 URL");
         }
         String id = blank(view.id()) ? newId() : view.id();
         long now = System.currentTimeMillis();
@@ -144,9 +146,9 @@ public class SqliteMcpServerStore implements McpServerRepository {
         } catch (SQLException e) {
             String message = String.valueOf(e.getMessage());
             if (message.contains("UNIQUE")) {
-                throw new IllegalArgumentException("名称已存在：" + name);
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "名称已存在：" + name);
             }
-            throw new IllegalStateException("MCP 保存失败：" + message, e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 保存失败：" + message, e);
         }
     }
 
@@ -218,7 +220,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
             st.setString(1, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("MCP 删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -240,7 +242,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
                 return parseHeaders(secretBox.decrypt(enc, iv));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("MCP 请求头读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 请求头读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -263,7 +265,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("MCP 工具开关读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 工具开关读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -293,7 +295,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
                 ins.executeBatch();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("MCP 工具开关保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 工具开关保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -357,7 +359,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
         String t = transport == null || transport.isBlank()
                 ? "stdio" : transport.trim().toLowerCase(Locale.ROOT);
         if (!t.equals("stdio") && !t.equals("http")) {
-            throw new IllegalArgumentException("transport 只能是 stdio 或 http");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "transport 只能是 stdio 或 http");
         }
         return t;
     }
@@ -365,10 +367,10 @@ public class SqliteMcpServerStore implements McpServerRepository {
     private static String requireName(String name) {
         String n = name == null ? "" : name.trim();
         if (n.isBlank() || n.length() > 64) {
-            throw new IllegalArgumentException("名称必填且不超过 64 字符");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "名称必填且不超过 64 字符");
         }
         if (!n.matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")) {
-            throw new IllegalArgumentException("名称只能包含字母、数字、下划线、点与短横线");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "名称只能包含字母、数字、下划线、点与短横线");
         }
         return n;
     }

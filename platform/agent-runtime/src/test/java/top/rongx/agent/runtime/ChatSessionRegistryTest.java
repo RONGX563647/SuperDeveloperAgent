@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 会话必须绑定到唯一的用户/项目/环境，切项目复用同一个 sessionId 会被拒绝。 */
 class ChatSessionRegistryTest {
@@ -26,7 +27,7 @@ class ChatSessionRegistryTest {
         registry.bindOrVerify("s1",
                 new ProjectContext("RY", "test", "u1", "git@x/ry.git", null, false));
 
-        assertThrows(IllegalArgumentException.class, () -> registry.bindOrVerify("s1",
+        assertThrows(PlatformException.class, () -> registry.bindOrVerify("s1",
                 new ProjectContext("NEW", "test", "u1", "git@x/new.git", null, false)));
     }
 
@@ -35,9 +36,9 @@ class ChatSessionRegistryTest {
         registry.bindOrVerify("s1",
                 new ProjectContext("RY", "test", "u1", "git@x/ry.git", null, false));
 
-        assertThrows(IllegalArgumentException.class, () -> registry.bindOrVerify("s1",
+        assertThrows(PlatformException.class, () -> registry.bindOrVerify("s1",
                 new ProjectContext("RY", "dev", "u1", "git@x/ry.git", null, false)));
-        assertThrows(IllegalArgumentException.class, () -> registry.bindOrVerify("s1",
+        assertThrows(PlatformException.class, () -> registry.bindOrVerify("s1",
                 new ProjectContext("RY", "test", "u2", "git@x/ry.git", null, false)));
     }
 

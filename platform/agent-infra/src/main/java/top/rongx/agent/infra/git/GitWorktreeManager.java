@@ -494,17 +494,17 @@ public class GitWorktreeManager {
     public String mergeFastForward(Path repoDir, String branch, String into) {
         String target = revParse(repoDir, "refs/heads/" + into);
         if (target.isBlank()) {
-            throw new IllegalArgumentException("目标分支不存在：" + into);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "目标分支不存在：" + into);
         }
         String source = revParse(repoDir, "refs/heads/" + branch);
         if (source.isBlank()) {
-            throw new IllegalArgumentException("分支不存在：" + branch);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "分支不存在：" + branch);
         }
         if (!target.equals(source)) {
             Raw check = exec(repoDir, List.of("git", "merge-base", "--is-ancestor", target, source),
                     "git merge-base", GIT_TIMEOUT_SECONDS, null);
             if (check.exit() != 0) {
-                throw new IllegalArgumentException("分支 " + branch + " 无法快进合并进 " + into
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "分支 " + branch + " 无法快进合并进 " + into
                         + "（" + into + " 已有新提交），请手动合并");
             }
             if (into.equals(currentBranch(repoDir))) {

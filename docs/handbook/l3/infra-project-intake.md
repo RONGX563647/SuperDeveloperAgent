@@ -11,7 +11,7 @@ summary: 校验请求、拦截重复接入，并在虚拟线程里推进接入�
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 项目接入异步入口与状态机 | `ProjectIntakeService#submit` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java:140-156` | agent-infra |
+| 项目接入异步入口与状态机 | `ProjectIntakeService#submit` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java:141-157` | agent-infra |
 <!-- generated:end -->
 
 ## 行为拆解

@@ -19,6 +19,8 @@ import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.settings.ProjectEnvVar;
 import top.rongx.agent.domain.settings.ProjectEnvVarRepository;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 项目环境变量（SQLite）：值一律 AES-GCM 加密落库。
@@ -64,7 +66,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
         try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("project_env_vars 表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "project_env_vars 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -90,7 +92,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -113,7 +115,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
             }
             return out;
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -128,7 +130,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
             boolean keep = value == null || value.isEmpty();
             if (keep) {
                 if (findOne(conn, projectId, env, key).isEmpty()) {
-                    throw new IllegalArgumentException("新变量必须提供值：" + key);
+                    throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新变量必须提供值：" + key);
                 }
                 try (PreparedStatement st = conn.prepareStatement("""
                         UPDATE project_env_vars SET is_secret=?, updated_by=?, updated_at=?
@@ -167,7 +169,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
                 }
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量保存失败：" + e.getMessage(), e);
         }
         return findOne(projectId, env, key).orElseThrow();
     }
@@ -185,7 +187,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
             st.setString(3, key);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -195,7 +197,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
         try (Connection conn = open()) {
             return findOne(conn, projectId, env, key);
         } catch (SQLException e) {
-            throw new IllegalStateException("环境变量查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -233,7 +235,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
 
     private static void requireProject(String projectId) {
         if (projectId == null || !projectId.matches("[A-Za-z0-9_-]{1,32}")) {
-            throw new IllegalArgumentException("非法项目 ID：" + projectId);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "非法项目 ID：" + projectId);
         }
     }
 
@@ -243,7 +245,7 @@ public class SqliteProjectEnvVarStore implements ProjectEnvVarRepository {
 
     private static void requireKey(String key) {
         if (key == null || !key.matches("[A-Za-z_][A-Za-z0-9_]{0,63}")) {
-            throw new IllegalArgumentException("变量名不合法（需 [A-Za-z_][A-Za-z0-9_]*）：" + key);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量名不合法（需 [A-Za-z_][A-Za-z0-9_]*）：" + key);
         }
     }
 }

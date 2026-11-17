@@ -16,6 +16,8 @@ import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.gateway.gitissue.GitIssueRemoteClient;
 import top.rongx.agent.infra.git.GitWorktreeManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 自动修复的 Git 适配器：在基线提交上建临时 worktree → 应用补丁 → 提交到独立分支 → 推送并建 PR。
@@ -69,30 +71,30 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
                 // 该引用不存在，继续尝试下一个
             }
         }
-        throw new IllegalStateException("仓库没有可用提交：" + projectId);
+        throw new RunException(ErrorCode.RUN_INVALID_STATE, "仓库没有可用提交：" + projectId);
     }
 
     @Override
     public String commitFix(BugFixRun run, List<BugFixEdit> edits, String message) {
         if (edits == null || edits.isEmpty()) {
-            throw new IllegalArgumentException("修复补丁为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "修复补丁为空");
         }
         if (edits.size() > MAX_EDITS) {
-            throw new IllegalArgumentException("一次最多 " + MAX_EDITS + " 处改动，收到 "
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "一次最多 " + MAX_EDITS + " 处改动，收到 "
                     + edits.size());
         }
         long files = edits.stream().map(edit -> normalize(edit.path())).distinct().count();
         if (files > MAX_FILES) {
-            throw new IllegalArgumentException("一次最多修改 " + MAX_FILES + " 个文件，收到 " + files);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "一次最多修改 " + MAX_FILES + " 个文件，收到 " + files);
         }
         Path repo = requireRepo(run.projectId());
         String baseSha = run.baseSha() == null || run.baseSha().isBlank()
                 ? headSha(run.projectId()) : run.baseSha();
         if (!baseSha.matches("[0-9a-f]{7,40}")) {
-            throw new IllegalArgumentException("基线提交非法：" + baseSha);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "基线提交非法：" + baseSha);
         }
         if (git.revParse(repo, baseSha + "^{commit}").isBlank()) {
-            throw new IllegalArgumentException("基线提交不存在：" + baseSha);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "基线提交不存在：" + baseSha);
         }
         String name = "wt-bugfix-" + run.id();
         ProjectRepoLocator.StorageMode mode = locator.modeOf(run.projectId());
@@ -102,7 +104,7 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
         try {
             applyEdits(worktree, edits);
             if (git.statusPorcelain(worktree).isEmpty()) {
-                throw new IllegalArgumentException("补丁未产生实际改动（old 与 new 相同，或片段替换后内容未变）");
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "补丁未产生实际改动（old 与 new 相同，或片段替换后内容未变）");
             }
             // -B：重试时把旧分支重置到基线，避免失败尝试的提交叠加
             git.resetBranch(worktree, run.branch());
@@ -137,10 +139,10 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
         if (oldText == null || oldText.isEmpty()) {
             // 新建文件：绝不覆盖已有内容，防止模型用「空片段」把整个文件清空
             if (!current.isEmpty()) {
-                throw new IllegalArgumentException("文件已存在，拒绝用空片段整体覆盖：" + path);
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件已存在，拒绝用空片段整体覆盖：" + path);
             }
             if (newText == null || newText.isEmpty()) {
-                throw new IllegalArgumentException("新建文件内容为空：" + path);
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "新建文件内容为空：" + path);
             }
             return newText;
         }
@@ -154,15 +156,15 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
         }
         try {
             if (Files.size(target) > MAX_FILE_BYTES) {
-                throw new IllegalArgumentException("文件过大，自动修复拒绝修改：" + path);
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件过大，自动修复拒绝修改：" + path);
             }
             String text = Files.readString(target, StandardCharsets.UTF_8);
             if (text.indexOf('\0') >= 0) {
-                throw new IllegalArgumentException("二进制文件不允许由 Agent 修改：" + path);
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "二进制文件不允许由 Agent 修改：" + path);
             }
             return text;
         } catch (IOException e) {
-            throw new IllegalStateException("读取基线文件失败：" + path + "（" + e.getMessage() + "）");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "读取基线文件失败：" + path + "（" + e.getMessage() + "）");
         }
     }
 
@@ -171,18 +173,18 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
             Files.createDirectories(target.getParent());
             Files.writeString(target, text, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new IllegalStateException("写入修复文件失败：" + path + "（" + e.getMessage() + "）");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "写入修复文件失败：" + path + "（" + e.getMessage() + "）");
         }
     }
 
     @Override
     public List<String> changedFiles(BugFixRun run, String fixSha) {
         if (fixSha == null || !fixSha.matches("[0-9a-f]{7,40}")) {
-            throw new IllegalArgumentException("修复提交非法：" + fixSha);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "修复提交非法：" + fixSha);
         }
         String base = run.baseSha();
         if (base == null || !base.matches("[0-9a-f]{7,40}")) {
-            throw new IllegalStateException("缺少合法的基线提交，无法校验改动范围");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "缺少合法的基线提交，无法校验改动范围");
         }
         Path repo = requireRepo(run.projectId());
         return git.diffNames(repo, base, fixSha);
@@ -191,12 +193,11 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
     @Override
     public String openPullRequest(BugFixRun run, String title, String body) {
         if (remote == null) {
-            throw new IllegalStateException("未配置 Git 远端客户端，无法创建 PR");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "未配置 Git 远端客户端，无法创建 PR");
         }
         GitIssueRemoteClient.Credentials credentials = remote.credentials(
                         run.userId(), run.provider(), run.repo())
-                .orElseThrow(() -> new IllegalStateException(
-                        "未绑定 " + run.provider() + " 账号，无法推送分支与创建 PR"));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_STATE, "未绑定 " + run.provider() + " 账号，无法推送分支与创建 PR"));
         // 幂等：上一步创建成功但响应超时/重试时，直接复用已有 PR，避免重复创建
         Optional<String> existing = remote.findPullRequest(credentials, run.branch());
         if (existing.isPresent()) {
@@ -249,11 +250,11 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
 
     private Path requireRepo(String projectId) {
         Path repo = locator.repoDir(projectId).orElseThrow(() ->
-                new IllegalStateException("项目尚未接入 git 仓库：" + projectId));
+                new RunException(ErrorCode.RUN_INVALID_STATE, "项目尚未接入 git 仓库：" + projectId));
         // 关键防坑：项目目录若只是普通目录（甚至位于另一个仓库的子目录），
         // git 命令会「向上找到父仓库」并静默操作错误仓库。这里要求它本身就是仓库根。
         if (!Files.exists(repo.resolve(".git")) && !Files.isDirectory(repo.resolve("objects"))) {
-            throw new IllegalStateException("项目目录不是 git 仓库根目录：" + repo);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "项目目录不是 git 仓库根目录：" + repo);
         }
         return repo;
     }
@@ -268,23 +269,23 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
 
     private static void validate(String path, String content) {
         if (path.isBlank() || path.startsWith("/") || path.contains("..")) {
-            throw new IllegalArgumentException("非法文件路径：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "非法文件路径：" + path);
         }
         String lower = path.toLowerCase(Locale.ROOT);
         if (lower.equals(".git") || lower.startsWith(".git/") || lower.contains("/.git/")) {
-            throw new IllegalArgumentException(".git 目录不允许修改：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, ".git 目录不允许修改：" + path);
         }
         String name = lower.substring(lower.lastIndexOf('/') + 1);
         if (name.startsWith(".env") || name.endsWith(".pem") || name.endsWith(".key")
                 || name.startsWith("id_rsa") || name.startsWith("id_ed25519")
                 || name.contains("credential") || name.contains("secret")) {
-            throw new IllegalArgumentException("密钥/凭证文件不允许由 Agent 修改：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "密钥/凭证文件不允许由 Agent 修改：" + path);
         }
         if (content != null && content.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException("二进制内容不允许由 Agent 写入：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "二进制内容不允许由 Agent 写入：" + path);
         }
         if (content != null && content.length() > MAX_CONTENT_CHARS) {
-            throw new IllegalArgumentException("文件内容过大：" + path + "（上限 "
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件内容过大：" + path + "（上限 "
                     + MAX_CONTENT_CHARS + " 字符）");
         }
     }
@@ -292,7 +293,7 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
     private static Path resolveInside(Path root, String relative) {
         Path resolved = root.resolve(relative).normalize();
         if (!resolved.startsWith(root.normalize())) {
-            throw new IllegalArgumentException("路径超出仓库范围：" + relative);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + relative);
         }
         return resolved;
     }
@@ -315,7 +316,7 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
             };
         }
         if (host.isBlank()) {
-            throw new IllegalStateException("无法确定 " + c.provider() + " 的仓库域名");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "无法确定 " + c.provider() + " 的仓库域名");
         }
         return "https://" + host + "/" + c.repo() + ".git";
     }

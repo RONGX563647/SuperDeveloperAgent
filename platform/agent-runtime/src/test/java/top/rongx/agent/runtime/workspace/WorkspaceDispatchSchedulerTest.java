@@ -19,6 +19,7 @@ import top.rongx.agent.domain.conversation.DispatchNodeResult;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.RunStatus;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** DAG 调度：并行等待、依赖顺序、失败熔断与提前终止。 */
 class WorkspaceDispatchSchedulerTest {
@@ -124,7 +125,7 @@ class WorkspaceDispatchSchedulerTest {
                 new DispatchNode("b", null, null, null, null, "b", List.of("a"), true, 60)),
                 true, 2);
 
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> scheduler.execute(plan, new FakeBackend()));
         assertTrue(error.getMessage().contains("循环依赖"));
     }

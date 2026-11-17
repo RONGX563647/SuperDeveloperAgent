@@ -17,6 +17,8 @@ import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.port.RecipeStore;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 
 /**
  * recipe 的文件存储：{@code <workspace>/<projectId>/recipes/<env>/v<N>/{pipeline.yml,actions.yml,meta.yml}}，
@@ -63,7 +65,7 @@ public class FileRecipeStore implements RecipeStore {
             log.info("固化环境脚本：{} / {} → v{}（证据 {}）", projectId, env, version, saved.evidenceRunId());
             return saved;
         } catch (IOException e) {
-            throw new IllegalStateException("保存环境脚本失败：" + e.getMessage(), e);
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, "保存环境脚本失败：" + e.getMessage(), e);
         }
     }
 
@@ -211,7 +213,7 @@ public class FileRecipeStore implements RecipeStore {
     /** projectId / env 只允许字母数字下划线短横（防路径穿越）。 */
     private static String safe(String value) {
         if (value == null || !value.matches("[A-Za-z0-9_\\-]{1,32}")) {
-            throw new IllegalArgumentException("非法标识：" + value);
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "非法标识：" + value);
         }
         return value;
     }

@@ -18,6 +18,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.ArtifactException;
 
 /**
  * OpenAPI 快照：把运行时生成的规范序列化为 JSON，落盘给 Agent 工具与外部 MCP 使用。
@@ -66,7 +68,7 @@ public class ApiDocsSnapshotService {
         OpenApiResource resource = resources.getIfAvailable();
         ObjectMapperProvider provider = mappers.getIfAvailable();
         if (resource == null || provider == null) {
-            throw new IllegalStateException("OpenAPI 未启用（springdoc.api-docs.enabled=false）");
+            throw new ArtifactException(ErrorCode.ARTIFACT_INVALID_STATE, "OpenAPI 未启用（springdoc.api-docs.enabled=false）");
         }
         long started = System.nanoTime();
         String json;
@@ -76,7 +78,7 @@ public class ApiDocsSnapshotService {
             json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(spec);
         }
         catch (ReflectiveOperationException | IOException e) {
-            throw new IllegalStateException("OpenAPI 生成失败", e);
+            throw new ArtifactException(ErrorCode.ARTIFACT_INVALID_STATE, "OpenAPI 生成失败", e);
         }
         cachedJson = json;
         cachedAtMillis = System.currentTimeMillis();
@@ -133,7 +135,7 @@ public class ApiDocsSnapshotService {
             return method;
         }
         catch (NoSuchMethodException e) {
-            throw new IllegalStateException("springdoc 版本不兼容：找不到 getOpenApi(Locale)", e);
+            throw new ArtifactException(ErrorCode.ARTIFACT_INVALID_STATE, "springdoc 版本不兼容：找不到 getOpenApi(Locale)", e);
         }
     }
 }

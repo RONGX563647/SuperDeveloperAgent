@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.TokenUsageRepository;
 import top.rongx.agent.infra.sqlite.SqliteConnections;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * token 用量明细（SQLite，独立库 {@code _platform/token_usage.db}）。
@@ -59,7 +61,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
         try {
             Files.createDirectories(dbFile.getParent());
         } catch (IOException e) {
-            throw new IllegalStateException("token 用量库目录创建失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token 用量库目录创建失败：" + e.getMessage(), e);
         }
         initSchema();
     }
@@ -72,7 +74,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
                 }
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("token_usage 表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token_usage 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -104,7 +106,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
             st.setLong(10, usage.createdAt() > 0 ? usage.createdAt() : System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("token 用量写入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token 用量写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -135,7 +137,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("token 用量查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token 用量查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -160,7 +162,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
                 return rs.next() ? totals(rs) : UsageTotals.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("会话 token 汇总失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "会话 token 汇总失败：" + e.getMessage(), e);
         }
     }
 
@@ -176,7 +178,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
                     queryByModel(conn, since),
                     queryByProject(conn, since));
         } catch (SQLException e) {
-            throw new IllegalStateException("token 用量汇总失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token 用量汇总失败：" + e.getMessage(), e);
         }
     }
 
@@ -191,7 +193,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
             st.setString(1, sessionId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("token 用量删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token 用量删除失败：" + e.getMessage(), e);
         }
     }
 

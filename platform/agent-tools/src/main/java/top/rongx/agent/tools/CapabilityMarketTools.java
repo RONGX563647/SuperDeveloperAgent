@@ -7,6 +7,7 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.settings.CapabilityInstaller;
 import top.rongx.agent.domain.settings.CapabilityMarket;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 能力市场工具：让对话 Agent 自己发现并接入外部的 MCP / Skill。
@@ -37,7 +38,7 @@ public class CapabilityMarketTools {
         List<CapabilityMarket.Entry> found;
         try {
             found = market.search(type, keyword);
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             return "err: " + e.getMessage();
         }
         if (found.isEmpty()) {
@@ -60,7 +61,7 @@ public class CapabilityMarketTools {
             CapabilityInstaller.Result result = installer.install(capabilityId);
             return result.message() + "（kind=%s, name=%s%s）".formatted(
                     result.kind(), result.name(), result.installed() ? ", 已存在" : "");
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
     }

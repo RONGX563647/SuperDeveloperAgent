@@ -24,6 +24,7 @@ import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan.ScaffoldFile;
+import top.rongx.agent.domain.error.RecipeException;
 
 /**
  * 平台专用流水线脚手架：导入项目后，按仓库结构自动生成 {@code ci/} 脚本。
@@ -227,7 +228,7 @@ public class RecipeScaffolder implements ProjectScaffolder {
                 Files.writeString(target, file.content(), StandardCharsets.UTF_8);
                 written.add(file.path());
             } catch (IOException e) {
-                throw new IllegalStateException("写入失败 " + file.path() + "：" + e.getMessage(), e);
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, "写入失败 " + file.path() + "：" + e.getMessage(), e);
             }
         }
         return written;

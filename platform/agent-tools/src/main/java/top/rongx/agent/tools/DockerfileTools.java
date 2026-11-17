@@ -30,6 +30,9 @@ import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.BuildException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * Docker 发布自愈工具：当 DOCKER 目标因「仓库没有 Dockerfile / 缺 image_package」被
@@ -121,7 +124,7 @@ public class DockerfileTools {
                 plan = detect(repo, containerPort);
             } catch (IOException e) {
                 return "err: 读取仓库失败：" + e.getMessage();
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 return "err: " + e.getMessage();
             }
             dockerfilePath = "Dockerfile";
@@ -193,7 +196,7 @@ public class DockerfileTools {
                 }
             } catch (IOException e) {
                 return "err: 读取平台侧流水线定义失败：" + e.getMessage();
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 return "err: 平台侧定义无法补齐镜像阶段：" + e.getMessage();
             }
         }
@@ -209,7 +212,7 @@ public class DockerfileTools {
             CodePatcher.Staged staged;
             try {
                 staged = patcher.stage(ctx.projectId(), baseSha.trim(), edits);
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 return "err: " + e.getMessage();
             }
             String patchId = "pt-" + UUID.randomUUID().toString().substring(0, 8);
@@ -305,8 +308,7 @@ public class DockerfileTools {
                     """.formatted(distPath, distPath);
             return new Plan("frontend", content);
         }
-        throw new IllegalArgumentException(
-                "未能识别技术栈：没有找到带 *Application.java 的 Maven 模块，也没有前端 dist。"
+        throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "未能识别技术栈：没有找到带 *Application.java 的 Maven 模块，也没有前端 dist。"
                         + "请先在仓库根提供 Dockerfile，或确认构建阶段会产出 target/*.jar / dist");
     }
 
@@ -450,7 +452,7 @@ public class DockerfileTools {
             }
         }
         if (stages < 0) {
-            throw new IllegalArgumentException("流水线定义缺少顶层 stages:");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "流水线定义缺少顶层 stages:");
         }
         int end = lines.length;
         for (int i = stages + 1; i < lines.length; i++) {
@@ -473,7 +475,7 @@ public class DockerfileTools {
             }
         }
         if (deploy < 0) {
-            throw new IllegalArgumentException("stages 里找不到 deploy 阶段，无法确定镜像阶段的插入位置");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "stages 里找不到 deploy 阶段，无法确定镜像阶段的插入位置");
         }
         int dash = lines[deploy].indexOf('-');
         String indent = dash > 0 ? lines[deploy].substring(0, dash) : "";

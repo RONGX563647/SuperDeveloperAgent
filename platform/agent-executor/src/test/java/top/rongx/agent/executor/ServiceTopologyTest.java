@@ -13,6 +13,7 @@ import top.rongx.agent.domain.env.RuntimeMode;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 运行形态（dev/test/prod）与 test 多服务部署的拓扑约定。
@@ -70,7 +71,7 @@ class ServiceTopologyTest {
                   - id: deploy
                     type: deploy
                 """);
-        assertThrows(IllegalArgumentException.class, () -> PipelineDefinition.load(repo));
+        assertThrows(PlatformException.class, () -> PipelineDefinition.load(repo));
 
         Files.writeString(repo.resolve("ci/pipeline.yml"), """
                 name: release
@@ -82,7 +83,7 @@ class ServiceTopologyTest {
                   - id: deploy
                     type: deploy
                 """);
-        assertThrows(IllegalArgumentException.class, () -> PipelineDefinition.load(repo));
+        assertThrows(PlatformException.class, () -> PipelineDefinition.load(repo));
 
         Files.writeString(repo.resolve("ci/pipeline.yml"), """
                 name: release
@@ -95,7 +96,7 @@ class ServiceTopologyTest {
                   - id: deploy
                     type: deploy
                 """);
-        assertThrows(IllegalArgumentException.class, () -> PipelineDefinition.load(repo));
+        assertThrows(PlatformException.class, () -> PipelineDefinition.load(repo));
     }
 
     @Test

@@ -25,6 +25,8 @@ import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
 import top.rongx.agent.infra.sqlite.SqliteConnections;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 工作区会话 / 运行 / 任务的 SQLite 存储。
@@ -146,7 +148,7 @@ public class SqliteConversationStore
         try {
             Files.createDirectories(dbFile.getParent());
         } catch (IOException e) {
-            throw new IllegalStateException("会话数据库目录创建失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话数据库目录创建失败：" + e.getMessage(), e);
         }
         initSchema();
     }
@@ -164,7 +166,7 @@ public class SqliteConversationStore
             ensureColumn(conn, "conversations", "model_connection_id", "TEXT");
             ensureColumn(conn, "conversations", "model_name", "TEXT");
         } catch (SQLException e) {
-            throw new IllegalStateException("conversations 表初始化失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "conversations 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -220,7 +222,7 @@ public class SqliteConversationStore
             st.executeUpdate();
             return conversation;
         } catch (SQLException e) {
-            throw new IllegalStateException("会话保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -232,7 +234,7 @@ public class SqliteConversationStore
         try (Connection conn = open()) {
             return find(conn, id);
         } catch (SQLException e) {
-            throw new IllegalStateException("会话查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -263,7 +265,7 @@ public class SqliteConversationStore
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("会话列表查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话列表查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -281,7 +283,7 @@ public class SqliteConversationStore
                 return rs.next() ? Optional.of(mapConversation(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("调度会话查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "调度会话查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -319,7 +321,7 @@ public class SqliteConversationStore
             }
             return Optional.of(merged);
         } catch (SQLException e) {
-            throw new IllegalStateException("会话更新失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -362,7 +364,7 @@ public class SqliteConversationStore
                 throw e;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("会话删除失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -437,7 +439,7 @@ public class SqliteConversationStore
                 return rs.next() ? Optional.of(rs.getString("payload")) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("会话历史查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话历史查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -455,7 +457,7 @@ public class SqliteConversationStore
             st.setLong(3, System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("会话历史保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话历史保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -485,7 +487,7 @@ public class SqliteConversationStore
             st.executeUpdate();
             return run;
         } catch (SQLException e) {
-            throw new IllegalStateException("运行保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -506,7 +508,7 @@ public class SqliteConversationStore
             st.executeUpdate();
             return run;
         } catch (SQLException e) {
-            throw new IllegalStateException("运行更新失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -523,7 +525,7 @@ public class SqliteConversationStore
                 return rs.next() ? Optional.of(mapRun(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("运行查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -541,7 +543,7 @@ public class SqliteConversationStore
                 return rs.next() ? Optional.of(mapRun(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("活动运行查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "活动运行查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -560,7 +562,7 @@ public class SqliteConversationStore
                 return rs.next() ? Optional.of(mapRun(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("重复目标查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "重复目标查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -591,7 +593,7 @@ public class SqliteConversationStore
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("运行列表查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行列表查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -634,7 +636,7 @@ public class SqliteConversationStore
             st.executeUpdate();
             return task;
         } catch (SQLException e) {
-            throw new IllegalStateException("任务保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -657,7 +659,7 @@ public class SqliteConversationStore
             st.executeUpdate();
             return task;
         } catch (SQLException e) {
-            throw new IllegalStateException("任务更新失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -674,7 +676,7 @@ public class SqliteConversationStore
                 return rs.next() ? Optional.of(mapTask(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("任务查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -706,7 +708,7 @@ public class SqliteConversationStore
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("任务列表查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务列表查询失败：" + e.getMessage(), e);
         }
     }
 

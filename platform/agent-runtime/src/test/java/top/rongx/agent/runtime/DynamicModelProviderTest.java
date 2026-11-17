@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 动态模型：配置不变复用实例；配置变化重建（热切换）。 */
 class DynamicModelProviderTest {
@@ -90,7 +91,7 @@ class DynamicModelProviderTest {
     void picksUpConfigWithoutRestart() {
         MutableRegistry registry = new MutableRegistry(null);
         DynamicModelProvider provider = new DynamicModelProvider(registry, true);
-        assertThrows(IllegalStateException.class, provider::current);
+        assertThrows(PlatformException.class, provider::current);
 
         registry.value.set(new ActiveModel(
                 "mdl-1", "设置页配置", "https://example.com/v1", "sk-web", "qwen-plus", 0.2, 8));
@@ -102,7 +103,7 @@ class DynamicModelProviderTest {
         try {
             provider.current();
             return "";
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             return e.getMessage();
         }
     }

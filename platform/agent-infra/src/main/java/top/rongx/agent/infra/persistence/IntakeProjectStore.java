@@ -13,6 +13,8 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.project.ProjectEnv;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * 接入项目的 SQLite 存储（v2 P1：接入的项目重启不丢）。
@@ -35,7 +37,7 @@ public class IntakeProjectStore implements AutoCloseable {
         try {
             Files.createDirectories(dbFile.getParent());
         } catch (java.io.IOException e) {
-            throw new IllegalStateException("无法创建项目存储目录：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "无法创建项目存储目录：" + e.getMessage(), e);
         }
         initSchema();
     }
@@ -88,7 +90,7 @@ public class IntakeProjectStore implements AutoCloseable {
                 // 列已存在（旧库刚迁移过），忽略
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("无法初始化项目存储 " + dbFile + "：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "无法初始化项目存储 " + dbFile + "：" + e.getMessage(), e);
         }
     }
 
@@ -139,7 +141,7 @@ public class IntakeProjectStore implements AutoCloseable {
             }
             conn.commit();
         } catch (SQLException e) {
-            throw new IllegalStateException("项目登记失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目登记失败：" + e.getMessage(), e);
         }
     }
 
@@ -159,7 +161,7 @@ public class IntakeProjectStore implements AutoCloseable {
             st.setString(2, env);
             return st.executeUpdate() > 0;
         } catch (SQLException e) {
-            throw new IllegalStateException("环境登记失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "环境登记失败：" + e.getMessage(), e);
         }
     }
 
@@ -178,7 +180,7 @@ public class IntakeProjectStore implements AutoCloseable {
             }
             return removed;
         } catch (SQLException e) {
-            throw new IllegalStateException("项目删除失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -195,7 +197,7 @@ public class IntakeProjectStore implements AutoCloseable {
                 return Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("项目查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -210,7 +212,7 @@ public class IntakeProjectStore implements AutoCloseable {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("项目查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -228,7 +230,7 @@ public class IntakeProjectStore implements AutoCloseable {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "环境查询失败：" + e.getMessage(), e);
         }
     }
 

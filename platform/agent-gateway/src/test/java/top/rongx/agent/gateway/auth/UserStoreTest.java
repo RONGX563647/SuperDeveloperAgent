@@ -13,6 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.infra.sqlite.SqliteConnections;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 种子密码固定化 + 设置页改密 + 旧版随机密码迁移。 */
 class UserStoreTest {
@@ -73,18 +74,18 @@ class UserStoreTest {
     void changePasswordRejectsBadInput() {
         UserStore store = new UserStore(tempDir.toString(), "");
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.changePassword("admin", "wrong-current", "GoodNewPass-1"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.changePassword("admin", UserStore.DEFAULT_INITIAL_PASSWORD, "short"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.changePassword("admin", UserStore.DEFAULT_INITIAL_PASSWORD,
                         UserStore.DEFAULT_INITIAL_PASSWORD));
         // 失败的改密不能影响原密码
         assertTrue(store.checkPassword("admin", UserStore.DEFAULT_INITIAL_PASSWORD));
 
         store.changePassword("admin", UserStore.DEFAULT_INITIAL_PASSWORD, "GoodNewPass-1");
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.changePassword("admin", "GoodNewPass-1", "GoodNewPass-1"));
     }
 

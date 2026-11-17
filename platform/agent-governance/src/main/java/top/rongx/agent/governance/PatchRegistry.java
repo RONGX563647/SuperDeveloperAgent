@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.PatchStore;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 待确认补丁存储（SQLite 持久化）。
@@ -74,7 +76,7 @@ public class PatchRegistry implements PatchStore {
                 exec(conn, SCHEMA_EDITS);
             }
         } catch (SQLException | java.io.IOException e) {
-            throw new IllegalStateException("code_patches 表初始化失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "code_patches 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -136,7 +138,7 @@ public class PatchRegistry implements PatchStore {
                 throw e;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("补丁保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "补丁保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -175,7 +177,7 @@ public class PatchRegistry implements PatchStore {
             return Optional.of(new CodePatch(patchId, projectId, env, baseSha, branch,
                     edits(conn, patchId), diff, diffHash, added, removed, createdAt));
         } catch (SQLException e) {
-            throw new IllegalStateException("补丁查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "补丁查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -216,7 +218,7 @@ public class PatchRegistry implements PatchStore {
                 throw e;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("补丁删除失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "补丁删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -246,7 +248,7 @@ public class PatchRegistry implements PatchStore {
                 throw e;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("补丁清理失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "补丁清理失败：" + e.getMessage(), e);
         }
     }
 }

@@ -14,6 +14,8 @@ import top.rongx.agent.domain.change.PlanHasher;
 import top.rongx.agent.domain.port.ChangeStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PromotionException;
 
 /**
  * 变更单存储（SQLite 持久化）。
@@ -61,7 +63,7 @@ public class ChangeRegistry implements ChangeStore {
                 st.executeUpdate();
             }
         } catch (SQLException | java.io.IOException e) {
-            throw new IllegalStateException("change_plans 表初始化失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "change_plans 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -105,7 +107,7 @@ public class ChangeRegistry implements ChangeStore {
             st.executeUpdate();
             return plan;
         } catch (SQLException e) {
-            throw new IllegalStateException("变更单登记失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单登记失败：" + e.getMessage(), e);
         }
     }
 
@@ -138,7 +140,7 @@ public class ChangeRegistry implements ChangeStore {
                         Instant.ofEpochMilli(rs.getLong("created_at"))));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("变更单查询失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -150,7 +152,7 @@ public class ChangeRegistry implements ChangeStore {
             st.setLong(1, cutoff.toEpochMilli());
             return st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("变更单清理失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单清理失败：" + e.getMessage(), e);
         }
     }
 }

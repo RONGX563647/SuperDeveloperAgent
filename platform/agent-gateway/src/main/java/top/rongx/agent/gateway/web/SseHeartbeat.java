@@ -8,6 +8,8 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * SSE 心跳：长任务（DAG 并行派发、模型长时间思考）期间没有业务事件时，
@@ -47,7 +49,7 @@ final class SseHeartbeat {
                 log.debug("SSE 心跳结束：{}", gone.getMessage());
                 onFailure.run();
                 // 抛出后 ScheduledExecutorService 不再调度该任务
-                throw new IllegalStateException("sse heartbeat stopped", gone);
+                throw new RunException(ErrorCode.RUN_INVALID_STATE, "sse heartbeat stopped", gone);
             }
         }, period, period, TimeUnit.MILLISECONDS);
     }

@@ -20,6 +20,8 @@ import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 会话状态存储（AES-256-GCM 落盘）。
@@ -223,11 +225,11 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     /** 只允许安全字符，且拒绝 . / ..，避免状态目录被路径穿越。 */
     private static String safeName(String raw, String label) {
         if (raw == null || raw.isBlank()) {
-            throw new IllegalArgumentException(label + " 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, label + " 不能为空");
         }
         String name = raw.replaceAll("[^A-Za-z0-9._-]", "_");
         if (name.equals(".") || name.equals("..")) {
-            throw new IllegalArgumentException(label + " 非法：" + raw);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, label + " 非法：" + raw);
         }
         return name.length() > 120 ? name.substring(0, 120) : name;
     }
@@ -261,7 +263,7 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     private String decrypt(String token) {
         int sep = token.indexOf(SEPARATOR);
         if (sep <= 0) {
-            throw new IllegalArgumentException("状态数据不是加密格式");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "状态数据不是加密格式");
         }
         return cipher.decrypt(token.substring(0, sep), token.substring(sep + 1));
     }
@@ -293,7 +295,7 @@ public class EncryptedAgentStateStore implements AgentStateStore {
             restrict(file, "rw-------");
             restrict(file.getParent(), "rwx------");
         } catch (IOException e) {
-            throw new IllegalStateException("会话状态写入失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话状态写入失败：" + e.getMessage(), e);
         }
     }
 

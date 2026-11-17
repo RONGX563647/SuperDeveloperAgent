@@ -34,6 +34,8 @@ import top.rongx.agent.domain.run.RunKind;
 import top.rongx.agent.domain.run.RunLedgerRepository;
 import top.rongx.agent.domain.run.RunRecord;
 import top.rongx.agent.domain.run.RunState;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * Bug 自动修复编排器：把「分析 → 复现 → 修复 → 验证 → PR」串成可持久化的状态机。
@@ -107,13 +109,13 @@ public class BugFixOrchestrator {
     /** 为 Bug 任务创建运行并入队（手动触发也走这里）。 */
     public BugFixRun start(GitIssue issue) {
         if (issue == null) {
-            throw new IllegalArgumentException("任务不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "任务不能为空");
         }
         if (issue.projectId() == null || issue.projectId().isBlank()) {
-            throw new IllegalArgumentException("任务未关联项目，无法自动修复");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "任务未关联项目，无法自动修复");
         }
         if (runs.activeByIssue(issue.id()).isPresent()) {
-            throw new IllegalStateException("该任务已有进行中的自动修复");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "该任务已有进行中的自动修复");
         }
         // 已成功提过 PR 的任务不再重复跑，避免为同一个 Bug 建出多个 PR
         runs.list(issue.userId(), issue.id(), 10).stream()
@@ -122,7 +124,7 @@ public class BugFixOrchestrator {
                         && run.prUrl() != null && !run.prUrl().isBlank())
                 .findFirst()
                 .ifPresent(run -> {
-                    throw new IllegalStateException("该任务已自动修复并创建 PR：" + run.prUrl());
+                    throw new RunException(ErrorCode.RUN_INVALID_STATE, "该任务已自动修复并创建 PR：" + run.prUrl());
                 });
         long now = System.currentTimeMillis();
         String id = "bf-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
@@ -144,17 +146,17 @@ public class BugFixOrchestrator {
         synchronized (lockFor(id)) {
             BugFixRun run = require(userId, id);
             if (run.stage() == BugFixStage.DONE) {
-                throw new IllegalStateException("该运行已完成，无需重试");
+                throw new RunException(ErrorCode.RUN_INVALID_STATE, "该运行已完成，无需重试");
             }
             if (run.status() == BugFixStatus.WAITING_MERGE) {
-                throw new IllegalStateException("PR 正在等待人工合并，无需重试");
+                throw new RunException(ErrorCode.RUN_INVALID_STATE, "PR 正在等待人工合并，无需重试");
             }
             if (run.status().active()) {
                 return run;
             }
             BugFixPolicy policy = policies.load(run.projectId());
             if (run.attempt() >= policy.maxAttempts()) {
-                throw new IllegalStateException("已达最大尝试次数（" + policy.maxAttempts()
+                throw new RunException(ErrorCode.RUN_INVALID_STATE, "已达最大尝试次数（" + policy.maxAttempts()
                         + "），请人工处理后再继续");
             }
             long now = System.currentTimeMillis();
@@ -250,9 +252,9 @@ public class BugFixOrchestrator {
 
     private BugFixRun require(String userId, String id) {
         BugFixRun run = runs.find(id)
-                .orElseThrow(() -> new IllegalArgumentException("自动修复运行不存在：" + id));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "自动修复运行不存在：" + id));
         if (userId != null && !userId.equals(run.userId())) {
-            throw new IllegalArgumentException("无权访问该自动修复运行");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "无权访问该自动修复运行");
         }
         return run;
     }

@@ -14,6 +14,8 @@ import top.rongx.agent.domain.change.ChangePlan;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.tools.ActionService;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 动作 HTTP 接口（不经过模型也能用，便于运维与可用性测试）。
@@ -87,7 +89,7 @@ public class ActionController {
 
     private ActionId requireAction(String raw) {
         return ActionId.fromWire(raw)
-                .orElseThrow(() -> new IllegalArgumentException("未知动作: " + raw));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "未知动作: " + raw));
     }
 
     /** 动作视图（不含内部结构，只给前端/调用方需要的）。 */

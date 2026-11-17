@@ -30,6 +30,8 @@ import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.tools.DockerfileTools;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 「首次发布就绪检查」：把散落在设置页与接入页的前置条件聚合成一张清单。
@@ -151,16 +153,16 @@ public class ProjectReadinessController {
         String userId = currentUser.requireUserId();
         String target = env.trim().toLowerCase();
         if ("prod".equals(target)) {
-            throw new IllegalArgumentException("生产环境不允许生成 Dockerfile：请先在 dev/test 验证");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "生产环境不允许生成 Dockerfile：请先在 dev/test 验证");
         }
         String baseSha = repoInspector.status(id).head();
         if (baseSha == null || baseSha.isBlank()) {
-            throw new IllegalArgumentException("仓库没有可用提交：请先把代码提交一次再修复");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "仓库没有可用提交：请先把代码提交一次再修复");
         }
         ProjectContext ctx = new ProjectContext(id, target, userId, null, null);
         String report = dockerfileTools.ensure(baseSha, null, ctx);
         if (report.startsWith("err:")) {
-            throw new IllegalArgumentException(report.substring(4).trim());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, report.substring(4).trim());
         }
         Map<String, Object> out = new LinkedHashMap<>(parseReport(report));
         out.put("baseSha", baseSha);

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 命令解释器前缀：OS 自适应、可覆盖、配置错误不影响启动。 */
 class CommandShellTest {
@@ -50,11 +51,11 @@ class CommandShellTest {
     @Test
     @DisplayName("引号未闭合 / token 过多都给出可照做的错误，而不是启动期崩溃")
     void invalidConfigIsExplicit() {
-        IllegalArgumentException unclosed = assertThrows(IllegalArgumentException.class,
+        PlatformException unclosed = assertThrows(PlatformException.class,
                 () -> CommandShell.prefix("\"/bin/bash -c"));
         assertTrue(unclosed.getMessage().contains("未闭合"));
 
-        IllegalArgumentException tooMany = assertThrows(IllegalArgumentException.class,
+        PlatformException tooMany = assertThrows(PlatformException.class,
                 () -> CommandShell.prefix("a b c d e"));
         assertTrue(tooMany.getMessage().contains("配置非法"));
     }

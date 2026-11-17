@@ -1,6 +1,8 @@
 package top.rongx.agent.runtime;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 模型与运行时配置。
@@ -28,10 +30,10 @@ public record AgentProperties(
     public AgentProperties {
         // 默认值统一在 application.yml 的 ${ENV:默认} 里声明，Java 端只做归一与边界收敛
         if (baseUrl == null || baseUrl.isBlank()) {
-            throw new IllegalStateException("agent.model.base-url 未配置");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "agent.model.base-url 未配置");
         }
         if (model == null || model.isBlank()) {
-            throw new IllegalStateException("agent.model.model 未配置");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "agent.model.model 未配置");
         }
         maxIters = maxIters == null || maxIters < 1 ? 8 : Math.min(maxIters, 30);
         temperature = temperature == null ? 0.2d : temperature;

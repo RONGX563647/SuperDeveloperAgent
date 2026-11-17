@@ -19,6 +19,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.tools.SecretRedactor;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 本地目录浏览接口（供前端"选择本地文件夹"）。
@@ -78,26 +80,26 @@ public class FsBrowserController {
     @GetMapping("/read")
     public FsFile read(@RequestParam String path) {
         if (path == null || path.isBlank()) {
-            throw new IllegalArgumentException("path 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "path 不能为空");
         }
         Path requested = Path.of(path);
         if (!requested.isAbsolute()) {
             if (sharedRoot == null) {
-                throw new IllegalArgumentException("相对路径仅在 shared-root 模式下可用");
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "相对路径仅在 shared-root 模式下可用");
             }
             requested = sharedRoot.resolve(path);
         }
         Path normalized = requested.toAbsolutePath().normalize();
         Path real = resolveReal(normalized);
         if (containsGitDir(real)) {
-            throw new IllegalArgumentException("不允许读取 .git 内部文件");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "不允许读取 .git 内部文件");
         }
         checkBoundary(real);
         if (redactor != null && redactor.isSensitiveFile(real.getFileName().toString())) {
-            throw new IllegalArgumentException("敏感文件不允许预览：" + real.getFileName());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "敏感文件不允许预览：" + real.getFileName());
         }
         if (!Files.isRegularFile(real)) {
-            throw new IllegalArgumentException("不是普通文件：" + real);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "不是普通文件：" + real);
         }
         long size;
         long modified;
@@ -105,7 +107,7 @@ public class FsBrowserController {
             size = Files.size(real);
             modified = Files.getLastModifiedTime(real).toMillis();
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法读取文件元数据：" + e.getMessage());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "无法读取文件元数据：" + e.getMessage());
         }
         String name = real.getFileName().toString();
         if (size > MAX_PREVIEW_BYTES) {
@@ -115,7 +117,7 @@ public class FsBrowserController {
         try {
             bytes = Files.readAllBytes(real);
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法读取文件：" + e.getMessage());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "无法读取文件：" + e.getMessage());
         }
         if (looksBinary(bytes)) {
             return new FsFile(real.toString(), name, size, modified, null, false);
@@ -135,12 +137,12 @@ public class FsBrowserController {
 
     private static Path resolveReal(Path path) {
         if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IllegalArgumentException("文件不存在：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件不存在：" + path);
         }
         try {
             return path.toRealPath();
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法解析文件路径：" + e.getMessage());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "无法解析文件路径：" + e.getMessage());
         }
     }
 
@@ -155,8 +157,7 @@ public class FsBrowserController {
             // 边界目录无法解析时回退到规范化路径：宁严勿松，仍按 startsWith 判断
         }
         if (!real.equals(root) && !real.startsWith(root)) {
-            throw new IllegalArgumentException(
-                    "路径超出工作区边界：" + real + "（边界：" + sharedRoot + "）");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出工作区边界：" + real + "（边界：" + sharedRoot + "）");
         }
     }
 
@@ -224,12 +225,11 @@ public class FsBrowserController {
         // shared-root 边界校验（防逃逸）
         if (sharedRoot != null) {
             if (!normalized.equals(sharedRoot) && !normalized.startsWith(sharedRoot)) {
-                throw new IllegalArgumentException(
-                        "路径超出工作区边界：" + normalized + "（边界：" + sharedRoot + "）");
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出工作区边界：" + normalized + "（边界：" + sharedRoot + "）");
             }
         }
         if (!Files.isDirectory(normalized)) {
-            throw new IllegalArgumentException("目录不存在：" + dir);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "目录不存在：" + dir);
         }
         List<Entry> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(normalized)) {
@@ -243,7 +243,7 @@ public class FsBrowserController {
                 entries.add(new Entry(name, p.toString(), isDir, git));
             }
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法读取目录：" + e.getMessage());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "无法读取目录：" + e.getMessage());
         }
         entries.sort((a, b) -> {
             if (a.directory() != b.directory()) return a.directory() ? -1 : 1;
@@ -265,8 +265,7 @@ public class FsBrowserController {
     public Map<String, Object> probe(@RequestParam String path) {
         Path dir = Path.of(path).toAbsolutePath().normalize();
         if (sharedRoot != null && !dir.equals(sharedRoot) && !dir.startsWith(sharedRoot)) {
-            throw new IllegalArgumentException(
-                    "路径超出工作区边界：" + dir + "（边界：" + sharedRoot + "）");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出工作区边界：" + dir + "（边界：" + sharedRoot + "）");
         }
         boolean exists = Files.isDirectory(dir);
         boolean git = exists && Files.isDirectory(dir.resolve(".git"));

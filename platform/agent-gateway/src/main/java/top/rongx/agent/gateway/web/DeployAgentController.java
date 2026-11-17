@@ -25,6 +25,8 @@ import reactor.core.publisher.Flux;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.runtime.ChatService;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.DeployException;
 
 /**
  * 发布 Agent 入口：流水线工作台点「发布 Agent」后由这里启动一次自动部署。
@@ -89,15 +91,15 @@ public class DeployAgentController {
         String env = request.env() == null || request.env().isBlank()
                 ? "test" : request.env().trim().toLowerCase();
         if ("prod".equals(env)) {
-            throw new IllegalArgumentException("生产环境不能由发布 Agent 自动部署：请用「发布到生产」（测试证据 + 一次性确认）");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "生产环境不能由发布 Agent 自动部署：请用「发布到生产」（测试证据 + 一次性确认）");
         }
         String sha = request.sha() == null ? "" : request.sha().trim().toLowerCase();
         if (!sha.matches("[0-9a-f]{7,40}")) {
-            throw new IllegalArgumentException("提交 sha 非法（需 7-40 位小写十六进制）");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "提交 sha 非法（需 7-40 位小写十六进制）");
         }
         String bindingId = request.bindingId() == null ? "" : request.bindingId().trim();
         if (bindingId.isEmpty()) {
-            throw new IllegalArgumentException("缺少已确认的环境绑定：请重新点击「发布 Agent」完成确认");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "缺少已确认的环境绑定：请重新点击「发布 Agent」完成确认");
         }
         String pipelineId = request.pipelineId() == null || request.pipelineId().isBlank()
                 ? DEFAULT_PIPELINE : request.pipelineId().trim();

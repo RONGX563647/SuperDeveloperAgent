@@ -3,6 +3,8 @@ package top.rongx.agent.gateway.bugfix;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 结构化结果的序列化/反序列化。
@@ -28,7 +30,7 @@ public class BugFixJson {
         try {
             return mapper.writeValueAsString(value);
         } catch (Exception e) {
-            throw new IllegalStateException("结构化结果序列化失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "结构化结果序列化失败：" + e.getMessage(), e);
         }
     }
 

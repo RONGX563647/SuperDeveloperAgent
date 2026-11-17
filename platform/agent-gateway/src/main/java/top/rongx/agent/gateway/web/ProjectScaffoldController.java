@@ -21,6 +21,8 @@ import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 import top.rongx.agent.infra.persistence.IntakeProjectStore;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 流水线脚手架接口：按仓库结构生成流水线定义。
@@ -237,11 +239,10 @@ public class ProjectScaffoldController {
     private Path readableRepo(String projectId) {
         if (repoLocator.modeOf(projectId) == ProjectRepoLocator.StorageMode.MANAGED) {
             return repoLocator.repoDir(projectId)
-                    .orElseThrow(() -> new IllegalStateException("项目仓库不存在：" + projectId));
+                    .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_STATE, "项目仓库不存在：" + projectId));
         }
         return repoLocator.repoDir(projectId)
                 .filter(Files::isDirectory)
-                .orElseThrow(() -> new IllegalStateException(
-                        "项目目录不存在，请先完成接入：" + projectId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_STATE, "项目目录不存在，请先完成接入：" + projectId));
     }
 }

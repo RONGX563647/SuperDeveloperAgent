@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.tools.SecretRedactor;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * {@code GET /api/v1/fs/read} 的边界与降级行为。
@@ -60,7 +61,7 @@ class FsBrowserControllerTest {
         Path outside = root.getParent().resolve("outside-" + System.nanoTime() + ".txt");
         Files.writeString(outside, "secret");
         try {
-            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+            PlatformException error = assertThrows(PlatformException.class,
                     () -> controller().read("../" + outside.getFileName()));
             assertTrue(error.getMessage().contains("边界"));
         } finally {
@@ -73,7 +74,7 @@ class FsBrowserControllerTest {
         Path outside = root.getParent().resolve("abs-" + System.nanoTime() + ".txt");
         Files.writeString(outside, "secret");
         try {
-            assertThrows(IllegalArgumentException.class,
+            assertThrows(PlatformException.class,
                     () -> controller().read(outside.toString()));
         } finally {
             Files.deleteIfExists(outside);
@@ -91,7 +92,7 @@ class FsBrowserControllerTest {
             Assumptions.abort("当前文件系统不支持符号链接：" + e.getMessage());
         }
         try {
-            assertThrows(IllegalArgumentException.class, () -> controller().read(link.toString()));
+            assertThrows(PlatformException.class, () -> controller().read(link.toString()));
         } finally {
             Files.deleteIfExists(link);
             Files.deleteIfExists(outside);
@@ -102,7 +103,7 @@ class FsBrowserControllerTest {
     void rejectsSensitiveFile() throws IOException {
         Files.writeString(root.resolve(".env"), "TOKEN=abc");
 
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> controller().read(".env"));
         assertTrue(error.getMessage().contains("敏感文件"));
     }
@@ -113,7 +114,7 @@ class FsBrowserControllerTest {
         Files.createDirectories(config.getParent());
         Files.writeString(config, "[remote]");
 
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> controller().read(".git/config"));
         assertTrue(error.getMessage().contains(".git"));
     }
@@ -122,7 +123,7 @@ class FsBrowserControllerTest {
     void rejectsDirectory() throws IOException {
         Files.createDirectories(root.resolve("src"));
 
-        assertThrows(IllegalArgumentException.class, () -> controller().read("src"));
+        assertThrows(PlatformException.class, () -> controller().read("src"));
     }
 
     @Test
@@ -169,11 +170,11 @@ class FsBrowserControllerTest {
         FsBrowserController free = new FsBrowserController("", new SecretRedactor(null));
 
         assertEquals("ok", free.read(file.toString()).content());
-        assertThrows(IllegalArgumentException.class, () -> free.read("free.txt"));
+        assertThrows(PlatformException.class, () -> free.read("free.txt"));
     }
 
     @Test
     void rejectsMissingFile() {
-        assertThrows(IllegalArgumentException.class, () -> controller().read("missing.txt"));
+        assertThrows(PlatformException.class, () -> controller().read("missing.txt"));
     }
 }

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 仓库文件访问必须挡住符号链接逃逸（link -> /etc 之类）。 */
 class RepoQueryToolsSymlinkTest {
@@ -56,10 +57,10 @@ class RepoQueryToolsSymlinkTest {
         // 正常文件仍可读
         assertTrue(tools.readFile(ctx, "ok.txt").contains("hello"));
         // 文件链接 / 目录链接 / ../ / 绝对路径：全部拒绝
-        assertThrows(IllegalArgumentException.class, () -> tools.readFile(ctx, "file-link"));
-        assertThrows(IllegalArgumentException.class, () -> tools.readFile(ctx, "dir-link/secret.txt"));
-        assertThrows(IllegalArgumentException.class, () -> tools.readFile(ctx, "../outside/secret.txt"));
-        assertThrows(IllegalArgumentException.class, () -> tools.readFile(ctx, "/etc/passwd"));
+        assertThrows(PlatformException.class, () -> tools.readFile(ctx, "file-link"));
+        assertThrows(PlatformException.class, () -> tools.readFile(ctx, "dir-link/secret.txt"));
+        assertThrows(PlatformException.class, () -> tools.readFile(ctx, "../outside/secret.txt"));
+        assertThrows(PlatformException.class, () -> tools.readFile(ctx, "/etc/passwd"));
     }
 
     @Test

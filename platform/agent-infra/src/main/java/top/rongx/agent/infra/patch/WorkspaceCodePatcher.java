@@ -15,6 +15,8 @@ import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.infra.git.GitWorktreeManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 受限补丁器：Agent 能改动的仓库内容全部经这里落地。
@@ -62,17 +64,17 @@ public class WorkspaceCodePatcher implements CodePatcher {
     @Override
     public Staged stage(String projectId, String baseSha, List<CodePatch.FileEdit> edits) {
         if (baseSha == null || !baseSha.matches("[0-9a-f]{7,40}")) {
-            throw new IllegalArgumentException("base_sha 需 7-40 位小写十六进制（失败运行的提交）");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "base_sha 需 7-40 位小写十六进制（失败运行的提交）");
         }
         if (edits == null || edits.isEmpty()) {
-            throw new IllegalArgumentException("至少需要一个文件改动");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "至少需要一个文件改动");
         }
         if (edits.size() > MAX_FILES) {
-            throw new IllegalArgumentException("一次最多修改 " + MAX_FILES + " 个文件，收到 " + edits.size());
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "一次最多修改 " + MAX_FILES + " 个文件，收到 " + edits.size());
         }
         Path repo = requireRepo(projectId);
         if (!hasCommit(repo, baseSha)) {
-            throw new IllegalArgumentException("提交不存在：" + baseSha);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "提交不存在：" + baseSha);
         }
 
         StringBuilder diff = new StringBuilder();
@@ -82,11 +84,11 @@ public class WorkspaceCodePatcher implements CodePatcher {
         for (CodePatch.FileEdit edit : edits) {
             String path = normalize(edit.path());
             if (!allowed(path)) {
-                throw new IllegalArgumentException("不允许修改该路径：" + path
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "不允许修改该路径：" + path
                         + "；允许范围：" + String.join(", ", ALLOWED_PATTERNS));
             }
             if (edit.content().length() > MAX_CONTENT_CHARS) {
-                throw new IllegalArgumentException("文件内容过大：" + path
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件内容过大：" + path
                         + "（上限 " + MAX_CONTENT_CHARS + " 字符）");
             }
             String oldText = git.showFile(repo, baseSha, path);
@@ -102,7 +104,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
             files.add(path);
         }
         if (added == 0 && removed == 0) {
-            throw new IllegalArgumentException("补丁没有产生任何改动：内容与 base_sha 一致");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "补丁没有产生任何改动：内容与 base_sha 一致");
         }
         String text = diff.toString();
         return new Staged(text, sha256(text), added, removed, files);
@@ -123,7 +125,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
                     Files.createDirectories(target.getParent());
                     Files.writeString(target, edit.content(), StandardCharsets.UTF_8);
                 } catch (IOException e) {
-                    throw new IllegalStateException("写入补丁文件失败：" + edit.path()
+                    throw new RunException(ErrorCode.RUN_INVALID_STATE, "写入补丁文件失败：" + edit.path()
                             + "（" + e.getMessage() + "）");
                 }
             }
@@ -141,7 +143,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
 
     private Path requireRepo(String projectId) {
         return locator.repoDir(projectId).orElseThrow(() ->
-                new IllegalArgumentException("项目尚未接入 git 仓库：" + projectId));
+                new RunException(ErrorCode.RUN_INVALID_INPUT, "项目尚未接入 git 仓库：" + projectId));
     }
 
     private boolean hasCommit(Path repo, String sha) {
@@ -196,7 +198,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
     private static Path resolveInside(Path root, String relative) {
         Path resolved = root.resolve(relative).normalize();
         if (!resolved.startsWith(root.normalize())) {
-            throw new IllegalArgumentException("路径超出仓库范围：" + relative);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + relative);
         }
         return resolved;
     }

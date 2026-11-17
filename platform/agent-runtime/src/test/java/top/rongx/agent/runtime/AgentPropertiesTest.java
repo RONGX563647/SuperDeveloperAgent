@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 模型配置绑定：API Key 允许缺失（否则"没配 key → 启不来 → 进不了设置页配 key"），
@@ -45,9 +46,9 @@ class AgentPropertiesTest {
         assertEquals(30, capped.maxIters());
         assertEquals(5.0d, capped.temperature(), 1e-9);
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(PlatformException.class,
                 () -> new AgentProperties("", "sk-xxx", "qwen-plus", null, null));
-        assertThrows(IllegalStateException.class,
+        assertThrows(PlatformException.class,
                 () -> new AgentProperties(BASE_URL, "sk-xxx", "", null, null));
     }
 }

@@ -25,6 +25,8 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 
 /**
  * 工具目录：把装配好的 Toolkit 导出成机器可读的 {@code agent-tools.json}。
@@ -169,7 +171,7 @@ public class AgentToolCatalog {
             return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         }
         catch (IOException e) {
-            throw new IllegalStateException("工具目录序列化失败", e);
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE, "工具目录序列化失败", e);
         }
     }
 

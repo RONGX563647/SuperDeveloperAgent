@@ -2,6 +2,8 @@ package top.rongx.agent.domain.env;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 工具输出与网关之间的环境绑定「线格式」。
@@ -32,7 +34,7 @@ public final class EnvBindingWire {
     /** 生产端：输出一行可被 {@link #extract(String)} 识别的绑定 id。 */
     public static String line(String bindingId) {
         if (bindingId == null || bindingId.isBlank()) {
-            throw new IllegalArgumentException("bindingId 不能为空");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "bindingId 不能为空");
         }
         return FIELD + ": " + bindingId.trim();
     }

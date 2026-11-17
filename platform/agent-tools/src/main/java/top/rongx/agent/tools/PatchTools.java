@@ -12,6 +12,9 @@ import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.PatchStore;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 受限代码补丁工具：让 Agent 真正具备「改仓库」的能力，但只在受控范围内。
@@ -64,13 +67,13 @@ public class PatchTools {
         List<CodePatch.FileEdit> files;
         try {
             files = parseEdits(edits);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
         CodePatcher.Staged staged;
         try {
             staged = patcher.stage(ctx.projectId(), baseSha == null ? "" : baseSha.trim(), files);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }
 
@@ -107,7 +110,7 @@ public class PatchTools {
     /** 解析 {@code === FILE: path ===} 分段格式。 */
     static List<CodePatch.FileEdit> parseEdits(String raw) {
         if (raw == null || raw.isBlank()) {
-            throw new IllegalArgumentException("edits 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "edits 不能为空");
         }
         List<CodePatch.FileEdit> result = new ArrayList<>();
         String marker = "=== FILE:";
@@ -129,7 +132,7 @@ public class PatchTools {
             result.add(new CodePatch.FileEdit(currentPath, content.toString()));
         }
         if (result.isEmpty()) {
-            throw new IllegalArgumentException("没有解析到任何文件：请使用 \"=== FILE: 相对路径 ===\" 分段");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "没有解析到任何文件：请使用 \"=== FILE: 相对路径 ===\" 分段");
         }
         return result;
     }

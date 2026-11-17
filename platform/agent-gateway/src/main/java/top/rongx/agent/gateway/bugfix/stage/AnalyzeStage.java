@@ -16,6 +16,7 @@ import top.rongx.agent.gateway.bugfix.BugFixOutputValidation;
 import top.rongx.agent.gateway.bugfix.BugFixPromptTemplates;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
 import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 分析阶段：同步仓库 → 锁定基线提交 → 让只读 Agent 输出「版本范围 / 根因 / 复现步骤 / 目标文件」。
@@ -88,7 +89,7 @@ public class AnalyzeStage implements BugFixStageHandler {
         List<String> targetFiles;
         try {
             targetFiles = BugFixOutputValidation.paths(output.targetFiles());
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return BugFixStageResult.blocked("分析目标文件不合法：" + e.getMessage());
         }
         double confidence = BugFixOutputValidation.confidence(output.confidence());

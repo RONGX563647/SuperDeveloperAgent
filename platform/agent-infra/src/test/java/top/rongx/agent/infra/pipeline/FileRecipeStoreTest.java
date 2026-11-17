@@ -9,6 +9,7 @@ import top.rongx.agent.domain.deploy.DeployRecipe;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 环境脚本存储：版本递增、current 指针、历史回滚。
@@ -60,7 +61,7 @@ class FileRecipeStoreTest {
         try {
             store.current("../etc", "test");
             throw new AssertionError("应拒绝非法 projectId");
-        } catch (IllegalArgumentException expected) {
+        } catch (PlatformException | IllegalArgumentException expected) {
             // ok
         }
     }

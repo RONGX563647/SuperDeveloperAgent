@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 定义解析优先级：仓库提交覆盖 → 平台定义 → 规则生成 → agent 兜底。
@@ -217,7 +218,7 @@ class PipelineDefinitionResolverTest {
         MemoryStore store = new MemoryStore(temp.resolve("platform"));
         store.write(PROJECT, "name: release\nstages: [", null);
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> resolver(store, plan("JAVA", "x"), null).resolveForRead(PROJECT, repo));
     }
 

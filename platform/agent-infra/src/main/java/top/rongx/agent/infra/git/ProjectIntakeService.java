@@ -17,6 +17,7 @@ import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 import top.rongx.agent.infra.persistence.IntakeProjectStore;
 import top.rongx.agent.infra.scaffold.RecipeScaffolder;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * 项目接入服务（v2）：本地收编 / 远程 clone + 配方自检 + 状态机。
@@ -140,14 +141,14 @@ public class ProjectIntakeService {
     public IntakeState submit(IntakeRequest req) {
         String err = validate(req);
         if (err != null) {
-            throw new IllegalArgumentException(err);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, err);
         }
         String id = req.projectId();
         IntakeState existing = intakes.get(id);
         // 只有"正在跑"的接入才拦截；REGISTERED / INTAKE_FAILED 都允许重提交
         // （FAILED=重试；REGISTERED=重新收编，覆盖语义）
         if (existing != null && isRunning(existing.phase())) {
-            throw new IllegalStateException("项目 " + id + " 正在接入中（" + existing.phase() + "）");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目 " + id + " 正在接入中（" + existing.phase() + "）");
         }
         IntakeState start = new IntakeState(id, "VALIDATING", "校验中", Map.of(), System.currentTimeMillis());
         intakes.put(id, start);
@@ -159,7 +160,7 @@ public class ProjectIntakeService {
     public IntakeState status(String projectId) {
         IntakeState s = intakes.get(projectId);
         if (s == null) {
-            throw new IllegalArgumentException("没有 " + projectId + " 的接入记录");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "没有 " + projectId + " 的接入记录");
         }
         return s;
     }
@@ -268,7 +269,7 @@ public class ProjectIntakeService {
                             .filter(f -> f.path().equals("ci/pipeline.yml"))
                             .map(ScaffoldPlan.ScaffoldFile::content)
                             .findFirst()
-                            .orElseThrow(() -> new IllegalStateException("脚手架没有生成 ci/pipeline.yml"));
+                            .orElseThrow(() -> new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "脚手架没有生成 ci/pipeline.yml"));
                     String actionsYaml = plan.files().stream()
                             .filter(f -> f.path().equals("ci/actions.yml"))
                             .map(ScaffoldPlan.ScaffoldFile::content)

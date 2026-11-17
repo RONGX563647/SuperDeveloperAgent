@@ -13,6 +13,8 @@ import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.BuildException;
 
 /**
  * 流水线定义解析：决定**这次用哪份定义**。
@@ -315,7 +317,6 @@ public final class PipelineDefinitionResolver {
                 .filter(f -> f.path().equals(path))
                 .map(ScaffoldPlan.ScaffoldFile::content)
                 .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                        "脚手架没有生成 " + path + "（项目 " + plan.projectId() + "）"));
+                .orElseThrow(() -> new BuildException(ErrorCode.BUILD_INVALID_STATE, "脚手架没有生成 " + path + "（项目 " + plan.projectId() + "）"));
     }
 }

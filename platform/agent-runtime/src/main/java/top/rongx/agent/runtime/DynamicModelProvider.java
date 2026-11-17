@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.ModelRegistry;
 import top.rongx.agent.domain.port.ModelRegistry.ActiveModel;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 动态模型提供者：设置页保存后**无需重启**即可切换模型。
@@ -45,13 +47,13 @@ public class DynamicModelProvider {
 
     /** 默认连接 / 默认模型（线程安全；配置未变时复用实例）。 */
     public Model current() {
-        return current(registry.active().orElseThrow(() -> new IllegalStateException(NO_MODEL)));
+        return current(registry.active().orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_STATE, NO_MODEL)));
     }
 
     /** 会话显式选择的连接 + 模型。 */
     public Model current(String connectionId, String modelName) {
         ActiveModel config = registry.resolve(connectionId, modelName).orElseThrow(
-                () -> new IllegalStateException("模型连接不可用或已停用："
+                () -> new RunException(ErrorCode.RUN_INVALID_STATE, "模型连接不可用或已停用："
                         + (connectionId == null ? "默认连接" : connectionId)));
         return current(config);
     }
@@ -67,13 +69,13 @@ public class DynamicModelProvider {
     /** 当前生效配置（供对话页展示模型名）。 */
     public ActiveModel activeConfig() {
         return registry.active().orElseThrow(
-                () -> new IllegalStateException(NO_MODEL));
+                () -> new RunException(ErrorCode.RUN_INVALID_STATE, NO_MODEL));
     }
 
     /** 会话显式选择对应的生效配置。 */
     public ActiveModel activeConfig(String connectionId, String modelName) {
         return registry.resolve(connectionId, modelName).orElseThrow(
-                () -> new IllegalStateException("模型连接不可用或已停用："
+                () -> new RunException(ErrorCode.RUN_INVALID_STATE, "模型连接不可用或已停用："
                         + (connectionId == null ? "默认连接" : connectionId)));
     }
 

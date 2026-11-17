@@ -36,6 +36,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.settings.CapabilityMarket;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 外部能力市场：MCP 官方 Registry + Awesome-MCP-ZH 精选 + 公开 Skill 仓库
@@ -530,7 +533,7 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
             }
         }
         throw failure == null
-                ? new IllegalStateException("技能仓库不可达：" + repo) : failure;
+                ? new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能仓库不可达：" + repo) : failure;
     }
 
     private byte[] getBytes(String url) {
@@ -538,14 +541,14 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
             HttpRequest request = request(url).GET().build();
             HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() / 100 != 2) {
-                throw new IllegalStateException("下载失败 HTTP " + response.statusCode() + "：" + url);
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "下载失败 HTTP " + response.statusCode() + "：" + url);
             }
             return response.body();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("下载被中断", e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "下载被中断", e);
         } catch (IOException e) {
-            throw new IllegalStateException("下载失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "下载失败：" + e.getMessage(), e);
         }
     }
 
@@ -555,7 +558,7 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
         try {
             return json.readTree(body);
         } catch (IOException e) {
-            throw new IllegalStateException("能力市场响应无法解析：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "能力市场响应无法解析：" + e.getMessage(), e);
         }
     }
 
@@ -564,15 +567,15 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
             HttpResponse<String> response = http.send(request(url).GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
-                throw new IllegalStateException("能力市场返回 HTTP " + response.statusCode()
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "能力市场返回 HTTP " + response.statusCode()
                         + "：" + url);
             }
             return response.body();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("能力市场请求被中断", e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "能力市场请求被中断", e);
         } catch (IOException e) {
-            throw new IllegalStateException("能力市场不可达：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "能力市场不可达：" + e.getMessage(), e);
         }
     }
 
@@ -731,7 +734,7 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
                     builder.proxy(ProxySelector.of(new InetSocketAddress(uri.getHost(),
                             uri.getPort() > 0 ? uri.getPort() : 8080)));
                 }
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 // 代理变量格式不对时按直连处理，后面请求失败会给出明确错误
             }
         }

@@ -6,6 +6,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.Locale;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 出站 HTTP 客户端：遵循 HTTPS_PROXY / HTTP_PROXY 环境变量。
@@ -42,7 +43,7 @@ final class OutboundHttp {
                 return null;
             }
             return new InetSocketAddress(uri.getHost(), uri.getPort() > 0 ? uri.getPort() : 8080);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return null;
         }
     }

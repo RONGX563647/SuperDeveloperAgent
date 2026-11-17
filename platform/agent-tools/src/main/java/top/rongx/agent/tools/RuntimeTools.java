@@ -32,6 +32,7 @@ import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 应用运行时工具：只回答"应用有没有在跑、日志里报了什么"，不启停任何东西。
@@ -99,7 +100,7 @@ public class RuntimeTools {
         List<RuntimeInspector.ContainerStatus> containers = List.of();
         try {
             containers = inspector.containers(ctx.projectId(), target);
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             dockerError = e.getMessage();
         }
         if (dockerError != null) {
@@ -192,7 +193,7 @@ public class RuntimeTools {
         List<RuntimeInspector.ContainerStatus> containers = List.of();
         try {
             containers = inspector.containers(ctx.projectId(), target);
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             dockerError = e.getMessage();
         }
         if (dockerError != null && !wrote) {
@@ -210,7 +211,7 @@ public class RuntimeTools {
             List<String> lines;
             try {
                 lines = inspector.logs(c.name(), since);
-            } catch (IllegalStateException e) {
+            } catch (PlatformException | IllegalStateException e) {
                 sb.append("container: ").append(c.name()).append('\n')
                         .append("  err: ").append(e.getMessage()).append('\n');
                 wrote = true;
@@ -281,7 +282,7 @@ public class RuntimeTools {
         List<RuntimeInspector.PortOwner> owners = List.of();
         try {
             owners = inspector.portOwners(port);
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             dockerError = e.getMessage();
         }
         if (dockerError != null) {

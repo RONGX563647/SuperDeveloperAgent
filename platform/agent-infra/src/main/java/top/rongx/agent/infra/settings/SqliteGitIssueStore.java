@@ -18,6 +18,8 @@ import top.rongx.agent.domain.gitissue.GitIssueIntegration;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
 import top.rongx.agent.domain.gitissue.GitIssueRepository;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * Issue 任务 / 评论 / 事件去重 / 集成配置的 SQLite 存储。
@@ -133,7 +135,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                         "ALTER TABLE git_issues ADD COLUMN priority TEXT NOT NULL DEFAULT 'P2'");
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("git issue 表初始化失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "git issue 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -177,7 +179,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("任务查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -192,7 +194,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return rs.next() ? Optional.of(mapIssue(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("任务查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -213,7 +215,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return rs.next() ? Optional.of(mapIssue(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("任务绑定查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务绑定查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -275,7 +277,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                     issue.createdAt() > 0 ? issue.createdAt() : now, now);
             return saved;
         } catch (SQLException e) {
-            throw new IllegalStateException("任务保存失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -316,7 +318,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 st.executeUpdate();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("任务删除失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -330,7 +332,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return rs.next() ? rs.getLong(1) : 0;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("任务统计失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务统计失败：" + e.getMessage(), e);
         }
     }
 
@@ -352,7 +354,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("评论查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "评论查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -373,7 +375,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             st.executeUpdate();
             return comment;
         } catch (SQLException e) {
-            throw new IllegalStateException("评论保存失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "评论保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -386,7 +388,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             st.setString(2, issueId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("评论删除失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "评论删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -411,7 +413,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return st.executeUpdate() > 0;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("事件去重失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "事件去重失败：" + e.getMessage(), e);
         }
     }
 
@@ -431,7 +433,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Issue 同步配置查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -445,7 +447,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 return rs.next() ? Optional.of(mapIntegration(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Issue 同步配置查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -463,7 +465,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                         rs.getString("secret_enc"), rs.getString("secret_iv")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Webhook 密钥读取失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Webhook 密钥读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -509,7 +511,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             }
             return find(provider).orElseThrow();
         } catch (SQLException e) {
-            throw new IllegalStateException("Issue 同步配置保存失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -534,7 +536,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             st.setString(1, normalizeProvider(provider));
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("Issue 同步配置删除失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -594,7 +596,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
     private static String normalizeProvider(String provider) {
         String p = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
         if (!p.equals("GITEE") && !p.equals("GITHUB") && !p.equals("GITLAB")) {
-            throw new IllegalArgumentException("provider 只能是 GITEE / GITHUB / GITLAB");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "provider 只能是 GITEE / GITHUB / GITLAB");
         }
         return p;
     }

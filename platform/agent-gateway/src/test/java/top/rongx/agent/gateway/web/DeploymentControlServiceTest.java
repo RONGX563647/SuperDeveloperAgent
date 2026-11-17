@@ -25,6 +25,7 @@ import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
 import top.rongx.agent.gateway.web.DeploymentControlService.Cell;
 import top.rongx.agent.gateway.web.DeploymentControlService.DeploymentLogs;
 import top.rongx.agent.gateway.web.DeploymentControlService.Matrix;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 环境矩阵只做「读部署事实 + 校验」：不启动真实进程/容器。 */
 class DeploymentControlServiceTest {
@@ -144,9 +145,9 @@ class DeploymentControlServiceTest {
     void rejectsUnsafeVersion() {
         RuntimeInspector inspector = mock(RuntimeInspector.class);
         DeploymentControlService service = service(inspector);
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> service.start("proj", "dev", "../../etc/passwd"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> service.stop("proj", "uat", null));
     }
 
@@ -251,7 +252,7 @@ class DeploymentControlServiceTest {
         assertEquals("proj-test-frontend", logs.container());
         assertEquals(List.of("proj-test-backend", "proj-test-frontend"), logs.containers());
         assertEquals(List.of("fe ready"), logs.lines());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> service.logs("proj", "test", "sha9", "another-container", 50, 60));
     }
 

@@ -21,6 +21,8 @@ import top.rongx.agent.domain.port.PipelineEngine.RunMeta;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.gateway.deploy.DeployGate;
+import top.rongx.agent.domain.error.RecipeException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 流水线运行查询（CI 的"构建历史/阶段视图"）。 */
 @RestController
@@ -150,7 +152,7 @@ public class PipelineController {
                                       @RequestBody Map<String, String> params) {
         String projectId = params.get("projectId");
         if (projectId == null || projectId.isBlank()) {
-            throw new IllegalArgumentException("projectId 必填");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "projectId 必填");
         }
         currentUser.checkPermission("ci:run");
         String env = params.getOrDefault("env", "test");
@@ -165,7 +167,7 @@ public class PipelineController {
         // projectId 必填：不再默认到某个写死的项目（防误触发）
         String projectId = params.get("projectId");
         if (projectId == null || projectId.isBlank()) {
-            throw new IllegalArgumentException("projectId 必填");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "projectId 必填");
         }
         String sha = params.get("gitSha");
         // 环境：缺省 test（绝不让"没传环境"落到生产）
@@ -178,22 +180,22 @@ public class PipelineController {
         if (imageOnly) {
             deployImage = deployImage.trim();
             if (!deployImage.matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")) {
-                throw new IllegalArgumentException("镜像 tag 非法：" + deployImage);
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "镜像 tag 非法：" + deployImage);
             }
             // 只允许部署本项目/本环境登记过的版本，防止借接口启动任意本机镜像
             sha = engine.gitShaForImage(projectId, normalizedEnv, deployImage).orElse(null);
             if (sha == null) {
-                throw new IllegalArgumentException("镜像版本不存在或不属于 " + projectId
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "镜像版本不存在或不属于 " + projectId
                         + " / " + normalizedEnv + "：" + deployImage);
             }
             // 预检前移：镜像是否还在、Docker 是否可用、环境密钥/必填项是否齐全，
             // 不通过直接 400，避免"触发成功 → 跑一半才失败"。
             java.util.List<String> blockers = engine.deployPreflight(projectId, normalizedEnv, deployImage);
             if (!blockers.isEmpty()) {
-                throw new IllegalArgumentException(String.join("；", blockers));
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, String.join("；", blockers));
             }
         } else if (sha == null || sha.isBlank()) {
-            throw new IllegalArgumentException("gitSha 必填");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "gitSha 必填");
         }
         // 阶段门控：先 dry-run（只读预检），不通过不允许 apply；指定的报告哈希必须与当前一致。
         // 按版本部署没有待执行的构建脚本，门控换成上一步的"版本归属"校验。
@@ -245,8 +247,7 @@ public class PipelineController {
         if (version != null && !version.isBlank()) {
             version = version.trim();
             if (!version.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,31}")) {
-                throw new IllegalArgumentException(
-                        "版本号只能包含字母、数字、. _ -，且以字母或数字开头（最长 32）：" + version);
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "版本号只能包含字母、数字、. _ -，且以字母或数字开头（最长 32）：" + version);
             }
             triggerParams.put("version", version);
         }
@@ -254,7 +255,7 @@ public class PipelineController {
                 || "1".equals(String.valueOf(params.get("tag")));
         if (tagged) {
             if (version == null || version.isBlank()) {
-                throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 v1.2.0）");
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "打 tag 时必须填写版本号（例如 v1.2.0）");
             }
             triggerParams.put("tag", "true");
         }
@@ -353,7 +354,7 @@ public class PipelineController {
     public Map<String, Object> log(@PathVariable String runId,
                                    @RequestParam(defaultValue = "0") int offset) {
         if (!engine.hasRun(runId)) {
-            throw new IllegalArgumentException("运行不存在：" + runId);
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "运行不存在：" + runId);
         }
         LogSlice slice = engine.logFrom(runId, offset);
         boolean complete = engine.status(runId).isTerminal() && slice.end() == slice.offset();
@@ -407,7 +408,7 @@ public class PipelineController {
         try {
             engine.retryStage(runId, stageId);
             return Map.of("runId", runId, "retrying", true);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return Map.of("runId", runId, "retrying", false, "message", e.getMessage());
         }
     }
@@ -432,7 +433,7 @@ public class PipelineController {
     public Map<String, Object> deleteHistory(@PathVariable String runId) {
         try {
             return Map.of("deleted", engine.deleteHistory(runId));
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return Map.of("deleted", false, "message", e.getMessage());
         }
     }

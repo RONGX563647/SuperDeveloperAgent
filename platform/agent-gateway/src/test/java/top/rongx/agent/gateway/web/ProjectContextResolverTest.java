@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 项目上下文解析：不做项目级 RBAC、只读角色标记、工作树逃逸拒绝。
@@ -66,21 +67,21 @@ class ProjectContextResolverTest {
     @Test
     @DisplayName("未知用户不能构造上下文")
     void unknownUserRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> resolver.resolve("RY", "test", "ghost"));
     }
 
     @Test
     @DisplayName("环境必须属于项目")
     void unknownEnvRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> resolver.resolve("RY", "staging", "devops"));
     }
 
     @Test
     @DisplayName("工作树路径逃逸在进入工具层前被拒绝")
     void worktreeEscapeRejected() {
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+        PlatformException ex = assertThrows(PlatformException.class,
                 () -> resolver.resolve("RY", "test", "devops", "../../../etc"));
         assertTrue(ex.getMessage().contains("工作树名不合法"), ex.getMessage());
     }

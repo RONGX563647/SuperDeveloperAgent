@@ -11,6 +11,9 @@ import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 项目相关只读工具（L0）。
@@ -32,7 +35,7 @@ public class ProjectTools {
             readOnly = true, concurrencySafe = true)
     public String projectInfo(ProjectContext ctx) {
         Project p = projects.findById(ctx.projectId())
-                .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + ctx.projectId()));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "项目不存在: " + ctx.projectId()));
         return """
                 project: %s (%s)
                 type: %s
@@ -90,7 +93,7 @@ public class ProjectTools {
         }
         try {
             return URI.create(url).getPort();
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return 0;
         }
     }

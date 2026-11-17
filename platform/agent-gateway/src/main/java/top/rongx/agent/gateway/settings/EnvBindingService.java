@@ -108,7 +108,7 @@ public class EnvBindingService implements EnvBindingPort {
         try {
             mappingJson = json.writeValueAsString(mapping);
         } catch (Exception e) {
-            throw new IllegalStateException("生成映射草案失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "生成映射草案失败：" + e.getMessage(), e);
         }
         String hash = sha256(projectId + "|" + env + "|" + mappingJson);
         EnvBinding binding = new EnvBinding(null, projectId, env, mappingJson, hash,
@@ -179,7 +179,7 @@ public class EnvBindingService implements EnvBindingPort {
 
     private EnvBinding requireBinding(String bindingId) {
         return envStore.binding(bindingId).orElseThrow(() ->
-                new IllegalArgumentException("环境绑定不存在：" + bindingId));
+                new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境绑定不存在：" + bindingId));
     }
 
     /**
@@ -215,7 +215,7 @@ public class EnvBindingService implements EnvBindingPort {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
-            throw new IllegalStateException("计算映射哈希失败", e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "计算映射哈希失败", e);
         }
     }
 }

@@ -1,6 +1,8 @@
 package top.rongx.agent.domain.change;
 
 import java.time.Instant;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PromotionException;
 
 /**
  * 一次变更的计划（审批/确认的对象）。
@@ -32,7 +34,7 @@ public record ChangePlan(
 
     public ChangePlan {
         if (planHash == null || planHash.isBlank()) {
-            throw new IllegalArgumentException("planHash 不能为空");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "planHash 不能为空");
         }
         if (createdAt == null) {
             createdAt = Instant.now();

@@ -15,6 +15,8 @@ import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.GitOauthApp;
 import top.rongx.agent.domain.settings.GitOauthAppRepository;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * Git 平台 OAuth 应用配置（SQLite）。
@@ -57,7 +59,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
         try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("git_oauth_apps 表初始化失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "git_oauth_apps 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -78,7 +80,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("OAuth 应用配置查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -92,7 +94,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("OAuth 应用配置查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -101,11 +103,11 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
         String provider = normalizeProvider(view.provider());
         String clientId = view.clientId() == null ? "" : view.clientId().trim();
         if (clientId.isBlank()) {
-            throw new IllegalArgumentException("Client ID 不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "Client ID 不能为空");
         }
         String redirectUri = view.redirectUri() == null ? "" : view.redirectUri().trim();
         if (redirectUri.isBlank()) {
-            throw new IllegalArgumentException("回调地址不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "回调地址不能为空");
         }
         String scopes = view.scopes() == null || view.scopes().isBlank()
                 ? defaultScopes(provider) : view.scopes().trim();
@@ -115,7 +117,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
             SecretBox.Sealed sealed = clientSecret != null && !clientSecret.isBlank()
                     ? secretBox.encrypt(clientSecret.trim()) : existing;
             if (sealed == null) {
-                throw new IllegalArgumentException("首次配置必须填写 Client Secret");
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "首次配置必须填写 Client Secret");
             }
             if (existing == null) {
                 try (PreparedStatement st = conn.prepareStatement("""
@@ -152,7 +154,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
             }
             return find(provider).orElseThrow();
         } catch (SQLException e) {
-            throw new IllegalStateException("OAuth 应用配置保存失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -183,7 +185,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
                         rs.getString("secret_enc"), rs.getString("secret_iv")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Client Secret 读取失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Client Secret 读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -195,7 +197,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
             st.setString(1, normalizeProvider(provider));
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("OAuth 应用配置删除失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -216,7 +218,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
     private static String normalizeProvider(String provider) {
         String p = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
         if (!p.equals("GITEE") && !p.equals("GITHUB") && !p.equals("GITLAB")) {
-            throw new IllegalArgumentException("provider 只能是 GITEE / GITHUB / GITLAB");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "provider 只能是 GITEE / GITHUB / GITLAB");
         }
         return p;
     }

@@ -24,6 +24,8 @@ import top.rongx.agent.domain.action.ActionSource;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 
 /**
  * 配方解析（方案 D）。
@@ -216,17 +218,17 @@ public class RecipeActionResolver implements ActionResolver {
             }
             String name = str(m, "name", (String) null);
             if (name == null || name.isBlank()) {
-                throw new IllegalArgumentException(CI_ACTIONS + " 中 " + action.wireName()
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, CI_ACTIONS + " 中 " + action.wireName()
                         + ".params 的条目必须声明 name");
             }
             List<String> allowed = parseStringList(m.get("allowed"));
             String def = m.get("default") == null ? null : String.valueOf(m.get("default"));
             if (def == null) {
-                throw new IllegalArgumentException(CI_ACTIONS + " 中 " + action.wireName()
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, CI_ACTIONS + " 中 " + action.wireName()
                         + ".params." + name + " 必须声明 default");
             }
             if (!allowed.isEmpty() && !allowed.contains(def)) {
-                throw new IllegalArgumentException(CI_ACTIONS + " 中 " + action.wireName()
+                throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, CI_ACTIONS + " 中 " + action.wireName()
                         + ".params." + name + " 默认值 " + def + " 不在 allowed " + allowed);
             }
             out.put(name, def);
@@ -396,7 +398,7 @@ public class RecipeActionResolver implements ActionResolver {
     /** 支持 `run: [argv...]`（单条）与 `run: [[argv...],[argv...]]`（多条）。 */
     private List<List<String>> parseSteps(Object run, ActionId action, String where) {
         if (!(run instanceof List<?> list) || list.isEmpty()) {
-            throw new IllegalArgumentException(where + " 中 " + action.wireName() + ".run 必须是非空数组");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, where + " 中 " + action.wireName() + ".run 必须是非空数组");
         }
         if (list.get(0) instanceof List<?>) {
             List<List<String>> steps = new ArrayList<>();
@@ -410,14 +412,14 @@ public class RecipeActionResolver implements ActionResolver {
 
     private List<String> toStringList(Object value) {
         if (!(value instanceof List<?> list)) {
-            throw new IllegalArgumentException("命令必须是字符串数组，收到: " + value);
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "命令必须是字符串数组，收到: " + value);
         }
         List<String> argv = new ArrayList<>();
         for (Object o : list) {
             argv.add(String.valueOf(o));
         }
         if (argv.isEmpty()) {
-            throw new IllegalArgumentException("命令不能为空数组");
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "命令不能为空数组");
         }
         return List.copyOf(argv);
     }

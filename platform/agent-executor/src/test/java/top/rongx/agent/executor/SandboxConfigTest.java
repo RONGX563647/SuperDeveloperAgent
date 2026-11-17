@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 沙箱默认 fail-closed：Docker 不可用时不能静默降级为宿主执行。 */
 class SandboxConfigTest {
@@ -22,14 +23,14 @@ class SandboxConfigTest {
     @Test
     void dockerModeFailsWhenDockerUnavailable() {
         SandboxConfig config = new SandboxConfig();
-        assertThrows(IllegalStateException.class,
+        assertThrows(PlatformException.class,
                 () -> config.actionRunner(unavailable, "docker"));
     }
 
     @Test
     void legacyAutoModeAlsoFailsClosed() {
         SandboxConfig config = new SandboxConfig();
-        assertThrows(IllegalStateException.class,
+        assertThrows(PlatformException.class,
                 () -> config.actionRunner(unavailable, "auto"));
     }
 }

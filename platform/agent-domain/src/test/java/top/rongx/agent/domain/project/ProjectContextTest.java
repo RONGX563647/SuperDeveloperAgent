@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 项目上下文的安全校验：工作树名来自客户端，必须在进入工具层之前拒绝目录逃逸。
@@ -26,7 +27,7 @@ class ProjectContextTest {
     void rejectsEscapeNames() {
         for (String bad : new String[]{
                 "../../etc", "..", "a/b", "a\\b", "/etc/passwd", "C:/windows", "wt-../x", ".hidden"}) {
-            assertThrows(IllegalArgumentException.class,
+            assertThrows(PlatformException.class,
                     () -> new ProjectContext("RY", "test", "u1", null, bad),
                     "应拒绝工作树名：" + bad);
         }

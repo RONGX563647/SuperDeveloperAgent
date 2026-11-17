@@ -8,6 +8,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.infra.git.GitWorktreeManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * 仓库定位器（v2 直接模式）：
@@ -80,7 +82,7 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
         if ("DIRECT".equals(p.mode())) {
             Path dir = Path.of(p.localPath());
             if (!Files.isDirectory(dir.resolve(".git"))) {
-                throw new IllegalStateException("项目目录不是 git 仓库：" + dir);
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目目录不是 git 仓库：" + dir);
             }
             if (p.repoUrl() != null && !p.repoUrl().isBlank()) {
                 // REMOTE clone 到本地目录：fetch 远端拿最新
