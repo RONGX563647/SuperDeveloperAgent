@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
+import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
@@ -180,8 +181,14 @@ class DeployStageTest {
 
         StageResult deployStage = stageOf(runId, "deploy");
         assertEquals(StageStatus.SUCCEEDED, deployStage.status());
-        assertTrue(deployStage.artifacts().stream().anyMatch(a -> "deployment".equals(a.kind())),
-                "应登记 deployment 产物：" + deployStage.artifacts());
+        ArtifactRef deployment = deployStage.artifacts().stream()
+                .filter(a -> "deployment".equals(a.kind())).findFirst().orElse(null);
+        assertTrue(deployment != null, "应登记 deployment 产物：" + deployStage.artifacts());
+        // 证据链：实际端口/容器端口/探活路径必须随产物落库，排障不靠日志反推
+        assertEquals("18090", deployment.meta().get("port"), deployment.meta().toString());
+        assertEquals("8080", deployment.meta().get("containerPort"), deployment.meta().toString());
+        assertEquals("/healthz", deployment.meta().get("healthPath"), deployment.meta().toString());
+        assertEquals("docker", deployment.meta().get("target"), deployment.meta().toString());
     }
 
     @Test

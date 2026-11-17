@@ -3960,10 +3960,19 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             envStore.saveLease(new PortLease(state.projectId, state.env, spec.containerPort(),
                     actualPort, state.runId, System.currentTimeMillis()));
         }
+        // 证据链：产物里固化实际端口/容器端口/探活路径/镜像，排障时不必再从日志里反推
+        int evidencePort = actualPort > 0 ? actualPort : hostPort;
+        Map<String, String> meta = new java.util.LinkedHashMap<>();
+        meta.put("target", target.wireName());
+        meta.put("resource", result.resource() == null ? "" : result.resource());
+        meta.put("port", String.valueOf(evidencePort));
+        meta.put("containerPort", String.valueOf(spec.containerPort()));
+        meta.put("healthPath", spec.healthPath() == null ? "" : spec.healthPath());
+        if (image != null && !image.isBlank()) {
+            meta.put("image", image);
+        }
         List<ArtifactRef> artifacts = List.of(new ArtifactRef("deployment",
-                result.endpoint(), null, 0,
-                Map.of("target", target.wireName(),
-                        "resource", result.resource() == null ? "" : result.resource())));
+                result.endpoint(), null, 0, Map.copyOf(meta)));
         state.stages.add(StageResult.success(label, 0, artifacts, elapsed(start)));
         state.artifacts.addAll(artifacts);
         return true;
@@ -4111,7 +4120,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             ArtifactRef artifact = new ArtifactRef("deployment", result.endpoint(), null, 0,
                     Map.of("target", "docker",
                             "service", service.name(),
-                            "resource", result.resource() == null ? "" : result.resource()));
+                            "resource", result.resource() == null ? "" : result.resource(),
+                            "hostPort", String.valueOf(hostPort),
+                            "containerPort", String.valueOf(service.containerPort()),
+                            "image", service.image() == null ? "" : service.image()));
             artifacts.add(artifact);
             state.artifacts.add(artifact);
             if ("frontend".equals(service.name()) || primaryEndpoint == null) {
