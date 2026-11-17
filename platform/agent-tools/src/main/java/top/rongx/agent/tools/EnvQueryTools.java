@@ -34,12 +34,7 @@ public class EnvQueryTools {
         this.endpoints = endpoints;
     }
 
-    @Tool(name = "env_summary",
-            description = """
-                    查看某环境部署时会注入的变量数量、网络、端口与中间件健康（只读）。
-                    中间件按「本项目专属 / 环境共享」拆分：healthy 只统计本项目专属中间件，
-                    环境共享的实例（其它项目或公共中间件）单独列出、不计入本项目健康。
-                    不返回变量值；用于判断"缺变量/中间件没起"这类前置问题。""",
+    @Tool(name = "env_summary", description = "Summarize env vars, network, health.",
             readOnly = true, concurrencySafe = true)
     public String summary(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
                           ProjectContext ctx) {
@@ -100,11 +95,7 @@ public class EnvQueryTools {
      * <p>用于确认"我写的 SERVER_PORT 到底在不在""它是模板还是项目覆盖"，
      * 不必为了看一眼变量而生成一份绑定草案。
      */
-    @Tool(name = "env_vars",
-            description = """
-                    列出某环境部署时真正会注入的变量名、来源（模板/项目覆盖/资源）与是否敏感（只读）。
-                    不返回任何变量值。用于确认某个变量是否已经写入、是否被模板或项目覆盖。
-                    需要判断"变量指向哪个中间件"时再用 env_var_probe。""",
+    @Tool(name = "env_vars", description = "List env variable names and sources.",
             readOnly = true, concurrencySafe = true)
     public String vars(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
                        ProjectContext ctx) {
@@ -144,12 +135,7 @@ public class EnvQueryTools {
      * <p>典型误配是"DB_HOST 指向了别的项目/公共实例"——中间件全绿但连错库。
      * 这里把指向解析出来，与本环境登记的中间件比对，给出 project / shared / external 归属。
      */
-    @Tool(name = "env_var_probe",
-            description = """
-                    校验环境变量指向（只读，不返回值）：给定变量名，回答它指向的 host:port
-                    是否属于「本项目中间件」/「环境共享实例」/「外部地址」。
-                    用于排查"数据库连错实例""redis 指向别的项目"这类配置问题。
-                    支持 jdbc: / redis:// / amqp:// / http(s):// 以及 host:port、纯主机名写法。""",
+    @Tool(name = "env_var_probe", description = "Check what a variable points to.",
             readOnly = true, concurrencySafe = true)
     public String varProbe(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
                            @ToolParam(name = "keys",

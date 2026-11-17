@@ -39,22 +39,7 @@ public class PatchTools {
         this.changes = changes;
     }
 
-    @Tool(name = "propose_patch",
-            description = """
-                    提交一份受限代码补丁，用于修复流水线失败的根因（写操作，仅 dev/test）。
-                    适用场景：构建/测试配置写错、e2e 用例不该在构建阶段执行、ci 流水线定义与产物不匹配。
-                    允许修改的路径：ci/**、Jenkinsfile、**/pom.xml、**/build.gradle(.kts)、**/src/test/**、
-                    Dockerfile、.dockerignore、deploy/**、docker-compose*.yml、nginx*.conf、application*.yml、
-                    package.json、.env.example；业务代码与凭证会被拒绝。
-                    本工具只生成 diff 并登记变更单，不会直接改仓库——确认卡会直接出现在当前对话里，
-                    必须在对话中的确认卡片上确认后才应用。
-                    edits 格式（每个文件一段，内容写到下一个标记为止）：
-                    === FILE: ci/pipeline.yml ===
-                    <该文件的完整新内容>
-                    === FILE: pom.xml ===
-                    <该文件的完整新内容>
-                    reason 超长会按 120 字截断（不会因此报错）。
-                    调用后把 changeId 告诉用户即可，不要假设已确认。""",
+    @Tool(name = "propose_patch", description = "Propose a restricted code patch.",
             readOnly = false, concurrencySafe = false)
     public String propose(
             @ToolParam(name = "base_sha",

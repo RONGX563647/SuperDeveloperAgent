@@ -27,7 +27,7 @@ class ToolResultCacheTest {
     private static final String SCOPE = "p1|dev||u1";
 
     private ToolResultCache cache(long ttlSeconds, int maxOutputChars) {
-        return new ToolResultCache(true, ttlSeconds, 64, 0.9, maxOutputChars, "");
+        return new ToolResultCache(true, ttlSeconds, 64, 0.9, maxOutputChars, "", "");
     }
 
     @Test
@@ -96,15 +96,35 @@ class ToolResultCacheTest {
         String cached = text(tool.callAsync(second).block());
 
         assertEquals(1, delegate.calls.get());
-        assertTrue(first.contains("工具输出已截断"));
+        assertTrue(first.contains("tool output truncated"));
         assertEquals(first, cached);
         assertTrue(cache.stats().contains("hits=1"));
     }
 
     @Test
+    @DisplayName("按工具覆盖输出预算：小结果小预算、大结果大预算")
+    void perToolBudgetOverridesDefault() {
+        ToolResultCache cache = new ToolResultCache(true, 60, 64, 0.9, 10_000,
+                "project_info=2000,git_diff=16000", "");
+        CountingTool projectInfo = new CountingTool("project_info", "x".repeat(5_000));
+        CountingTool diff = new CountingTool("git_diff", "x".repeat(12_000));
+
+        String small = text(new CachingAgentTool(projectInfo, cache)
+                .callAsync(param(Map.of(), "c1")).block());
+        String large = text(new CachingAgentTool(diff, cache)
+                .callAsync(param(Map.of(), "c2")).block());
+
+        assertTrue(small.contains("tool output truncated"), small);
+        assertTrue(large.length() >= 12_000, "diff 在 16000 预算内不应被截断");
+        assertEquals(2_000, cache.maxOutputChars("project_info"));
+        assertEquals(16_000, cache.maxOutputChars("git_diff"));
+        assertEquals(10_000, cache.maxOutputChars("read_file"));
+    }
+
+    @Test
     @DisplayName("被排除的实时工具不缓存：每次调用都真正执行")
     void excludedToolAlwaysRuns() {
-        ToolResultCache cache = new ToolResultCache(true, 60, 64, 0.9, 10_000,
+        ToolResultCache cache = new ToolResultCache(true, 60, 64, 0.9, 10_000, "",
                 "conversation_wait");
         CountingTool delegate = new CountingTool("conversation_wait", "RUNNING");
         CachingAgentTool tool = new CachingAgentTool(delegate, cache);

@@ -66,11 +66,7 @@ public class DeployTools {
                 .resolve("_platform").resolve("deploy");
     }
 
-    @Tool(name = "deploy_env_status",
-            description = """
-                    查看某个环境当前的可复现脚本与证据状态（只读）。
-                    返回：脚本版本、证据运行 id 与状态、能否上服务器（prod）。
-                    探索前先调它，能避免重复劳动：已经有 vN 且证据成功，直接 replay 即可。""",
+    @Tool(name = "deploy_env_status", description = "Show deploy recipe and evidence status.",
             readOnly = true, concurrencySafe = true)
     // @handbook tools-deploy-tools/env-status | 部署环境状态只读查询
     public String envStatus(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
@@ -102,15 +98,7 @@ public class DeployTools {
      * 自动化就断在这里。这里只认固定状态文件 {@code _platform/deploy/<project>-<env>/app.pid}，
      * 且校验命令行确实是平台部署的 {@code app.jar}（防 pid 复用误杀），不提供任意 pid 操作。
      */
-    @Tool(name = "deploy_host_stop",
-            description = """
-                    停掉「HOST 目标」部署遗留的本机进程（写操作，仅 dev/test）。
-                    同时覆盖默认部署与打 tag 的 versions/<版本号> 槽；可用 version 只停其中一个。
-                    只按固定位置的状态文件操作：<workspace>/_platform/deploy/<project>-<env>/app.pid，
-                    并校验进程命令行确实是平台部署的 app.jar（防止 pid 被复用后误杀）。
-                    适用场景：上一版 host 部署的 java -jar 仍占用端口，导致新的 docker/host 部署端口冲突；
-                    换目标后平台不会再托管该进程，只有这里能停掉它。
-                    不会结束平台自身、IDE 或任意其它 pid；生产环境拒绝执行。""",
+    @Tool(name = "deploy_host_stop", description = "Stop leftover HOST deploy processes.",
             readOnly = false, concurrencySafe = false)
     public String stopHostDeployment(@ToolParam(name = "env", description = "环境：dev / test")
                                      String env,
@@ -191,18 +179,7 @@ public class DeployTools {
      * 代为修改（"端口被占用"这类最常见的前置失败因此卡住自动化）。这里把改动收进受控工具：
      * 只改 deploy 段与 health stage 的 url，动作与阶段顺序保持不变。
      */
-    @Tool(name = "ci_configure_deploy",
-            description = """
-                    修改平台侧流水线定义的部署配置（写操作，仅 dev/test）：
-                    target（docker/host/server）、port、container_port、health_path、health_url、volume。
-                    适用场景：部署端口被占用（例如 dev 实例占了 8090）需要换端口；
-                    健康检查路径与项目实际端点不一致（Spring Boot 通常是 /actuator/health）；
-                    单容器部署需要持久化数据（例如 /app/data），否则重发会清空容器内数据。
-                    修改后会重建 health stage 的 url（未显式给 health_url 时按 port + health_path 生成），
-                    并让该环境旧的固化脚本失效，避免旧脚本覆盖新配置。
-                    默认值：container_port 跟随 port；health_path 不传则保留原值；volume 传空字符串表示移除。
-                    先调用 ci_definition 查看当前定义；若仓库根也有 ci/pipeline.yml，它优先于本定义。
-                    生产环境拒绝执行。""",
+    @Tool(name = "ci_configure_deploy", description = "Update pipeline deploy settings.",
             readOnly = false, concurrencySafe = false)
     public String configureDeploy(@ToolParam(name = "target", required = false,
                                      description = "部署目标：docker / host / server") String target,
@@ -368,13 +345,7 @@ public class DeployTools {
         return Map.of();
     }
 
-    @Tool(name = "deploy_run",
-            description = """
-                    触发一次流水线运行（写操作，仅 dev/test）。
-                    优先使用传入的 binding_id；未传时自动复用该环境最近一次已确认且未过期的绑定
-                    （变量哈希变化则由 requireForRun 拒绝，需重新生成草案并人工确认）。
-                    没有任何已确认绑定时，必须先调用 env_mapping_draft，由人在对话中的绑定确认卡确认。
-                    服务器（prod）不允许用本工具触发：必须先在测试环境跑通并固化，再到部署面板确认发布。""",
+    @Tool(name = "deploy_run", description = "Run a pipeline for an environment.",
             readOnly = false, concurrencySafe = false)
     public String run(@ToolParam(name = "pipeline_id", description = "流水线名（release / verify）")
                       String pipelineId,
@@ -461,15 +432,7 @@ public class DeployTools {
                 + "\nstatus: " + engine.status(runId);
     }
 
-    @Tool(name = "deploy_save_recipe",
-            description = """
-                    把「已经跑通的动作序列」固化成该环境的可复现脚本（写操作）。
-                    只在确实跑通过之后调用；脚本会记录当前证据运行，供后续重放与上服务器判断。
-                    actions 只能取：backend_build / backend_test / frontend_build / image_package。
-                    需要部署时传 with_deploy=true；target / port / health_path 不传时沿用
-                    当前流水线定义的 deploy 段（没有定义才回落到 docker / 8080 / /healthz）：
-                    固化脚本会按该目标与 health_path 渲染，避免回放到 host/server 时报 E-504。
-                    可自动放行：dev/test 下无需额外确认单；生产环境拒绝执行。""",
+    @Tool(name = "deploy_save_recipe", description = "Save a proven action sequence as recipe.",
             readOnly = false, concurrencySafe = false)
     public String saveRecipe(@ToolParam(name = "env", description = "环境：dev / test") String env,
                              @ToolParam(name = "actions",

@@ -41,10 +41,7 @@ public class ToolCatalogTools {
         this.skills = skills;
     }
 
-    @Tool(name = "tool_search",
-            description = """
-                    搜索平台当前可用的 Agent 工具（只读）：按名称/描述/工具面匹配。
-                    返回一句话摘要与所属插件；确定工具后用 tool_load 加载插件，或 tool_get 看参数。""",
+    @Tool(name = "tool_search", description = "Search available agent tools.",
             readOnly = true, concurrencySafe = true)
     public String search(@ToolParam(name = "keyword", description = "关键词，如 deploy、git、env；可空")
                          String keyword,
@@ -60,8 +57,7 @@ public class ToolCatalogTools {
                 + "\n提示：调用前先用 tool_load 加载对应插件；参数细节用 tool_get。";
     }
 
-    @Tool(name = "tool_get",
-            description = "读取某个 Agent 工具的完整参数定义（只读）。name 用 tool_search 返回的名称。",
+    @Tool(name = "tool_get", description = "Read a tool's full parameter schema.",
             readOnly = true, concurrencySafe = true)
     public String get(@ToolParam(name = "name", description = "工具名，如 ci_run") String name) {
         AgentToolCatalog.Entry entry = catalog.entry(name);
@@ -87,10 +83,7 @@ public class ToolCatalogTools {
                 entry.description(), params);
     }
 
-    @Tool(name = "tool_plugins",
-            description = """
-                    列出工具插件（只读）：名称、用途、包含的工具与当前是否已加载。
-                    需要某类能力时用 tool_load(插件名) 加载，不要一次加载全部。""",
+    @Tool(name = "tool_plugins", description = "List tool plugins and load state.",
             readOnly = true, concurrencySafe = true)
     public String plugins(RuntimeContext rc) {
         ToolPluginIndex index = index(rc);
@@ -108,10 +101,7 @@ public class ToolCatalogTools {
         return out.toString();
     }
 
-    @Tool(name = "tool_load",
-            description = """
-                    加载一个或多个工具插件（只读，不改变环境）：plugins 传插件名，逗号分隔。
-                    加载后这些工具从下一轮起可直接调用；已加载的会自动去重。""",
+    @Tool(name = "tool_load", description = "Load one or more tool plugins.",
             readOnly = true, concurrencySafe = true)
     public String load(@ToolParam(name = "plugins", description = "插件名，多个用逗号分隔，如 deploy,env")
                        String plugins, RuntimeContext rc) {
@@ -162,10 +152,7 @@ public class ToolCatalogTools {
         return out.toString().trim();
     }
 
-    @Tool(name = "skill_load",
-            description = """
-                    读取一个已启用技能的 SKILL.md 正文（只读）。先用技能索引里的目录名调用；
-                    正文较长时会被截断，按需再查脚本/参考文件。""",
+    @Tool(name = "skill_load", description = "Load an enabled skill's SKILL.md.",
             readOnly = true, concurrencySafe = true)
     public String loadSkill(@ToolParam(name = "name", description = "技能目录名，如 docx") String name) {
         if (name == null || name.isBlank()) {

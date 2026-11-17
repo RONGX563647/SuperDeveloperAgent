@@ -79,6 +79,65 @@ class ProgressiveToolMiddlewareTest {
         assertEquals(List.of("project_info", "git_status", "read_file"), names(second.get()));
     }
 
+    @Test
+    @DisplayName("首轮路由只做一次：后续消息提到其它关键词不再扩工具面")
+    void routesOnlyOnFirstTurn() {
+        AgentState state = AgentState.builder().sessionId("s").userId("u").build();
+        RuntimeContext rc = RuntimeContext.builder().sessionId("s").userId("u").build();
+        rc.setAgentState(state);
+
+        ProgressiveToolMiddleware middleware = new ProgressiveToolMiddleware(INDEX, "session");
+        middleware.onReasoning(null, rc,
+                new ReasoningInput(List.of(user("看下这个 git 分支的代码")), schemas(), null),
+                input -> Flux.empty()).blockLast();
+
+        middleware.onReasoning(null, rc,
+                new ReasoningInput(List.of(user("再看构建流水线为什么失败")), schemas(), null),
+                input -> {
+                    assertEquals(List.of("project_info", "git_status", "read_file"),
+                            names(input.tools()), "第二轮不应因关键词再加载 ci 插件");
+                    return Flux.empty();
+                }).blockLast();
+    }
+
+    @Test
+    @DisplayName("auto-activate=off 时不按意图加载，只保留核心工具")
+    void autoActivateOffKeepsCoreOnly() {
+        AgentState state = AgentState.builder().sessionId("s").userId("u").build();
+        RuntimeContext rc = RuntimeContext.builder().sessionId("s").userId("u").build();
+        rc.setAgentState(state);
+
+        new ProgressiveToolMiddleware(INDEX, "off")
+                .onReasoning(null, rc,
+                        new ReasoningInput(List.of(user("看下这个 git 分支的代码")), schemas(), null),
+                        input -> {
+                            assertEquals(List.of("project_info"), names(input.tools()));
+                            return Flux.empty();
+                        }).blockLast();
+
+        assertTrue(state.getToolContext().getActivatedGroups().isEmpty());
+    }
+
+    @Test
+    @DisplayName("首轮最多自动加载 2 个插件，其余交给 tool_load")
+    void routesAtMostTwoPlugins() {
+        ToolPluginIndex index = ToolPluginIndex.of(List.of(
+                        new ToolPluginIndex.Plugin("a", "A", "a", Set.of("git"), Set.of("git_status")),
+                        new ToolPluginIndex.Plugin("b", "B", "b", Set.of("git"), Set.of("ci_status")),
+                        new ToolPluginIndex.Plugin("c", "C", "c", Set.of("git"), Set.of("read_file"))),
+                Set.of("project_info", "git_status", "ci_status", "read_file"), Set.of("project_info"));
+        AgentState state = AgentState.builder().sessionId("s").userId("u").build();
+        RuntimeContext rc = RuntimeContext.builder().sessionId("s").userId("u").build();
+        rc.setAgentState(state);
+
+        new ProgressiveToolMiddleware(index, "session")
+                .onReasoning(null, rc, new ReasoningInput(List.of(user("git")), schemas(), null),
+                        input -> Flux.empty()).blockLast();
+
+        assertEquals(List.of("a", "b"), new ArrayList<>(state.getToolContext().getActivatedGroups())
+                .stream().filter(name -> Set.of("a", "b", "c").contains(name)).toList());
+    }
+
     private static List<ToolSchema> schemas() {
         List<ToolSchema> tools = new ArrayList<>();
         for (String name : List.of("project_info", "git_status", "read_file", "ci_status")) {

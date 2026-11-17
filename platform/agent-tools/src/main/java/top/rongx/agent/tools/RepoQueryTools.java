@@ -65,12 +65,7 @@ public class RepoQueryTools {
         this.redactor = redactor;
     }
 
-    @Tool(name = "git_status",
-            description = """
-                    查询当前项目仓库的状态：分支、HEAD、upstream 领先/落后、未提交改动（按目录聚合）、
-                    最近 5 条提交与工作树列表。只读。
-                    默认折叠 node_modules / dist / target 等构建产物（单独给数量），
-                    需要看全部时传 include_build=true。""",
+    @Tool(name = "git_status", description = "Show repo branch, changes and commits.",
             readOnly = true, concurrencySafe = true)
     public String gitStatus(ProjectContext ctx,
                             @ToolParam(name = "include_build", required = false,
@@ -131,11 +126,7 @@ public class RepoQueryTools {
         return out.toString();
     }
 
-    @Tool(name = "grep",
-            description = """
-                    在项目仓库内按正则检索文本（只读），返回 文件:行号: 内容。
-                    默认跳过 node_modules / dist / target 等构建目录与二进制文件；
-                    用于查配置开关、错误文案、接口路径，避免逐个 read_file 翻文件。""",
+    @Tool(name = "grep", description = "Regex search repo; file:line results.",
             readOnly = true, concurrencySafe = true)
     public String grep(ProjectContext ctx,
                        @ToolParam(name = "pattern", description = "Java 正则表达式")
@@ -308,8 +299,7 @@ public class RepoQueryTools {
                         (a, b) -> a, LinkedHashMap::new));
     }
 
-    @Tool(name = "git_commits",
-            description = "查询当前项目最近的提交历史（按时间倒序，最多 30 条）。只读。",
+    @Tool(name = "git_commits", description = "List recent commits.",
             readOnly = true, concurrencySafe = true)
     public String gitCommits(ProjectContext ctx,
                              @ToolParam(name = "limit", required = false,
@@ -325,10 +315,7 @@ public class RepoQueryTools {
                 .collect(Collectors.joining("\n", "commits:\n", "\nevidence: project:" + ctx.projectId()));
     }
 
-    @Tool(name = "git_diff",
-            description = """
-                    对比两个提交之间的差异：返回 from..to 的提交列表与 diff stat（文件改动行数）。
-                    只读。用于回答"这两次提交之间改了什么"。""",
+    @Tool(name = "git_diff", description = "Diff stat between two commits.",
             readOnly = true, concurrencySafe = true)
     public String gitDiff(ProjectContext ctx,
                           @ToolParam(name = "from", description = "起始提交（sha / 分支 / HEAD~1）")
@@ -353,10 +340,7 @@ public class RepoQueryTools {
                 stat.isEmpty() ? "(无改动)" : String.join("\n", stat), ctx.projectId());
     }
 
-    @Tool(name = "list_files",
-            description = """
-                    列出项目仓库内某个目录（默认仓库根）的文件与子目录。只读。
-                    path 是相对仓库根的路径，如 "platform/agent-tools"；不能访问仓库之外的目录。""",
+    @Tool(name = "list_files", description = "List files under a repo directory.",
             readOnly = true, concurrencySafe = true)
     public String listFiles(ProjectContext ctx,
                             @ToolParam(name = "path", required = false,
@@ -399,14 +383,7 @@ public class RepoQueryTools {
                         "\nevidence: project:" + ctx.projectId()));
     }
 
-    @Tool(name = "read_file",
-            description = """
-                    读取项目仓库内的一个文本文件（相对路径）。
-                    只读。用于回答"这段配置/代码是怎么写的"；二进制文件与仓库外路径会被拒绝。
-                    大文件用 offset/limit 按行读取（offset 从 1 开始，limit 最多 400 行），避免整文件被截断。
-                    不传 offset/limit 时最多返回约 8000 字符。
-                    .env、私钥与凭据文件不提供原文（请用 env_summary / env_var_probe 查看变量指向），
-                    其它文本中的密钥值会被替换为 [REDACTED]。""",
+    @Tool(name = "read_file", description = "Read a text file from the repo.",
             readOnly = true, concurrencySafe = true)
     public String readFile(ProjectContext ctx,
                            @ToolParam(name = "path", description = "相对仓库根的文件路径")

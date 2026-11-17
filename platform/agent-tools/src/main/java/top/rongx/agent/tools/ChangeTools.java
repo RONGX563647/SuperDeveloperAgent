@@ -39,16 +39,7 @@ public class ChangeTools {
         this.registry = registry;
     }
 
-    @Tool(name = "request_confirmation",
-            description = """
-                    发起一次变更并请求人工确认。写操作的前置步骤，本身不改变任何环境。
-                    kind 分两类：
-                    1) 可执行动作（stack_deploy / stack_rollback）：与 HTTP 的
-                       /api/v1/actions/{action}/request 同一词汇表，确认后可 apply；
-                    2) 可自动放行动作（env_ensure / deploy_save_recipe / env_mapping_draft）：
-                       dev/test 下平台允许 Agent 直接执行，这里登记仅用于留痕，确认卡不会执行它。
-                    调用后必须把 changeId 告诉用户；确认卡会自动出现在当前对话里。
-                    不要假设用户已确认；确认结果由系统另行通知。""",
+    @Tool(name = "request_confirmation", description = "Register a change and request approval.",
             readOnly = false, concurrencySafe = false)
     public String requestConfirmation(
             @ToolParam(name = "kind",
@@ -117,14 +108,7 @@ public class ChangeTools {
      * <p>之所以提供这个工具：模型在长流程里需要"明确地把单号推到用户面前"，
      * 而不是只在正文里写一句"请确认"——后者无法驱动确认卡片，用户容易漏掉。
      */
-    @Tool(name = "confirm",
-            description = """
-                    把已登记的变更单提交给当前操作人确认（只发确认卡片，绝不执行、绝不签发令牌）。
-                    适用场景：request_confirmation 之后用户表示"我去确认"、或需要再次提醒时。
-                    对不存在的单号、其它项目/环境的单号会直接拒绝。
-                    返回 status=PENDING_USER_CONFIRMATION；只有用户本人在平台确认卡片上确认后，
-                    系统才会签发一次性令牌并允许 apply。不要循环调用本工具等待结果。
-                    """,
+    @Tool(name = "confirm", description = "Resend the approval card for a change.",
             readOnly = false, concurrencySafe = false)
     public String confirm(@ToolParam(name = "change_id",
                     description = "request_confirmation 返回的 changeId（chg-...）")

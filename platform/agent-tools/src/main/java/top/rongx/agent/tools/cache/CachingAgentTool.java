@@ -129,8 +129,10 @@ public final class CachingAgentTool implements AgentTool {
     }
 
     /**
-     * 输出预算：超长文本截断并留下可操作的提示，让模型知道"不是没有内容，是太长了"。
+     * 输出预算：超长文本保留头尾并标注省略量，让模型知道"不是没有内容，是太长了"。
      * 只处理文本块，图片/结构化块原样保留。
+     *
+     * <p>保留尾部很重要：构建日志、异常栈的结论都在末尾，只截头会丢掉关键证据。
      */
     private ToolResultBlock budget(ToolResultBlock block) {
         if (block == null) {
@@ -140,15 +142,19 @@ public final class CachingAgentTool implements AgentTool {
         if (output == null || output.isEmpty()) {
             return block;
         }
-        int max = cache.maxOutputChars();
+        int max = cache.maxOutputChars(delegate.getName());
         boolean changed = false;
         List<ContentBlock> limited = new ArrayList<>(output.size());
         for (ContentBlock part : output) {
             if (part instanceof TextBlock text && text.getText() != null
                     && text.getText().length() > max) {
-                String cut = text.getText().substring(0, max)
-                        + "\n…（工具输出已截断：共 " + text.getText().length()
-                        + " 字；请用更精确的参数或分页重查）";
+                String raw = text.getText();
+                int head = Math.max(1, max * 6 / 10);
+                int tail = Math.max(1, max - head);
+                String cut = raw.substring(0, head)
+                        + "\n…[tool output truncated: " + (raw.length() - head - tail)
+                        + " of " + raw.length() + " chars elided; narrow the query or paginate]\n"
+                        + raw.substring(raw.length() - tail);
                 limited.add(TextBlock.builder().text(cut).build());
                 changed = true;
             } else {

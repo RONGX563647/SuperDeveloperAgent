@@ -20,10 +20,7 @@ public class ActionQueryTools {
         this.actions = actions;
     }
 
-    @Tool(name = "list_actions",
-            description = """
-                    列出当前项目可执行的动作（构建/打包/发布/回滚）及其配方来源。只读。
-                    执行任何动作前先调用本工具确认动作名与来源。""",
+    @Tool(name = "list_actions", description = "List actions available in this project.",
             readOnly = true, concurrencySafe = true)
     public String listActions(ProjectContext ctx) {
         List<ActionSpec> specs = actions.list(ctx);
@@ -42,10 +39,7 @@ public class ActionQueryTools {
                 .formatted(ctx.projectId(), body, actions.workspace(ctx));
     }
 
-    @Tool(name = "plan_action",
-            description = """
-                    展示某个动作将要执行什么（命令原文、超时、产物、配方来源），不产生任何副作用。
-                    向用户解释或申请确认前应先调用本工具，并把命令原文一并说明。""",
+    @Tool(name = "plan_action", description = "Preview an action without running it.",
             readOnly = true, concurrencySafe = true)
     public String planAction(
             @ToolParam(name = "action",

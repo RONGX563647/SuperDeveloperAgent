@@ -33,13 +33,7 @@ public class CiCommandTools {
         this.policy = policy;
     }
 
-    @Tool(name = "ci_run",
-            description = """
-                    触发一次完整流水线构建/测试（仅测试环境）。写操作，编排层入口。
-                    与 run_action 的关系：ci_run 按 ci/pipeline.yml 跑整条流水线（含部署/健康检查）；
-                    run_action 只执行单个动作，用于单步调试。优先用 ci_run，除非要单独验证某个动作。
-                    pipeline_id 必须来自 ci_list_pipelines 的返回；git_sha 必须是 7-40 位小写十六进制。
-                    生产环境调用会被拒绝，请先在测试环境验证。""",
+    @Tool(name = "ci_run", description = "Trigger a full pipeline run (dev/test).",
             readOnly = false, concurrencySafe = false)
     public String run(
             @ToolParam(name = "pipeline_id", description = "流水线标识，必须来自 ci_list_pipelines") String pipelineId,
@@ -85,12 +79,7 @@ public class CiCommandTools {
                 """.formatted(runId, pipelineId, engine.status(runId), runId);
     }
 
-    @Tool(name = "ci_dry_run",
-            description = """
-                    只读预检：解析流水线、渲染命令、检查环境变量/密钥/必需配置与 Docker 可用性。
-                    不创建容器、不部署、不推送镜像，对真实系统零变更。
-                    apply 之前必须先 dry-run；若 ok=false，把 blockers 原样告诉用户，不要重试到通过为止。
-                    report_hash 可用于人工审批绑定；代码/配方/环境/密钥版本变化后旧报告自动失效。""",
+    @Tool(name = "ci_dry_run", description = "Dry-run a pipeline without side effects.",
             readOnly = true, concurrencySafe = true)
     public String dryRun(
             @ToolParam(name = "pipeline_id", description = "流水线标识，必须来自 ci_list_pipelines") String pipelineId,
@@ -129,10 +118,7 @@ public class CiCommandTools {
         return sb.toString();
     }
 
-    @Tool(name = "ci_cancel",
-            description = """
-                    取消一次尚未结束的构建。写操作。
-                    仅对 RUNNING / PENDING 状态的运行有效；已结束的运行返回提示，不报错。""",
+    @Tool(name = "ci_cancel", description = "Cancel a running build.",
             readOnly = false, concurrencySafe = false)
     public String cancel(
             @ToolParam(name = "run_id", description = "ci_run 返回的 runId") String runId,

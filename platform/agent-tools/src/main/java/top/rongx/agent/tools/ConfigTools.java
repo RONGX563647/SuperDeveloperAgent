@@ -23,13 +23,7 @@ public class ConfigTools {
         this.resolver = resolver;
     }
 
-    @Tool(name = "config_resolve",
-            description = """
-                    解析某个环境的配置，返回可直接使用的值、缺失项与扫描候选（密钥只显示 ****）。
-                    优先级：项目环境配置（设置→项目环境）> 仓库 .env/.env.example/compose > 文档扫描。
-                    如果返回 status: NEED_USER_INPUT，说明配置缺失或存在多个冲突候选：
-                    必须停止执行，把 missing/candidates/conflicts 摘要原样告诉用户，并等待用户回答要使用哪组值；
-                    不要自行猜测，也不要把明文密钥贴进对话。用户确认后再继续部署或生成绑定。""",
+    @Tool(name = "config_resolve", description = "Resolve env config; secrets are masked.",
             readOnly = true, concurrencySafe = true)
     public String resolve(
             @ToolParam(name = "env", description = "环境：dev / test / prod", required = false) String env,

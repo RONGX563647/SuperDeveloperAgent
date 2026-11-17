@@ -50,11 +50,7 @@ public class ApiDocTools {
         this.snapshotPath = Path.of(snapshot).toAbsolutePath().normalize();
     }
 
-    @Tool(name = "api_search",
-            description = """
-                    搜索平台自身的 HTTP API（只读）：按关键词匹配路径、摘要、描述与标签。
-                    返回 method + path + 摘要；确认目标后用 api_get 看参数与响应，用 api_schema 看模型。
-                    这是"平台接口怎么调"的权威答案，不要凭记忆编造接口。""",
+    @Tool(name = "api_search", description = "Search platform HTTP API docs.",
             readOnly = true, concurrencySafe = true)
     public String search(@ToolParam(name = "keyword",
             description = "关键词，如 deploy、workspace、settings；空字符串返回前若干条") String keyword,
@@ -94,10 +90,7 @@ public class ApiDocTools {
                 + "\nhint: 用 api_get(method, path) 查看参数/响应；用 api_schema(name) 查看模型。";
     }
 
-    @Tool(name = "api_get",
-            description = """
-                    读取一个接口的完整签名（只读）：参数、请求体、响应与状态码。
-                    path 使用 OpenAPI 模板（如 /api/v1/projects/{projectId}/envs），不是真实请求。""",
+    @Tool(name = "api_get", description = "Read one API endpoint signature.",
             readOnly = true, concurrencySafe = true)
     public String get(@ToolParam(name = "method", description = "HTTP 方法，如 GET/POST") String method,
                       @ToolParam(name = "path", description = "接口路径模板") String path) {
@@ -113,8 +106,7 @@ public class ApiDocTools {
         return render(op) + "\n" + provenance(snap);
     }
 
-    @Tool(name = "api_schema",
-            description = "读取某个请求/响应模型的字段定义（只读）。name 可带或不带 #/components/schemas 前缀。",
+    @Tool(name = "api_schema", description = "Read a request/response model schema.",
             readOnly = true, concurrencySafe = true)
     public String schema(@ToolParam(name = "name", description = "模型名，如 ChatRequest") String name) {
         Snapshot snap = load();

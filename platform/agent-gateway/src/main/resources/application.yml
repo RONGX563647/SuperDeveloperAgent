@@ -174,7 +174,11 @@ agent:
     prefix-cache: ${AGENT_MODEL_PREFIX_CACHE:true}
   # 上下文精益：单次工具输出上限 + 会话历史预算（两层闸门，避免长会话把上下文撑爆）
   tools:
-    max-output-chars: ${AGENT_TOOLS_MAX_OUTPUT_CHARS:16000}
+    # 默认输出预算；单工具可用 output-budgets 覆盖（小结果给小预算，diff/日志给大预算）
+    max-output-chars: ${AGENT_TOOLS_MAX_OUTPUT_CHARS:8000}
+    output-budgets: ${AGENT_TOOLS_OUTPUT_BUDGETS:project_info=2000,deploy_env_status=2000,app_logs=12000,read_run_log=16000,git_diff=16000}
+    # 首轮自动加载插件：session（只做一次，工具集定型）/ off（完全手动 tool_load）
+    auto-activate: ${AGENT_TOOLS_AUTO_ACTIVATE:session}
     # 工具目录快照：启动时导出，供 tool_search / tool_get 与外部 MCP 复用
     catalog-path: ${AGENT_TOOLS_CATALOG:./data/api/agent-tools.json}
     # 只读工具结果语义缓存：TTL + LRU + 写操作失效；相似度阈值越高越保守

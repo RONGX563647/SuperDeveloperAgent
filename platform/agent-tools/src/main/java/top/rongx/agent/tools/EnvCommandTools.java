@@ -39,12 +39,7 @@ public class EnvCommandTools {
         this.envStore = envStore;
     }
 
-    @Tool(name = "env_mapping_draft",
-            description = """
-                    生成该环境的变量映射草案（写一条 DRAFT 记录，不含任何变量值）。
-                    生成后平台会在对话里展开环境绑定确认卡，必须由用户本人点击确认；
-                    Agent 自己不能确认，也不能绕过 binding_id 直接 deploy_run。
-                    返回：binding_id、缺失变量、中间件告警。""",
+    @Tool(name = "env_mapping_draft", description = "Draft an env binding for confirmation.",
             readOnly = false, concurrencySafe = false)
     public String mappingDraft(@ToolParam(name = "env", description = "环境：dev / test") String env,
                                ProjectContext ctx) {
@@ -81,12 +76,7 @@ public class EnvCommandTools {
      * <p>只作用于本机 Docker 环境；远程服务器环境不会自动创建（返回说明）。
      * 返回值只有容器名 / 变量名，不含任何密码。
      */
-    @Tool(name = "env_ensure",
-            description = """
-                    确保项目在当前环境的中间件容器存在并运行；缺失时按需创建（项目隔离命名），
-                    并把地址/端口/账号/密码写入项目环境覆盖；必填的密钥类变量（TOKEN_SECRET 等）
-                    缺失时自动生成。用于解决"缺 DB_HOST / REDIS_HOST"这类部署前置失败。
-                    可自动放行：dev/test 下无需额外确认单；生产环境拒绝执行。""",
+    @Tool(name = "env_ensure", description = "Ensure project middleware is running.",
             readOnly = false, concurrencySafe = false)
     public String ensure(@ToolParam(name = "env", description = "环境：dev / test") String env,
                          ProjectContext ctx) {
@@ -127,14 +117,7 @@ public class EnvCommandTools {
      * <p>这是部署前最常见的配置补齐：端口覆盖（SERVER_PORT）、工作区目录、
      * 连接串等。值落库加密，工具结果不回显明文。
      */
-    @Tool(name = "env_var_set",
-            description = """
-                    新增或修改项目在某环境的变量覆盖（写操作，仅 dev/test）。
-                    适合补齐部署必需变量，例如 SERVER_PORT=8180、AGENT_WORKSPACE_ROOT=./data/workspaces-test。
-                    值会加密落库且不会回显；变量名必须是合法环境变量名。
-                    写入后有效环境哈希变化，旧的环境绑定会失效：需要重新调用 env_mapping_draft
-                    并由人在对话内的绑定确认卡确认新草案后才能 deploy_run。
-                    生产环境拒绝执行（生产变量由运维在设置页维护）。""",
+    @Tool(name = "env_var_set", description = "Set a project env variable override.",
             readOnly = false, concurrencySafe = false)
     public String setVar(@ToolParam(name = "env", description = "环境：dev / test") String env,
                          @ToolParam(name = "key", description = "变量名，例如 SERVER_PORT") String key,
@@ -168,11 +151,7 @@ public class EnvCommandTools {
     }
 
     /** 删除项目环境变量的覆盖项（回到环境模板/默认值）。 */
-    @Tool(name = "env_var_unset",
-            description = """
-                    删除项目在某环境的一个变量覆盖（写操作，仅 dev/test）。
-                    只删除项目覆盖，不影响环境模板；生产环境拒绝执行。
-                    删除后同样需要重新生成并人工确认环境绑定。""",
+    @Tool(name = "env_var_unset", description = "Remove a project env variable override.",
             readOnly = false, concurrencySafe = false)
     public String unsetVar(@ToolParam(name = "env", description = "环境：dev / test") String env,
                            @ToolParam(name = "key", description = "变量名") String key,

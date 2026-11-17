@@ -85,19 +85,7 @@ public class DockerfileTools {
         this.inspector = inspector;
     }
 
-    @Tool(name = "ensure_dockerfile",
-            description = """
-                    为 DOCKER 目标自动补齐镜像发布链路（写操作，仅 dev/test）。
-                    适用场景：deploy_run / ci_dry_run 返回 E-501「DOCKER 目标但仓库没有 Dockerfile」
-                    或「缺少 image_package 阶段」时，直接调用本工具，不要让用户手写 Dockerfile。
-                    它会做三件事：
-                    1) 按仓库结构生成 Dockerfile（Java 模块 → JRE + target/*.jar；纯前端 → nginx + dist；
-                       Java + 前端 → 同一镜像内托管页面并设置 AGENT_WEB_DIST）；
-                    2) 在真正生效的流水线定义里补 image_package 阶段（runner=host，放在 deploy 前）；
-                    3) 在对应的 ci/actions.yml 里补 image_package 配方（docker build -f Dockerfile -t ${tag} .）。
-                    Dockerfile 通过受限补丁登记变更单：确认卡会出现在当前对话里，必须由人确认后才应用；
-                    平台侧定义（仓库没有 ci/pipeline.yml 时）会直接写入并让旧固化脚本失效。
-                    返回 changeId 后请等用户确认，再针对新提交重新 deploy_run。""",
+    @Tool(name = "ensure_dockerfile", description = "Generate Dockerfile and image stage.",
             readOnly = false, concurrencySafe = false)
     public String ensure(@ToolParam(name = "base_sha",
                               description = "失败运行的提交 sha（7-40 位十六进制），用作补丁基线")

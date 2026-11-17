@@ -15,7 +15,8 @@ import java.util.Set;
  * <p>背景：平台装配了 70+ 个工具，单次请求光工具 schema 就有六十多 KB（约两万 token），
  * 每轮对话都重复消耗。这里按能力把工具切成若干插件（repo / ci / deploy / env / issue …），
  * 默认只暴露核心工具（项目信息、工具检索、插件加载等），其余插件由模型在需要时通过
- * {@code tool_load} 激活；未归类的工具（例如 MCP 工具、技能工具）默认保持可见，避免误伤。
+ * {@code tool_load} 激活；未归类的工具（例如 MCP 工具、技能工具）归入 {@code other} 插件，
+ * 同样需要显式加载——「默认不常驻」比「宁可多给」更省 token。
  *
  * <p>本类只做纯数据与规则，不依赖 AgentScope / Spring：运行层用它在
  * {@code onReasoning} 里裁剪工具 schema，工具层用它实现 {@code tool_load}。
@@ -92,11 +93,18 @@ public final class ToolPluginIndex {
                     definition.keywords(), tools));
             grouped.addAll(tools);
         }
-        // 未归类（MCP、技能工具、后续新增工具）默认可见：渐进披露不能因漏配而让能力消失
+        // 未归类工具（新加的 MCP / 后续新增工具）默认不常驻，收进 other 插件：
+        // 既能被 tool_load 显式加载（能力不会真的消失），又不会每轮白吃 schema。
+        Set<String> others = new LinkedHashSet<>();
         for (String tool : actual) {
-            if (!grouped.contains(tool)) {
-                core.add(tool);
+            if (!grouped.contains(tool) && !core.contains(tool)) {
+                others.add(tool);
             }
+        }
+        if (!others.isEmpty()) {
+            kept.add(new Plugin("other", "Other tools",
+                    "Tools not grouped yet; load explicitly when needed",
+                    Set.of(), others));
         }
         return new ToolPluginIndex(kept, core);
     }
@@ -165,10 +173,10 @@ public final class ToolPluginIndex {
             return "";
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("可用能力插件（默认未加载，需要时先 tool_load(plugin)）：\n");
+        sb.append("Tool plugins (not loaded by default; call tool_load(plugin)):\n");
         for (Plugin plugin : plugins) {
-            sb.append("- ").append(plugin.name()).append("：").append(plugin.description())
-                    .append("（").append(sample(plugin.tools(), 4)).append("…）\n");
+            sb.append("- ").append(plugin.name()).append(": ").append(plugin.description())
+                    .append(" (").append(sample(plugin.tools(), 4)).append(", ...)\n");
         }
         return sb.toString();
     }

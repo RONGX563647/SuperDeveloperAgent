@@ -30,13 +30,7 @@ public class ActionCommandTools {
         this.actions = actions;
     }
 
-    @Tool(name = "run_action",
-            description = """
-                    执行单个动作（仅限测试环境的构建类动作）。写操作，动作层入口。
-                    与 ci_run 的关系：ci_run 跑整条流水线；本工具只跑一个命名动作，用于单步调试。
-                    执行前建议先调用 plan_action 并把命令原文告知用户。
-                    stack_deploy / stack_rollback 属 L3，不能由此工具执行，需走变更确认流程。
-                    params 为可选覆盖（如 backend_build 的 profile）；键名与取值范围见 plan_action 输出。""",
+    @Tool(name = "run_action", description = "Run one named action (dev/test only).",
             readOnly = false, concurrencySafe = false)
     public String runAction(
             @ToolParam(name = "action", description = "动作名，见 list_actions 的返回") String action,

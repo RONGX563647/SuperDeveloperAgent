@@ -73,12 +73,7 @@ public class RuntimeTools {
                 .resolve("_platform").resolve("deploy");
     }
 
-    @Tool(name = "env_runtime_status",
-            description = """
-                    查看某环境「应用」（不是中间件）的运行时事实（只读）：容器/进程是否在跑、
-                    健康检查结果、重启次数、镜像与 digest、启动时间、端口映射。
-                    dev 返回平台托管的宿主机进程状态并做 HTTP 探活；test/prod 返回应用容器状态。
-                    用于回答"应用启动了吗 / 为什么起不来"，不要凭印象猜。""",
+    @Tool(name = "env_runtime_status", description = "Show app runtime status in an env.",
             readOnly = true, concurrencySafe = true)
     public String runtimeStatus(@ToolParam(name = "env", description = "环境：dev / test / prod")
                                 String env, ProjectContext ctx) {
@@ -148,12 +143,7 @@ public class RuntimeTools {
         return sb.toString();
     }
 
-    @Tool(name = "app_logs",
-            description = """
-                    读取某环境应用日志（只读，已脱敏）。test/prod 优先读 docker logs 按 since_minutes
-                    时间窗过滤；HOST 目标（本机 jar）读平台部署状态目录里持久化的 app.log；
-                    dev 读取平台托管的进程日志尾部（无逐行时间戳时按行过滤）。
-                    grep 为大小写不敏感的子串过滤。部署后"应用起没起来、报什么错"先用它，不要猜。""",
+    @Tool(name = "app_logs", description = "Read app logs of an environment.",
             readOnly = true, concurrencySafe = true)
     public String appLogs(@ToolParam(name = "env", description = "环境：dev / test / prod") String env,
                           @ToolParam(name = "service",
@@ -258,11 +248,7 @@ public class RuntimeTools {
         return redactor.redact(sb.toString(), ctx);
     }
 
-    @Tool(name = "port_check",
-            description = """
-                    检查某 host:port 是否可连接，并给出占用者（只读）：运行中的 docker 容器、
-                    本环境登记的中间件、平台 dev 服务租约。用于回答"端口被谁占了/应用该连的端口通不通"。
-                    只有本机地址（localhost / 127.0.0.1 / 0.0.0.0）才做归属判定；远程主机只做 TCP 连通性。""",
+    @Tool(name = "port_check", description = "Check a host:port and its occupant.",
             readOnly = true, concurrencySafe = true)
     public String portCheck(@ToolParam(name = "host", description = "主机，默认 127.0.0.1")
                             String host,

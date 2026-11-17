@@ -40,6 +40,8 @@ public class ToolResultCache {
     private final int maxEntries;
     private final double similarity;
     private final int maxOutputChars;
+    /** 按工具覆盖输出预算（工具名 -> 字符上限）；未列出的工具用 {@link #maxOutputChars}。 */
+    private final Map<String, Integer> outputBudgets;
     /** 结果本身随时间变化、命中会误导决策的工具：不缓存（仍参与输出预算）。 */
     private final Set<String> excluded;
 
@@ -58,7 +60,10 @@ public class ToolResultCache {
                            @Value("${agent.tools.cache.ttl-seconds:90}") long ttlSeconds,
                            @Value("${agent.tools.cache.max-entries:512}") int maxEntries,
                            @Value("${agent.tools.cache.similarity:0.9}") double similarity,
-                           @Value("${agent.tools.max-output-chars:12000}") int maxOutputChars,
+                           @Value("${agent.tools.max-output-chars:8000}") int maxOutputChars,
+                           @Value("${agent.tools.output-budgets:project_info=2000,deploy_env_status=2000,"
+                                   + "app_logs=12000,read_run_log=16000,git_diff=16000}")
+                           String outputBudgets,
                            @Value("${agent.tools.cache.exclude:conversation_wait,conversation_status,"
                                    + "conversation_summarize,workspace_snapshot,ci_status}")
                            String excludedTools) {
@@ -67,6 +72,7 @@ public class ToolResultCache {
         this.maxEntries = Math.max(16, maxEntries);
         this.similarity = Math.min(1.0, Math.max(0.5, similarity));
         this.maxOutputChars = Math.max(1_000, maxOutputChars);
+        this.outputBudgets = parseBudgets(outputBudgets);
         this.excluded = new HashSet<>();
         if (excludedTools != null) {
             for (String name : excludedTools.split(",")) {
@@ -88,6 +94,43 @@ public class ToolResultCache {
 
     public int maxOutputChars() {
         return maxOutputChars;
+    }
+
+    /**
+     * 单个工具的输出预算：manifest / 状态类小结果不需要几千字，
+     * 而 diff / 日志又必须留够上下文——统一阈值会两头都亏。
+     */
+    public int maxOutputChars(String tool) {
+        Integer custom = tool == null ? null : outputBudgets.get(tool);
+        return custom == null ? maxOutputChars : custom;
+    }
+
+    /** 解析 {@code tool=chars,tool=chars}；坏条目直接忽略，不影响启动。 */
+    private static Map<String, Integer> parseBudgets(String config) {
+        Map<String, Integer> out = new java.util.HashMap<>();
+        if (config == null) {
+            return out;
+        }
+        for (String item : config.split(",")) {
+            int eq = item.indexOf('=');
+            if (eq <= 0) {
+                continue;
+            }
+            String name = item.substring(0, eq).trim();
+            String value = item.substring(eq + 1).trim();
+            if (name.isEmpty() || value.isEmpty()) {
+                continue;
+            }
+            try {
+                int chars = Integer.parseInt(value);
+                if (chars >= 500) {
+                    out.put(name, chars);
+                }
+            } catch (NumberFormatException ignored) {
+                // 配置写错时按默认预算处理
+            }
+        }
+        return out;
     }
 
     /** 命中返回缓存的原始结果（调用方需要重写 id/name），未命中返回 null。 */

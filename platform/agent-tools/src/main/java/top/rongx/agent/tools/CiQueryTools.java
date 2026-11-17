@@ -56,8 +56,7 @@ public class CiQueryTools {
         this.locator = locator;
     }
 
-    @Tool(name = "ci_list_pipelines",
-            description = "列出当前项目可用的流水线。只读。触发构建前必须先调用本工具确认 pipelineId。",
+    @Tool(name = "ci_list_pipelines", description = "List pipelines of this project.",
             readOnly = true, concurrencySafe = true)
     public String listPipelines(ProjectContext ctx) {
         List<String> ids = engine.pipelines(ctx.projectId());
@@ -67,13 +66,7 @@ public class CiQueryTools {
                         "\nevidence: engine:" + engine.id()));
     }
 
-    @Tool(name = "ci_definition",
-            description = """
-                    读取真正生效的流水线定义原文（只读），用于确认 deploy.port / containerPort /
-                    healthPath 以及 health stage 的 url 实际值。
-                    生效顺序：环境固化脚本 > 仓库 ci/pipeline.yml > 平台侧定义。
-                    本工具会优先读仓库那份，并在 source 里标明来源；仓库没有时才回落平台侧。
-                    如果 deploy.target=docker 但没有 image stage，会直接给出发布必 E-501 的修复配方。""",
+    @Tool(name = "ci_definition", description = "Read the effective pipeline definition.",
             readOnly = true, concurrencySafe = true)
     public String definition(ProjectContext ctx) {
         Path repoRoot = locator.repoDir(ctx.projectId()).orElse(null);
@@ -164,11 +157,7 @@ public class CiQueryTools {
                 + "；仓库定义优先于平台侧，改完需人工确认\n";
     }
 
-    @Tool(name = "ci_status",
-            description = """
-                    查询一次构建的状态与各阶段结果。只读。用于确认构建是否成功。
-                    返回含 terminal 字段：true 表示已结束，无需再次轮询；
-                    失败时会给出失败阶段的 errorCode 与摘要，直接据此排查。""",
+    @Tool(name = "ci_status", description = "Get one build status and stages.",
             readOnly = true, concurrencySafe = true)
     public String status(@ToolParam(name = "run_id", description = "ci_run 返回的 runId") String runId) {
         if (runId == null || runId.isBlank()) {
@@ -197,10 +186,7 @@ public class CiQueryTools {
                 stageList.size(), failedPart, runId);
     }
 
-    @Tool(name = "read_run_log",
-            description = """
-                    读取一次构建的日志尾部（只读）。用于在 ci_status 显示 FAILED 后定位具体错误。
-                    run_id 取 ci_run / deploy_run 的返回值；返回最后约 6000 字符，已脱敏。""",
+    @Tool(name = "read_run_log", description = "Read a build log tail.",
             readOnly = true, concurrencySafe = true)
     public String readRunLog(ProjectContext ctx,
                              @ToolParam(name = "run_id", description = "ci_run / deploy_run 返回的 runId")
@@ -230,11 +216,7 @@ public class CiQueryTools {
                 evidence: run:%s""".formatted(runId, engine.status(runId), tail, runId);
     }
 
-    @Tool(name = "wait_run",
-            description = """
-                    等待一次构建到达终态（只读，会阻塞最多 timeout_seconds 秒）。
-                    触发后优先用它等待，不要高频轮询 ci_status；超时仍 RUNNING 时可再次调用续等。
-                    返回最终状态、阶段数、失败阶段摘要与日志尾部。""",
+    @Tool(name = "wait_run", description = "Wait for a build to finish.",
             readOnly = true, concurrencySafe = true)
     public String waitRun(@ToolParam(name = "run_id", description = "ci_run / deploy_run 返回的 runId")
                           String runId,
@@ -289,11 +271,7 @@ public class CiQueryTools {
                 stageList.size(), failedPart, tail.isBlank() ? "(暂无日志)" : tail, runId);
     }
 
-    @Tool(name = "ci_history",
-            description = """
-                    查询当前项目最近的构建历史（最多 20 条）。只读。
-                    每条含 env、可读时间（ISO）、耗时、提交与流水线定义来源，
-                    用于回答"上次构建是什么时候/成没成功/跑的是哪份定义"。""",
+    @Tool(name = "ci_history", description = "List recent builds of this project.",
             readOnly = true, concurrencySafe = true)
     public String history(ProjectContext ctx) {
         List<PipelineEngine.RunSummary> items = engine.history().stream()
@@ -309,11 +287,7 @@ public class CiQueryTools {
                         "history:\n", "\nevidence: engine:" + engine.id()));
     }
 
-    @Tool(name = "release_trace",
-            description = """
-                    按提交 sha 串起一条发布链路（只读）：提交 → 构建 → 配方 → 容器/健康检查。
-                    缺失的环节会显式列在 missing 里，用于回答"这个提交上线了吗/上线到哪个环境/
-                    用的哪个镜像"，不要凭印象猜。sha 可传完整值或至少 4 位前缀。""",
+    @Tool(name = "release_trace", description = "Trace commit to build to deploy chain.",
             readOnly = true, concurrencySafe = true)
     public String releaseTrace(ProjectContext ctx,
                                @ToolParam(name = "sha", description = "提交 sha（完整或至少 4 位前缀）")

@@ -30,16 +30,7 @@ public class OpsAgentTools {
         this.opsAgent = opsAgent;
     }
 
-    @Tool(name = "run_ops_agent",
-            description = """
-                    把「把某个环境真正跑通 / 深度排障 / 固化可复现部署脚本」委派给发布工程师 Agent
-                    （多 Agent 协作）。适用于：用户要求"帮我把 test 环境跑起来""为什么部署一直失败"
-                    "把跑通的步骤固化成脚本"这类需要多轮取证 + 触发 + 修复的完整任务。
-                    task 用一句话写清目标（不超过 1000 字），env 必须是当前会话环境。
-                    子 Agent 会自行调用 env_summary / deploy_run / read_run_log / propose_patch 等工具，
-                    但不会执行未经人工确认的变更；返回的是压缩后的结论、工具轨迹与失败原因。
-                    生产环境不可委派（生产发布请在部署面板人工确认）。
-                    简单问答（查状态、读日志、看配置）请直接用自己的工具，不要委派。""",
+    @Tool(name = "run_ops_agent", description = "Delegate deploy to the deploy agent.",
             readOnly = false, concurrencySafe = false)
     public String run(@ToolParam(name = "task",
                                  description = "要完成的目标，一句话；不超过 1000 字")

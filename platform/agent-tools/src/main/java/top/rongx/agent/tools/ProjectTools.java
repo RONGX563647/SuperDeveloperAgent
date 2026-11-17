@@ -28,8 +28,7 @@ public class ProjectTools {
         this.endpoints = endpoints;
     }
 
-    @Tool(name = "project_info",
-            description = "查询当前项目的基本信息与端口段。只读。用于确认自己在哪个项目、哪个环境。",
+    @Tool(name = "project_info", description = "Show current project information.",
             readOnly = true, concurrencySafe = true)
     public String projectInfo(ProjectContext ctx) {
         Project p = projects.findById(ctx.projectId())
@@ -45,12 +44,7 @@ public class ProjectTools {
                 p.portRangeStart(), p.portRangeEnd(), ctx.env(), p.id());
     }
 
-    @Tool(name = "list_envs",
-            description = """
-                    列出当前项目的所有环境、登记地址与「实际生效端点」。只读。
-                    effective 一栏来自流水线 deploy 段（仓库 ci/pipeline.yml > 平台侧 > 环境模板），
-                    是发布真正使用的端口；与登记地址不一致时会给出 warning。
-                    发布前用它确认目标环境，不要只信登记地址。""",
+    @Tool(name = "list_envs", description = "List environments and endpoints.",
             readOnly = true, concurrencySafe = true)
     public String listEnvs(ProjectContext ctx) {
         List<ProjectEnv> envs = projects.findEnvs(ctx.projectId());

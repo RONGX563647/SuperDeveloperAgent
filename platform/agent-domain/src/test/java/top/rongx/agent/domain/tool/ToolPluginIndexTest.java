@@ -32,13 +32,15 @@ class ToolPluginIndexTest {
     }
 
     @Test
-    @DisplayName("核心与未归类工具默认可见，插件工具默认隐藏")
-    void coreAndUngroupedVisible() {
+    @DisplayName("核心默认可见，未归类工具归入 other 插件、默认隐藏")
+    void coreVisibleUngroupedInOther() {
         ToolPluginIndex index = index();
 
         assertTrue(index.visible("project_info", Set.of()));
-        assertTrue(index.visible("mcp_tool_x", Set.of()), "MCP 工具没有定义也必须可见");
-        assertTrue(index.visible("unknown_tool", Set.of()), "未归类工具不能消失");
+        assertFalse(index.visible("mcp_tool_x", Set.of()), "未归类工具不再常驻");
+        assertFalse(index.visible("unknown_tool", Set.of()));
+        assertTrue(index.visible("mcp_tool_x", Set.of("other")));
+        assertTrue(index.visible("unknown_tool", Set.of("other")));
         assertFalse(index.visible("git_status", Set.of()));
         assertTrue(index.visible("git_status", Set.of("repo")));
     }
@@ -48,9 +50,11 @@ class ToolPluginIndexTest {
     void dropsEmptyPlugins() {
         ToolPluginIndex index = index();
 
-        assertEquals(3, index.plugins().size());
+        assertEquals(4, index.plugins().size());
         assertTrue(index.plugin("ghost").isEmpty());
         assertEquals(Set.of("git_status", "read_file"), index.plugins().get(0).tools());
+        assertEquals("other", index.plugins().get(3).name());
+        assertEquals(Set.of("mcp_tool_x", "unknown_tool"), index.plugins().get(3).tools());
     }
 
     @Test

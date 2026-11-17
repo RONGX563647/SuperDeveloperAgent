@@ -26,11 +26,7 @@ public class CapabilityMarketTools {
         this.installer = installer;
     }
 
-    @Tool(name = "search_capabilities",
-            description = """
-                    查找公开的 MCP 服务 / Skill 能力（外部市场，只读）。
-                    当用户问"有没有能操作浏览器的工具""找个日志分析技能"时先调用本工具；
-                    返回 id、类型、名称、用途与是否已接入。接入请接着调用 install_capability。""",
+    @Tool(name = "search_capabilities", description = "Search public MCP servers and skills.",
             readOnly = true, concurrencySafe = true)
     public String searchCapabilities(
             @ToolParam(name = "keyword",
@@ -55,12 +51,7 @@ public class CapabilityMarketTools {
                 "找到 %d 个能力：\n".formatted(found.size()), ""));
     }
 
-    @Tool(name = "install_capability",
-            description = """
-                    把市场里的能力接入平台（写操作：新增 MCP 服务或写入 Skill 目录）。
-                    参数用 search_capabilities 返回的 id，例如 mcp:io.github.foo/bar 或
-                    skill:anthropics/skills:skills/frontend-design/SKILL.md。
-                    接入后告诉用户：可在对话右侧「能力」工具栏勾选本会话是否调用；设置页可改默认启停。""",
+    @Tool(name = "install_capability", description = "Install a market capability (MCP/skill).",
             readOnly = false, concurrencySafe = false)
     public String installCapability(
             @ToolParam(name = "capabilityId",
