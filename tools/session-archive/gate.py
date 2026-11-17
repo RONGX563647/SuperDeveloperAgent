@@ -452,6 +452,11 @@ def commit_files(sha: str) -> list[dict]:
 
 
 def cases_added(sha: str, tests: list[dict]) -> int:
+    """统计某次提交新增的用例行数。
+
+    必须按「引入测试的提交」逐次统计：会话内多次提交时，新增的测试文件往往不在
+    HEAD 这一次提交里，用 HEAD 去 show 该文件拿不到任何 diff，用例数会被误判成 0。
+    """
     count = 0
     for test in tests:
         if test["status"] == "D":
@@ -482,6 +487,7 @@ def cmd_finish(args) -> int:
     all_tests: list[dict] = []
     modules = set()
     code_trees: list[str] = []
+    added_cases = 0
     for sha in sha_list:
         subject = git("log", "-1", "--format=%s", sha)
         files = commit_files(sha)
@@ -489,6 +495,7 @@ def cmd_finish(args) -> int:
             code_trees.append(git("rev-parse", f"{sha}^{{tree}}"))
         tests = [f for f in files if TEST_PATH_RE.search(f["path"])]
         all_tests.extend(tests)
+        added_cases += cases_added(sha, tests)
         commits.append({
             "sha": sha, "subject": subject,
             "category": classify(subject), "files": files,
@@ -511,7 +518,7 @@ def cmd_finish(args) -> int:
     tests_section = {
         "required": category in TEST_CATEGORIES,
         "files": all_tests,
-        "casesAdded": cases_added(head, all_tests),
+        "casesAdded": added_cases,
         "command": evidence["command"],
         "result": evidence["result"],
         "evidence": (
