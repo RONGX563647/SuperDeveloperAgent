@@ -7,6 +7,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.action.ActionId;
+import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.port.PipelineDefAuthor;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectScaffolder;
@@ -147,6 +148,14 @@ public final class PipelineDefinitionResolver {
         var recipe = current.get();
         Path root = recipes.rootOf(projectId, sourceEnv, recipe.version());
         PipelineDefinition def = PipelineDefinition.load(root);
+        if (!satisfiesDeployTarget(def)) {
+            // 历史脚本是在 image_package 阶段加入之前固化的：它没有镜像阶段，
+            // 回放时 deploy 只能靠"docker 静默降级 host"才跑得通，镜像链路永远不会落地。
+            // 这种脚本不能再当"被证明能跑通"的定义用，退回仓库/平台定义。
+            log.warn("项目 {} 环境 {} 的固化脚本 v{} 与部署目标不一致（无法产出镜像），改用仓库/平台定义",
+                    projectId, sourceEnv, recipe.version());
+            return Optional.empty();
+        }
         String note = "prod".equals(env) && !"prod".equals(sourceEnv)
                 ? "晋升：使用测试环境 v" + recipe.version() + " 的脚本（证据 " + recipe.evidenceRunId() + "）"
                 : "环境 " + sourceEnv + " 的可复现脚本 v" + recipe.version()
@@ -252,6 +261,29 @@ public final class PipelineDefinitionResolver {
     }
 
     // ---------------------------------------------------------------- 校验
+
+    /**
+     * 定义能不能满足它自己声明的部署目标（只校验"镜像从哪来"这一条）。
+     *
+     * <p>DOCKER / SERVER 目标必须有产出镜像的阶段（{@code image_package} 或多服务里预先声明的镜像）；
+     * 否则运行时只能靠"docker 降级 host"勉强成功，固化下来就是一条永远不产镜像的脚本。
+     */
+    static boolean satisfiesDeployTarget(PipelineDefinition def) {
+        PipelineDefinition.DeploySpec spec = def.deploy();
+        if (spec == null) {
+            return true; // 缺 deploy 段由引擎报 E-221，和镜像链路无关
+        }
+        DeployTarget target = DeployTarget.fromWire(spec.target()).orElse(null);
+        if (target == null || target == DeployTarget.HOST) {
+            return true;
+        }
+        if (spec.services() != null && spec.services().stream()
+                .anyMatch(s -> s.image() != null && !s.image().isBlank())) {
+            return true;
+        }
+        return def.stages().stream().anyMatch(stage ->
+                "image_package".equals(stage.action()) || "image".equalsIgnoreCase(stage.type()));
+    }
 
     /**
      * 校验模型给出的候选定义：能被解析、stage 类型合法、动作必须来自白名单。

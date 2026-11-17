@@ -163,6 +163,20 @@ public class DockerDeployer implements Deployer {
                              List<String> extraArgs, StringBuilder log, String endpointHost) {
         BooleanSupplier never = () -> false;
 
+        // 0. 镜像必须在本地：docker run 找不到镜像时会先去 registry 拉，
+        //    被镜像源白名单拦下后只留下 "exit 125 … not in the allowlist"，
+        //    把"本机没这个镜像"伪装成容器启动失败。回滚场景更糟：下面会先删掉在跑的容器。
+        StringBuilder inspectLog = new StringBuilder();
+        ProcessExecutor.StepOutcome inspect = executor.exec(dir,
+                List.of("docker", "image", "inspect", image), 15_000, inspectLog, never);
+        if (inspect.exitCode() != 0) {
+            return DeployResult.failed(DeployTarget.DOCKER,
+                    ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                    "镜像 " + image + " 不在本机（可能已被清理）：无法启动容器；"
+                            + "请重新执行 image_package 生成该版本；回滚需确认上一版镜像仍保留",
+                    ProcessExecutor.redact(inspectLog.toString()));
+        }
+
         // 1. 停旧（幂等：不存在时 docker 返回非 0，这里不视为失败）。
         //    daemon 的 "No such container" 原文绝不进日志：它排在最前面，
         //    曾把真实失败（应用配置校验不过、容器自行退出）掩盖成"部署报错"。

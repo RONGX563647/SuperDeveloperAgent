@@ -3736,11 +3736,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return DeployTarget.DOCKER;
             }
             if (hasJar) {
-                state.log.append("[deploy] 部署目标由 docker 自动修正为 host：")
-                        .append("本次没有镜像，但存在可运行 jar（target/*.jar）\n");
-                return DeployTarget.HOST;
+                // 以前这里会把 docker 静默改成 host：一次配置/配方缺陷从此被"自愈"掩盖，
+                // 每次回放都发 host 进程，镜像链路永远不落地（镜像 tag 也一直不存在）。
+                // 现在保持 docker，由部署器如实报 E-708，日志里直接指向缺 image_package。
+                state.log.append("[deploy] 部署目标 docker 但本次没有镜像：不再降级为 host，")
+                        .append("交由部署器报错（请检查 image_package 阶段）\n");
             }
-            return null;
+            return DeployTarget.DOCKER;
         }
         return requested;
     }

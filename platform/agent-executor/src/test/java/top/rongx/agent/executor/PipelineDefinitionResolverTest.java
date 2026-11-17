@@ -18,6 +18,7 @@ import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -186,6 +187,30 @@ class PipelineDefinitionResolverTest {
     }
 
     @Test
+    @DisplayName("固化脚本是 docker 目标却没有镜像阶段 → 视为过期脚本，退回平台定义")
+    void staleRecipeWithoutImageStageIsSkipped(@TempDir Path temp) throws Exception {
+        Path repo = dir(temp, "repo");
+        MemoryStore defs = new MemoryStore(temp.resolve("platform"));
+        defs.write(PROJECT, dockerYaml("from-platform", true), null);
+        MemoryRecipeStore recipes = new MemoryRecipeStore(temp.resolve("recipes"));
+        // 历史脚本：image_package 加入之前固化的，回放只能靠"docker 降级 host"跑通
+        recipes.save(new DeployRecipe(PROJECT, "test", 0, dockerYaml("from-recipe", false), null,
+                "run-early", "aaaaaaa", 0L, "agent"));
+
+        PipelineDefinitionResolver.Resolved r = new PipelineDefinitionResolver(
+                defs, scaffolder(plan("JAVA", "from-rule")), null, recipes)
+                .resolveForRun(PROJECT, repo, repo, "test");
+
+        assertEquals(PipelineDefinitionResolver.Source.PLATFORM, r.source());
+        assertEquals("from-platform", r.definition().name());
+        assertFalse(PipelineDefinitionResolver.satisfiesDeployTarget(
+                PipelineDefinition.parse(dockerYaml("old", false), "test")),
+                "docker 目标没有 image_package 时不应被视为可用脚本");
+        assertTrue(PipelineDefinitionResolver.satisfiesDeployTarget(
+                PipelineDefinition.parse(dockerYaml("new", true), "test")));
+    }
+
+    @Test
     @DisplayName("平台定义被写坏 → 抛 IllegalArgumentException（引擎映射成 E-221）")
     void brokenPlatformDefinitionThrows(@TempDir Path temp) throws Exception {
         Path repo = dir(temp, "repo");
@@ -241,6 +266,16 @@ class PipelineDefinitionResolverTest {
     private static String yaml(String name) {
         return "name: " + name + "\nstages:\n"
                 + "  - id: build\n    type: action\n    action: backend_build\n    runner: host\n";
+    }
+
+    /** docker 目标的定义：{@code withImage=false} 模拟没有 image_package 的历史脚本。 */
+    private static String dockerYaml(String name, boolean withImage) {
+        return "name: " + name + "\n"
+                + "deploy: {target: docker, port: 8182, containerPort: 8090}\n"
+                + "stages:\n"
+                + "  - {id: build, type: action, action: backend_build, runner: host}\n"
+                + (withImage ? "  - {id: image, type: action, action: image_package, runner: host}\n" : "")
+                + "  - {id: deploy, type: deploy}\n";
     }
 
     private static ProjectScaffolder scaffolder(ScaffoldPlan plan) {
