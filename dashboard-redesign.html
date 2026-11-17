@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>任务看板 · 数据洞察</title>
+<style>
+  /* ============================== 设计令牌 ============================== */
+  :root {
+    --bg: #F9FAFB;
+    --card: #FFFFFF;
+    --line: #E5E7EB;
+    --line-strong: #DDE3EC;
+    --ink: #0F172A;
+    --ink-2: #334155;
+    --muted: #64748B;
+    --faint: #94A3B8;
+    --primary: #2563EB;
+    --primary-soft: #EFF6FF;
+    --bug: #EF4444;
+    --feat: #8B5CF6;
+    --ok: #059669;
+    --ok-soft: #ECFDF5;
+    --radius: 12px;
+    --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.04);
+    --shadow-2: 0 10px 28px rgba(16, 24, 40, 0.08);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--ink);
+    background: var(--bg);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  button { font-family: inherit; cursor: pointer; }
+
+  .page { max-width: 1440px; margin: 0 auto; padding: 32px 40px 28px; }
+
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ============================== 卡片 ============================== */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-1);
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-2);
+    border-color: var(--line-strong);
+  }
+
+  /* ============================== 页头 ============================== */
+  .topbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+  .topbar-left { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; }
+  .crumb { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--faint); }
+  .crumb b { font-weight: 500; color: var(--muted); }
+  .crumb svg { width: 12px; height: 12px; }
+  h1 { margin: 4px 0 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+  .topbar-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .repo-chip {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    padding: 5px 10px;
+    margin-right: 4px;
+    font-size: 11px;
+    color: var(--muted);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+  }
+  .repo-chip i { width: 6px; height: 6px; background: #10B981; border-radius: 50%; }
+
+  .segmented { display: inline-flex; padding: 2px; background: #F1F5F9; border-radius: 8px; }
+  .segmented button {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
+  }
+  .segmented button:hover { color: var(--ink); }
+  .segmented button[aria-selected="true"] {
+    color: var(--ink);
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+  }
+
+  .btn {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    border-radius: 8px;
+    transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+  }
+  .btn svg { width: 14px; height: 14px; }
+  .btn-primary {
+    color: #fff;
+    background: var(--primary);
+    border: 1px solid var(--primary);
+    box-shadow: 0 1px 2px rgba(37, 99, 235, 0.24);
+  }
+  .btn-primary:hover { background: #1D4ED8; border-color: #1D4ED8; }
+  .btn-ghost { color: var(--ink-2); background: #fff; border: 1px solid var(--line); }
+  .btn-ghost:hover { background: #F8FAFC; border-color: #CBD5E1; }
+
+  /* ============================== 第一屏 ============================== */
+  .head-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2.6fr) minmax(280px, 1fr);
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .kpi-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; }
+  .kpi { display: flex; flex-direction: column; min-height: 120px; padding: 20px; }
+  .kpi-head { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; }
+  .kpi-label { font-size: 12px; font-weight: 500; color: var(--muted); }
+  .icon { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 8px; }
+  .icon svg { width: 16px; height: 16px; }
+  .icon.blue { color: var(--primary); background: var(--primary-soft); }
+  .icon.gray { color: var(--muted); background: #F1F5F9; }
+  .icon.green { color: var(--ok); background: var(--ok-soft); }
+  .icon.rose { color: #F43F5E; background: #FFF1F2; }
+  .kpi-value { display: flex; gap: 6px; align-items: baseline; margin-top: 12px; }
+  .kpi-value b { font-size: 28px; font-weight: 600; line-height: 1; letter-spacing: -0.03em; }
+  .kpi-value span { font-size: 12px; color: var(--faint); }
+  .kpi-note { margin: auto 0 0; padding-top: 12px; font-size: 11px; color: var(--faint); }
+  .kpi-note.ok { color: var(--ok); }
+  .progress-bar { height: 6px; margin-top: 12px; overflow: hidden; background: #F1F5F9; border-radius: 999px; }
+  .progress-bar i { display: block; width: 33%; height: 100%; background: var(--primary); border-radius: 999px; }
+
+  .risk { display: flex; flex-direction: column; padding: 20px; min-height: 120px; }
+  .risk-head { display: flex; align-items: center; justify-content: space-between; }
+  .risk-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .pill { padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 6px; }
+  .pill.ok { color: var(--ok); background: var(--ok-soft); }
+  .pill.slate { color: var(--muted); background: #F1F5F9; }
+  .risk-ok {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    margin-top: 12px;
+    background: rgba(236, 253, 245, 0.6);
+    border-radius: 8px;
+  }
+  .risk-ok-icon {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    color: var(--ok);
+    background: #D1FAE5;
+    border-radius: 50%;
+  }
+  .risk-ok-icon svg { width: 14px; height: 14px; }
+  .risk-ok p { margin: 0; font-size: 12px; font-weight: 500; color: #047857; }
+  .risk-ok small { display: block; margin-top: 2px; font-size: 11px; color: rgba(4, 120, 87, 0.65); }
+  .risk-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 16px; }
+  .risk-actions .btn { flex: 1; }
+
+  /* ============================== 图表区 ============================== */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .span-7 { grid-column: span 7; }
+  .span-5 { grid-column: span 5; }
+  .span-4 { grid-column: span 4; }
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 7fr 5fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .chart-card { display: flex; flex-direction: column; padding: 24px; }
+  .card-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+  .card-title { margin: 0; font-size: 14px; font-weight: 600; }
+  .card-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+  .card-sub b { font-weight: 600; color: var(--ink-2); }
+  .chart { width: 100%; }
+  .chart-tall { height: 232px; }
+  .chart-mid { height: 200px; }
+
+  .legend { display: flex; gap: 16px; margin-top: 18px; font-size: 11px; color: var(--muted); }
+  .legend span { display: inline-flex; gap: 6px; align-items: center; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+  .dot.bug { background: var(--bug); }
+  .dot.feat { background: var(--feat); }
+
+  .quadrant-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 12px;
+    margin-top: 4px;
+    border-top: 1px solid #F1F5F9;
+  }
+  .quadrant-foot .hint { font-size: 11px; color: var(--faint); }
+  .quadrant-foot .axis { font-size: 10px; color: #CBD5E1; }
+
+  /* 环形图 */
+  .donut-body { display: flex; flex-direction: column; gap: 16px; align-items: center; margin-top: 18px; flex: 1; }
+  .donut-wrap { position: relative; width: 168px; height: 168px; flex: none; }
+  .donut-wrap .chart { width: 100%; height: 100%; }
+  .donut-center {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    text-align: center;
+    pointer-events: none;
+  }
+  .donut-center b { font-size: 26px; font-weight: 600; line-height: 1; letter-spacing: -0.03em; }
+  .donut-center span { margin-top: 4px; font-size: 10px; color: var(--faint); }
+  .donut-legend { width: 100%; }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .legend-row b { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .legend-row .pct { margin-left: 4px; font-size: 12px; font-weight: 400; color: var(--faint); }
+  .legend-divider { height: 1px; margin: 10px 0; background: #F1F5F9; }
+  .legend-note { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: var(--faint); }
+
+  /* 优先级矩阵 */
+  .matrix { display: grid; grid-template-columns: 44px 1fr 1fr; gap: 8px; align-items: center; margin-top: 20px; }
+  .matrix-head { padding-bottom: 4px; font-size: 11px; font-weight: 500; color: var(--faint); text-align: center; }
+  .p-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 6px;
+  }
+  .p-badge.p0 { color: #F43F5E; background: #FFF1F2; }
+  .p-badge.p1 { color: #D97706; background: #FFFBEB; }
+  .p-badge.p2 { color: var(--muted); background: #F1F5F9; }
+  .heat-cell {
+    display: grid;
+    place-items: center;
+    height: 42px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 8px;
+  }
+  .heat-cell.filled { color: #1E40AF; }
+  .heat-cell.empty { color: #CBD5E1; font-weight: 400; }
+  .matrix-foot {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 14px;
+    margin-top: auto;
+    border-top: 1px solid #F1F5F9;
+  }
+  .matrix-foot p { margin: 0; font-size: 11px; color: var(--faint); }
+  .heat-legend { display: flex; gap: 6px; align-items: center; font-size: 10px; color: var(--faint); }
+  .heat-legend i { width: 16px; height: 10px; border-radius: 3px; }
+
+  /* ============================== 第三屏 ============================== */
+  .focus { padding: 24px; }
+  .focus-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+  .link { padding: 2px 0; font-size: 11px; font-weight: 500; color: var(--primary); background: none; border: 0; }
+  .link:hover { text-decoration: underline; }
+  .focus-list { margin-top: 14px; }
+  .focus-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+    padding: 10px 12px;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    transition: background-color .15s ease;
+  }
+  .focus-row:hover { background: #F8FAFC; }
+  .priority-line { width: 3px; height: 28px; flex: none; border-radius: 999px; }
+  .priority-line.p0 { background: #F43F5E; }
+  .priority-line.p1 { background: #F59E0B; }
+  .priority-line.p2 { background: #60A5FA; }
+  .tag { flex: none; padding: 2px 6px; font-size: 10px; font-weight: 600; border-radius: 4px; }
+  .tag.p0 { color: #E11D48; background: #FFF1F2; }
+  .tag.p1 { color: #D97706; background: #FFFBEB; }
+  .tag.p2 { color: var(--muted); background: #F1F5F9; }
+  .row-main { flex: 1; min-width: 0; }
+  .row-title {
+    display: block;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 500;
+    color: #1E293B;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-meta { display: block; margin-top: 2px; font-size: 11px; color: var(--faint); }
+  .row-arrow {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--faint);
+    opacity: 0;
+    transform: translateX(-2px);
+    transition: opacity .15s ease, transform .15s ease;
+  }
+  .focus-row:hover .row-arrow { opacity: 1; transform: translateX(0); }
+
+  /* 最近动态 */
+  .activity { padding: 24px; }
+  .live {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--primary);
+    background: var(--primary-soft);
+    border-radius: 999px;
+  }
+  .live i { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.35); }
+    50% { opacity: .55; box-shadow: 0 0 0 4px rgba(37, 99, 235, 0); }
+  }
+  .timeline { margin: 20px 0 0; padding: 0 0 0 20px; list-style: none; border-left: 1px solid #F1F5F9; }
+  .timeline li { position: relative; margin-bottom: 20px; }
+  .timeline li:last-child { margin-bottom: 0; }
+  .timeline li::before {
+    position: absolute;
+    top: 5px;
+    left: -25px;
+    width: 9px;
+    height: 9px;
+    content: "";
+    background: #CBD5E1;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px #F1F5F9;
+  }
+  .timeline li.blue::before { background: var(--primary); }
+  .timeline li.green::before { background: #10B981; }
+  .timeline li.violet::before { background: var(--feat); }
+  .timeline p { margin: 0; font-size: 13px; line-height: 1.55; color: #334155; }
+  .timeline p b { font-weight: 500; color: var(--ink); }
+  .timeline time { display: block; margin-top: 4px; font-size: 11px; color: var(--faint); }
+
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 24px;
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  /* ============================== 响应式 ============================== */
+  @media (max-width: 1200px) {
+    .head-grid { grid-template-columns: 1fr; }
+    .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .span-7, .span-5 { grid-column: span 12; }
+    .span-4 { grid-column: span 6; }
+    .bottom-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .page { padding: 20px; }
+    .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .span-4 { grid-column: span 12; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============================== 页头 ============================== -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div>
+        <div class="crumb">
+          <span>工作区</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+          <b>任务</b>
+        </div>
+        <h1>任务看板</h1>
+      </div>
+      <div class="segmented" role="tablist" aria-label="视图切换">
+        <button type="button" aria-selected="false">列表</button>
+        <button type="button" aria-selected="true">看板</button>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="repo-chip"><i></i>Gitee · acme/agent-platform</span>
+      <button type="button" class="btn btn-ghost">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        自动修复
+      </button>
+      <button type="button" class="btn btn-primary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        新建任务
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================ 第一屏 KPI ============================ -->
+  <section class="head-grid">
+    <div class="kpi-grid">
+      <div class="card kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">完成率</span>
+          <span class="icon blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21.2 15.9A10 10 0 1 1 8.8 2.8"/><path d="m9 11 3 3L22 4"/></svg>
+          </span>
+        </div>
+        <div class="kpi-value"><b class="num">33%</b><span class="num">3 / 9</span></div>
+        <div class="progress-bar"><i></i></div>
+      </div>
+
+      <div class="card kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">待处理</span>
+          <span class="icon gray">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          </span>
+        </div>
+        <div class="kpi-value"><b class="num">6</b><span>个任务</span></div>
+        <p class="kpi-note">全部未关闭工单</p>
+      </div>
+
+      <div class="card kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">已完成</span>
+          <span class="icon green">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+          </span>
+        </div>
+        <div class="kpi-value"><b class="num">3</b><span>个任务</span></div>
+        <p class="kpi-note">近 7 天闭环 3 个</p>
+      </div>
+
+      <div class="card kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">P0 紧急</span>
+          <span class="icon rose">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3c1 3 4 4.5 4 8a4 4 0 0 1-8 0c0-1.4.5-2.4 1-3.2"/><path d="M12 21a7 7 0 0 0 7-7"/></svg>
+          </span>
+        </div>
+        <div class="kpi-value"><b class="num">0</b><span>个任务</span></div>
+        <p class="kpi-note ok">无紧急阻塞</p>
+      </div>
+
+      <div class="card kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">同步失败</span>
+          <span class="icon gray">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.5 19a4.5 4.5 0 0 0 .7-8.95A6 6 0 0 0 6.2 9.2 4 4 0 0 0 6 17"/><path d="m9 15 6-6"/></svg>
+          </span>
+        </div>
+        <div class="kpi-value"><b class="num">0</b><span>个任务</span></div>
+        <p class="kpi-note ok">全部同步正常</p>
+      </div>
+    </div>
+
+    <div class="card risk">
+      <div class="risk-head">
+        <h2>风险项</h2>
+        <span class="pill ok">0</span>
+      </div>
+      <div class="risk-ok">
+        <span class="risk-ok-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+        </span>
+        <div>
+          <p>所有任务同步正常</p>
+          <small>最近同步 09:14</small>
+        </div>
+      </div>
+      <div class="risk-actions">
+        <button type="button" class="btn btn-ghost">自动修复</button>
+        <button type="button" class="btn btn-primary">新建任务</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 第二屏 图表 ============================ -->
+  <section class="charts-grid">
+
+    <!-- 新增任务趋势 -->
+    <div class="card chart-card span-7">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">新增任务趋势</h2>
+          <p class="card-sub">
+            近 <span id="trendRangeLabel" class="num">7</span> 天新增
+            <b id="trendTotal" class="num">9</b> 个任务
+            <span style="color:#CBD5E1;margin:0 4px">·</span>
+            Bug <span id="trendBug" class="num">7</span> / Feat <span id="trendFeat" class="num">2</span>
+          </p>
+        </div>
+        <div class="segmented" role="tablist" aria-label="时间范围">
+          <button type="button" data-range="7" aria-selected="true">7 天</button>
+          <button type="button" data-range="30" aria-selected="false">30 天</button>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="dot bug"></i>Bug</span>
+        <span><i class="dot feat"></i>Feat</span>
+      </div>
+      <div id="trendChart" class="chart chart-tall"></div>
+    </div>
+
+    <!-- 四象限图 -->
+    <div class="card chart-card span-5">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">任务四象限</h2>
+          <p class="card-sub">横轴积压时长 · 纵轴优先级 · 气泡越大越紧急</p>
+        </div>
+        <span class="pill slate">6 个未关闭</span>
+      </div>
+      <div id="quadrantChart" class="chart chart-tall" style="margin-top:8px"></div>
+      <div class="quadrant-foot">
+        <div class="legend" style="margin-top:0">
+          <span><i class="dot bug"></i>Bug</span>
+          <span><i class="dot feat"></i>Feat</span>
+        </div>
+        <span class="hint">右上角需优先清理</span>
+      </div>
+    </div>
+
+    <!-- 类型构成 -->
+    <div class="card chart-card span-4">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">类型构成</h2>
+          <p class="card-sub">共 9 个任务</p>
+        </div>
+      </div>
+      <div class="donut-body">
+        <div class="donut-wrap">
+          <div id="donutChart" class="chart"></div>
+          <div class="donut-center">
+            <b class="num">9</b>
+            <span>任务总数</span>
+          </div>
+        </div>
+        <div class="donut-legend">
+          <div class="legend-row">
+            <span><i class="dot bug"></i> Bug</span>
+            <span class="num"><b>7</b><span class="pct">· 78%</span></span>
+          </div>
+          <div class="legend-divider"></div>
+          <div class="legend-row">
+            <span><i class="dot feat"></i> Feat</span>
+            <span class="num"><b>2</b><span class="pct">· 22%</span></span>
+          </div>
+          <p class="legend-note">Bug 占比偏高，建议暂缓新需求，集中还技术债。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 未完成优先级矩阵 -->
+    <div class="card chart-card span-4">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">未完成优先级矩阵</h2>
+          <p class="card-sub">优先级 × 类型</p>
+        </div>
+        <span class="pill slate">6 个待处理</span>
+      </div>
+
+      <div class="matrix">
+        <span></span>
+        <span class="matrix-head">Bug</span>
+        <span class="matrix-head">Feat</span>
+
+        <span class="p-badge p0">P0</span>
+        <div class="heat-cell empty">–</div>
+        <div class="heat-cell empty">–</div>
+
+        <span class="p-badge p1">P1</span>
+        <div class="heat-cell filled" style="background: rgba(37, 99, 235, 0.14)">2</div>
+        <div class="heat-cell empty">–</div>
+
+        <span class="p-badge p2">P2</span>
+        <div class="heat-cell filled" style="background: rgba(37, 99, 235, 0.20)">3</div>
+        <div class="heat-cell filled" style="background: rgba(37, 99, 235, 0.08)">1</div>
+      </div>
+
+      <div class="matrix-foot">
+        <p>颜色越深积压越多</p>
+        <div class="heat-legend">
+          <span>少</span>
+          <i style="background: rgba(37, 99, 235, 0.06)"></i>
+          <i style="background: rgba(37, 99, 235, 0.13)"></i>
+          <i style="background: rgba(37, 99, 235, 0.22)"></i>
+          <span>多</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 完成吞吐 -->
+    <div class="card chart-card span-4">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">完成吞吐</h2>
+          <p class="card-sub">
+            近 <span id="doneRangeLabel" class="num">7</span> 天完成
+            <b id="doneTotal" class="num">3</b> 个
+            <span style="color:#CBD5E1;margin:0 4px">·</span>
+            日均 <span id="doneAvg" class="num">0.4</span>
+          </p>
+        </div>
+      </div>
+      <div id="throughputChart" class="chart chart-mid" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <!-- ============================ 第三屏 操作 ============================ -->
+  <section class="bottom-grid">
+    <div class="card focus">
+      <div class="focus-head">
+        <div>
+          <h2 class="card-title">优先处理</h2>
+          <p class="card-sub">未关闭任务按优先级排序</p>
+        </div>
+        <button type="button" class="link">查看全部 →</button>
+      </div>
+
+      <div class="focus-list">
+        <button type="button" class="focus-row">
+          <span class="priority-line p1"></span>
+          <span class="tag p1">P1</span>
+          <span class="row-main">
+            <span class="row-title">工作区会话发送按钮点击无效</span>
+            <span class="row-meta">Bug · #142 · 2 小时前</span>
+          </span>
+          <svg class="row-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+
+        <button type="button" class="focus-row">
+          <span class="priority-line p1"></span>
+          <span class="tag p1">P1</span>
+          <span class="row-main">
+            <span class="row-title">部署完成后需要区分前端 / 后端环境</span>
+            <span class="row-meta">Bug · #141 · 5 小时前</span>
+          </span>
+          <svg class="row-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+
+        <button type="button" class="focus-row">
+          <span class="priority-line p2"></span>
+          <span class="tag p2">P2</span>
+          <span class="row-main">
+            <span class="row-title">SSL 证书不可达导致回调失败</span>
+            <span class="row-meta">Bug · #139 · 昨天</span>
+          </span>
+          <svg class="row-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+
+        <button type="button" class="focus-row">
+          <span class="priority-line p2"></span>
+          <span class="tag p2">P2</span>
+          <span class="row-main">
+            <span class="row-title">MCP 工具返回 token 超限未截断</span>
+            <span class="row-meta">Bug · #138 · 昨天</span>
+          </span>
+          <svg class="row-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+
+        <button type="button" class="focus-row">
+          <span class="priority-line p2"></span>
+          <span class="tag p2">P2</span>
+          <span class="row-main">
+            <span class="row-title">会话历史分页偶发重复渲染</span>
+            <span class="row-meta">Bug · #137 · 11/16</span>
+          </span>
+          <svg class="row-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+
+        <button type="button" class="focus-row">
+          <span class="priority-line p2"></span>
+          <span class="tag p2">P2</span>
+          <span class="row-main">
+            <span class="row-title">增加 KV cache 命中率统计面板</span>
+            <span class="row-meta">Feat · #135 · 11/16</span>
+          </span>
+          <svg class="row-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="card activity">
+      <div class="focus-head">
+        <div>
+          <h2 class="card-title">最近动态</h2>
+          <p class="card-sub">Agent 与 Git 同步处理日志</p>
+        </div>
+        <span class="live"><i></i>实时</span>
+      </div>
+
+      <ol class="timeline">
+        <li class="blue">
+          <p>Agent 完成修复并回写工单 <b>「部署环境前后端区分」</b></p>
+          <time>12 分钟前 · Agent</time>
+        </li>
+        <li class="green">
+          <p>推送成功：<b>3 条任务</b> 已同步到 Gitee</p>
+          <time>今天 09:14 · Git 同步</time>
+        </li>
+        <li class="violet">
+          <p>Agent 生成修复 PR <b>#128「SSL 证书不可达」</b></p>
+          <time>2 小时前 · Agent · 待人工合并</time>
+        </li>
+        <li>
+          <p>新建任务 <b>「MCP 服务接入与 token 优化」</b></p>
+          <time>昨天 18:22 · 平台</time>
+        </li>
+        <li>
+          <p>关闭任务 <b>「KV cache 命中率统计」</b></p>
+          <time>11/16 · 平台</time>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    <span>图表：Apache ECharts 5（本地 assets/echarts.min.js）· 数据来源：任务页 Git 工单</span>
+    <span class="num">更新时间 2026-11-17 09:14</span>
+  </footer>
+</div>
+
+<script src="./assets/echarts.min.js"></script>
+<script>
+(function () {
+  'use strict'
+
+  if (!window.echarts) {
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#trendChart, #quadrantChart, #donutChart, #throughputChart'),
+      function (el) {
+        el.innerHTML = '<div style="display:grid;height:100%;place-items:center;font-size:12px;color:#94A3B8">'
+          + '图表库未加载：请确认 assets/echarts.min.js 与 HTML 在同一目录</div>'
+      })
+    return
+  }
+
+  var INK = '#0F172A'
+  var FAINT = '#94A3B8'
+  var BUG = '#EF4444'
+  var FEAT = '#8B5CF6'
+  var PRIMARY = '#2563EB'
+
+  var range7 = {
+    labels: ['11/11', '11/12', '11/13', '11/14', '11/15', '11/16', '11/17'],
+    bug: [1, 0, 1, 1, 1, 2, 1],
+    feat: [0, 0, 0, 0, 1, 0, 1],
+    done: [0, 0, 0, 0, 1, 1, 1]
+  }
+
+  function build30() {
+    var labels = []
+    var bug = []
+    var feat = []
+    var done = []
+    var base = new Date(2026, 10, 17)
+    for (var i = 29; i >= 0; i -= 1) {
+      var d = new Date(base.getTime())
+      d.setDate(base.getDate() - i)
+      labels.push((d.getMonth() + 1) + '/' + d.getDate())
+      if (i <= 6) {
+        var k = 6 - i
+        bug.push(range7.bug[k])
+        feat.push(range7.feat[k])
+        done.push(range7.done[k])
+      } else {
+        bug.push(0)
+        feat.push(0)
+        done.push(0)
+      }
+    }
+    return { labels: labels, bug: bug, feat: feat, done: done }
+  }
+
+  var range30 = build30()
+  var currentRange = '7'
+
+  var tooltipBase = {
+    backgroundColor: INK,
+    borderWidth: 0,
+    padding: [8, 12],
+    textStyle: { color: '#fff', fontSize: 12 },
+    extraCssText: 'border-radius:8px;box-shadow:0 8px 24px rgba(15,23,42,.18);'
+  }
+
+  var trendChart = echarts.init(document.getElementById('trendChart'))
+  var throughputChart = echarts.init(document.getElementById('throughputChart'))
+  var donutChart = echarts.init(document.getElementById('donutChart'))
+  var quadrantChart = echarts.init(document.getElementById('quadrantChart'))
+
+  // ------------------------------ 新增趋势 ------------------------------
+  function renderTrend(data) {
+    trendChart.setOption({
+      animationDuration: 520,
+      color: [BUG, FEAT],
+      tooltip: Object.assign({}, tooltipBase, {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(15,23,42,0.04)' } },
+        formatter: function (params) {
+          var total = params.reduce(function (sum, p) { return sum + (p.value || 0) }, 0)
+          var head = '<div style="font-size:11px;color:#94A3B8">' + params[0].axisValue + '</div>'
+          if (!total) return head + '<div style="margin-top:4px;color:#CBD5E1">无新增任务</div>'
+          var rows = params.filter(function (p) { return p.value > 0 }).map(function (p) {
+            return '<div style="display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:5px">'
+              + '<span style="display:inline-flex;align-items:center;gap:6px;color:#CBD5E1">'
+              + '<span style="width:6px;height:6px;border-radius:50%;background:' + p.color + '"></span>'
+              + p.seriesName + '</span><b style="font-variant-numeric:tabular-nums">' + p.value + '</b></div>'
+          }).join('')
+          return head + '<div style="margin-top:3px;font-weight:600">新增 ' + total + ' 个</div>' + rows
+        }
+      }),
+      grid: { left: 0, right: 0, top: 10, bottom: 0, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: data.labels,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          color: FAINT, fontSize: 10, margin: 12,
+          interval: currentRange === '7' ? 0 : 4
+        }
+      },
+      yAxis: { type: 'value', show: false },
+      series: [
+        {
+          name: 'Bug', type: 'bar', stack: 'total', data: data.bug,
+          barMaxWidth: 26, itemStyle: { borderRadius: [4, 4, 0, 0] },
+          emphasis: { focus: 'series' }
+        },
+        {
+          name: 'Feat', type: 'bar', stack: 'total', data: data.feat,
+          barMaxWidth: 26, itemStyle: { borderRadius: [6, 6, 0, 0] },
+          emphasis: { focus: 'series' }
+        }
+      ]
+    }, true)
+  }
+
+  // ------------------------------ 完成吞吐 ------------------------------
+  function renderThroughput(data) {
+    throughputChart.setOption({
+      animationDuration: 620,
+      color: [PRIMARY],
+      tooltip: Object.assign({}, tooltipBase, {
+        trigger: 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: '#CBD5E1', type: 'dashed' } },
+        formatter: function (params) {
+          var p = params[0]
+          return '<div style="font-size:11px;color:#94A3B8">' + p.axisValue + '</div>'
+            + '<div style="margin-top:4px">完成 <b>' + p.value + '</b> 个任务</div>'
+        }
+      }),
+      grid: { left: 0, right: 4, top: 12, bottom: 0, containLabel: true },
+      xAxis: {
+        type: 'category',
+        boundaryGap: false,
+        data: data.labels,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          color: FAINT, fontSize: 10, margin: 12,
+          interval: currentRange === '7' ? 0 : 4
+        }
+      },
+      yAxis: { type: 'value', show: false },
+      series: [{
+        name: '完成',
+        type: 'line',
+        smooth: 0.42,
+        symbol: 'circle',
+        symbolSize: 6,
+        showSymbol: false,
+        data: data.done,
+        lineStyle: { width: 2, color: PRIMARY },
+        itemStyle: { color: PRIMARY, borderColor: '#fff', borderWidth: 2 },
+        emphasis: { scale: 1.4 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(37,99,235,0.20)' },
+            { offset: 1, color: 'rgba(37,99,235,0)' }
+          ])
+        }
+      }]
+    }, true)
+  }
+
+  // ------------------------------ 类型构成 ------------------------------
+  donutChart.setOption({
+    animationDuration: 650,
+    color: [BUG, FEAT],
+    tooltip: Object.assign({}, tooltipBase, { trigger: 'item', formatter: '{b}: {c} 个 ({d}%)' }),
+    series: [{
+      type: 'pie',
+      radius: ['68%', '90%'],
+      center: ['50%', '50%'],
+      avoidLabelOverlap: false,
+      padAngle: 2,
+      itemStyle: { borderColor: '#fff', borderWidth: 2, borderRadius: 6 },
+      label: { show: false },
+      labelLine: { show: false },
+      emphasis: { scale: true, scaleSize: 4 },
+      data: [{ value: 7, name: 'Bug' }, { value: 2, name: 'Feat' }]
+    }]
+  })
+
+  // ------------------------------ 四象限图 ------------------------------
+  var WEIGHT = { P0: 3, P1: 2, P2: 1 }
+  var openTasks = [
+    { name: '工作区会话发送按钮点击无效', priority: 'P1', kind: 'Bug', age: 0.12 },
+    { name: '部署完成后需要区分前端 / 后端环境', priority: 'P1', kind: 'Bug', age: 0.35 },
+    { name: 'SSL 证书不可达导致回调失败', priority: 'P2', kind: 'Bug', age: 0.95 },
+    { name: 'MCP 工具返回 token 超限未截断', priority: 'P2', kind: 'Bug', age: 1.35 },
+    { name: '会话历史分页偶发重复渲染', priority: 'P2', kind: 'Bug', age: 2.15 },
+    { name: '增加 KV cache 命中率统计面板', priority: 'P2', kind: 'Feat', age: 1.72 }
+  ]
+
+  function quadrantData() {
+    return openTasks.map(function (task) {
+      var weight = WEIGHT[task.priority]
+      var color = task.kind === 'Bug' ? BUG : FEAT
+      return {
+        value: [task.age, weight, task.name, task.priority, task.kind],
+        symbolSize: 13 + (weight - 1) * 4,
+        itemStyle: {
+          color: color,
+          borderColor: '#fff',
+          borderWidth: 2,
+          shadowBlur: 8,
+          shadowColor: 'rgba(15,23,42,0.12)'
+        }
+      }
+    })
+  }
+
+  quadrantChart.setOption({
+    animationDuration: 620,
+    tooltip: Object.assign({}, tooltipBase, {
+      trigger: 'item',
+      formatter: function (p) {
+        var v = p.value
+        return '<div style="max-width:240px;font-weight:600;white-space:normal">' + v[2] + '</div>'
+          + '<div style="margin-top:4px;color:#CBD5E1;font-size:11px">'
+          + v[4] + ' · ' + v[3] + ' · 积压 ' + v[0] + ' 天</div>'
+      }
+    }),
+    grid: { left: 0, right: 10, top: 22, bottom: 4, containLabel: true },
+    xAxis: {
+      type: 'value',
+      min: 0,
+      max: 2.4,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { show: false },
+      axisLabel: {
+        color: FAINT, fontSize: 10,
+        formatter: function (value) { return value + 'd' }
+      }
+    },
+    yAxis: {
+      type: 'value',
+      min: 0.5,
+      max: 3.5,
+      interval: 1,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { show: false },
+      axisLabel: {
+        color: FAINT, fontSize: 10,
+        formatter: function (value) {
+          return value === 3 ? 'P0' : value === 2 ? 'P1' : value === 1 ? 'P2' : ''
+        }
+      }
+    },
+    graphic: [
+      { type: 'text', left: '16%', top: '12%', silent: true,
+        style: { text: '新近 · 高优', fill: '#CBD5E1', font: '10px Inter, sans-serif' } },
+      { type: 'text', right: '8%', top: '12%', silent: true,
+        style: { text: '积压 · 高优', fill: '#FCA5A5', font: '600 10px Inter, sans-serif' } },
+      { type: 'text', left: '16%', bottom: '20%', silent: true,
+        style: { text: '新近 · 常规', fill: '#CBD5E1', font: '10px Inter, sans-serif' } },
+      { type: 'text', right: '8%', bottom: '20%', silent: true,
+        style: { text: '积压 · 常规', fill: '#CBD5E1', font: '10px Inter, sans-serif' } }
+    ],
+    series: [{
+      type: 'scatter',
+      data: quadrantData(),
+      markArea: {
+        silent: true,
+        itemStyle: { color: 'rgba(239, 68, 68, 0.045)' },
+        data: [[{ xAxis: 1.5, yAxis: 1.5 }, { xAxis: 2.4, yAxis: 3.3 }]]
+      },
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        lineStyle: { color: '#E2E8F0', type: 'dashed', width: 1 },
+        label: { show: false },
+        data: [{ xAxis: 1.5 }, { yAxis: 1.5 }]
+      },
+      emphasis: { scale: 1.25 }
+    }]
+  })
+
+  // ------------------------------ 范围切换 ------------------------------
+  function sum(arr) {
+    return arr.reduce(function (a, b) { return a + b }, 0)
+  }
+
+  function applyRange(rangeKey) {
+    currentRange = rangeKey
+    var data = rangeKey === '7' ? range7 : range30
+    renderTrend(data)
+    renderThroughput(data)
+
+    document.getElementById('trendRangeLabel').textContent = rangeKey
+    document.getElementById('doneRangeLabel').textContent = rangeKey
+    document.getElementById('trendTotal').textContent = sum(data.bug) + sum(data.feat)
+    document.getElementById('trendBug').textContent = sum(data.bug)
+    document.getElementById('trendFeat').textContent = sum(data.feat)
+    document.getElementById('doneTotal').textContent = sum(data.done)
+    document.getElementById('doneAvg').textContent = (sum(data.done) / Number(rangeKey)).toFixed(1)
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.segmented [data-range]'), function (btn) {
+    btn.addEventListener('click', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.segmented [data-range]'), function (b) {
+        b.setAttribute('aria-selected', String(b === btn))
+      })
+      applyRange(btn.getAttribute('data-range'))
+    })
+  })
+
+  applyRange('7')
+
+  var resizeTimer = null
+  window.addEventListener('resize', function () {
+    if (resizeTimer) window.clearTimeout(resizeTimer)
+    resizeTimer = window.setTimeout(function () {
+      trendChart.resize()
+      throughputChart.resize()
+      donutChart.resize()
+      quadrantChart.resize()
+    }, 120)
+  })
+})()
+</script>
+</body>
+</html>
