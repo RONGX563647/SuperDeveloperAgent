@@ -74,7 +74,7 @@ class RecipeScaffolderTest {
         String actions = content(plan, "ci/actions.yml");
         assertTrue(actions.contains("pnpm"), actions);
         // 前端 stage 必须显式用 Node 镜像，否则默认 Maven 沙箱里没有 node/npm
-        assertTrue(pipeline.contains("image: node:20-bookworm"), pipeline);
+        assertTrue(pipeline.contains("image: node:22-bookworm"), pipeline);
         // pnpm 不是 Node 镜像自带的全局命令：用 corepack 直接运行；
         // 不能用 corepack enable（非 root 沙箱写 /usr/local/bin 会 EACCES）
         assertTrue(actions.contains("corepack"), actions);

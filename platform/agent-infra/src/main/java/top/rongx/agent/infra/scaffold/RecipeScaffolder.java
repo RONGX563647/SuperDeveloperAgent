@@ -69,7 +69,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
      * 前端构建镜像默认值：默认沙箱镜像是 Maven，里面没有 node/npm，必须显式指定。
      * 只是生成配方时的兜底，可用 {@code agent.scaffold.node-image} 覆盖为本机已有镜像。
      */
-    public static final String DEFAULT_NODE_IMAGE = "node:20-bookworm";
+    /** 前端工具链镜像：依赖（puppeteer-core / @vueuse 等）已要求 Node >= 22。 */
+    public static final String DEFAULT_NODE_IMAGE = "node:22-bookworm";
     /** Dockerfile 探测顺序：根目录优先，其次是常见的前后端分离目录。 */
     private static final List<String> DOCKERFILE_DIRS = List.of(
             "", "backend", "frontend", "deploy", "docker");

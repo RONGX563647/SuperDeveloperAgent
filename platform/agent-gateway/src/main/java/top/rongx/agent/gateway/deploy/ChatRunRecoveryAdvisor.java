@@ -138,6 +138,11 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
                     ? toolNames.get(end.getToolCallId()) : end.getToolCallName());
             String state = end.getState() == null ? "" : end.getState().name();
             String summary = oneLine(toolResults.remove(end.getToolCallId()), MAX_RESULT_LINE);
+            // 工具内部失败常以错误文本返回，事件状态仍是 SUCCESS（例如"路径不存在"）。
+            // 不按文本前缀纠正的话，自愈记录会把失败写成成功，误导后续判断与审计。
+            if (!"FAILED".equalsIgnoreCase(state) && isErrorText(summary)) {
+                state = "FAILED";
+            }
             lines.add("工具结果 " + name + (state.isEmpty() ? "" : " [" + state + "]")
                     + (summary.isEmpty() ? "" : "：" + summary));
         } else if (event instanceof TextBlockDeltaEvent delta) {
@@ -179,6 +184,16 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         }
         String one = value.toString().replaceAll("\\s+", " ").trim();
         return one.length() > max ? one.substring(0, max) + "…" : one;
+    }
+
+    /** 工具把失败当文本返回（事件状态仍是 SUCCESS）：按约定前缀识别。 */
+    static boolean isErrorText(String summary) {
+        if (summary == null || summary.isEmpty()) {
+            return false;
+        }
+        return summary.startsWith("Error:")
+                || summary.startsWith("err:")
+                || summary.contains("Tool execution failed");
     }
 
     /** 超长时保留开头与结尾：结尾通常是 Agent 的最终结论，不能丢。 */
