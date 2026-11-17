@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -167,6 +168,27 @@ def cmd_start(args) -> int:
 
 # ------------------------------------------------------------------ tests
 
+def write_tree() -> str:
+    """快照当前索引树。
+
+    <p>IDE 的 SCM 刷新、并行会话的 git 操作都会短暂创建 {@code .git/index.lock}，
+    撞上就会让本该通过的提交失败。这里对瞬时锁做几次短重试，测试结论本身不受影响。
+    """
+    last = ""
+    for attempt in range(10):
+        proc = subprocess.run(["git", "write-tree"], cwd=ROOT, capture_output=True,
+                              env=clean_env())
+        if proc.returncode == 0:
+            return proc.stdout.decode("utf-8", "replace").strip()
+        last = proc.stderr.decode("utf-8", "replace").strip()
+        if "index.lock" not in last:
+            break
+        if attempt == 0:
+            out("索引被其它 git 进程占用，等待锁释放后重试…")
+        time.sleep(0.5)
+    raise GateError(f"git write-tree 失败：{last}")
+
+
 def surefire_stats(started: float) -> dict:
     tests = failures = errors = skipped = 0
     reports = ROOT / "platform"
@@ -201,7 +223,7 @@ def run_tests(command: str) -> dict:
         "failures": stats["failures"],
         "errors": stats["errors"],
         "skipped": stats["skipped"],
-        "tree": git("write-tree"),
+        "tree": write_tree(),
     }
 
 
