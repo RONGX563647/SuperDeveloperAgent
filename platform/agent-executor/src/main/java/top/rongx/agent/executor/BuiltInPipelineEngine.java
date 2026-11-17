@@ -585,11 +585,19 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (needsDocker && !dockerAvailable()) {
             blockers.add("Docker 不可用：镜像/容器部署无法执行（L3 fail-closed）");
         }
-        // P0-3：预检全绿不代表发布能成功。DOCKER 目标没有镜像阶段时，发布必然 E-501。
+        // P0-3：预检全绿不代表发布能成功。
+        // 有镜像阶段但提交里没有 Dockerfile：image_package 必然 E-101/E-501，而且自动修复
+        // 也救不了（生成 Dockerfile 是待确认补丁，确认后还得用新提交重跑），必须在预检挡住。
+        String missingDockerfile = missingImageDockerfile(repo, previews);
+        if (missingDockerfile != null) {
+            blockers.add(ErrorCode.DEPLOY_PREREQUISITE_MISSING.code()
+                    + " 发布将失败：镜像阶段需要 " + missingDockerfile
+                    + "，但本次提交里没有（先生成 Dockerfile，用新提交再发布）");
+        }
+        // DOCKER 目标却没有镜像阶段时，发布必然 E-501。
         String deployTarget = previews.stream().map(StagePreview::deployTarget)
                 .filter(t -> t != null && !t.isBlank()).findFirst().orElse(null);
-        boolean hasImageStage = previews.stream().anyMatch(p ->
-                "image_package".equals(p.action()) || "image".equalsIgnoreCase(p.type()));
+        boolean hasImageStage = previews.stream().anyMatch(BuiltInPipelineEngine::isImageStage);
         if ("docker".equalsIgnoreCase(deployTarget) && !hasImageStage) {
             boolean hasDockerfile = repo != null
                     && (Files.isRegularFile(repo.resolve("Dockerfile"))
@@ -624,6 +632,45 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private volatile long dockerProbeAt;
     private volatile boolean dockerProbeOk;
+
+    /** 该阶段是否在打包镜像（动作或阶段类型）。 */
+    static boolean isImageStage(StagePreview preview) {
+        return "image_package".equals(preview.action()) || "image".equalsIgnoreCase(preview.type());
+    }
+
+    /**
+     * 镜像阶段要用、但本次提交里不存在的 Dockerfile；没有缺失时返回 null。
+     *
+     * <p>路径从镜像阶段的命令里取 {@code -f/--file}（缺省 {@code Dockerfile}）：
+     * 不能一律按根目录 {@code Dockerfile} 判断，否则自定义配方会被误判成阻塞。
+     */
+    static String missingImageDockerfile(Path repo, List<StagePreview> previews) {
+        if (repo == null) {
+            return null;
+        }
+        for (StagePreview preview : previews) {
+            if (!isImageStage(preview)) {
+                continue;
+            }
+            String dockerfile = dockerfileOf(preview.command());
+            return Files.isRegularFile(repo.resolve(dockerfile)) ? null : dockerfile;
+        }
+        return null;
+    }
+
+    /** 从 {@code docker build -f <path> ...} 里取 Dockerfile 路径，缺省 Dockerfile。 */
+    private static String dockerfileOf(String command) {
+        if (command == null || command.isBlank()) {
+            return "Dockerfile";
+        }
+        String[] argv = command.trim().split("\\s+");
+        for (int i = 0; i < argv.length - 1; i++) {
+            if ("-f".equals(argv[i]) || "--file".equals(argv[i])) {
+                return argv[i + 1];
+            }
+        }
+        return "Dockerfile";
+    }
 
     /** 本机 Docker 可用性（10 秒缓存）：dry-run 门控与界面下拉共用，避免每次刷新都阻塞在 CLI 上。 */
     @Override

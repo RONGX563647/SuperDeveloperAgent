@@ -3,6 +3,7 @@ package top.rongx.agent.gateway.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentEventType;
+import io.agentscope.core.event.CustomEvent;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -46,6 +47,15 @@ public class AgentEventMapper {
     public Map<String, Object> toDto(AgentEvent event, String activeModelName) {
         Map<String, Object> dto = new LinkedHashMap<>();
         AgentEventType type = event.getType();
+        // 选项卡片：ask_user 工具由运行时中间件翻译成 CustomEvent，这里换成稳定 wire type，
+        // 前端只认 ask.requested 与归一化后的 payload（question / options / multiple / allowText）
+        if (type == AgentEventType.CUSTOM && event instanceof CustomEvent custom
+                && "ask_user".equals(custom.getName())) {
+            dto.put("type", "ask.requested");
+            dto.put("version", PROTOCOL_VERSION);
+            dto.put("payload", new LinkedHashMap<>(custom.getValue()));
+            return dto;
+        }
         dto.put("type", wireType(type));
         dto.put("version", PROTOCOL_VERSION);
         try {

@@ -5,10 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.event.AgentEventType;
+import io.agentscope.core.event.CustomEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.message.ToolResultState;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -53,6 +55,23 @@ class AgentEventMapperTest {
         Map<String, Object> payload = (Map<String, Object>) dto.get("payload");
         assertEquals("read_file", payload.get("name"));
         assertEquals("success", String.valueOf(payload.get("state")).toLowerCase());
+    }
+
+    @Test
+    void askUserCustomEventMapsToAskRequested() {
+        Map<String, Object> dto = mapper.toDto(new CustomEvent("ask_user",
+                Map.of("question", "要发布到哪个环境？",
+                        "options", List.of(Map.of("label", "test"), Map.of("label", "prod")),
+                        "allowText", true)));
+
+        assertEquals("ask.requested", dto.get("type"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) dto.get("payload");
+        assertEquals("要发布到哪个环境？", payload.get("question"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> options = (List<Map<String, Object>>) payload.get("options");
+        assertEquals(2, options.size());
+        assertEquals("test", options.get(0).get("label"));
     }
 
     @Test

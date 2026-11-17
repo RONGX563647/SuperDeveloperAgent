@@ -182,7 +182,9 @@ public class AgentFactory {
                 .stateStore(stateStore)
                 // 渐进披露：只把核心工具 + 已激活插件的 schema 发给模型；
                 // 首轮路由只做一次（工具集定型后不再抖动，KV 前缀缓存才能命中）
-                .middleware(new ProgressiveToolMiddleware(plugins, autoActivate));
+                .middleware(new ProgressiveToolMiddleware(plugins, autoActivate))
+                // 选项卡片：把 ask_user 的入参提前翻译成 ask.requested 事件
+                .middleware(new AskUserMiddleware());
         return new AgentSession(builder.build(), closeables, plugins);
     }
 
@@ -470,6 +472,7 @@ public class AgentFactory {
                 .permissionContext(permission)
                 .maxIters(Math.max(props.maxIters(), 12))
                 .stateStore(stateStore)
+                .middleware(new AskUserMiddleware())
                 .build();
     }
 
@@ -501,6 +504,9 @@ public class AgentFactory {
                   nodes succeeding ends the batch early. On a circuit-breaker failure, report the failed
                   nodes and shared cause instead of re-dispatching the batch unchanged.
                 - When the user says "fix the issues in the issue list", prefer dispatch_issue.
+                - If the goal is ambiguous in a way that changes what you dispatch (scope, which
+                  conversation, prod vs test), call ask_user(question, options) and wait for the
+                  user's click instead of guessing; end your reply right after the call.
                 - Answer as soon as you have enough evidence: conclusion, evidence location and next
                   step only; do not repeat long logs.
                 - Report runId, status and summary faithfully after dispatch; never claim sub-conversation
@@ -560,6 +566,11 @@ public class AgentFactory {
                 - Cite file:line or a time window for code and logs. Say "unknown" instead of inventing
                   APIs, config or log lines. For platform API usage: api_search -> api_get ->
                   api_schema (api_get/api_schema live in the api plugin).
+                - When the next step depends on the user's preference and guessing could waste a run
+                  (branch strategy, scope, which env to touch), call ask_user(question, options) so the
+                  user can click; if it is not in the tool list yet, load it with tool_load("other")
+                  first. After calling it, end your reply and wait. Do not ask for things you can
+                  verify yourself, and do not silently pick for the user.
 
                 %s%s
                 Safety and confirmation (independent of which plugins are loaded):

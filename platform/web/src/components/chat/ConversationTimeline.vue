@@ -22,6 +22,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'copy', text: string): void
   (e: 'retry'): void
+  (e: 'ask-select', answer: string): void
 }>()
 
 /** 确认卡是否已展开（由父视图通过 v-model 式同步；展开后隐藏提示条避免信息重复）。 */
@@ -89,6 +90,8 @@ const turnCosts = computed(() => {
 const rows = computed(() => items.value.map((message, index) => ({
   message,
   streaming: itemActive(index, message),
+  // 只有最后一条消息上的选项卡片可点：历史卡片已回答，不该再影响当前轮
+  askActive: index === items.value.length - 1 && !props.streaming,
   cost: turnCosts.value.get(message.id),
 })))
 </script>
@@ -101,8 +104,10 @@ const rows = computed(() => items.value.map((message, index) => ({
         :tool="row.message.toolCallId ? projection.tools[row.message.toolCallId] : undefined"
         :streaming="row.streaming"
         :can-retry="!streaming"
+        :ask-active="row.askActive"
         @copy="emit('copy', $event)"
         @retry="emit('retry')"
+        @ask-select="emit('ask-select', $event)"
       />
       <!-- 每轮费用合计：等宽小字，贴在该轮最后一条消息下方 -->
       <div v-if="row.cost" class="turn-cost mono">

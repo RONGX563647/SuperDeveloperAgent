@@ -26,7 +26,23 @@ export interface AgentEventDto {
   payload: Record<string, unknown>
 }
 
-export type MessageRole = 'user' | 'assistant' | 'step' | 'error'
+export type MessageRole = 'user' | 'assistant' | 'step' | 'error' | 'ask'
+
+/** 选项卡片的一个可点选答案。 */
+export interface AskOption {
+  label: string
+  detail?: string
+}
+
+/** ask_user 工具下发的提问（后端 ask.requested 事件，落成 role='ask' 的消息）。 */
+export interface AskPayload {
+  question: string
+  options: AskOption[]
+  /** 是否允许多选（默认单选）。 */
+  multiple?: boolean
+  /** 是否允许用户自行输入（默认 true）。 */
+  allowText?: boolean
+}
 
 export interface ChatMessage {
   id: string
@@ -40,6 +56,8 @@ export interface ChatMessage {
   toolCallId?: string
   /** 该条消息对应的模型费用（仅 deepseek 系列且拿到 usage 时存在） */
   cost?: UsageCost
+  /** role='ask'：待用户点选的选项卡片（随历史一起持久化） */
+  ask?: AskPayload
   at: number
 }
 

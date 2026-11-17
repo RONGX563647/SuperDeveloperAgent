@@ -1,6 +1,6 @@
 import type {
-  AgentEvent, AgentProjection, ChatMessage, RunStatus, StreamingTurn, ToolActivity,
-  UsageCost,
+  AgentEvent, AgentProjection, AskOption, AskPayload, ChatMessage, RunStatus, StreamingTurn,
+  ToolActivity, UsageCost,
 } from '../types'
 import {
   addSessionCost, calculateDeepSeekCost, emptySessionCost, isDeepSeekModel, sumCost,
@@ -102,6 +102,7 @@ const toolDisplayNames: Record<string, string> = {
   confirm: '提交变更确认',
   run_ops_agent: '委派发布工程师',
   propose_patch: '提交代码补丁',
+  ask_user: '询问用户',
 }
 
 /**
@@ -212,6 +213,37 @@ function pushMessage(
     cost,
     at: Date.now(),
   })
+}
+
+/** 归一化 ask.requested 的 payload；缺问题或缺选项时返回 null（不落空卡片）。 */
+function toAskPayload(payload: Record<string, unknown>): AskPayload | null {
+  const question = typeof payload.question === 'string' ? payload.question.trim() : ''
+  if (!question) return null
+  const raw = Array.isArray(payload.options) ? payload.options : []
+  const options: AskOption[] = []
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      if (item.trim()) options.push({ label: item.trim() })
+      continue
+    }
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const label = typeof record.label === 'string' ? record.label.trim() : ''
+    if (!label) continue
+    options.push({
+      label,
+      detail: typeof record.detail === 'string' && record.detail.trim()
+        ? record.detail.trim() : undefined,
+    })
+  }
+  if (!options.length) return null
+  return {
+    question,
+    options,
+    multiple: payload.multiple === true,
+    // 后端只在允许自由输入时才下发 allowText；缺省按允许处理
+    allowText: payload.allowText !== false,
+  }
 }
 
 /**
@@ -355,6 +387,26 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
     }
     case 'env_binding.confirmed': {
       next.pendingBindingId = null
+      break
+    }
+
+    // ---- 选项卡片：ask_user 工具下发的提问，落成 role='ask' 消息 ----
+    case 'ask.requested': {
+      const ask = toAskPayload(event.payload)
+      if (!ask) break
+      // 卡片属于"下一步要用户决定"的位置：先把已产出的正文落盘，保证顺序
+      if (next.streamingTurn && (next.streamingTurn.text || next.streamingTurn.thinking)) {
+        pushMessage(next, 'assistant', next.streamingTurn.text, undefined, undefined,
+          next.streamingTurn.thinking, next.streamingTurn.cost)
+        next.streamingTurn = null
+      }
+      next.messages.push({
+        id: `ask-${event.sequence}-${next.messages.length}`,
+        role: 'ask',
+        text: ask.question,
+        ask,
+        at: Date.now(),
+      })
       break
     }
 

@@ -175,6 +175,17 @@ function appendUserMessage(text: string): void {
   entry.value.chat.appendMessage({ id: `u-${Date.now()}`, role: 'user', text, at: Date.now() })
 }
 
+/**
+ * 选项卡片点选：把选中答案当成下一条用户消息发回调度 Agent。
+ * 与手动输入走同一条路径（气泡 + send），保证顺序与会话落库一致。
+ */
+function onAskSelect(answer: string): void {
+  if (streaming.value || !supervisor.value) return
+  appendUserMessage(answer)
+  void nextTick(() => scrollToLatest({ force: true }))
+  void sendChat(answer)
+}
+
 function stop(): void {
   entry.value.chat.stop()
 }
@@ -861,6 +872,7 @@ onUnmounted(() => {
             :projection="projection"
             :streaming="streaming"
             @copy="copyText"
+            @ask-select="onAskSelect"
           />
           <div v-if="error" class="stream-error">
             <span class="stream-error-text">{{ error }}</span>

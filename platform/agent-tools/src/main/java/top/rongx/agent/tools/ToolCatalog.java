@@ -41,11 +41,12 @@ public class ToolCatalog {
                                    GitIssueQueryTools gitIssueQueryTools,
                                    ApiDocTools apiDocTools,
                                    ToolCatalogTools toolCatalogTools,
+                                   AskUserTools askUserTools,
                                    ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
-                apiDocTools, toolCatalogTools);
+                apiDocTools, toolCatalogTools, askUserTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
@@ -61,7 +62,8 @@ public class ToolCatalog {
                                               EnvQueryTools envQueryTools,
                                               GitIssueQueryTools gitIssueQueryTools,
                                               ApiDocTools apiDocTools,
-                                              ToolCatalogTools toolCatalogTools) {
+                                              ToolCatalogTools toolCatalogTools,
+                                              AskUserTools askUserTools) {
         toolkit.registerTool(projectTools);
         toolkit.registerTool(ciQueryTools);
         toolkit.registerTool(actionQueryTools);
@@ -75,6 +77,8 @@ public class ToolCatalog {
         // API 文档与工具目录：只读规范，不调用任何业务接口
         toolkit.registerTool(apiDocTools);
         toolkit.registerTool(toolCatalogTools);
+        // 选项卡片：只读、无副作用，对话面与调度面都需要（生产只读面也允许提问）
+        toolkit.registerTool(askUserTools);
     }
 
     @Bean
@@ -157,11 +161,12 @@ public class ToolCatalog {
                                      GitIssueQueryTools gitIssueQueryTools,
                                      ApiDocTools apiDocTools,
                                      ToolCatalogTools toolCatalogTools,
+                                     AskUserTools askUserTools,
                                      ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
-                apiDocTools, toolCatalogTools);
+                apiDocTools, toolCatalogTools, askUserTools);
         toolkit.registerTool(supervisorTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;

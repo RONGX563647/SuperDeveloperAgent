@@ -842,6 +842,7 @@ onBeforeUnmount(() => {
         :streaming="streaming"
         @copy="copyMessage"
         @retry="retryLast"
+        @ask-select="submit"
       >
         <template #change-action>
           <button

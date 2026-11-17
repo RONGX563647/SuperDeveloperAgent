@@ -147,5 +147,26 @@ import { renderMarkdown } from '../utils/markdown'
   check('md 防注入', !renderMarkdown('<script>alert(1)</script>').includes('<script>'))
 }
 
+// 11. ask.requested：选项卡片落成 role='ask' 消息（用户点选后原样作为下一条用户消息）
+{
+  let p = emptyAgentProjection()
+  p = reduceAgentEvent(p, ev('text.delta', 1, { text: '我需要确认一下：' }))
+  p = reduceAgentEvent(p, ev('ask.requested', 2, {
+    question: '要发布到哪个环境？',
+    options: [{ label: 'test' }, { label: 'prod', detail: '需要二次密码' }],
+    multiple: false,
+  }))
+  const card = p.messages.at(-1)
+  check('ask 卡片消息', card?.role === 'ask'
+    && card?.ask?.question === '要发布到哪个环境？'
+    && card?.ask?.options.length === 2, JSON.stringify(p.messages.map((m) => m.role)))
+  check('ask 前正文先落盘', p.messages[0].role === 'assistant'
+    && p.messages[0].text === '我需要确认一下：')
+  check('ask 缺省允许自由输入', card?.ask?.allowText === true)
+  // 缺问题或缺选项：不落空卡片
+  let empty = reduceAgentEvent(emptyAgentProjection(), ev('ask.requested', 1, { options: [] }))
+  check('ask 无问题不落卡片', empty.messages.length === 0)
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

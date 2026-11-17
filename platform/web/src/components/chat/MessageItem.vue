@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { CopyDocument } from '@element-plus/icons-vue'
 import type { ChatMessage, ToolActivity } from '../../types'
+import AskUserCard from './AskUserCard.vue'
 import MarkdownView from './MarkdownView.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 
@@ -19,6 +20,8 @@ interface Props {
   streaming?: boolean
   /** 失败行是否允许重试（生成中不可重试）。 */
   canRetry?: boolean
+  /** 选项卡片是否可交互（最后一条消息且当前未在跑）。 */
+  askActive?: boolean
 }
 
 const props = defineProps<Props>()
@@ -26,11 +29,13 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'copy', text: string): void
   (e: 'retry'): void
+  (e: 'ask-select', answer: string): void
 }>()
 
 const isUser = computed(() => props.message.role === 'user')
 const isStep = computed(() => props.message.role === 'step')
 const isError = computed(() => props.message.role === 'error')
+const isAsk = computed(() => props.message.role === 'ask')
 const isAssistant = computed(() => props.message.role === 'assistant')
 
 const toolFailed = computed(() => props.tool?.status === 'FAILED')
@@ -128,6 +133,14 @@ const time = computed(() => {
         重试
       </button>
     </div>
+
+    <!-- 选项卡片（ask_user）：点选后由父视图作为下一条用户消息发回 -->
+    <AskUserCard
+      v-else-if="isAsk && message.ask"
+      :ask="message.ask"
+      :active="askActive"
+      @select="emit('ask-select', $event)"
+    />
 
     <template v-else>
       <!-- 用户消息：右侧软底块 -->

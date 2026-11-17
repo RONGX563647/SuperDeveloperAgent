@@ -11,7 +11,7 @@ summary: 参数校验、dry-run 哈希自证、建运行状态并异步执行
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 流水线触发与异步执行入口 | `BuiltInPipelineEngine#trigger` | `platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java:1055-1139` | agent-executor |
+| 流水线触发与异步执行入口 | `BuiltInPipelineEngine#trigger` | `platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java:1103-1187` | agent-executor |
 <!-- generated:end -->
 
 ## 行为拆解
