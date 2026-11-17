@@ -32,6 +32,7 @@ import org.yaml.snakeyaml.Yaml;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.action.ActionId;
+import top.rongx.agent.domain.action.ActionSource;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSource;
 import top.rongx.agent.domain.action.ActionSpec;
@@ -3102,7 +3103,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             ActionSpec substituted = substitute(original, vars);
             state.maxRunMillis += Math.max(0, substituted.timeout().toMillis()
                     - STAGE_TIMEOUT.toMillis() + 60_000L);
-            ActionRunner runner = selectRunner(stage);
+            ActionRunner runner = selectRunner(state, stage, substituted);
             // monorepo：stage 可在子目录执行（如 backend / frontend），
             // 但产物与镜像仍按仓库根记账，避免各模块配方各写一套路径。
             Path stageDir = (stage.workdir() == null || stage.workdir().isBlank())
@@ -3325,7 +3326,44 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * 选择执行器：host 走宿主；container 且声明了 {@code image} 时，
      * 用该 stage 专属工具链镜像新建一个沙箱（同一套隔离参数，只换镜像）。
      */
-    private ActionRunner selectRunner(PipelineDefinition.StageDef stage) {
+    /** 必须在宿主上执行的动作：它们直接调用宿主 Docker 守护进程。 */
+    static boolean needsHostDocker(ActionId action) {
+        return action == ActionId.IMAGE_PACKAGE;
+    }
+
+    /**
+     * 配方是否可信任到能在宿主执行。
+     *
+     * <p>信任边界看的是**定义来源**而不是配方文件本身：平台侧定义（平台 ci/actions.yml、
+     * 固化脚本）里的配方由平台维护；仓库定义里的 ci/actions.yml / Taskfile / Makefile
+     * 属于仓库内容，给了宿主执行权就等于沙箱被绕过。内置配方始终可信。
+     */
+    static boolean trustedForHost(ActionSpec spec, PipelineDefinitionResolver.Source definitionSource) {
+        if (spec == null) {
+            return false;
+        }
+        ActionSource source = spec.source();
+        if (source == null || source.kind() == ActionSource.Kind.BUILTIN) {
+            return true;
+        }
+        return definitionSource != null && definitionSource != PipelineDefinitionResolver.Source.REPO;
+    }
+
+    private ActionRunner selectRunner(RunState state, PipelineDefinition.StageDef stage, ActionSpec spec) {
+        ActionId action = ActionId.fromWire(stage.action()).orElse(null);
+        if (needsHostDocker(action)) {
+            // 镜像打包必须用宿主 Docker：沙箱镜像（maven/node …）里既没有 docker CLI，
+            // 也没有挂 docker.sock，包进容器只会得到 exit 127（command not found）。
+            if (trustedForHost(spec, state.definitionSource)) {
+                state.log.append('[').append(stage.id())
+                        .append("] 该阶段需要宿主 Docker（构建镜像），在宿主执行\n");
+                return host;
+            }
+            // 仓库自己写的 docker 配方不给宿主执行权：那是绕过沙箱的通道。
+            throw new IllegalStateException("阶段 " + stage.id() + "（" + stage.action()
+                    + "）需要宿主 Docker，但配方来自仓库（" + spec.source().ref()
+                    + "）。请改用平台侧 ci/actions.yml 的配方，或删除仓库里的同名配方");
+        }
         if ("host".equals(stage.runner())) {
             // 仓库里的 ci/pipeline.yml 可以写 runner: host。容器模式下若照做，
             // 等于给仓库内容一条跳出沙箱的通道，所以这里只在显式 process 模式生效。

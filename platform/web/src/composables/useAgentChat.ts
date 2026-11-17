@@ -19,6 +19,9 @@ import { addSessionCost, emptySessionCost } from '../utils/deepseekPricing'
 
 export type ConnectionState = 'IDLE' | 'CONNECTING' | 'OPEN' | 'RECONNECTING' | 'CLOSED'
 
+/** 运行终态：收到即视为本轮结束，不再等服务端关连接。 */
+const terminalEventTypes = new Set(['run.completed', 'run.failed', 'run.cancelled'])
+
 interface UseAgentChatOptions {
   /** 构造 ChatRequest 请求体（projectId/env/sessionId 由调用方持有）。 */
   buildRequest: (message: string) => Record<string, unknown>
@@ -135,6 +138,22 @@ export function useAgentChat(options: UseAgentChatOptions) {
     connection.value = 'CLOSED'
   }
 
+  /**
+   * 服务端已下发运行终态：立刻收尾并断开读流。
+   *
+   * <p>不能只等读流自然结束：调度 Agent 的长任务/心跳会让 SSE 连接一直挂着，
+   * 前端就永远停在「停止」态，用户得手动点一次停止才能发下一条。
+   */
+  function finishStream(stopped: boolean): void {
+    if (!streaming.value && !controller) return
+    // 先让在途读流过期，它的 catch/finally 不会覆盖这里已经收尾的状态
+    runToken += 1
+    controller?.abort()
+    controller = null
+    finalizeStreamingTurn(stopped)
+    clearRuntime()
+  }
+
   function resetProjection(): void {
     runToken += 1
     userStopped = false
@@ -214,6 +233,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
             error.value = typeof event.payload?.message === 'string'
               ? event.payload.message
               : '对话流异常'
+          }
+          // 终态事件一到就收尾（reducer 已把流式正文落盘），不再等服务端关闭连接
+          if (terminalEventTypes.has(event.type)) {
+            finishStream(event.type === 'run.cancelled')
           }
         },
         controller.signal,

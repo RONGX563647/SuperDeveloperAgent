@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.web;
 
 import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.AgentEventType;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -157,6 +158,13 @@ public class WorkspaceSuperController {
                         .id(String.valueOf(seq.incrementAndGet()))
                         .name("agent")
                         .data(eventMapper.toDto(event, modelName), MediaType.APPLICATION_JSON));
+            }
+            // AGENT_END 是运行终态：立刻关流并释放配额。
+            // 不能只依赖上游 Flux 的 onComplete —— 调度 Agent 的工具循环可能长时间不结束，
+            // 心跳会让 SSE 连接一直挂着，前端只能手动点停止才能发下一条。
+            if (event.getType() == AgentEventType.AGENT_END) {
+                emitter.complete();
+                cancel.run();
             }
         } catch (IOException clientGone) {
             cancel.run();
