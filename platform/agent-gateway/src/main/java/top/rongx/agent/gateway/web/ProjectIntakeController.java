@@ -380,11 +380,12 @@ public class ProjectIntakeController {
         Map<String, Object> payload = body == null ? Map.of() : body;
         String branch = str(payload, "branch");
         if (branch == null || branch.isBlank()) {
-            throw new IllegalArgumentException("branch 不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "branch 不能为空");
         }
         RepoContext ctx = repoContext(id);
         if (!ctx.initialized()) {
-            throw new IllegalArgumentException("该项目尚未完成 git 接入，无法创建分支。");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT,
+                    "该项目尚未完成 git 接入，无法创建分支。");
         }
         String from = str(payload, "from");
         boolean created = git.createBranchAt(ctx.dir(), branch,

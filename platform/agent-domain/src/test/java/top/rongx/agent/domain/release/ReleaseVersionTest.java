@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import top.rongx.agent.domain.error.BuildException;
 
 class ReleaseVersionTest {
 
@@ -16,10 +17,10 @@ class ReleaseVersionTest {
     void parsesStrictSemver() {
         assertEquals(new ReleaseVersion(0, 1, 2), ReleaseVersion.parse("0.1.2"));
         assertEquals(new ReleaseVersion(0, 1, 2), ReleaseVersion.parse(" 0.1.2 "));
-        assertThrows(IllegalArgumentException.class, () -> ReleaseVersion.parse("v0.1.2"));
-        assertThrows(IllegalArgumentException.class, () -> ReleaseVersion.parse("0.1"));
-        assertThrows(IllegalArgumentException.class, () -> ReleaseVersion.parse("0.1.2-snapshot"));
-        assertThrows(IllegalArgumentException.class, () -> ReleaseVersion.parse("1.0.0.0"));
+        assertThrows(BuildException.class, () -> ReleaseVersion.parse("v0.1.2"));
+        assertThrows(BuildException.class, () -> ReleaseVersion.parse("0.1"));
+        assertThrows(BuildException.class, () -> ReleaseVersion.parse("0.1.2-snapshot"));
+        assertThrows(BuildException.class, () -> ReleaseVersion.parse("1.0.0.0"));
     }
 
     @Test

@@ -4,6 +4,8 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import top.rongx.agent.domain.error.BuildException;
+import top.rongx.agent.domain.error.ErrorCode;
 
 /**
  * 发布版本号：三段式 {@code MAJOR.MINOR.PATCH}，不带 {@code v} 前缀。
@@ -28,7 +30,7 @@ public record ReleaseVersion(int major, int minor, int patch)
 
     public ReleaseVersion {
         if (major < 0 || minor < 0 || patch < 0) {
-            throw new IllegalArgumentException("版本号不能为负数");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "版本号不能为负数");
         }
     }
 
@@ -42,7 +44,7 @@ public record ReleaseVersion(int major, int minor, int patch)
         String value = raw == null ? "" : raw.trim();
         Matcher matcher = RELEASE.matcher(value);
         if (!matcher.matches()) {
-            throw new IllegalArgumentException(
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT,
                     "版本号必须是 MAJOR.MINOR.PATCH（例如 0.1.0，不带 v 前缀）：" + raw);
         }
         return new ReleaseVersion(Integer.parseInt(matcher.group(1)),
@@ -53,7 +55,7 @@ public record ReleaseVersion(int major, int minor, int patch)
     public static Optional<ReleaseVersion> tryParse(String raw) {
         try {
             return Optional.of(parse(raw));
-        } catch (IllegalArgumentException e) {
+        } catch (BuildException e) {
             return Optional.empty();
         }
     }
