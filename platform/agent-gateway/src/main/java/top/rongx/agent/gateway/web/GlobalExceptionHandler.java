@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.web;
 
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -17,6 +18,7 @@ import cn.dev33.satoken.exception.DisableServiceException;
 import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.exception.NotPermissionException;
 import cn.dev33.satoken.exception.NotRoleException;
+import top.rongx.agent.domain.error.PlatformException;
 import top.rongx.agent.domain.policy.ConfirmationRequiredException;
 
 /** 统一错误响应：含 traceId，不含堆栈与内部细节（规约 §3）。 */
@@ -43,6 +45,13 @@ public class GlobalExceptionHandler {
         return error(request, HttpStatus.BAD_REQUEST, e.getMessage());
     }
 
+    /** 业务异常 → 按错误码分组映射 HTTP，响应体带业务错误码。 */
+    @ExceptionHandler(PlatformException.class)
+    public ResponseEntity<?> platform(PlatformException e, HttpServletRequest request) {
+        return error(request, ErrorStatusMapper.statusOf(e.errorCode()), e.getMessage(),
+                UUID.randomUUID().toString(), e.code());
+    }
+
     /** 确认令牌相关失败 → 409（状态冲突，需要重新确认）。 */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<?> conflict(IllegalStateException e, HttpServletRequest request) {
@@ -62,7 +71,7 @@ public class GlobalExceptionHandler {
         String traceId = UUID.randomUUID().toString();
         log.error("Agent 执行失败 traceId={} reason={}", traceId, e.getMessage(), e);
         return error(request, HttpStatus.INTERNAL_SERVER_ERROR,
-                "Agent 执行失败，请稍后重试并提供 traceId", traceId);
+                "Agent 执行失败，请稍后重试并提供 traceId", traceId, e.code());
     }
 
     /** 明确带 HTTP 状态的异常（如 webhook 401）→ 按原状态返回，不落到 500。 */
@@ -96,10 +105,15 @@ public class GlobalExceptionHandler {
      */
     private ResponseEntity<?> error(HttpServletRequest request, HttpStatus status,
             String message, String traceId) {
+        return error(request, status, message, traceId, null);
+    }
+
+    private ResponseEntity<?> error(HttpServletRequest request, HttpStatus status,
+            String message, String traceId, String errorCode) {
         if (acceptsOnlyEventStream(request)) {
             return ResponseEntity.status(status).build();
         }
-        return body(status, message, traceId);
+        return body(status, message, traceId, errorCode);
     }
 
     private boolean acceptsOnlyEventStream(HttpServletRequest request) {
@@ -120,9 +134,18 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message, String traceId) {
-        return ResponseEntity.status(status).body(Map.of(
-                "code", status.value(),
-                "message", message == null ? "未知错误" : message,
-                "traceId", traceId));
+        return body(status, message, traceId, null);
+    }
+
+    private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message,
+            String traceId, String errorCode) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("code", status.value());
+        payload.put("message", message == null ? "未知错误" : message);
+        payload.put("traceId", traceId);
+        if (errorCode != null) {
+            payload.put("errorCode", errorCode);
+        }
+        return ResponseEntity.status(status).body(payload);
     }
 }

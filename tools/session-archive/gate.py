@@ -261,6 +261,7 @@ def is_exempt(path: str) -> bool:
         path.startswith("docs/")
         or path.startswith("tools/session-archive/")
         or path.startswith(".githooks/")
+        or path.startswith(".trae-html-share-packages/")  # 分享产物，非源码
         or path in {".gitignore", ".pre-commit-config.yaml", "agent.md"}
         or path.endswith(".md")
     )

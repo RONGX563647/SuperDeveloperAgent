@@ -21,6 +21,7 @@ import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.ProjectEnvFiles;
 import top.rongx.agent.domain.env.StackAdapter;
+import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 
@@ -134,21 +135,24 @@ public class EnvBindingService implements EnvBindingPort {
     public EnvBinding requireForRun(String bindingId, String projectId, String env) {
         EnvBinding binding = requireBinding(bindingId);
         if (!binding.projectId().equals(projectId) || !binding.env().equals(env)) {
-            throw new IllegalArgumentException(ErrorCode.ENV_BINDING_INVALID.code() + " 环境绑定与本次运行不匹配（binding="
-                    + binding.projectId() + "/" + binding.env() + "，run=" + projectId + "/" + env + "）");
+            throw new EnvironmentException(ErrorCode.ENV_BINDING_INVALID,
+                    "环境绑定与本次运行不匹配（binding=" + binding.projectId() + "/" + binding.env()
+                            + "，run=" + projectId + "/" + env + "）");
         }
         if (!binding.confirmed()) {
-            throw new IllegalArgumentException(ErrorCode.ENV_BINDING_INVALID.code() + " 环境绑定尚未人工确认：请在对话的环境绑定确认卡中确认草案");
+            throw new EnvironmentException(ErrorCode.ENV_BINDING_INVALID,
+                    "环境绑定尚未人工确认：请在对话的环境绑定确认卡中确认草案");
         }
         if (binding.expired()) {
-            throw new IllegalArgumentException(ErrorCode.ENV_BINDING_INVALID.code() + " 环境绑定已过期：请重新生成并确认");
+            throw new EnvironmentException(ErrorCode.ENV_BINDING_INVALID,
+                    "环境绑定已过期：请重新生成并确认");
         }
         String expected = bindingHash(binding.mappingJson());
         if (expected != null) {
             String actual = valuesDigest(envStore.effective(projectId, env));
             if (!expected.equals(actual)) {
-                throw new IllegalArgumentException(
-                        ErrorCode.ENV_BINDING_INVALID.code() + " 环境变量在确认后已变更：请重新生成并确认绑定");
+                throw new EnvironmentException(ErrorCode.ENV_BINDING_INVALID,
+                        "环境变量在确认后已变更：请重新生成并确认绑定");
             }
         }
         return binding;

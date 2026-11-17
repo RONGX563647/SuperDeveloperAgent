@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.artifact.ArtifactRef;
+import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
@@ -200,13 +201,14 @@ public class PipelineController {
         if (!imageOnly) {
             dryRun = engine.dryRun(projectId, pipelineId, normalizedEnv, sha);
             if (!dryRun.ok()) {
-                throw new IllegalArgumentException(ErrorCode.DRY_RUN_FAILED.code() + " dry-run 未通过："
-                        + String.join("；", dryRun.blockers()));
+                throw new EnvironmentException(ErrorCode.DRY_RUN_FAILED,
+                        "dry-run 未通过：" + String.join("；", dryRun.blockers()));
             }
             String requestedHash = params.get("dryRunHash");
             if (requestedHash != null && !requestedHash.isBlank()
                     && !requestedHash.equals(dryRun.reportHash())) {
-                throw new IllegalArgumentException(ErrorCode.DRY_RUN_STALE.code() + " dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+                throw new EnvironmentException(ErrorCode.DRY_RUN_STALE,
+                        "dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
             }
         }
         // 服务器（prod）操作：测试证据 + 一次性人工确认令牌，两个入口（这里 / deploy/replay）共用同一校验

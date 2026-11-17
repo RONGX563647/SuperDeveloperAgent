@@ -5,7 +5,10 @@ package top.rongx.agent.domain.error;
  *
  * <p>所有业务代码必须通过本枚举获取错误码（{@link #code()}），禁止再写字面量。
  * 码段约定：1xx 构建/执行，2xx 配方与参数，3xx 运行时，4xx 产物，
- * 5xx 部署，6xx 晋升与门禁，7xx 环境与策略。
+ * 5xx 部署，6xx 晋升与门禁，7xx 环境与策略，8xx 项目接入。
+ *
+ * <p>抛异常时必须使用 {@link PlatformException} 对应分组的业务异常类，
+ * 禁止再把码值拼进通用异常。
  */
 public enum ErrorCode {
 
@@ -29,6 +32,8 @@ public enum ErrorCode {
     TIMEOUT("E-302"),
     /** 执行被取消或中断。 */
     CANCELLED("E-303"),
+    /** Agent 执行失败（模型超时、调用异常、未按 schema 返回）。 */
+    AGENT_EXECUTION_FAILED("E-304"),
 
     /**
      * 声明的产物未生成；历史上本机健康检查未通过也复用该码。
@@ -82,7 +87,10 @@ public enum ErrorCode {
     /** dry-run 未通过，禁止 apply。 */
     DRY_RUN_FAILED("E-708"),
     /** 破坏性动作触发频次上限。 */
-    RATE_LIMITED("E-709");
+    RATE_LIMITED("E-709"),
+
+    /** 项目接入失败（目录、仓库或 git 操作不可用）。 */
+    INTAKE_FAILED("E-801");
 
     private final String code;
 
@@ -93,5 +101,10 @@ public enum ErrorCode {
     /** 对外错误码字符串，例如 {@code E-707}。 */
     public String code() {
         return code;
+    }
+
+    /** 错误码所属业务分组，由码段决定。 */
+    public ErrorGroup group() {
+        return ErrorGroup.of(code.charAt(2) - '0');
     }
 }

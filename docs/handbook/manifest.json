@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-17T12:10:09+08:00",
-  "sourceCommit": "4899aeff643e4d987afa16d2c67547f7b8f6214e",
+  "generatedAt": "2026-11-17T17:24:07+08:00",
+  "sourceCommit": "0e8b9a86805defb89691db4e3602ecb42f5da5a7",
   "docs": [
     {
       "level": "L1",
@@ -96,8 +96,8 @@
       "symbol": "BuiltInPipelineEngine#trigger",
       "source": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
       "module": "agent-executor",
-      "start": 1103,
-      "end": 1187
+      "start": 1106,
+      "end": 1190
     },
     {
       "id": "gateway-chat-controller/chat-stream",
@@ -116,8 +116,8 @@
       "symbol": "DeployGate#requireIfNeeded",
       "source": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java",
       "module": "agent-gateway",
-      "start": 45,
-      "end": 58
+      "start": 46,
+      "end": 59
     },
     {
       "id": "governance-env-policy/require-not-denied",
@@ -136,8 +136,8 @@
       "symbol": "GitWorktreeManager#addWorktree",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
       "module": "agent-infra",
-      "start": 220,
-      "end": 234
+      "start": 222,
+      "end": 236
     },
     {
       "id": "infra-project-intake/submit",
