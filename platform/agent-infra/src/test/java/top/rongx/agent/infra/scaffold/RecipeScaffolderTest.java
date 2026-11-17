@@ -53,6 +53,20 @@ class RecipeScaffolderTest {
     }
 
     @Test
+    @DisplayName("镜像打包用 BuildKit：image_package 配方是 docker buildx build --load")
+    void imageRecipeUsesBuildkit(@TempDir Path repo) throws Exception {
+        Files.writeString(repo.resolve("pom.xml"), "<project/>");
+        Files.writeString(repo.resolve("Dockerfile"), "FROM eclipse-temurin:21-jre");
+
+        ScaffoldPlan plan = scaffolder.plan("RY", repo, DeployTarget.DOCKER);
+        String actions = content(plan, "ci/actions.yml");
+
+        assertTrue(actions.contains("\"buildx\""), actions);
+        assertTrue(actions.contains("\"--load\""), actions);
+        assertFalse(actions.contains("\"docker\", \"build\", \"-f\""), actions);
+    }
+
+    @Test
     @DisplayName("monorepo（backend + frontend）→ 两个 stage 带 workdir，包管理器按锁文件识别")
     void monorepo(@TempDir Path repo) throws Exception {
         Files.createDirectories(repo.resolve("backend"));
