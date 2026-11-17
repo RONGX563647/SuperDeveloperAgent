@@ -5,6 +5,7 @@ import { ArrowDown, ArrowRight, Connection, MagicStick, Refresh, Search, Setting
 import { ElMessage } from 'element-plus'
 import { saveMcpServer, setSkillEnabled } from '../../api/settings'
 import type { CapabilityOption } from '../../composables/useChatCapabilities'
+import { orderCapabilities } from './capabilityOrder'
 
 /**
  * 会话能力页（顶部 Tab「能力」）。
@@ -64,22 +65,15 @@ function toggleAll(kind: 'skill' | 'mcp', on: boolean): void {
 
 function visible(list: CapabilityOption[], kind: 'skill' | 'mcp'): CapabilityOption[] {
   const q = keyword.value.trim().toLowerCase()
-  return list
-    .filter((option) => {
-      if (filter.value === 'on' && !isOn(kind, option.key)) return false
-      if (filter.value === 'off' && isOn(kind, option.key)) return false
-      if (!q) return true
-      return `${option.label} ${option.description} ${option.key}`
-        .toLowerCase()
-        .includes(q)
-    })
-    .sort((a, b) => {
-      if (sortBy.value === 'name') return a.label.localeCompare(b.label, 'zh-CN')
-      // 默认排序：已启用的置顶，其余保持后端顺序，找「这轮开了什么」不用滚动
-      const onA = isOn(kind, a.key) ? 0 : 1
-      const onB = isOn(kind, b.key) ? 0 : 1
-      return onA - onB
-    })
+  const filtered = list.filter((option) => {
+    if (filter.value === 'on' && !isOn(kind, option.key)) return false
+    if (filter.value === 'off' && isOn(kind, option.key)) return false
+    if (!q) return true
+    return `${option.label} ${option.description} ${option.key}`
+      .toLowerCase()
+      .includes(q)
+  })
+  return orderCapabilities(filtered, (key) => isOn(kind, key), sortBy.value)
 }
 
 const filteredSkills = computed(() => visible(props.skillOptions, 'skill'))
