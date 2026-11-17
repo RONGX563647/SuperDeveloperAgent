@@ -57,6 +57,9 @@ public class DockerSandbox {
     /** 自动拉取工具链镜像的默认预算（可由 agent.sandbox.pull-timeout-seconds 覆盖）。 */
     private static final long DEFAULT_IMAGE_PULL_TIMEOUT_MS = 180_000L;
 
+    /** 缓存卷初始化的可信最小镜像：只做 mkdir/chown/touch，绝不用构建镜像（可能是不可信代码）。 */
+    private static final String DEFAULT_INIT_IMAGE = "busybox:1.36";
+
     /** 外部命令执行器：抽出以便超时逻辑复用、也便于在不依赖 Docker 的情况下单测。 */
     @FunctionalInterface
     interface CommandExecutor {
@@ -84,6 +87,10 @@ public class DockerSandbox {
     private long imagePullTimeoutMs = DEFAULT_IMAGE_PULL_TIMEOUT_MS;
     /** npm registry 镜像：默认直连 npmjs 在国内沙箱只有几 KB/s，install 会吃光构建预算。 */
     private String npmRegistry = "";
+    /** docker 运行时（如 gVisor 的 runsc）；空 = 默认 runc。 */
+    private String runtime = "";
+    /** 缓存卷初始化使用的可信镜像（只做 mkdir/chown/touch）。 */
+    private String initImage = DEFAULT_INIT_IMAGE;
 
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user) {
@@ -144,6 +151,11 @@ public class DockerSandbox {
         cmd.add(dockerBinary);
         cmd.add("run");
         cmd.add("--rm");
+        // 1a. 可选运行时（gVisor runsc 等）：空则用默认 runc
+        if (runtime != null && !runtime.isBlank()) {
+            cmd.add("--runtime");
+            cmd.add(runtime);
+        }
         // 1b. 固定容器名：超时/取消时据此 docker rm -f，防止 CLI 被杀后容器成孤儿
         String containerName = ACTIVE_CONTAINER.get();
         if (containerName != null) {
@@ -259,6 +271,18 @@ public class DockerSandbox {
     /** 设置 npm registry 镜像；空值表示用容器默认源。 */
     public DockerSandbox setNpmRegistry(String registry) {
         this.npmRegistry = registry == null ? "" : registry.trim();
+        return this;
+    }
+
+    /** 设置 docker 运行时（gVisor runsc 等）；空值回落到默认 runc。 */
+    public DockerSandbox setRuntime(String runtime) {
+        this.runtime = runtime == null ? "" : runtime.trim();
+        return this;
+    }
+
+    /** 设置缓存卷初始化的可信镜像；空值回落到默认最小镜像。 */
+    public DockerSandbox setInitImage(String initImage) {
+        this.initImage = initImage == null || initImage.isBlank() ? DEFAULT_INIT_IMAGE : initImage.trim();
         return this;
     }
 
@@ -381,12 +405,29 @@ public class DockerSandbox {
         cmd.add(dockerBinary);
         cmd.add("run");
         cmd.add("--rm");
+        if (runtime != null && !runtime.isBlank()) {
+            cmd.add("--runtime");
+            cmd.add(runtime);
+        }
         cmd.add("--entrypoint=");
+        // 初始化容器也一样「不可提权 + 无外联 + 资源受限」：root 只用于 chown 卷属主，
+        // 不能带着默认 capabilities / 网络去跑一个（可能是不可信的）构建镜像。
+        cmd.add("--network");
+        cmd.add("none");
+        cmd.add("--cap-drop");
+        cmd.add("ALL");
+        cmd.add("--security-opt");
+        cmd.add("no-new-privileges");
+        cmd.add("--pids-limit");
+        cmd.add("64");
+        cmd.add("--memory");
+        cmd.add(memory);
         cmd.add("--user");
         cmd.add("0:0");
         cmd.add("-v");
         cmd.add(volume + ":/cache");
-        cmd.add(image);
+        // 用可信最小镜像初始化，绝不用构建镜像（构建镜像可能被投毒，root 下直接接管宿主 Docker）
+        cmd.add(initImage);
         cmd.addAll(List.of(argv));
         return cmd;
     }
@@ -441,7 +482,7 @@ public class DockerSandbox {
         DockerSandbox copy = new DockerSandbox(dockerBinary, newImage, network, memory, cpus,
                 pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
         return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs)
-                .setNpmRegistry(npmRegistry);
+                .setNpmRegistry(npmRegistry).setRuntime(runtime).setInitImage(initImage);
     }
 
     public String describe() {

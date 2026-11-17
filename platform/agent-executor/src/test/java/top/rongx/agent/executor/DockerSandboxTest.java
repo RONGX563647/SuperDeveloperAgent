@@ -100,4 +100,16 @@ class DockerSandboxTest {
         List<String> cmd = locked.wrap(Path.of("E:/w"), List.of("x"));
         assertEquals("none", cmd.get(cmd.indexOf("--network") + 1));
     }
+
+    @Test
+    @DisplayName("配置 gVisor 运行时后，docker run 带上 --runtime，默认回落 runc")
+    void runtimeFlagOptIn() {
+        List<String> plain = sandbox.wrap(Path.of("E:/w"), List.of("x"));
+        assertTrue(plain.stream().noneMatch("--runtime"::equals), "默认不加 --runtime，走 runc：" + plain);
+
+        DockerSandbox gvisor = new DockerSandbox(
+                "docker", "img", "bridge", "2g", "2", 512, "1000:1000").setRuntime("runsc");
+        List<String> cmd = gvisor.wrap(Path.of("E:/w"), List.of("x"));
+        assertEquals("runsc", cmd.get(cmd.indexOf("--runtime") + 1), cmd.toString());
+    }
 }

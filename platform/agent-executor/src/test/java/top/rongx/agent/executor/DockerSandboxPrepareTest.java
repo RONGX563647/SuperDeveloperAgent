@@ -236,4 +236,25 @@ class DockerSandboxPrepareTest {
         assertEquals(List.of("docker", "rm", "-f", "agent-act-abc"), recorder.commands.get(0));
         assertEquals(30_000L, recorder.timeouts.get(0));
     }
+
+    @Test
+    @DisplayName("缓存卷初始化容器同样受限，且用可信最小镜像而非构建镜像")
+    void rootInitContainerIsHardened() {
+        Recorder recorder = new Recorder(freshVolume());
+        DockerSandbox sandbox = sandbox(recorder);
+
+        sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, null);
+
+        // 找到真正的初始化命令（mkdir），它属于 root 容器
+        List<String> init = recorder.commands.stream()
+                .filter(c -> c.contains("mkdir")).findFirst().orElseThrow();
+        String joined = String.join(" ", init);
+        assertTrue(joined.contains("--network none"), joined);
+        assertTrue(joined.contains("--cap-drop ALL"), joined);
+        assertTrue(joined.contains("no-new-privileges"), joined);
+        assertTrue(joined.contains("--pids-limit 64"), joined);
+        // 初始化绝不能跑构建镜像（可能是不可信代码），而是固定可信最小镜像
+        assertTrue(joined.contains("busybox:1.36"), joined);
+        assertTrue(!joined.contains("maven"), joined);
+    }
 }
