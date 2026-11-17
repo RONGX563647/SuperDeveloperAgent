@@ -1,0 +1,98 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_2011_intake-dockerfile-parity",
+  "category": "bug",
+  "title": "修复项目健康检查与流水线预检的 Dockerfile 判定冲突",
+  "createdAt": "2026-11-17T20:11:40+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "按方案A修复：自检与预检统一镜像阶段判定、支持自动生成 Dockerfile",
+    "toolCallCount": 0
+  },
+  "problem": "项目接入自检说可发布，但流水线预检（ci_dry_run）因 image 阶段缺 Dockerfile 报 E-501；两条链路判定口径不一致，且 targetIsDocker 解析不了 inline flow map。",
+  "solution": "自检改为与预检同口径：有 image_package/type=image 阶段且缺 Dockerfile 即阻塞；补充 inline map 的 docker 目标识别；Dockerfile 探测覆盖根/backend/frontend/deploy/docker；阻塞项提示调用 ensure_dockerfile；新增本仓库 Dockerfile 与 .dockerignore（方案 A）。",
+  "commits": [
+    {
+      "sha": "c80a2f4931d8b8ed85cd766fa059d071305e872c",
+      "subject": "fix(intake): 自检与流水线预检统一镜像阶段判定",
+      "category": "bug",
+      "files": [
+        {
+          "path": ".dockerignore",
+          "status": "A",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "0e8eff755990e81da3342dfd72f36336d952a98c"
+        },
+        {
+          "path": "Dockerfile",
+          "status": "A",
+          "additions": 12,
+          "deletions": 0,
+          "blobHash": "686d5329e6d15603e2145f7200714db84a97aedd"
+        },
+        {
+          "path": "docs/handbook/l3/infra-project-intake.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "afed23e92c6d6a28ef027eeba330b7fe5f40c74a"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "c1107e0c0ea3e2fa34204e5cd7713e17406c2720"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java",
+          "status": "M",
+          "additions": 52,
+          "deletions": 14,
+          "blobHash": "bfdd5c8b8fafe85bc3fc3d4908c4c7e5e65fe3ee"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/RecipeCheckTest.java",
+          "status": "M",
+          "additions": 82,
+          "deletions": 0,
+          "blobHash": "d5f031814c1e554340695025b17276cad23bb6f2"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/RecipeCheckTest.java",
+        "status": "M",
+        "additions": 82,
+        "deletions": 0,
+        "blobHash": "d5f031814c1e554340695025b17276cad23bb6f2"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -pl spec-checks -am test -Dtest=!SqliteGitIssueStoreCodeTest -Dsurefire.failIfNoSpecifiedTests=false",
+    "result": "PASSED",
+    "evidence": "Tests run: 580, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-infra"
+    ],
+    "verification": "RecipeCheckTest 8 个用例通过（新增 C6-C8）；spec-checks 580 例通过（临时排除并行会话未完成的 SqliteGitIssueStoreCodeTest）。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_2011_intake-dockerfile-parity"
+    ]
+  },
+  "chain": {
+    "prev": "b8927049b923b8eb91e81f8fc26891167975df4022a7388b65fe019257d3ff61",
+    "self": "4783a45abe91bfa1088f7495fe1d468af7f67cc621cd38c3fa3b4a210df6232f"
+  }
+}
