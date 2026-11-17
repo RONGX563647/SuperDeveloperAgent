@@ -32,6 +32,16 @@ class AgentDbPropertiesTest {
     }
 
     @Test
+    @DisplayName("显式 SQLite URL 优先于 sqlite-file 配置")
+    void explicitSqliteUrlWins() {
+        AgentDbProperties props = new AgentDbProperties(
+                "jdbc:sqlite:/tmp/custom.db", "", "", "/tmp/ignored.db", 4, false);
+
+        assertEquals(DbBackend.SQLITE, props.backend());
+        assertEquals("jdbc:sqlite:/tmp/custom.db", props.jdbcUrl());
+    }
+
+    @Test
     @DisplayName("不支持的 JDBC URL 必须显式失败，不能静默回落")
     void rejectsUnknownJdbcUrl() {
         assertThrows(EnvironmentException.class,
