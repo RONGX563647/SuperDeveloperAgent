@@ -1,0 +1,99 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_1716_workspace-child-transcript",
+  "category": "bug",
+  "title": "工作区子会话消息持久化与派发去重修复",
+  "createdAt": "2026-11-17T17:16:34+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "工作区子会话消息持久化与派发去重修复",
+    "toolCallCount": 0
+  },
+  "problem": "工作区子会话（调度 Agent 派发的会话）运行结束后没有消息记录：WorkspaceRunExecutor 只累积 run.result，时间线仅由浏览器侧 saveConversationTranscript 写入，子会话没有前端页面所以永远空白；同时 ConversationManager.send 用 goalKey 跨会话去重，不同会话的相同目标会复用旧 runId，导致派发的任务被静默吞掉；调度会话时间线只靠防抖写入，页面隐藏或关闭时最后一段输出丢失。",
+  "solution": "WorkspaceRunExecutor.finish 在运行终态时读取已有时间线并追加本轮 user/assistant 消息（结构同前端 messages+tools，保留最近 200 条，写入失败只记日志）；send 的去重改为按会话隔离，同会话相同目标返回明确 err 文案，不同会话不再互相复用运行；workspaceChat 增加 pagehide/visibilitychange 立即落盘（本地+服务端 keepalive），并把 projection watcher 挂到独立 effectScope，避免离开工作区页面后不再落盘。",
+  "commits": [
+    {
+      "sha": "eea143c2b23c8408b81377a386ba4fe491d1473c",
+      "subject": "fix(workspace): 子会话运行结束自动落时间线，派发去重按会话隔离",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-runtime/pom.xml",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "3f988d07c28f81f1ef68a461aa364a5ee8e6f600"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationManager.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 8,
+          "blobHash": "d7891951b4ad41c6bf9e85b7084800263194f5bf"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceRunExecutor.java",
+          "status": "M",
+          "additions": 76,
+          "deletions": 0,
+          "blobHash": "100a91dfa11bbf33eba35802f32ebe02d714b155"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+          "status": "M",
+          "additions": 51,
+          "deletions": 5,
+          "blobHash": "913881e35996b787b6ecf6700d7b6a76038a4f21"
+        },
+        {
+          "path": "platform/web/src/api/workspace.ts",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "5a9ba74b10779401bd57a1229409c862e58a2829"
+        },
+        {
+          "path": "platform/web/src/state/workspaceChat.ts",
+          "status": "M",
+          "additions": 49,
+          "deletions": 11,
+          "blobHash": "24a20bff60174244e50a55e5f1d66e1aa728d680"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+        "status": "M",
+        "additions": 51,
+        "deletions": 5,
+        "blobHash": "913881e35996b787b6ecf6700d7b6a76038a4f21"
+      }
+    ],
+    "casesAdded": 2,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 548, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-runtime",
+      "web"
+    ],
+    "verification": "mvn -B -pl agent-runtime -am test -Dtest=ConversationManagerTest：8 个用例全绿（新增 runWritesTranscript、runAppendsTranscript，重写 duplicateGoalAndCancel 验证跨会话各自派发）；platform/web npm run typecheck 通过；pre-commit 的 spec-checks 全量测试通过。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1716_workspace-child-transcript"
+    ]
+  },
+  "chain": {
+    "prev": "58048d70f6955b3bc9f22ed7ce08af56f436c6442f7a7cb1717126f3425d702d",
+    "self": "297868a9de989a93bb3e73c6b68d8548a035a79f5c27c0bb69b5281273eac905"
+  }
+}
