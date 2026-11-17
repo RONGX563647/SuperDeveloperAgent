@@ -1,9 +1,15 @@
 package top.rongx.agent.runtime.workspace;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import jakarta.annotation.PreDestroy;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
@@ -25,6 +31,7 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.run.RunKind;
@@ -47,6 +54,9 @@ public class WorkspaceRunExecutor {
 
     private static final int MAX_QUEUE = 100;
     private static final int MAX_RESULT_CHARS = 20_000;
+    /** 与前端保持一致：单个会话时间线最多保留 200 条消息。 */
+    private static final int MAX_TRANSCRIPT_MESSAGES = 200;
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private record Results(String result, String error) {
     }
@@ -63,6 +73,7 @@ public class WorkspaceRunExecutor {
     private final ObjectProvider<ChatService> chatService;
     private final ConversationRunRepository runs;
     private final ConversationRepository conversations;
+    private final ConversationTranscriptRepository transcripts;
     private final WorkspaceEventBus events;
     private final RunLedgerRepository ledger;
     private final int maxConcurrent;
@@ -73,12 +84,14 @@ public class WorkspaceRunExecutor {
     public WorkspaceRunExecutor(ObjectProvider<ChatService> chatService,
                                 ConversationRunRepository runs,
                                 ConversationRepository conversations,
+                                ConversationTranscriptRepository transcripts,
                                 WorkspaceEventBus events,
                                 RunLedgerRepository ledger,
                                 @Value("${agent.workspace.supervisor.max-concurrent:3}") int maxConcurrent) {
         this.chatService = chatService;
         this.runs = runs;
         this.conversations = conversations;
+        this.transcripts = transcripts;
         this.events = events;
         this.ledger = ledger;
         this.maxConcurrent = Math.max(1, Math.min(maxConcurrent, 10));
@@ -234,6 +247,7 @@ public class WorkspaceRunExecutor {
                     updated.conversationId(), updated.id(), updated.ownerUserId(),
                     "run.status", status.name(), updated.result(), now));
             track(updated, ledgerState(status), summaryOf(updated), updated.error());
+            saveTranscript(updated);
             handles.remove(updated.id());
             handle.streamDone.countDown();
             handle.done.countDown();
@@ -242,6 +256,68 @@ public class WorkspaceRunExecutor {
                         updated.id(), updated.conversationId(), updated.error());
             }
         }
+    }
+
+    /**
+     * 运行结束后把这一轮的提问与产出追加进会话时间线。
+     *
+     * <p>子会话由调度 Agent 异步派发，前端没有打开对应页面，时间线不会由浏览器写入；
+     * 不在这里补一次，用户点开会话只能看到空白记录。写入失败只记日志，不影响运行终态。
+     */
+    private void saveTranscript(ConversationRun run) {
+        try {
+            ObjectNode root = existingTranscript(run.conversationId());
+            ArrayNode messages = root.withArray("messages");
+            messages.add(messageNode(run.id() + "-user", "user", run.goal(), run.createdAt()));
+            String reply = run.result();
+            if (!run.error().isBlank()) {
+                reply = reply.isBlank() ? "运行失败：" + run.error()
+                        : reply + "\n\n运行失败：" + run.error();
+            }
+            if (!reply.isBlank()) {
+                messages.add(messageNode(run.id() + "-assistant", "assistant", reply,
+                        System.currentTimeMillis()));
+            }
+            while (messages.size() > MAX_TRANSCRIPT_MESSAGES) {
+                messages.remove(0);
+            }
+            transcripts.saveTranscript(run.conversationId(), JSON.writeValueAsString(root));
+        } catch (RuntimeException | JsonProcessingException e) {
+            log.warn("会话时间线写入失败 conversation={} run={}：{}",
+                    run.conversationId(), run.id(), e.getMessage());
+        }
+    }
+
+    /** 读取已保存的时间线；为空或损坏时按空模板重建，避免整轮记录丢失。 */
+    private ObjectNode existingTranscript(String conversationId) {
+        Optional<String> stored = transcripts.findTranscript(conversationId);
+        if (stored.isPresent()) {
+            try {
+                JsonNode node = JSON.readTree(stored.get());
+                if (node instanceof ObjectNode object
+                        && object.get("messages") instanceof ArrayNode) {
+                    if (!object.has("tools") || !object.get("tools").isObject()) {
+                        object.putObject("tools");
+                    }
+                    return object;
+                }
+            } catch (JsonProcessingException ignored) {
+                // 旧数据损坏：按空时间线重建
+            }
+        }
+        ObjectNode root = JSON.createObjectNode();
+        root.putArray("messages");
+        root.putObject("tools");
+        return root;
+    }
+
+    private static ObjectNode messageNode(String id, String role, String text, long at) {
+        ObjectNode node = JSON.createObjectNode();
+        node.put("id", id);
+        node.put("role", role);
+        node.put("text", text == null ? "" : text);
+        node.put("at", at);
+        return node;
     }
 
     private ThreadPoolExecutor pool(String projectId) {

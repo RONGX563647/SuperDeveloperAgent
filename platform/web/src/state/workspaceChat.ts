@@ -1,5 +1,5 @@
-import { shallowRef, watch } from 'vue'
-import type { ShallowRef } from 'vue'
+import { effectScope, shallowRef, watch } from 'vue'
+import type { EffectScope, ShallowRef } from 'vue'
 import { appStore } from '../stores/app'
 import { getToken } from '../api/auth'
 import {
@@ -40,6 +40,8 @@ export interface WorkspaceChatEntry {
   chat: ReturnType<typeof useAgentChat>
   /** 首次进入项目时加载调度会话并恢复历史；重复调用复用同一 Promise。 */
   ensure: () => Promise<void>
+  /** 立即落盘（页面隐藏/关闭时调用，避免防抖窗口内的最后一段输出丢失）。 */
+  flush: () => void
 }
 
 const entries = new Map<string, WorkspaceChatEntry>()
@@ -88,13 +90,34 @@ function createEntry(projectId: string): WorkspaceChatEntry {
     saveHistory(current.id, snapshotMessages(), chat.projection.value.tools)
   }
 
-  function pushServer(): void {
+  function pushServer(keepalive = false): void {
     const current = supervisor.value
     if (!current) return
     const payload = serializeHistory(snapshotMessages(), chat.projection.value.tools)
-    void saveConversationTranscript(current.id, payload).catch(() => {
+    void saveConversationTranscript(current.id, payload, keepalive).catch(() => {
       // 后端不可用：本地缓存照旧，下一轮变更会重试
     })
+  }
+
+  /**
+   * 立即落盘：清掉防抖计时器，把最后一段输出同步写本地并推服务端。
+   *
+   * <p>之前只在投影变化后延迟 600ms/1s 才写，用户直接在流式过程中关闭页面，
+   * 防抖窗口内的内容就永久丢失（服务端时间线停留在上一次推送）。
+   * 页面隐藏/卸载时调用这里兜底；服务端尚未完成对账时不推送，避免覆盖更新的记录。
+   */
+  function flush(): void {
+    if (!hydrated || !supervisor.value) return
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    persist()
+    if (serverTimer) {
+      clearTimeout(serverTimer)
+      serverTimer = null
+    }
+    if (serverReady) pushServer(true)
   }
 
   function scheduleServerSave(): void {
@@ -133,12 +156,17 @@ function createEntry(projectId: string): WorkspaceChatEntry {
     }
   }
 
-  // projection 是浅响应式对象，每次事件都会整体替换：直接监听引用，不必 deep 遍历大消息列表
-  watch(chat.projection, () => {
-    if (!supervisor.value || !hydrated) return
-    if (saveTimer) clearTimeout(saveTimer)
-    saveTimer = setTimeout(persist, LOCAL_SAVE_DELAY)
-    scheduleServerSave()
+  // projection 是浅响应式对象，每次事件都会整体替换：直接监听引用，不必 deep 遍历大消息列表。
+  // watcher 必须挂在独立 effectScope：会话实例跨路由常驻，但 createEntry 通常在视图 setup 里调用，
+  // 跟着组件卸载会导致后续流式输出不再落盘（刷新后时间线停在离开页面的那一刻）。
+  const saveScope: EffectScope = effectScope(true)
+  saveScope.run(() => {
+    watch(chat.projection, () => {
+      if (!supervisor.value || !hydrated) return
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = setTimeout(persist, LOCAL_SAVE_DELAY)
+      scheduleServerSave()
+    })
   })
 
   function ensure(): Promise<void> {
@@ -160,8 +188,18 @@ function createEntry(projectId: string): WorkspaceChatEntry {
     return ensurePromise
   }
 
-  return { projectId, supervisor, chat, ensure }
+  return { projectId, supervisor, chat, ensure, flush }
 }
+
+/** 页面隐藏或关闭前把所有项目的调度会话立即落盘（含服务端）。 */
+function flushAll(): void {
+  entries.forEach((entry) => entry.flush())
+}
+
+window.addEventListener('pagehide', flushAll)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushAll()
+})
 
 export function getWorkspaceChat(projectId: string): WorkspaceChatEntry {
   let entry = entries.get(projectId)

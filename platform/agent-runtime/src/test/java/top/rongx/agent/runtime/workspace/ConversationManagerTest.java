@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.TextBlockDeltaEvent;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -53,8 +54,8 @@ class ConversationManagerTest {
 
     private ConversationManager manager(ChatService chat, int concurrency) {
         WorkspaceRunExecutor executor = new WorkspaceRunExecutor(provider(() -> chat), store, store,
-                new WorkspaceEventBus(), top.rongx.agent.domain.run.RunLedgerRepository.noop(),
-                concurrency);
+                store, new WorkspaceEventBus(),
+                top.rongx.agent.domain.run.RunLedgerRepository.noop(), concurrency);
         return new ConversationManager(store, store, store, store, projects, executor, userId -> false,
                 top.rongx.agent.domain.conversation.SessionDataCleaner.noop(),
                 DispatchPlan.DEFAULT_MAX_PARALLEL, DispatchPlan.DEFAULT_MAX_DURATION_SECONDS);
@@ -103,16 +104,47 @@ class ConversationManagerTest {
     }
 
     @Test
-    @DisplayName("同一目标在运行中不重复派发；不同会话共用去重；可取消")
+    @DisplayName("异步运行结束后自动落会话时间线，子会话打开时能看到提问与产出")
+    void runWritesTranscript() {
+        ConversationManager manager = manager(new EchoChat(), 1);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        String runId = manager.send(c.id(), USER, "检查构建");
+        assertEquals(RunStatus.SUCCEEDED, manager.waitForRun(runId, USER, 3_000).status());
+
+        String payload = manager.transcript(c.id(), USER).orElseThrow();
+        assertTrue(payload.contains("检查构建"), "时间线应包含派发的提问：" + payload);
+        assertTrue(payload.contains("已完成构建检查"), "时间线应包含运行产出：" + payload);
+        assertTrue(payload.contains("\"tools\""), "时间线结构需与前端一致（messages + tools）");
+    }
+
+    @Test
+    @DisplayName("同一会话多次运行按追加方式累积时间线，不覆盖历史")
+    void runAppendsTranscript() {
+        ConversationManager manager = manager(new EchoChat(), 1);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        manager.waitForRun(manager.send(c.id(), USER, "第一轮"), USER, 3_000);
+        manager.waitForRun(manager.send(c.id(), USER, "第二轮"), USER, 3_000);
+
+        String payload = manager.transcript(c.id(), USER).orElseThrow();
+        assertTrue(payload.contains("第一轮") && payload.contains("第二轮"),
+                "第二轮运行时不能覆盖第一轮的时间线：" + payload);
+    }
+
+    @Test
+    @DisplayName("不同会话的相同目标各自派发；同会话重复目标明确拒绝；可取消")
     void duplicateGoalAndCancel() {
         ConversationManager manager = manager(new NeverChat(), 2);
         Conversation a = manager.createConversation(PROJECT, USER, "a", "test", null);
         Conversation b = manager.createConversation(PROJECT, USER, "b", "test", null);
         String first = manager.send(a.id(), USER, "  修复 构建  ");
         String second = manager.send(b.id(), USER, "修复   构建");
-        assertEquals(first, second, "规范化后同一目标应复用运行");
+        assertFalse(first.equals(second), "不同会话的相同目标必须各自派发，不能复用别人的运行");
+        assertFalse(second.startsWith("err:"));
 
-        // 同一会话不能再并发派发
+        // 同一会话重复派发相同目标：幂等拒绝并给出明确原因，不能静默返回旧 runId
+        String duplicate = manager.send(a.id(), USER, "修复 构建");
+        assertTrue(duplicate.startsWith("err:"), "同会话重复目标应返回明确错误文案");
+        // 同一会话不能再并发派发其他目标
         assertThrows(IllegalArgumentException.class,
                 () -> manager.send(a.id(), USER, "另一个目标"));
         // 调度会话不能给自己派发（深度固定为 1）
@@ -183,6 +215,20 @@ class ConversationManagerTest {
                                        String role, List<String> skills, List<String> mcpServers,
                                        String modelConnectionId, String modelName) {
             return Flux.empty();
+        }
+    }
+
+    /** 立即产出一段正文的对话流（用于验证时间线落库）。 */
+    private static final class EchoChat extends ChatService {
+        EchoChat() {
+            super(null, new ChatSessionRegistry(), null, null);
+        }
+
+        @Override
+        public Flux<AgentEvent> stream(ProjectContext ctx, String sessionId, String text,
+                                       String role, List<String> skills, List<String> mcpServers,
+                                       String modelConnectionId, String modelName) {
+            return Flux.just(new TextBlockDeltaEvent("reply-1", "block-1", "已完成构建检查"));
         }
     }
 

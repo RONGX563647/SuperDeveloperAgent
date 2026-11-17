@@ -353,13 +353,13 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         }
         Optional<ConversationRun> active = runs.findActiveByConversation(conversationId);
         if (active.isPresent()) {
-            throw new IllegalArgumentException("会话正在运行，请先等待或取消：runId="
-                    + active.get().id());
-        }
-        String goalKey = goalKey(text);
-        Optional<ConversationRun> duplicate = runs.findActiveByGoal(conversation.projectId(), goalKey);
-        if (duplicate.isPresent()) {
-            return duplicate.get().id();
+            ConversationRun current = active.get();
+            // 同一会话的相同目标按幂等处理，但必须明确告知调用方，避免把旧 runId 当成新派发
+            if (current.goalKey().equals(goalKey(text))) {
+                return "err: 该会话已有相同目标的运行（runId=" + current.id()
+                        + "），请等待完成或取消后再派发";
+            }
+            throw new IllegalArgumentException("会话正在运行，请先等待或取消：runId=" + current.id());
         }
         Project project = projects.findById(conversation.projectId())
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -370,7 +370,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 conversation.worktree(), readOnly);
         long now = System.currentTimeMillis();
         ConversationRun run = new ConversationRun("run-" + shortId(), project.id(),
-                conversation.id(), ownerUserId, text, goalKey, RunStatus.QUEUED,
+                conversation.id(), ownerUserId, text, goalKey(text), RunStatus.QUEUED,
                 "", "", now, 0, 0);
         runs.saveRun(run);
         conversations.update(conversation.id(), ownerUserId,

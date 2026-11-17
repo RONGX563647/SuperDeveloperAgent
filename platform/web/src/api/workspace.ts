@@ -117,10 +117,12 @@ export function getConversationTranscript(conversationId: string): Promise<Conve
 export function saveConversationTranscript(
   conversationId: string,
   payload: string,
+  keepalive = false,
 ): Promise<{ saved: boolean }> {
   return apiFetch(`/api/v1/conversations/${conversationId}/messages`, {
     method: 'PUT',
     body: JSON.stringify({ payload }),
+    keepalive,
   })
 }
 
