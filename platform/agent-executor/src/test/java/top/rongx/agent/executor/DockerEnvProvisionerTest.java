@@ -51,4 +51,13 @@ class DockerEnvProvisionerTest {
         assertFalse(line.contains("PASSWORD"), line);
         assertTrue(line.contains("agent-dev-demo-redis-data:/data"), line);
     }
+
+    @Test
+    void runArgvUsesConfiguredBinary() {
+        List<String> argv = DockerEnvProvisioner.runArgv(new DockerCli("podman"), "redis",
+                "agent-dev-demo-redis", 16379, null, "root", null, "agent-dev-net",
+                java.util.Map.of("redis", "redis:7-alpine"));
+        assertEquals("podman", argv.get(0), argv.toString());
+        assertEquals("run", argv.get(1), argv.toString());
+    }
 }

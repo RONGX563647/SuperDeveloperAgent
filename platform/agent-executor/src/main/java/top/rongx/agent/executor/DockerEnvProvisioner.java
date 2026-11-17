@@ -795,9 +795,9 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                 network, images);
     }
 
-    private static List<String> runArgv(DockerCli docker, String kind, String name, int port,
-                                        String database, String username, String password,
-                                        String network, Map<String, String> images) {
+    static List<String> runArgv(DockerCli docker, String kind, String name, int port,
+                                String database, String username, String password,
+                                String network, Map<String, String> images) {
         List<String> argv = new ArrayList<>(docker.cmd("run", "-d", "--name", name,
                 "--restart", "unless-stopped", "--network", network,
                 // 与应用容器同一 compose 组：Docker Desktop 里一个环境一个组
