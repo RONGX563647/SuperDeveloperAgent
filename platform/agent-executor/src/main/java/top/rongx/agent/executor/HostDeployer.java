@@ -39,6 +39,9 @@ public class HostDeployer implements Deployer {
 
     private static final long STARTUP_PROBE_MS = 800;
 
+    /** 槽内进程登记（追加写）：每行 {@code pid 启动时刻毫秒}，pid 文件丢失时据此回收遗留进程。 */
+    private static final String PIDS_FILE = "app.pids";
+
     /** 稳定的部署状态根（通常 platform/data/workspaces/_deploy）；null = 退回工作树内旧行为。 */
     private final Path deployRoot;
 
@@ -133,6 +136,9 @@ public class HostDeployer implements Deployer {
         Path pidFile = stateDir.resolve("app.pid");
         Path logFile = stateDir.resolve("app.log");
         stopPrevious(pidFile, log);
+        // pid 文件可能在上一次运行里丢失/被覆盖（线上日志里 8090 上的旧实例就是这么留下的）。
+        // 槽内另有追加式进程登记，按它再回收一遍，避免旧进程继续占端口、健康检查打到旧进程。
+        stopRecorded(stateDir, log);
 
         // 用与当前平台一致的 JDK 启动，不去 PATH 上碰运气（PATH 可能是 JDK17、平台跑在 25）。
         List<String> argv = List.of(JavaRuntime.javaBinary(), "-jar", jar.toString(),
@@ -156,6 +162,7 @@ public class HostDeployer implements Deployer {
         try {
             Process process = pb.start();
             Files.writeString(pidFile, String.valueOf(process.pid()), StandardCharsets.UTF_8);
+            recordProcess(stateDir, process.toHandle());
             boolean exited = process.waitFor(STARTUP_PROBE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (exited && process.exitValue() != 0) {
                 Files.deleteIfExists(pidFile);
@@ -222,6 +229,76 @@ public class HostDeployer implements Deployer {
 
     private void writePointer(Path file, String value) throws IOException {
         Files.writeString(file, value, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 回收本槽的遗留进程：按槽内追加的进程登记（{@code app.pids}）。
+     *
+     * <p>只看 pid 文件不够：上一次运行失败/被强制结束时 pid 文件可能已经丢了，
+     * 但进程还活着（线上日志里 8090 上那个旧 release 就是这样留下来的）。
+     * 登记文件是槽私有的，{@code versions/<tag>} 下的并行版本互不影响。
+     *
+     * <p>Windows 上 {@code ProcessHandle.Info.commandLine()} 对其它进程为空，
+     * 无法按命令行识别，因此登记时同时写入启动时刻：pid 被系统复用时启动时刻对不上，
+     * 一律跳过，避免误杀无关进程。
+     */
+    void stopRecorded(Path stateDir, StringBuilder log) {
+        Path file = stateDir.resolve(PIDS_FILE);
+        if (!Files.isRegularFile(file)) {
+            return;
+        }
+        List<String> survivors = new java.util.ArrayList<>();
+        try {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length == 0 || parts[0].isEmpty()) {
+                    continue;
+                }
+                long pid;
+                long startedAt;
+                try {
+                    pid = Long.parseLong(parts[0]);
+                    startedAt = parts.length > 1 ? Long.parseLong(parts[1]) : 0L;
+                } catch (NumberFormatException invalid) {
+                    continue;
+                }
+                if (pid == ProcessHandle.current().pid()) {
+                    continue;
+                }
+                Optional<ProcessHandle> handle = ProcessHandle.of(pid);
+                if (handle.isEmpty() || !handle.get().isAlive()) {
+                    continue;
+                }
+                long actual = handle.get().info().startInstant()
+                        .map(java.time.Instant::toEpochMilli).orElse(-1L);
+                if (startedAt > 0 && actual > 0 && Math.abs(actual - startedAt) > 2000L) {
+                    survivors.add(line);
+                    continue;
+                }
+                handle.get().destroy();
+                if (!waitForExit(handle.get(), 5)) {
+                    handle.get().destroyForcibly();
+                    waitForExit(handle.get(), 3);
+                }
+                log.append("[host] stopped orphan pid=").append(pid).append('\n');
+            }
+            // 回写未能回收的登记，避免下次失去线索
+            Files.write(file, survivors, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.append("[host] 遗留进程登记读取失败（继续）：").append(e.getMessage()).append('\n');
+        }
+    }
+
+    /** 追加登记刚拉起的进程：每行 {@code pid 启动时刻毫秒}。 */
+    void recordProcess(Path stateDir, ProcessHandle handle) {
+        long startedAt = handle.info().startInstant().map(java.time.Instant::toEpochMilli).orElse(0L);
+        try {
+            Files.writeString(stateDir.resolve(PIDS_FILE),
+                    handle.pid() + " " + startedAt + System.lineSeparator(), StandardCharsets.UTF_8,
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            ProcessExecutor.warn("进程登记写入失败：" + e.getMessage());
+        }
     }
 
     /** 停掉上一次由平台拉起的进程（按 pid 文件；已死则清理文件）。 */

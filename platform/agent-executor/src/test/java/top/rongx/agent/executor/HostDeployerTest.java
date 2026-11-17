@@ -177,6 +177,40 @@ class HostDeployerTest {
         assertTrue(result.summary().contains("DOCKER"), result.summary());
     }
 
+    @Test
+    @DisplayName("pid 文件丢失时仍能按槽内登记回收遗留进程，且不误杀其它槽")
+    void stopsRecordedOrphansOfSameSlotOnly() throws Exception {
+        Path slot = Files.createTempDirectory("host-slot-");
+        Files.createDirectories(slot.resolve("releases"));
+        Path otherSlot = Files.createTempDirectory("host-slot-other-");
+        Files.createDirectories(otherSlot.resolve("releases"));
+
+        Process orphan = sleepy();
+        Process other = sleepy();
+        try {
+            deployer.recordProcess(slot, orphan.toHandle());
+            deployer.recordProcess(otherSlot, other.toHandle());
+            StringBuilder log = new StringBuilder();
+            deployer.stopRecorded(slot, log);
+
+            assertTrue(orphan.waitFor(10, TimeUnit.SECONDS), "本槽遗留进程应被回收");
+            assertTrue(log.toString().contains("stopped orphan pid=" + orphan.pid()), log.toString());
+            assertTrue(other.isAlive(), "其它版本槽的进程不能被误杀");
+        } finally {
+            kill(orphan.pid());
+            kill(other.pid());
+            deleteQuietly(slot);
+            deleteQuietly(otherSlot);
+        }
+    }
+
+    /** 起一个长时间运行的进程，模拟平台此前拉起的 java -jar。 */
+    private static Process sleepy() throws IOException {
+        return new ProcessBuilder("powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 60")
+                .redirectErrorStream(true)
+                .start();
+    }
+
     private Path ptr(String name) {
         return workspace.resolve(".agent/deploy").resolve(PROJECT).resolve(name);
     }
