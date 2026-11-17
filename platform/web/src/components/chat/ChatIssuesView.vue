@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ChatDotRound, Close, Delete, Edit, Link, Picture, Plus, Refresh, RefreshRight, Search,
-  Setting, Tickets,
+  Tickets,
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
@@ -11,15 +11,20 @@ import {
   uploadIssueImage,
   type GitIssueCommentRow, type GitIssuePriority, type GitIssueRow,
 } from '../../api/issues'
-import {
-  cancelBugFix, getBugFixPolicy, getBugFixRun, listBugFixRuns, retryBugFix,
-  saveBugFixPolicy, startBugFix,
-  type BugFixEventRow, type BugFixPolicyRow, type BugFixRunRow, type BugFixStage,
-  type BugFixStageRunRow,
-} from '../../api/bugfix'
 import MarkdownView from './MarkdownView.vue'
 import { appStore } from '../../stores/app'
 import { listProjects, type ProjectRow } from '../../api/project'
+import VisXYContainer from '@unovis/vue/containers/xy-container'
+import VisSingleContainer from '@unovis/vue/containers/single-container'
+import VisStackedBar, { VisStackedBarSelectors } from '@unovis/vue/components/stacked-bar'
+import VisArea from '@unovis/vue/components/area'
+import VisDonut, { VisDonutSelectors } from '@unovis/vue/components/donut'
+import VisScatter, { VisScatterSelectors } from '@unovis/vue/components/scatter'
+import VisAxis from '@unovis/vue/components/axis'
+import VisTooltip from '@unovis/vue/components/tooltip'
+import VisCrosshair from '@unovis/vue/components/crosshair'
+import VisPlotline from '@unovis/vue/components/plotline'
+import { CurveType } from '@unovis/ts/types/curve'
 
 /**
  * 对话页「任务」Tab：项目托管的 Git Issue 双向同步任务。
@@ -42,281 +47,6 @@ const commentsLoading = ref(false)
 const commentText = ref('')
 const commenting = ref(false)
 const actionBusy = ref('')
-
-// ---------------------------------------------------------------- Bug 自动修复
-
-/** 自动修复阶段（与后端状态机一致，DONE 只在结束后出现）。 */
-const FIX_STAGES: { key: BugFixStage; label: string; hint: string }[] = [
-  { key: 'ANALYZE', label: '分析版本', hint: '锁定基线提交并给出根因与影响文件' },
-  { key: 'REPRO_DEPLOY', label: '部署测试环境', hint: '把基线提交发布到测试环境' },
-  { key: 'REPRODUCE', label: '尝试复现', hint: '按复现步骤确认问题可重现' },
-  { key: 'FIX', label: '代码修复', hint: '生成补丁并提交到独立修复分支' },
-  { key: 'VERIFY_DEPLOY', label: '部署修复版本', hint: '重新部署修复提交' },
-  { key: 'VERIFY', label: '验证修复', hint: '确认问题已解决且无回归' },
-  { key: 'PULL_REQUEST', label: '提交 PR', hint: '推送分支并创建 PR，等待人工合并' },
-]
-
-const FIX_STATUS_LABEL: Record<string, string> = {
-  QUEUED: '排队中',
-  RUNNING: '执行中',
-  WAITING_MERGE: '等待合并',
-  SUCCEEDED: '已完成',
-  FAILED: '失败',
-  BLOCKED: '待人工处理',
-  CANCELLED: '已取消',
-}
-
-const fixLoading = ref(false)
-const fixBusy = ref('')
-const fixRun = ref<BugFixRunRow | null>(null)
-const fixEvents = ref<BugFixEventRow[]>([])
-const fixStages = ref<BugFixStageRunRow[]>([])
-let fixTimer: ReturnType<typeof setTimeout> | undefined
-
-const fixActive = computed(
-  () => !!fixRun.value && ['QUEUED', 'RUNNING'].includes(fixRun.value.status))
-
-function stageIndex(stage?: string): number {
-  if (stage === 'DONE') return FIX_STAGES.length
-  const index = FIX_STAGES.findIndex((s) => s.key === stage)
-  return index < 0 ? 0 : index
-}
-
-/** 阶段状态：done / active / error / muted / pending。 */
-function stageState(stage: BugFixStage, index: number): string {
-  const run = fixRun.value
-  if (!run) return 'pending'
-  if (run.stage === 'DONE' || run.status === 'SUCCEEDED') return 'done'
-  // PR 已创建但等人工合并：PR 阶段视为完成，进度 100%
-  if (run.status === 'WAITING_MERGE') return 'done'
-  const current = stageIndex(run.stage)
-  if (index < current) return 'done'
-  if (index > current) return 'pending'
-  if (run.status === 'FAILED' || run.status === 'BLOCKED') return 'error'
-  if (run.status === 'CANCELLED') return 'muted'
-  return 'active'
-}
-
-function fixStatusLabel(status?: string): string {
-  return status ? (FIX_STATUS_LABEL[status] ?? status) : ''
-}
-
-function stageLabel(stage?: string): string {
-  if (stage === 'DONE') return '全部完成'
-  return FIX_STAGES.find((s) => s.key === stage)?.label ?? (stage ?? '')
-}
-
-function formatDuration(ms: number): string {
-  if (!ms || ms < 0) return '—'
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
-}
-
-/** 阶段记录按时间正序展示最近 12 条，验证失败回到修复的每一轮都保留。 */
-const fixStageRuns = computed(() => fixStages.value.slice(-12))
-
-/** 当前阶段序号（1/7），DONE 时显示 7/7。 */
-const fixStageNo = computed(() => {
-  const run = fixRun.value
-  if (!run) return ''
-  if (run.stage === 'DONE') return `${FIX_STAGES.length}/${FIX_STAGES.length}`
-  return `${stageIndex(run.stage) + 1}/${FIX_STAGES.length}`
-})
-
-const fixStageLabel = computed(() => {
-  const run = fixRun.value
-  if (!run) return ''
-  if (run.stage === 'DONE') return '全部完成'
-  return FIX_STAGES.find((s) => s.key === run.stage)?.label ?? run.stage
-})
-
-/** 失败/阻塞时给出可操作的建议，而不是只显示一行错误。 */
-const fixHint = computed(() => {
-  const run = fixRun.value
-  if (!run) return ''
-  if (run.status === 'BLOCKED') {
-    const hints: Record<string, string> = {
-      REPRO_DEPLOY: '检查策略里的测试环境与「已确认」的环境绑定，补齐后点重试。',
-      REPRODUCE: '测试环境未复现或证据不足；请补充复现步骤/日志，人工确认后再重试。',
-      FIX: '补丁未通过校验（片段不唯一或文件已变更）；可重试让 Agent 重新分析，或人工检查保留的修复分支。',
-      VERIFY_DEPLOY: '修复版本部署失败；查看时间线错误并检查环境与构建日志。',
-      VERIFY: '验证证据不足或置信度不够；请人工确认测试环境状态后再重试。',
-      PULL_REQUEST: 'PR 未创建：确认已绑定 Git 账号与仓库权限，修复分支已保留。',
-    }
-    return hints[run.stage] ?? '前置条件不满足，补齐后点重试。'
-  }
-  if (run.status === 'FAILED') {
-    return '执行失败，可点重试从当前阶段继续；连续失败请人工介入查看时间线。'
-  }
-  if (run.status === 'CANCELLED') return '已取消；点重试会从当前阶段继续。'
-  if (run.status === 'QUEUED') return '已排队；同一项目的修复会串行执行，避免同时部署测试环境。'
-  return ''
-})
-
-async function confirmCancelFix(row: GitIssueRow): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      '取消后正在执行的阶段结果会被丢弃，可从当前阶段重试继续。',
-      '取消自动修复',
-      { type: 'warning', confirmButtonText: '取消运行', cancelButtonText: '继续运行' },
-    )
-  } catch {
-    return
-  }
-  await cancelFix(row)
-}
-
-async function copyBranch(): Promise<void> {
-  const branch = fixRun.value?.branch
-  if (!branch) return
-  try {
-    await navigator.clipboard.writeText(branch)
-    ElMessage.success('分支名已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择：' + branch)
-  }
-}
-
-async function loadBugFix(issueId: string): Promise<void> {
-  fixLoading.value = true
-  try {
-    const rows = await listBugFixRuns(issueId)
-    if (selectedId.value !== issueId) return
-    if (!rows.length) {
-      fixRun.value = null
-      fixEvents.value = []
-      fixStages.value = []
-      return
-    }
-    const detail = await getBugFixRun(rows[0].id)
-    if (selectedId.value !== issueId) return
-    fixRun.value = detail.run
-    fixEvents.value = detail.events
-    fixStages.value = detail.stages ?? []
-  } catch {
-    if (selectedId.value === issueId) {
-      fixRun.value = null
-      fixEvents.value = []
-      fixStages.value = []
-    }
-  } finally {
-    if (selectedId.value === issueId) fixLoading.value = false
-  }
-}
-
-/** 运行中每 3 秒刷新一次，结束后自动停止，避免常驻轮询。 */
-function scheduleFixPoll(): void {
-  clearTimeout(fixTimer)
-  const run = fixRun.value
-  const issueId = selectedId.value
-  if (!issueId || !run || !['QUEUED', 'RUNNING'].includes(run.status)) return
-  fixTimer = setTimeout(async () => {
-    if (selectedId.value !== issueId) return
-    await loadBugFix(issueId)
-    scheduleFixPoll()
-  }, 3000)
-}
-
-async function startFix(row: GitIssueRow): Promise<void> {
-  fixBusy.value = 'start'
-  try {
-    fixRun.value = await startBugFix(row.id)
-    fixEvents.value = []
-    fixStages.value = []
-    ElMessage.success('已开始自动修复')
-    scheduleFixPoll()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '启动自动修复失败')
-  } finally {
-    fixBusy.value = ''
-  }
-}
-
-async function retryFix(row: GitIssueRow): Promise<void> {
-  const run = fixRun.value
-  if (!run) return
-  fixBusy.value = 'retry'
-  try {
-    fixRun.value = await retryBugFix(run.id)
-    await loadBugFix(row.id)
-    ElMessage.success('已重新排队，将从中断阶段继续')
-    scheduleFixPoll()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '重试失败')
-  } finally {
-    fixBusy.value = ''
-  }
-}
-
-async function cancelFix(row: GitIssueRow): Promise<void> {
-  const run = fixRun.value
-  if (!run) return
-  fixBusy.value = 'cancel'
-  try {
-    fixRun.value = await cancelBugFix(run.id)
-    await loadBugFix(row.id)
-    ElMessage.success('已取消本次自动修复')
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '取消失败')
-  } finally {
-    fixBusy.value = ''
-  }
-}
-
-// 自动修复策略（测试环境 + 已确认环境绑定 + PR 开关）
-const policyOpen = ref(false)
-const policyLoading = ref(false)
-const policySaving = ref(false)
-const policy = ref<BugFixPolicyRow | null>(null)
-const policyForm = reactive({
-  enabled: false,
-  autoDeploy: true,
-  autoCreatePr: true,
-  testEnv: 'test',
-  bindingId: '',
-  maxAttempts: 2,
-  baseUrl: '',
-  buildCommand: '',
-  testCommand: '',
-})
-
-async function togglePolicy(): Promise<void> {
-  policyOpen.value = !policyOpen.value
-  if (!policyOpen.value) return
-  policyLoading.value = true
-  try {
-    const current = await getBugFixPolicy()
-    policy.value = current
-    Object.assign(policyForm, {
-      enabled: current.enabled,
-      autoDeploy: current.autoDeploy,
-      autoCreatePr: current.autoCreatePr,
-      testEnv: current.testEnv,
-      bindingId: current.bindingId,
-      maxAttempts: current.maxAttempts,
-      baseUrl: current.baseUrl ?? '',
-      buildCommand: current.buildCommand ?? '',
-      testCommand: current.testCommand ?? '',
-    })
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '读取自动修复策略失败')
-  } finally {
-    policyLoading.value = false
-  }
-}
-
-async function submitPolicy(): Promise<void> {
-  policySaving.value = true
-  try {
-    policy.value = await saveBugFixPolicy({ ...policyForm })
-    ElMessage.success('自动修复策略已保存')
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存策略失败')
-  } finally {
-    policySaving.value = false
-  }
-}
 
 const stateOptions = [
   { label: '全部', value: '' },
@@ -383,15 +113,30 @@ const stats = computed(() => {
   return { total, open, closed, p0, p1, p2, bug, feat, percent }
 })
 
-/** 近 7 天按天分桶：新增（按类型）与完成数，用于趋势/吞吐图。 */
-const daily = computed(() => {
-  const buckets: { label: string; start: number; bug: number; feat: number; done: number }[] = []
+/** 看板时间范围：7 天 / 30 天。 */
+const chartRange = ref<7 | 30>(7)
+
+interface ChartBucket {
+  index: number
+  label: string
+  start: number
+  bug: number
+  feat: number
+  done: number
+}
+
+/** 按天分桶：新增（Bug/Feat）与完成数，供堆叠柱 / 面积图。 */
+const chartBuckets = computed<ChartBucket[]>(() => {
+  const days = chartRange.value
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  for (let i = 6; i >= 0; i -= 1) {
+  const buckets: ChartBucket[] = []
+  for (let i = days - 1; i >= 0; i -= 1) {
     const start = today.getTime() - i * 86_400_000
+    const date = new Date(start)
     buckets.push({
-      label: `${new Date(start).getMonth() + 1}/${new Date(start).getDate()}`,
+      index: days - 1 - i,
+      label: `${date.getMonth() + 1}/${date.getDate()}`,
       start, bug: 0, feat: 0, done: 0,
     })
   }
@@ -403,19 +148,47 @@ const daily = computed(() => {
       else created.feat += 1
     }
     if (row.state === 'CLOSED') {
-      const done = bucketOf(row.updatedAt)
-      if (done) done.done += 1
+      const doneBucket = bucketOf(row.updatedAt)
+      if (doneBucket) doneBucket.done += 1
     }
   }
-  return {
-    buckets,
-    maxCreated: Math.max(1, ...buckets.map((b) => b.bug + b.feat)),
-    maxDone: Math.max(1, ...buckets.map((b) => b.done)),
-  }
+  return buckets
 })
 
-/** 近 7 天完成总数与平均闭环时长（小时，近似用 updatedAt - createdAt）。 */
-const weeklyDone = computed(() => daily.value.buckets.reduce((sum, b) => sum + b.done, 0))
+/** X 轴刻度：7 天全展示，30 天每 5 天一个。 */
+const chartTicks = computed(() => {
+  const buckets = chartBuckets.value
+  const step = chartRange.value === 7 ? 1 : 5
+  return buckets
+    .filter((_, i) => i % step === 0 || i === buckets.length - 1)
+    .map((b) => b.index)
+})
+const chartTickFormat = (tick: number): string =>
+  chartBuckets.value[Math.round(tick)]?.label ?? ''
+
+/** 当前时间范围内的汇总，用于图表标题。 */
+const chartTotals = computed(() => ({
+  created: chartBuckets.value.reduce((n, b) => n + b.bug + b.feat, 0),
+  bug: chartBuckets.value.reduce((n, b) => n + b.bug, 0),
+  feat: chartBuckets.value.reduce((n, b) => n + b.feat, 0),
+  done: chartBuckets.value.reduce((n, b) => n + b.done, 0),
+}))
+
+/** 近 7 天完成数与新增 Bug 数，用于列表页数字条。 */
+function lastWeekStart(): number {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return today.getTime() - 6 * 86_400_000
+}
+const weeklyDone = computed(() => {
+  const start = lastWeekStart()
+  return items.value.filter((i) => i.state === 'CLOSED' && i.updatedAt >= start).length
+})
+const weeklyBugs = computed(() => {
+  const start = lastWeekStart()
+  return items.value
+    .filter((i) => (i.kind ?? 'BUG') === 'BUG' && i.createdAt >= start).length
+})
 const avgCycleHours = computed(() => {
   const closed = items.value.filter((i) => i.state === 'CLOSED')
   if (!closed.length) return 0
@@ -438,27 +211,112 @@ const priorityMatrix = computed(() => PRIORITY_VALUES.map((key) => {
 /** 风险项：同步失败的任务（远端推送失败需要重试）。 */
 const riskTasks = computed(() => items.value.filter((i) => i.syncStatus === 'FAILED').slice(0, 5))
 
-const priorityBars = computed(() => {
-  const total = stats.value.total || 1
-  return PRIORITY_VALUES.map((key) => {
-    const count = stats.value[key.toLowerCase() as 'p0' | 'p1' | 'p2']
-    return { key, count, percent: Math.round((count / total) * 100) }
-  })
-})
-
-/** 大环：看板里的完成率主视觉。 */
-const RING_RADIUS = 82
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
-const ringDash = RING_CIRCUMFERENCE.toFixed(1)
-const ringOffset = computed(
-  () => (RING_CIRCUMFERENCE * (1 - stats.value.percent / 100)).toFixed(1))
-
 /** 同步状态：已同步 / 仅本地 / 失败。 */
 const syncStats = computed(() => ({
   synced: items.value.filter((i) => i.syncStatus === 'SYNCED').length,
   local: items.value.filter((i) => i.syncStatus !== 'SYNCED' && i.syncStatus !== 'FAILED').length,
   failed: items.value.filter((i) => i.syncStatus === 'FAILED').length,
 }))
+
+// ---------------------------------------------------------------- 看板图表数据
+
+/** 图表访问器：Unovis 用函数取值，集中定义避免模板里重复创建。 */
+const bucketX = (d: ChartBucket) => d.index
+const trendY = [(d: ChartBucket) => d.bug, (d: ChartBucket) => d.feat]
+const doneY = (d: ChartBucket) => d.done
+
+/** 类型构成环形图。 */
+const donutData = computed(() => [
+  { name: 'Bug', value: stats.value.bug, color: '#EF4444' },
+  { name: 'Feat', value: stats.value.feat, color: '#8B5CF6' },
+])
+const donutValue = (d: { value: number }) => d.value
+const donutColor = (d: { color: string }) => d.color
+
+/** 四象限散点：横轴积压天数，纵轴优先级权重。 */
+interface QuadrantPoint {
+  id: string
+  title: string
+  priority: GitIssuePriority
+  kind: string
+  ageDays: number
+  weight: number
+  size: number
+}
+const quadrantPoints = computed<QuadrantPoint[]>(() => {
+  const now = Date.now()
+  return items.value
+    .filter((i) => i.state === 'OPEN')
+    .map((i) => {
+      const priority = (i.priority ?? 'P2') as GitIssuePriority
+      const weight = priority === 'P0' ? 3 : priority === 'P1' ? 2 : 1
+      const ageDays = Math.max(0.1, Math.round(((now - i.createdAt) / 86_400_000) * 10) / 10)
+      return {
+        id: i.id, title: i.title, priority, kind: i.kind ?? 'BUG',
+        ageDays, weight, size: 12 + weight * 3,
+      }
+    })
+})
+const quadMaxAge = computed(
+  () => Math.max(2, ...quadrantPoints.value.map((p) => p.ageDays)) + 0.2)
+const quadSplitX = computed(() => Math.round((quadMaxAge.value / 2) * 10) / 10)
+const quadX = (d: QuadrantPoint) => d.ageDays
+const quadY = (d: QuadrantPoint) => d.weight
+const quadSize = (d: QuadrantPoint) => d.size
+const quadColor = (d: QuadrantPoint) => (d.kind === 'BUG' ? '#EF4444' : '#8B5CF6')
+const priorityTick = (tick: number): string =>
+  tick === 3 ? 'P0' : tick === 2 ? 'P1' : tick === 1 ? 'P2' : ''
+const quadAgeTick = (tick: number): string => `${Math.round(tick)}d`
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch] as string))
+}
+
+/** 柱状图 hover：StackedBar 绑定的是包装对象，需要取 datum。 */
+interface StackedBarRecord {
+  datum: ChartBucket
+  index: number
+  stackIndex: number
+}
+const trendTriggers = {
+  [VisStackedBarSelectors.bar]: (record: StackedBarRecord) => {
+    const d = record.datum
+    const total = d.bug + d.feat
+    return `<div style="font-size:10px;color:#94a3b8">${d.label}</div>`
+      + (total
+        ? `<div style="margin-top:2px;font-weight:600">新增 ${total} 个</div>`
+          + (d.bug ? `<div style="margin-top:2px;font-size:11px">Bug <b>${d.bug}</b></div>` : '')
+          + (d.feat ? `<div style="margin-top:2px;font-size:11px">Feat <b>${d.feat}</b></div>` : '')
+        : '<div style="margin-top:2px;color:#64748b">无新增任务</div>')
+  },
+}
+
+/** 环形图 hover：Donut 绑定的是 { data } 包装对象。 */
+const donutTriggers = {
+  [VisDonutSelectors.segment]: (record: { data: { name: string; value: number; color: string } }) => {
+    const d = record.data
+    return `<div style="display:flex;align-items:center;gap:6px;font-size:11px">`
+      + `<span style="width:6px;height:6px;border-radius:50%;background:${d.color}"></span>`
+      + `<span style="color:#cbd5e1">${d.name}</span><b>${d.value}</b></div>`
+  },
+}
+
+const quadrantTriggers = {
+  [VisScatterSelectors.point]: (record: QuadrantPoint | { datum: QuadrantPoint }) => {
+    const d = 'datum' in record ? record.datum : record
+    return `<div style="max-width:220px;font-size:12px;font-weight:600;white-space:normal">${escapeHtml(d.title)}</div>`
+      + `<div style="margin-top:3px;font-size:11px;color:#94a3b8">`
+      + `${d.kind === 'BUG' ? 'Bug' : 'Feat'} · ${d.priority} · 积压 ${d.ageDays} 天</div>`
+  },
+}
+
+/** 面积图十字线提示。 */
+function throughputTemplate(d: ChartBucket): string {
+  return `<div style="font-size:10px;color:#94a3b8">${d.label}</div>`
+    + `<div style="margin-top:2px;font-size:11px">完成 <b>${d.done}</b> 个任务</div>`
+}
 
 /** 看板「优先处理」：未关闭任务按优先级取前 6 条。 */
 const focusTasks = computed(() => items.value
@@ -620,25 +478,15 @@ onMounted(() => {
   void listProjects().then((rows) => { projects.value = rows }).catch(() => {})
 })
 
-onUnmounted(() => clearTimeout(fixTimer))
-
 // ---------------------------------------------------------------- 选中 / 评论
 
-/** 左列选中一条任务，右列加载它的评论与自动修复状态（已选中则不重复请求）。 */
+/** 左列选中一条任务，右列加载它的评论（已选中则不重复请求）。 */
 async function select(row: GitIssueRow): Promise<void> {
   if (selectedId.value === row.id) return
   selectedId.value = row.id
   editorOpen.value = false
   commentText.value = ''
-  clearTimeout(fixTimer)
-  fixRun.value = null
-  fixEvents.value = []
-  fixStages.value = []
   await loadComments()
-  if ((row.kind ?? 'BUG') === 'BUG') {
-    await loadBugFix(row.id)
-    scheduleFixPoll()
-  }
 }
 
 async function loadComments(): Promise<void> {
@@ -957,9 +805,6 @@ defineExpose({ openCreate, focus })
             {{ providerLabel(currentRepo.provider) }}
             <span class="mono">{{ currentRepo.repo }}</span>
           </span>
-          <el-button size="small" @click="togglePolicy">
-            <el-icon><Setting /></el-icon> 自动修复
-          </el-button>
           <el-button size="small" type="primary" @click="openCreate">
             <el-icon><Plus /></el-icon> 新建任务
           </el-button>
@@ -971,150 +816,194 @@ defineExpose({ openCreate, focus })
 
       <!-- 量化看板：只在「看板」Tab 下展示 -->
       <section v-if="taskView === 'board'" class="board-view">
-        <div class="board-hero">
-          <div class="hero-ring">
-            <svg viewBox="0 0 200 200" aria-hidden="true">
-              <defs>
-                <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#4d82f7" />
-                  <stop offset="55%" stop-color="#6e8cff" />
-                  <stop offset="100%" stop-color="#2ea36b" />
-                </linearGradient>
-                <filter id="ringGlow" x="-30%" y="-30%" width="160%" height="160%">
-                  <feGaussianBlur stdDeviation="6" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-              </defs>
-              <circle class="ring-track" cx="100" cy="100" :r="RING_RADIUS" />
-              <circle
-                class="ring-value" cx="100" cy="100" :r="RING_RADIUS"
-                :stroke-dasharray="ringDash"
-                :stroke-dashoffset="ringOffset" filter="url(#ringGlow)"
-              />
-            </svg>
-            <div class="ring-center">
-              <b class="mono">{{ stats.percent }}%</b>
+        <!-- 关键指标条 -->
+        <div class="kpi-strip">
+          <button type="button" class="stat-card" @click="focusState('CLOSED')">
+            <span class="stat-head">
               <span>完成率</span>
+              <i class="stat-icon blue">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21.2 15.9A10 10 0 1 1 8.8 2.8"/><path d="m9 11 3 3L22 4"/></svg>
+              </i>
+            </span>
+            <span class="stat-value">
+              <b class="mono">{{ stats.percent }}%</b>
               <em class="mono">{{ stats.closed }} / {{ stats.total }}</em>
-            </div>
-          </div>
+            </span>
+            <span class="stat-progress"><i :style="{ width: `${stats.percent}%` }" /></span>
+          </button>
 
-          <div class="hero-side">
-            <div class="hero-head">
-              <h2>任务健康度</h2>
-              <p>实时汇总任务页的全部工单，点任意指标可跳回列表查看明细。</p>
+          <button type="button" class="stat-card" @click="focusState('OPEN')">
+            <span class="stat-head">
+              <span>待处理</span>
+              <i class="stat-icon gray">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              </i>
+            </span>
+            <span class="stat-value"><b class="mono">{{ stats.open }}</b><em>个任务</em></span>
+            <span class="stat-foot">全部未关闭工单</span>
+          </button>
+
+          <button type="button" class="stat-card" @click="focusState('CLOSED')">
+            <span class="stat-head">
+              <span>已完成</span>
+              <i class="stat-icon green">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+              </i>
+            </span>
+            <span class="stat-value"><b class="mono">{{ stats.closed }}</b><em>个任务</em></span>
+            <span class="stat-foot">近 7 天闭环 {{ weeklyDone }} 个</span>
+          </button>
+
+          <button type="button" class="stat-card" @click="focusPriority('P0')">
+            <span class="stat-head">
+              <span>P0 紧急</span>
+              <i class="stat-icon rose">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3c1 3 4 4.5 4 8a4 4 0 0 1-8 0c0-1.4.5-2.4 1-3.2"/><path d="M12 21a7 7 0 0 0 7-7"/></svg>
+              </i>
+            </span>
+            <span class="stat-value"><b class="mono">{{ stats.p0 }}</b><em>个任务</em></span>
+            <span class="stat-foot" :class="{ ok: stats.p0 === 0 }">
+              {{ stats.p0 === 0 ? '无紧急阻塞' : '需要立即处理' }}
+            </span>
+          </button>
+
+          <button type="button" class="stat-card" @click="focusState('')">
+            <span class="stat-head">
+              <span>同步失败</span>
+              <i class="stat-icon gray">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.5 19a4.5 4.5 0 0 0 .7-8.95A6 6 0 0 0 6.2 9.2 4 4 0 0 0 6 17"/><path d="m9 15 6-6"/></svg>
+              </i>
+            </span>
+            <span class="stat-value"><b class="mono">{{ syncStats.failed }}</b><em>个任务</em></span>
+            <span class="stat-foot" :class="{ ok: syncStats.failed === 0 }">
+              {{ syncStats.failed === 0 ? '全部同步正常' : '需要重试' }}
+            </span>
+          </button>
+
+          <div class="risk-card">
+            <div class="risk-card-head">
+              <span>风险项</span>
+              <em class="mono" :class="{ ok: riskTasks.length === 0 }">{{ riskTasks.length }}</em>
             </div>
-            <div class="hero-metrics">
-              <button type="button" class="metric" @click="focusState('OPEN')">
-                <span class="metric-label">待处理</span>
-                <b class="metric-value mono">{{ stats.open }}</b>
-                <span class="metric-foot">全部未关闭</span>
-              </button>
-              <button type="button" class="metric ok" @click="focusState('CLOSED')">
-                <span class="metric-label">已完成</span>
-                <b class="metric-value mono">{{ stats.closed }}</b>
-                <span class="metric-foot">闭环工单</span>
-              </button>
-              <button type="button" class="metric p0" @click="focusPriority('P0')">
-                <span class="metric-label">P0 紧急</span>
-                <b class="metric-value mono">{{ stats.p0 }}</b>
-                <span class="metric-foot">立即处理</span>
-              </button>
-              <button type="button" class="metric fail" @click="focusState('')">
-                <span class="metric-label">同步失败</span>
-                <b class="metric-value mono">{{ syncStats.failed }}</b>
-                <span class="metric-foot">需要重试</span>
-              </button>
+            <p class="risk-card-body" :class="{ ok: riskTasks.length === 0 }">
+              {{ riskTasks.length === 0 ? '所有任务同步正常' : '存在同步失败的任务，请尽快重试' }}
+            </p>
+            <div class="risk-card-actions">
+              <button type="button" class="primary-btn" @click="openCreate">新建任务</button>
             </div>
           </div>
         </div>
 
-        <!-- 趋势：新增（Bug/Feat 堆叠）与完成吞吐 -->
+        <!-- 第一行：新增趋势 + 四象限 -->
         <div class="board-grid wide">
           <div class="bpanel">
             <div class="bpanel-head">
-              <span class="bpanel-title">新增任务趋势</span>
-              <span class="bpanel-hint">近 7 天 · Bug / Feat</span>
-            </div>
-            <div class="stack-legend">
-              <span><i class="dot bug" />Bug</span>
-              <span><i class="dot feat" />Feat</span>
-            </div>
-            <div class="stack-chart">
-              <div v-for="day in daily.buckets" :key="day.label" class="stack-col">
-                <span class="stack-total mono">{{ day.bug + day.feat }}</span>
-                <div class="stack-bar-area">
-                  <i
-                    class="stack-bar feat"
-                    :style="{ height: `${(day.feat / daily.maxCreated) * 100}%` }"
-                  />
-                  <i
-                    class="stack-bar bug"
-                    :style="{ height: `${(day.bug / daily.maxCreated) * 100}%` }"
-                  />
-                </div>
-                <span class="stack-label">{{ day.label }}</span>
+              <div>
+                <span class="bpanel-title">新增任务趋势</span>
+                <span class="bpanel-hint">
+                  近 {{ chartRange }} 天新增 {{ chartTotals.created }} 个
+                  <span class="hint-sep">·</span>
+                  Bug {{ chartTotals.bug }} / Feat {{ chartTotals.feat }}
+                </span>
+              </div>
+              <div class="seg-switch">
+                <button
+                  type="button" :class="{ active: chartRange === 7 }"
+                  @click="chartRange = 7"
+                >7 天</button>
+                <button
+                  type="button" :class="{ active: chartRange === 30 }"
+                  @click="chartRange = 30"
+                >30 天</button>
               </div>
             </div>
+            <div class="chart-legend">
+              <span><i class="legend-dot bug" />Bug</span>
+              <span><i class="legend-dot feat" />Feat</span>
+            </div>
+            <VisXYContainer :data="chartBuckets" :height="228" class="chart-box">
+              <VisStackedBar
+                :data="chartBuckets" :x="bucketX" :y="trendY"
+                :color="['#EF4444', '#8B5CF6']" :roundedCorners="4" :barMaxWidth="26"
+              />
+              <VisAxis
+                type="x" :tickValues="chartTicks" :tickFormat="chartTickFormat"
+                :gridLine="false" :tickLine="false" :domainLine="false" :tickPadding="10"
+              />
+              <VisTooltip :triggers="trendTriggers" />
+            </VisXYContainer>
           </div>
 
           <div class="bpanel">
             <div class="bpanel-head">
-              <span class="bpanel-title">完成吞吐</span>
-              <span class="bpanel-hint">近 7 天完成 {{ weeklyDone }} 个</span>
+              <div>
+                <span class="bpanel-title">任务四象限</span>
+                <span class="bpanel-hint">横轴积压时长 · 纵轴优先级</span>
+              </div>
+              <span class="bpanel-tag">{{ quadrantPoints.length }} 未关闭</span>
             </div>
-            <div class="throughput-stats">
-              <div class="tp-stat">
-                <b class="mono">{{ weeklyDone }}</b>
-                <span>7 天完成</span>
-              </div>
-              <div class="tp-stat">
-                <b class="mono">{{ avgCycleHours }}</b>
-                <span>平均闭环 / 小时</span>
-              </div>
-            </div>
-            <div class="done-chart">
-              <div v-for="day in daily.buckets" :key="day.label" class="done-col">
-                <span class="done-count mono">{{ day.done }}</span>
-                <span class="done-bar-wrap">
-                  <i
-                    class="done-bar"
-                    :style="{ height: `${Math.max(5, (day.done / daily.maxDone) * 100)}%` }"
-                  />
-                </span>
-                <span class="done-label">{{ day.label }}</span>
-              </div>
+            <VisXYContainer
+              :data="quadrantPoints" :height="228"
+              :xDomain="[0, quadMaxAge]" :yDomain="[0.5, 3.5]"
+            >
+              <VisScatter
+                :data="quadrantPoints" :x="quadX" :y="quadY" :size="quadSize"
+                :color="quadColor" strokeColor="#fff" :strokeWidth="2"
+              />
+              <VisAxis
+                type="x" :tickFormat="quadAgeTick"
+                :gridLine="false" :tickLine="false" :domainLine="false" :tickPadding="8"
+              />
+              <VisAxis
+                type="y" :tickValues="[1, 2, 3]" :tickFormat="priorityTick"
+                :gridLine="false" :tickLine="false" :domainLine="false" :tickPadding="8"
+              />
+              <VisPlotline
+                axis="x" :value="quadSplitX" :lineWidth="1" :lineStyle="[4, 4]" color="#E2E8F0"
+              />
+              <VisPlotline
+                axis="y" :value="1.5" :lineWidth="1" :lineStyle="[4, 4]" color="#E2E8F0"
+              />
+              <VisTooltip :triggers="quadrantTriggers" />
+            </VisXYContainer>
+            <div class="chart-legend quad-foot">
+              <span><i class="legend-dot bug" />Bug</span>
+              <span><i class="legend-dot feat" />Feat</span>
+              <span class="quad-hint">右上角需优先清理</span>
             </div>
           </div>
         </div>
 
-        <!-- 分布：优先级 / 未完成矩阵 / 类型与同步 -->
-        <div class="board-grid">
+        <!-- 第二行：类型构成 / 优先级矩阵 / 完成吞吐 -->
+        <div class="board-grid three">
           <div class="bpanel">
             <div class="bpanel-head">
-              <span class="bpanel-title">优先级分布</span>
-              <span class="bpanel-hint">点击切换列表</span>
+              <div>
+                <span class="bpanel-title">类型构成</span>
+                <span class="bpanel-hint">共 {{ stats.total }} 个任务</span>
+              </div>
             </div>
-            <button
-              v-for="bar in priorityBars" :key="bar.key" type="button"
-              class="pbar-row" @click="focusPriority(bar.key)"
-            >
-              <span class="pbar-key" :class="bar.key.toLowerCase()">{{ bar.key }}</span>
-              <span class="pbar-track">
-                <i :class="bar.key.toLowerCase()" :style="{ width: `${bar.percent}%` }" />
-              </span>
-              <span class="pbar-num mono">{{ bar.count }}</span>
-              <span class="pbar-pct mono">{{ bar.percent }}%</span>
-            </button>
+            <VisSingleContainer :data="donutData" :height="176" class="chart-box">
+              <VisDonut
+                :value="donutValue" :color="donutColor" :arcWidth="16"
+                :cornerRadius="4" :padAngle="0.02"
+                :centralLabel="String(stats.total)" centralSubLabel="任务总数"
+              />
+              <VisTooltip :triggers="donutTriggers" />
+            </VisSingleContainer>
+            <div class="type-legend">
+              <span><i class="legend-dot bug" />Bug <b class="mono">{{ stats.bug }}</b></span>
+              <span><i class="legend-dot feat" />Feat <b class="mono">{{ stats.feat }}</b></span>
+            </div>
           </div>
 
           <div class="bpanel">
             <div class="bpanel-head">
-              <span class="bpanel-title">未完成优先级矩阵</span>
-              <span class="bpanel-hint">优先级 × 类型</span>
+              <div>
+                <span class="bpanel-title">未完成优先级矩阵</span>
+                <span class="bpanel-hint">优先级 × 类型</span>
+              </div>
+              <span class="bpanel-tag">{{ stats.open }} 待处理</span>
             </div>
             <div class="matrix-head">
               <span />
@@ -1126,44 +1015,56 @@ defineExpose({ openCreate, focus })
               class="matrix-row" @click="focusPriority(cell.key)"
             >
               <span class="pbar-key" :class="cell.key.toLowerCase()">{{ cell.key }}</span>
-              <span class="matrix-cell mono">{{ cell.bug }}</span>
-              <span class="matrix-cell mono">{{ cell.feat }}</span>
+              <span class="matrix-cell mono">{{ cell.bug || '–' }}</span>
+              <span class="matrix-cell mono">{{ cell.feat || '–' }}</span>
             </button>
+            <div class="matrix-foot">
+              <span class="bpanel-hint">0 值不展示，避免噪音</span>
+            </div>
           </div>
 
           <div class="bpanel">
             <div class="bpanel-head">
-              <span class="bpanel-title">类型构成</span>
-              <span class="bpanel-hint">Bug / Feat</span>
+              <div>
+                <span class="bpanel-title">完成吞吐</span>
+                <span class="bpanel-hint">
+                  近 {{ chartRange }} 天完成 {{ chartTotals.done }} 个
+                  <span class="hint-sep">·</span>
+                  平均闭环 {{ avgCycleHours }}h
+                </span>
+              </div>
             </div>
-            <div class="type-split">
-              <span class="type-bar bug" :style="{ flexGrow: stats.bug }" />
-              <span class="type-bar feat" :style="{ flexGrow: stats.feat }" />
-            </div>
-            <div class="type-legend">
-              <span><i class="dot bug" />Bug <b class="mono">{{ stats.bug }}</b></span>
-              <span><i class="dot feat" />Feat <b class="mono">{{ stats.feat }}</b></span>
-            </div>
-            <div class="sync-list">
-              <span><i class="dot synced" />已同步 <b class="mono">{{ syncStats.synced }}</b></span>
-              <span><i class="dot local" />仅本地 <b class="mono">{{ syncStats.local }}</b></span>
-              <span><i class="dot failed" />失败 <b class="mono">{{ syncStats.failed }}</b></span>
-            </div>
+            <VisXYContainer :data="chartBuckets" :height="176" class="chart-box">
+              <VisArea
+                :data="chartBuckets" :x="bucketX" :y="doneY"
+                :curveType="CurveType.MonotoneX" color="rgba(37, 99, 235, 0.16)"
+                :line="true" lineColor="#2563EB" :lineWidth="2"
+              />
+              <VisAxis
+                type="x" :tickValues="chartTicks" :tickFormat="chartTickFormat"
+                :gridLine="false" :tickLine="false" :domainLine="false" :tickPadding="10"
+              />
+              <VisCrosshair :template="throughputTemplate" color="#2563EB" />
+              <VisTooltip />
+            </VisXYContainer>
           </div>
         </div>
 
-        <!-- 行动：优先处理 + 风险项 -->
+        <!-- 第三行：优先处理 + 风险项 -->
         <div class="board-grid wide">
-          <div class="bpanel focus-panel">
+          <div class="bpanel">
             <div class="bpanel-head">
-              <span class="bpanel-title">优先处理</span>
-              <span class="bpanel-hint">未关闭任务按优先级排序</span>
+              <div>
+                <span class="bpanel-title">优先处理</span>
+                <span class="bpanel-hint">未关闭任务按优先级排序</span>
+              </div>
             </div>
             <div v-if="!focusTasks.length" class="board-empty">暂无未关闭任务</div>
             <button
               v-for="row in focusTasks" :key="row.id" type="button"
               class="focus-row" @click="openFromBoard(row)"
             >
+              <span class="prio-line" :class="(row.priority ?? 'P2').toLowerCase()" />
               <span class="prio-pill" :class="(row.priority ?? 'P2').toLowerCase()">
                 {{ row.priority ?? 'P2' }}
               </span>
@@ -1175,8 +1076,10 @@ defineExpose({ openCreate, focus })
 
           <div class="bpanel">
             <div class="bpanel-head">
-              <span class="bpanel-title">风险项</span>
-              <span class="bpanel-hint">同步失败需重试</span>
+              <div>
+                <span class="bpanel-title">风险项</span>
+                <span class="bpanel-hint">远端同步失败的任务</span>
+              </div>
             </div>
             <div v-if="!riskTasks.length" class="risk-ok">
               <span class="risk-ok-dot" />
@@ -1190,82 +1093,22 @@ defineExpose({ openCreate, focus })
               <span class="focus-title">{{ row.title }}</span>
               <span class="focus-arrow">→</span>
             </button>
+            <div class="sync-summary">
+              <span><i class="legend-dot synced" />已同步 <b class="mono">{{ syncStats.synced }}</b></span>
+              <span><i class="legend-dot local" />仅本地 <b class="mono">{{ syncStats.local }}</b></span>
+              <span><i class="legend-dot failed" />失败 <b class="mono">{{ syncStats.failed }}</b></span>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- 自动修复策略：页内卡片，说明清楚“PR 必须人工合并” -->
-      <section v-if="policyOpen" class="policy-card">
-        <div class="editor-head">
-          <div>
-            <h2 class="editor-title">Bug 自动修复</h2>
-            <p class="editor-desc">
-              Bug 任务创建后自动：分析版本 → 部署测试环境复现 → 修复 → 重新部署验证 → 提交 PR。
-              平台只创建 PR，最终合并必须由人工完成。
-            </p>
-          </div>
-          <el-button text size="small" @click="policyOpen = false">收起</el-button>
-        </div>
-        <div v-if="policyLoading" class="block-empty">加载策略…</div>
-        <div v-else class="policy-grid">
-          <label class="policy-switch">
-            <el-switch v-model="policyForm.enabled" />
-            <span>启用自动修复（新建 Bug 自动入队）</span>
-          </label>
-          <label class="policy-switch">
-            <el-switch v-model="policyForm.autoDeploy" />
-            <span>允许运维 Agent 自动部署测试环境</span>
-          </label>
-          <label class="policy-switch">
-            <el-switch v-model="policyForm.autoCreatePr" />
-            <span>验证通过后自动推送分支并创建 PR</span>
-          </label>
-          <div class="policy-field">
-            <span class="policy-label">测试环境</span>
-            <el-input v-model="policyForm.testEnv" size="small" placeholder="test" />
-          </div>
-          <div class="policy-field">
-            <span class="policy-label">环境绑定 ID</span>
-            <el-input
-              v-model="policyForm.bindingId" size="small"
-              placeholder="已人工确认的 EnvBinding id"
-            />
-          </div>
-          <div class="policy-field">
-            <span class="policy-label">最大尝试次数</span>
-            <el-input-number v-model="policyForm.maxAttempts" :min="1" :max="5" size="small" />
-          </div>
-          <div class="policy-field">
-            <span class="policy-label">测试环境地址</span>
-            <el-input
-              v-model="policyForm.baseUrl" size="small"
-              placeholder="https://test.example.com（用于确定性冒烟检查）"
-            />
-          </div>
-          <div class="policy-field">
-            <span class="policy-label">构建命令</span>
-            <el-input
-              v-model="policyForm.buildCommand" size="small"
-              placeholder="mvn -q -DskipTests package（修复后必须通过）"
-            />
-          </div>
-          <div class="policy-field">
-            <span class="policy-label">测试命令</span>
-            <el-input
-              v-model="policyForm.testCommand" size="small"
-              placeholder="可选，例如 mvn -q test"
-            />
-          </div>
-        </div>
-        <div class="editor-foot">
-          <span class="policy-hint">
-            {{ policy?.enabled ? '当前已启用，新建 Bug 会自动执行。' : '当前未启用，仅同步不自动执行。' }}
-          </span>
-          <el-button size="small" type="primary" :loading="policySaving" @click="submitPolicy">
-            保存策略
-          </el-button>
-        </div>
-      </section>
+      <!-- 列表视图的轻量数字条：不进看板也能看到关键指标 -->
+      <div v-if="taskView === 'list'" class="list-stats">
+        <span><em>待处理</em><b class="mono">{{ stats.open }}</b></span>
+        <span class="p0"><em>P0 紧急</em><b class="mono">{{ stats.p0 }}</b></span>
+        <span class="bug"><em>近 7 天新增 Bug</em><b class="mono">{{ weeklyBugs }}</b></span>
+        <button type="button" class="list-stats-more" @click="taskView = 'board'">查看看板 →</button>
+      </div>
 
       <div v-if="taskView === 'list'" class="issues-body">
         <!-- 左列：搜索 / 过滤 / 任务列表 -->
@@ -1536,136 +1379,6 @@ defineExpose({ openCreate, focus })
                 </div>
               </section>
 
-              <!-- Bug 自动修复：阶段时间线 + 证据 + PR -->
-              <section v-if="selectedRow.kind === 'BUG'" class="fix-block">
-                <div class="block-head">
-                  <span class="block-title">自动修复</span>
-                  <span v-if="fixRun" class="fix-status" :class="fixRun.status.toLowerCase()">
-                    {{ fixStatusLabel(fixRun.status) }}
-                  </span>
-                  <span v-if="fixRun" class="block-sub mono">
-                    阶段 {{ fixStageNo }} · {{ fixStageLabel }}
-                  </span>
-                  <span v-else class="block-sub">尚未运行</span>
-                </div>
-
-                <div v-if="fixLoading" class="block-empty">加载自动修复状态…</div>
-                <div v-else-if="!fixRun" class="fix-empty">
-                  <div class="fix-idle">
-                    <span>可按平台策略自动执行，也可以立即手动启动一次。</span>
-                    <el-button
-                      size="small" type="primary"
-                      :loading="fixBusy === 'start'" @click="startFix(selectedRow)"
-                    >
-                      立即自动修复
-                    </el-button>
-                  </div>
-                  <ol class="fix-timeline fix-timeline-idle">
-                    <li
-                      v-for="stage in FIX_STAGES" :key="stage.key"
-                      class="fix-step pending"
-                    >
-                      <span class="fix-dot" />
-                      <div class="fix-step-body">
-                        <div class="fix-step-title">{{ stage.label }}</div>
-                        <div class="fix-step-hint">{{ stage.hint }}</div>
-                      </div>
-                    </li>
-                  </ol>
-                </div>
-                <template v-else>
-                  <div class="fix-meta mono">
-                    <span v-if="fixRun.branch">{{ fixRun.branch }}</span>
-                    <button
-                      v-if="fixRun.branch" type="button" class="fix-copy"
-                      title="复制修复分支名" @click="copyBranch"
-                    >
-                      复制
-                    </button>
-                    <span v-if="fixRun.artifacts.baseSha">base {{ fixRun.artifacts.baseSha.slice(0, 8) }}</span>
-                    <span v-if="fixRun.artifacts.fixSha">fix {{ fixRun.artifacts.fixSha.slice(0, 8) }}</span>
-                    <span v-if="fixRun.artifacts.env">env {{ fixRun.artifacts.env }}</span>
-                    <span v-if="fixRun.attempt">第 {{ fixRun.attempt + 1 }} 次尝试</span>
-                  </div>
-
-                  <ol class="fix-timeline">
-                    <li
-                      v-for="(stage, index) in FIX_STAGES" :key="stage.key"
-                      class="fix-step" :class="stageState(stage.key, index)"
-                    >
-                      <span class="fix-dot" />
-                      <div class="fix-step-body">
-                        <div class="fix-step-title">
-                          {{ index + 1 }}. {{ stage.label }}
-                        </div>
-                        <div class="fix-step-hint">{{ stage.hint }}</div>
-                      </div>
-                    </li>
-                  </ol>
-
-                  <div v-if="fixRun.message" class="fix-message">{{ fixRun.message }}</div>
-                  <div v-if="fixHint" class="fix-hint">{{ fixHint }}</div>
-
-                  <details v-if="fixRun.artifacts.analysis" class="fix-fold">
-                    <summary>分析结论</summary>
-                    <pre class="fix-pre">{{ fixRun.artifacts.analysis }}</pre>
-                  </details>
-                  <details v-if="fixRun.artifacts.evidence" class="fix-fold">
-                    <summary>部署 / 验证证据</summary>
-                    <pre class="fix-pre">{{ fixRun.artifacts.evidence }}</pre>
-                  </details>
-
-                  <div v-if="fixStageRuns.length" class="fix-stages">
-                    <div class="fix-stages-head">阶段记录（尝试次数 / 耗时 / 证据）</div>
-                    <details v-for="sr in fixStageRuns" :key="sr.id" class="fix-fold">
-                      <summary>
-                        <span class="mono">{{ stageIndex(sr.stage) + 1 }}/7</span>
-                        {{ stageLabel(sr.stage) }} · 第 {{ sr.attempt }} 次 ·
-                        {{ formatDuration(sr.durationMs) }} ·
-                        <span class="mono fix-stage-run" :class="sr.status.toLowerCase()">
-                          {{ sr.status }}
-                        </span>
-                      </summary>
-                      <pre v-if="sr.message" class="fix-pre">{{ sr.message }}</pre>
-                      <pre v-if="sr.artifact" class="fix-pre">{{ sr.artifact }}</pre>
-                    </details>
-                  </div>
-
-                  <div v-if="fixEvents.length" class="fix-events">
-                    <div v-for="ev in fixEvents.slice(-8)" :key="ev.id" class="fix-event">
-                      <span class="fix-event-time mono">{{ formatTime(ev.createdAt) }}</span>
-                      <span class="fix-event-stage mono">{{ ev.stage }}</span>
-                      <span class="fix-event-msg" :class="ev.level.toLowerCase()">
-                        {{ ev.message }}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div class="fix-actions">
-                    <a
-                      v-if="fixRun.artifacts.prUrl" class="block-link"
-                      :href="fixRun.artifacts.prUrl" target="_blank" rel="noreferrer"
-                    >
-                      <el-icon><Link /></el-icon> 查看 PR（等待人工合并）
-                    </a>
-                    <span v-else class="fix-pr-hint">修复分支不会自动合并，PR 创建后等待人工确认。</span>
-                    <el-button
-                      v-if="fixActive" size="small"
-                      :loading="fixBusy === 'cancel'" @click="confirmCancelFix(selectedRow)"
-                    >
-                      取消
-                    </el-button>
-                    <el-button
-                      v-else-if="['BLOCKED', 'FAILED', 'CANCELLED'].includes(fixRun.status)"
-                      size="small" type="primary"
-                      :loading="fixBusy === 'retry'" @click="retryFix(selectedRow)"
-                    >
-                      重试 / 继续
-                    </el-button>
-                  </div>
-                </template>
-              </section>
-
               <section class="comment-block">
                 <div class="block-head">
                   <span class="block-title">评论</span>
@@ -1852,6 +1565,25 @@ defineExpose({ openCreate, focus })
 
 /* ---- 量化看板视图 ---- */
 .board-view {
+  --vis-font-family: inherit;
+  --vis-axis-tick-label-color: var(--ink-faint);
+  --vis-axis-tick-label-font-size: 10px;
+  --vis-axis-tick-label-weight: 500;
+  --vis-axis-grid-color: transparent;
+  --vis-axis-domain-color: transparent;
+  --vis-axis-tick-color: transparent;
+  --vis-tooltip-background-color: rgb(15 23 42 / 0.96);
+  --vis-tooltip-text-color: #f8fafc;
+  --vis-tooltip-border-color: transparent;
+  --vis-tooltip-border-radius: 8px;
+  --vis-tooltip-padding: 8px 12px;
+  --vis-tooltip-box-shadow: 0 8px 24px rgb(15 23 42 / 18%);
+  --vis-donut-background-color: #f1f5f9;
+  --vis-donut-central-label-text-color: var(--ink);
+  --vis-donut-central-label-font-size: 26px;
+  --vis-donut-central-label-font-weight: 700;
+  --vis-donut-central-sub-label-text-color: var(--ink-faint);
+
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -1861,332 +1593,259 @@ defineExpose({ openCreate, focus })
   overflow-y: auto;
 }
 
-/* 主视觉：完成率大环 + 关键指标 */
-.board-hero {
+/* 关键指标条 */
+.kpi-strip {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 18px;
-  padding: 20px 22px;
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgb(77 130 247 / 10%), transparent 55%),
-    radial-gradient(120% 140% at 100% 0%, rgb(46 163 107 / 9%), transparent 55%),
-    linear-gradient(160deg, var(--surface-raised), var(--surface-sunken));
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg, 16px);
+  flex: none;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(190px, 1.15fr);
+  gap: 12px;
 }
-.hero-ring {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 224px;
-}
-.hero-ring svg {
-  width: 224px;
-  height: 224px;
-  transform: rotate(-90deg);
-}
-.ring-track {
-  fill: none;
-  stroke: var(--line-soft);
-  stroke-width: 14;
-  opacity: 0.55;
-}
-.ring-value {
-  fill: none;
-  stroke: url(#ringGrad);
-  stroke-width: 14;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.8s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-.ring-center {
-  position: absolute;
+.stat-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 1px;
-}
-.ring-center b {
-  font-size: 34px;
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -0.03em;
-  color: var(--ink);
-}
-.ring-center span {
-  font-size: 11px;
-  color: var(--ink-muted);
-}
-.ring-center em {
-  margin-top: 3px;
-  padding: 1px 8px;
-  font-size: 9.5px;
-  font-style: normal;
-  color: var(--ink-faint);
-  background: var(--surface-sunken);
-  border-radius: 999px;
-}
-.hero-side {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  justify-content: center;
   min-width: 0;
-}
-.hero-head h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--ink);
-}
-.hero-head p {
-  margin: 3px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--ink-muted);
-}
-.hero-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-.metric {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  align-items: flex-start;
-  padding: 10px 12px;
+  padding: 14px 16px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  border-radius: var(--radius-lg, 12px);
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
-.metric:hover {
+.stat-card:hover {
   transform: translateY(-2px);
-  border-color: var(--accent);
-  box-shadow: 0 8px 20px rgb(77 130 247 / 12%);
+  border-color: var(--line);
+  box-shadow: 0 10px 24px rgb(15 23 42 / 8%);
 }
-.metric-label {
-  font-size: 10px;
-  color: var(--ink-faint);
+.stat-head {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--ink-muted);
 }
-.metric-value {
+.stat-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+.stat-icon svg { width: 14px; height: 14px; }
+.stat-icon.blue { color: #2563eb; background: #eff6ff; }
+.stat-icon.gray { color: var(--ink-muted); background: var(--surface-sunken); }
+.stat-icon.green { color: var(--ok); background: #ecfdf5; }
+.stat-icon.rose { color: #f43f5e; background: #fff1f2; }
+.stat-value { display: flex; gap: 6px; align-items: baseline; margin-top: 10px; }
+.stat-value b {
   font-size: 24px;
   font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  line-height: 1;
+  letter-spacing: -0.03em;
   color: var(--ink);
 }
-.metric-foot {
-  font-size: 9px;
-  color: var(--ink-faint);
+.stat-value em { font-size: 11px; font-style: normal; color: var(--ink-faint); }
+.stat-foot { margin-top: 10px; font-size: 10px; color: var(--ink-faint); }
+.stat-foot.ok { color: var(--ok); }
+.stat-progress {
+  height: 5px;
+  margin-top: 12px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: 999px;
 }
-.metric.ok .metric-value { color: var(--ok); }
-.metric.p0 .metric-value { color: var(--danger); }
-.metric.fail .metric-value { color: var(--warn); }
+.stat-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width .5s ease;
+}
 
-/* 三块量化面板 */
+.risk-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg, 12px);
+}
+.risk-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.risk-card-head em { font-style: normal; font-size: 11px; font-weight: 600; color: var(--danger); }
+.risk-card-head em.ok { color: var(--ok); }
+.risk-card-body { margin: 0; font-size: 10.5px; color: var(--ink-faint); }
+.risk-card-body.ok { color: var(--ok); }
+.risk-card-actions { display: flex; gap: 6px; margin-top: auto; padding-top: 4px; }
+.ghost-btn,
+.primary-btn {
+  flex: 1;
+  height: 26px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 7px;
+}
+.ghost-btn {
+  color: var(--ink-2, #334155);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+}
+.ghost-btn:hover { background: var(--surface-sunken); }
+.primary-btn { color: #fff; background: var(--accent); border: 1px solid var(--accent); }
+.primary-btn:hover { filter: brightness(0.95); }
+
 .board-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+.board-grid.wide { grid-template-columns: 1.4fr 1fr; }
 .bpanel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 8px;
+  padding: 16px 18px;
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg, 16px);
+  border-radius: var(--radius-lg, 12px);
+  transition: border-color .18s ease, box-shadow .18s ease;
 }
+.bpanel:hover { border-color: var(--line); box-shadow: 0 6px 18px rgb(15 23 42 / 5%); }
 .bpanel-head {
   display: flex;
-  align-items: center;
+  gap: 10px;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
 }
-.bpanel-title {
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--ink);
-}
-.bpanel-hint {
+.bpanel-title { display: block; font-size: 12px; font-weight: 650; color: var(--ink); }
+.bpanel-hint { display: block; margin-top: 2px; font-size: 9.5px; color: var(--ink-faint); }
+.hint-sep { margin: 0 4px; color: var(--line); }
+.bpanel-tag {
+  flex: none;
+  padding: 1px 7px;
   font-size: 9.5px;
-  color: var(--ink-faint);
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
-/* 优先级分布 */
-.pbar-row {
-  display: flex;
-  gap: 8px;
+.seg-switch {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border-radius: 7px;
+}
+.seg-switch button {
+  padding: 2px 9px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  transition: .15s ease;
+}
+.seg-switch button.active {
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+}
+
+.chart-box { width: 100%; margin-top: 4px; }
+.chart-legend { display: flex; gap: 14px; align-items: center; font-size: 10px; color: var(--ink-muted); }
+.legend-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; }
+.legend-dot.bug { background: #ef4444; }
+.legend-dot.feat { background: #8b5cf6; }
+.legend-dot.synced { background: var(--ok); }
+.legend-dot.local { background: var(--line); }
+.legend-dot.failed { background: var(--danger); }
+.quad-foot { margin-top: auto; }
+.quad-hint { margin-left: auto; font-size: 9.5px; color: var(--ink-faint); }
+.type-legend { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-muted); }
+.type-legend b { color: var(--ink); }
+
+/* 优先级矩阵 */
+.matrix-head,
+.matrix-row {
+  display: grid;
+  grid-template-columns: 34px 1fr 1fr;
+  gap: 6px;
   align-items: center;
+}
+.matrix-head { font-size: 9px; color: var(--ink-faint); text-align: center; }
+.matrix-row {
   padding: 2px 0;
   font-family: inherit;
   cursor: pointer;
   background: none;
   border: 0;
+  border-radius: 6px;
 }
+.matrix-row:hover { background: var(--surface-sunken); }
 .pbar-key {
-  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 26px;
   height: 20px;
   font-size: 10px;
   font-weight: 700;
-  line-height: 20px;
-  text-align: center;
   border-radius: 6px;
 }
 .pbar-key.p0 { color: #c23a3a; background: rgb(229 77 77 / 14%); }
 .pbar-key.p1 { color: #96660f; background: rgb(184 130 27 / 16%); }
 .pbar-key.p2 { color: var(--accent-ink, #4a6cf7); background: rgb(77 130 247 / 13%); }
-.pbar-track {
-  flex: 1;
-  height: 8px;
-  overflow: hidden;
-  background: var(--surface-sunken);
-  border-radius: 999px;
-}
-.pbar-track i {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-.pbar-track i.p0 { background: linear-gradient(90deg, #ff9d9d, var(--danger)); }
-.pbar-track i.p1 { background: linear-gradient(90deg, #e8c46a, var(--warn)); }
-.pbar-track i.p2 { background: linear-gradient(90deg, #8fb2ff, var(--accent)); }
-.pbar-num {
-  flex: none;
-  width: 22px;
-  font-size: 11px;
+.matrix-cell {
+  display: grid;
+  place-items: center;
+  height: 34px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink);
-  text-align: right;
-}
-.pbar-pct {
-  flex: none;
-  width: 34px;
-  font-size: 10px;
-  color: var(--ink-faint);
-  text-align: right;
-}
-
-/* 类型构成 + 同步状态 */
-.type-split {
-  display: flex;
-  gap: 3px;
-  height: 10px;
-  overflow: hidden;
   background: var(--surface-sunken);
-  border-radius: 999px;
+  border-radius: 7px;
 }
-.type-bar {
-  flex-basis: 0;
-  min-width: 0;
-}
-.type-bar.bug { background: linear-gradient(90deg, #d47272, #b54a4a); }
-.type-bar.feat { background: linear-gradient(90deg, #7e9cff, var(--accent)); }
-.type-legend,
-.sync-list {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 10px;
-  color: var(--ink-muted);
-}
-.sync-list {
-  padding-top: 10px;
-  margin-top: auto;
-  border-top: 1px dashed var(--line-soft);
-}
-.type-legend b,
-.sync-list b {
-  margin-left: 2px;
-  color: var(--ink);
-}
-.dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 4px;
-  border-radius: 50%;
-}
-.dot.bug { background: #b54a4a; }
-.dot.feat { background: var(--accent); }
-.dot.synced { background: var(--ok); }
-.dot.local { background: var(--line); }
-.dot.failed { background: var(--danger); }
+.matrix-row:hover .matrix-cell { background: var(--surface-raised); }
+.matrix-foot { padding-top: 6px; margin-top: auto; }
 
-/* 近 7 天活动 */
-.trend {
-  display: flex;
-  flex: 1;
-  gap: 8px;
-  align-items: stretch;
-  height: 112px;
-}
-.trend-col {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
-  align-items: center;
-  min-width: 0;
-}
-.trend-count {
-  font-size: 9.5px;
-  color: var(--ink-faint);
-}
-.trend-bar-wrap {
-  display: flex;
-  flex: 1;
-  align-items: flex-end;
-  justify-content: center;
-  width: 100%;
-  min-height: 0;
-}
-.trend-bar {
-  width: 100%;
-  max-width: 20px;
-  min-height: 4px;
-  background: linear-gradient(180deg, #6e8cff, rgb(77 130 247 / 18%));
-  border-radius: 5px 5px 2px 2px;
-  box-shadow: 0 0 12px rgb(77 130 247 / 18%);
-  transition: height 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-.trend-label {
-  font-size: 9px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-}
-
-/* 优先处理 */
-.focus-panel {
-  gap: 2px;
-}
-.focus-panel .bpanel-head {
-  margin-bottom: 6px;
-}
+/* 优先处理 / 风险项 */
 .focus-row {
   display: flex;
-  gap: 10px;
+  gap: 9px;
   align-items: center;
-  padding: 9px 8px;
+  padding: 8px 6px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   background: none;
   border: 0;
-  border-radius: 8px;
-  transition: background-color 0.15s ease;
+  border-radius: 7px;
+  transition: background-color .15s ease;
 }
-.focus-row:hover {
-  background: var(--surface-sunken);
-}
+.focus-row:hover { background: var(--surface-sunken); }
+.prio-line { width: 3px; height: 22px; flex: none; border-radius: 999px; }
+.prio-line.p0 { background: #f43f5e; }
+.prio-line.p1 { background: #f59e0b; }
+.prio-line.p2 { background: #60a5fa; }
+.prio-pill { flex: none; padding: 1px 5px; font-size: 9.5px; font-weight: 700; border-radius: 4px; }
+.prio-pill.p0 { color: #c23a3a; background: rgb(229 77 77 / 14%); }
+.prio-pill.p1 { color: #96660f; background: rgb(184 130 27 / 16%); }
+.prio-pill.p2 { color: var(--accent-ink, #4a6cf7); background: rgb(77 130 247 / 13%); }
 .focus-title {
   flex: 1;
   min-width: 0;
@@ -2196,38 +1855,100 @@ defineExpose({ openCreate, focus })
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.focus-meta {
-  flex: none;
-  font-size: 10px;
-  color: var(--ink-faint);
-}
+.focus-meta { flex: none; font-size: 9.5px; color: var(--ink-faint); }
 .focus-arrow {
   flex: none;
-  font-size: 12px;
-  color: var(--ink-faint);
-  transition: transform 0.15s ease, color 0.15s ease;
-}
-.focus-row:hover .focus-arrow {
-  color: var(--accent);
-  transform: translateX(2px);
-}
-.board-empty {
-  padding: 18px 6px;
   font-size: 11px;
   color: var(--ink-faint);
-  text-align: center;
+  transition: transform .15s ease, color .15s ease;
+}
+.focus-row:hover .focus-arrow { color: var(--accent); transform: translateX(2px); }
+.risk-ok {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 6px;
+  font-size: 11px;
+  color: var(--ok);
+}
+.risk-ok-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--ok);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgb(46 163 107 / 15%);
+}
+.risk-badge {
+  flex: none;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--danger);
+  background: rgb(229 77 77 / 12%);
+  border-radius: 4px;
+}
+.board-empty { padding: 16px 6px; font-size: 11px; color: var(--ink-faint); text-align: center; }
+.sync-summary {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+  margin-top: auto;
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  border-top: 1px dashed var(--line-soft);
+}
+.sync-summary b { color: var(--ink); }
+
+@media (max-width: 1100px) {
+  .kpi-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .board-grid,
+  .board-grid.wide { grid-template-columns: 1fr; }
 }
 
-@media (max-width: 1000px) {
-  .board-hero {
-    grid-template-columns: 1fr;
-  }
-  .hero-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .board-grid {
-    grid-template-columns: 1fr;
-  }
+/* ---- 列表视图数字条 ---- */
+.list-stats {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+.list-stats span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: 6px;
+}
+.list-stats em {
+  font-style: normal;
+  color: var(--ink-faint);
+}
+.list-stats b {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.list-stats .p0 b { color: var(--danger); }
+.list-stats .bug b { color: var(--warn); }
+.list-stats-more {
+  margin-left: auto;
+  padding: 2px 4px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--accent-ink, #4a6cf7);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.list-stats-more:hover {
+  text-decoration: underline;
 }
 
 /* ---- 左右分栏 ---- */
@@ -2947,12 +2668,6 @@ defineExpose({ openCreate, focus })
   padding-top: 12px;
   border-top: 1px solid var(--line-soft);
 }
-.policy-card .editor-foot {
-  padding: 10px 16px;
-  background: var(--surface-sunken);
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-}
-
 .comment-list {
   display: flex;
   flex-direction: column;
@@ -3036,290 +2751,6 @@ defineExpose({ openCreate, focus })
 
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-/* ---- 自动修复策略 ---- */
-.policy-card {
-  flex: none;
-  overflow: hidden;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
-}
-.policy-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px 18px;
-  padding: 14px 16px;
-}
-.policy-switch {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  font-size: 11.5px;
-  color: var(--ink);
-  cursor: pointer;
-}
-.policy-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.policy-label {
-  font-size: 10.5px;
-  color: var(--ink-muted);
-}
-.policy-hint {
-  margin-right: auto;
-  font-size: 10.5px;
-  color: var(--ink-faint);
-}
-
-/* ---- 自动修复时间线 ---- */
-.fix-block {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 13px;
-  background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-}
-.fix-block .block-head {
-  padding: 0 0 8px;
-  background: none;
-  border-bottom: 1px solid var(--line-soft);
-}
-.fix-status {
-  margin-left: auto;
-  padding: 2px 8px;
-  font-size: 10px;
-  border-radius: var(--radius-pill);
-}
-.fix-status.queued,
-.fix-status.running {
-  color: var(--accent-ink, #4a6cf7);
-  background: var(--accent-soft, rgba(74, 108, 247, 0.12));
-}
-.fix-status.succeeded,
-.fix-status.waiting_merge {
-  color: var(--ok);
-  background: rgba(46, 160, 67, 0.12);
-}
-.fix-status.failed {
-  color: var(--danger, #c45656);
-  background: rgba(196, 86, 86, 0.12);
-}
-.fix-status.blocked {
-  color: var(--warn, #d19a00);
-  background: rgba(209, 154, 0, 0.12);
-}
-.fix-status.cancelled {
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-}
-.fix-empty {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 11.5px;
-  color: var(--ink-muted);
-}
-.fix-idle {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-}
-.fix-timeline-idle {
-  opacity: 0.72;
-}
-.fix-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 10px;
-  color: var(--ink-faint);
-}
-.fix-timeline {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-.fix-step {
-  position: relative;
-  display: flex;
-  gap: 10px;
-  padding: 5px 0 5px 2px;
-}
-.fix-step:not(:last-child)::before {
-  position: absolute;
-  top: 16px;
-  left: 6px;
-  width: 1px;
-  height: calc(100% - 10px);
-  content: '';
-  background: var(--line-soft);
-}
-.fix-dot {
-  z-index: 1;
-  flex: none;
-  width: 9px;
-  height: 9px;
-  margin-top: 4px;
-  background: var(--surface-sunken);
-  border: 1.5px solid var(--line);
-  border-radius: 50%;
-}
-.fix-step.done .fix-dot {
-  background: var(--ok);
-  border-color: var(--ok);
-}
-.fix-step.active .fix-dot {
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft, rgba(74, 108, 247, 0.15));
-}
-.fix-step.error .fix-dot {
-  background: var(--danger, #c45656);
-  border-color: var(--danger, #c45656);
-}
-.fix-step.muted .fix-dot {
-  background: var(--ink-faint);
-  border-color: var(--ink-faint);
-}
-.fix-step-body {
-  min-width: 0;
-}
-.fix-step-title {
-  font-size: 11.5px;
-  color: var(--ink);
-}
-.fix-step.pending .fix-step-title {
-  color: var(--ink-faint);
-}
-.fix-step.active .fix-step-title {
-  font-weight: 600;
-}
-.fix-step-hint {
-  margin-top: 1px;
-  font-size: 10px;
-  line-height: 1.45;
-  color: var(--ink-faint);
-}
-.fix-message {
-  padding: 8px 10px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--ink-muted);
-  background: var(--surface-sunken);
-  border-radius: 7px;
-}
-.fix-hint {
-  padding: 7px 10px;
-  font-size: 10.5px;
-  line-height: 1.55;
-  color: var(--warn, #d19a00);
-  background: rgba(209, 154, 0, 0.08);
-  border-radius: 7px;
-}
-.fix-copy {
-  padding: 1px 6px;
-  font-family: inherit;
-  font-size: 10px;
-  line-height: 1.4;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 1px solid var(--line-soft);
-  border-radius: 5px;
-}
-.fix-copy:hover {
-  color: var(--ink);
-  border-color: var(--line);
-}
-.fix-fold {
-  font-size: 11px;
-  color: var(--ink-muted);
-}
-.fix-fold summary {
-  font-size: 10.5px;
-  color: var(--ink-muted);
-  cursor: pointer;
-}
-.fix-pre {
-  max-height: 220px;
-  padding: 8px 10px;
-  margin: 6px 0 0;
-  overflow: auto;
-  font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
-  line-height: 1.55;
-  color: var(--ink);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  background: var(--code-bg);
-  border-radius: 7px;
-}
-.fix-events {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.fix-stages {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.fix-stages-head {
-  font-size: 10.5px;
-  color: var(--ink-muted);
-}
-.fix-stage-run.continue { color: #2f9e6e; }
-.fix-stage-run.failed { color: #d9534f; }
-.fix-stage-run.blocked,
-.fix-stage-run.cancelled { color: #b8860b; }
-.fix-stage-run.running { color: var(--ink); }
-.fix-event {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  font-size: 10px;
-}
-.fix-event-time {
-  flex: none;
-  color: var(--ink-faint);
-}
-.fix-event-stage {
-  flex: none;
-  color: var(--ink-muted);
-}
-.fix-event-msg {
-  min-width: 0;
-  color: var(--ink-muted);
-}
-.fix-event-msg.warn {
-  color: var(--warn, #d19a00);
-}
-.fix-event-msg.error {
-  color: var(--danger, #c45656);
-}
-.fix-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-}
-.fix-pr-hint {
-  font-size: 10px;
-  color: var(--ink-faint);
 }
 
 /* ---- 响应式 ---- */

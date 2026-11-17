@@ -1195,3 +1195,19 @@ body {
     display: none;
   }
 }
+
+/* ---- Unovis 图表主题（任务看板） ---- */
+:root {
+  --vis-font-family: inherit;
+  --vis-tooltip-background-color: rgb(15 23 42 / 96%);
+  --vis-tooltip-text-color: #f8fafc;
+  --vis-tooltip-border-color: transparent;
+  --vis-tooltip-border-radius: 8px;
+  --vis-tooltip-padding: 8px 12px;
+  --vis-tooltip-box-shadow: 0 8px 24px rgb(15 23 42 / 18%);
+  --vis-axis-tick-label-color: var(--ink-muted);
+  --vis-axis-tick-label-font-size: 10px;
+  --vis-axis-grid-color: transparent;
+  --vis-axis-domain-color: transparent;
+  --vis-axis-tick-color: transparent;
+}
