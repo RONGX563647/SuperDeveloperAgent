@@ -72,6 +72,25 @@ class AskUserMiddlewareTest {
     }
 
     @Test
+    void allowTextIsOnByDefault() {
+        // 选项覆盖不到的答案不应该逼用户二选一：缺省 allowText=true 由前端渲染输入框
+        ToolUseBlock call = new ToolUseBlock("call-4", "ask_user", Map.of(
+                "question", "继续吗？",
+                "options", List.of("继续", "先停")));
+
+        List<AgentEvent> events = middleware
+                .onActing(null, null, new ActingInput(List.of(call)),
+                        input -> Flux.<AgentEvent>empty())
+                .collectList()
+                .block();
+
+        assertNotNull(events);
+        assertEquals(1, events.size());
+        CustomEvent event = (CustomEvent) events.get(0);
+        assertEquals(Boolean.TRUE, event.getValue().get("allowText"));
+    }
+
+    @Test
     void incompleteAskDoesNotEmit() {
         // 没有问题：不产生卡片（模型会收到工具的 err 文本）
         ToolUseBlock call = new ToolUseBlock("call-3", "ask_user",
