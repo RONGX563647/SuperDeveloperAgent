@@ -120,6 +120,15 @@ class DeployersTest {
     }
 
     @Test
+    @DisplayName("回滚预检：镜像名为空时直接判定不存在，不触发 docker 调用")
+    void imageExistsRejectsBlankImage() {
+        DockerDeployer deployer = new DockerDeployer();
+        assertFalse(deployer.imageExists(Path.of("."), ""));
+        assertFalse(deployer.imageExists(Path.of("."), " "));
+        assertFalse(deployer.imageExists(Path.of("."), null));
+    }
+
+    @Test
     @DisplayName("容器名按项目归一化：一个项目一个槽位（替换式发布）")
     void containerNameIsStablePerProject() {
         assertEquals("agent-deploy-ry", DockerDeployer.containerName("RY"));
