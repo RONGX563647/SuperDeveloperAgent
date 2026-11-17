@@ -1,0 +1,169 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_0641_sandbox-docker-cli-abstraction",
+  "category": "feat",
+  "title": "Docker CLI 可切换为 podman（去 Docker Desktop 硬依赖）",
+  "createdAt": "2026-11-18T06:41:20+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "Docker CLI 可切换为 podman（去 Docker Desktop 硬依赖）",
+    "toolCallCount": 0
+  },
+  "problem": "沙箱外仍硬编码 docker：部署器/中间件自愈/运行时巡检/流水线引擎全部调用 docker CLI，换 Podman 或 rootless 环境只有构建沙箱生效",
+  "solution": "抽出 DockerCli 作为可执行文件的唯一来源（agent.sandbox.docker-binary），PipelineConfig 注入 DockerDeployer/AppRuntimeInspector/DockerEnvRuntime/DockerEnvProvisioner/BuiltInPipelineEngine；各构造器保留无参重载走默认 docker",
+  "commits": [
+    {
+      "sha": "e6380aabd70d0db23731504fc0cf59deb200e001",
+      "subject": "feat(sandbox): Docker CLI 抽象，部署/中间件/巡检可切换 podman",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "0b2df79225444113a051d46279b94b6d4ed2dd05"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "3366d537ce0dcc25c5bc71fc5141d57b8b33a9a9"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/AppRuntimeInspector.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 5,
+          "blobHash": "e5f25ce2a04e5d8d4be4d5c154e12de093b2d65e"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 22,
+          "deletions": 11,
+          "blobHash": "63f3666746f346ada227495604f6fe3ac59c5c6e"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerCli.java",
+          "status": "A",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "1cf62dd28ebabc659738f9690859e37a278ca2d9"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 8,
+          "blobHash": "0084ad58603de7e3ae488c7ed086e43c51477ec4"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvProvisioner.java",
+          "status": "M",
+          "additions": 30,
+          "deletions": 12,
+          "blobHash": "3c02c9a79bfe2f91285b2c8c78345211097cece0"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvRuntime.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 3,
+          "blobHash": "ad072e2cb42d12394ccbcf5c9db663fedca24f3d"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineConfig.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 8,
+          "blobHash": "8de9fec1c18950ed37205cbfddabc4914696e281"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerCliTest.java",
+          "status": "A",
+          "additions": 31,
+          "deletions": 0,
+          "blobHash": "08fd6c3f6f00208e1a4b94c2b5ba1ce02d8ac89a"
+        }
+      ]
+    },
+    {
+      "sha": "5c69021f17c82b229ba69afaa26cd7010defcb0b",
+      "subject": "chore(config): 沙箱运行时/初始化镜像/docker 二进制配置项",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "c30efcd162679594df1ef81d061906aa59fe1082"
+        }
+      ]
+    },
+    {
+      "sha": "dd8fd33c6f494f7ae2ba44f180b653111303f1f7",
+      "subject": "test(sandbox): 断言中间件 run 命令跟随配置的 docker 二进制",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvProvisioner.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "01fce497b7aa70144ade7ab7340400d7d2d22360"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerEnvProvisionerTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "efc1438dc29e8a7cb8ea3c71cee602f53307b9b6"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerCliTest.java",
+        "status": "A",
+        "additions": 31,
+        "deletions": 0,
+        "blobHash": "08fd6c3f6f00208e1a4b94c2b5ba1ce02d8ac89a"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerEnvProvisionerTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 0,
+        "blobHash": "efc1438dc29e8a7cb8ea3c71cee602f53307b9b6"
+      }
+    ],
+    "casesAdded": 4,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 614, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "agent-gateway"
+    ],
+    "verification": "mvn -B -pl spec-checks -am test：614 例通过、0 失败；新增 DockerCliTest 3 例 + 中间件 runArgvUsesConfiguredBinary"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_0641_sandbox-docker-cli-abstraction"
+    ]
+  },
+  "chain": {
+    "prev": "0d9b487478cd1c32ee9a8c98bfc3cca55293270e9c9e44c14509eda575d3ec71",
+    "self": "fbc95ab8be3e2a104b8e08c1d9895ba949c5c346a2cbf8a6aada471da8c20bfa"
+  }
+}
