@@ -113,6 +113,10 @@ docs/
 - 测试不通过不允许 `git commit`（skill 流程强制 + spec-checks 兜底）。
 - bug 的回归用例必须先红后绿：`tests.evidence` 写明「先复现：xxx 失败；修复后：全绿」。
 - 归档时测试失败/未跑 = 不合格归档，`ProcessArchiveTest` 让构建失败。
+- **并发与复用**：pre-commit 的测试在公共 `.git/session-archive/test.lock` 上串行执行，
+  主树与 `.agent/worktrees/*` 不会同时跑两套全量测试；同一工作区内容（索引树 + 未暂存改动 +
+  未跟踪文件）在 `SESSION_ARCHIVE_EVIDENCE_TTL_MIN`（默认 60 分钟）内已验证为绿色时直接复用证据，
+  改提交信息之类的重试不再重跑。缩小范围用 `SESSION_ARCHIVE_TEST_CMD`。
 
 ### 3.4 只增不改
 
