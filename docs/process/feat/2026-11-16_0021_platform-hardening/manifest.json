@@ -1,0 +1,814 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-16_0021_platform-hardening",
+  "category": "feat",
+  "title": "平台加固：有界命令、部署配置与镜像自动拉取",
+  "createdAt": "2026-11-17T10:23:15+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "外部命令无界等待、JDK/镜像硬依赖、Windows 私有仓库认证失败；缺少部署配置工具且镜像不会自动拉取",
+    "toolCallCount": 0
+  },
+  "problem": "外部命令无界等待、JDK/镜像硬依赖、Windows 私有仓库认证失败；缺少部署配置工具且镜像不会自动拉取",
+  "solution": "引入有界命令原语与 OS 自适应解释器、按当前 JVM 解析路径；新增平台部署配置工具与镜像自动拉取；补齐稳定性回归并自动释放 SQLite 连接池",
+  "commits": [
+    {
+      "sha": "30be8dc560a9d5708757757c6d8319777ebc16ce",
+      "subject": "fix(web): 工作区助手切走不再中断输出，并补齐流式体验",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/web/src/composables/useAgentChat.ts",
+          "status": "M",
+          "additions": 73,
+          "deletions": 35,
+          "blobHash": "a57601ecc32b08e92ffcf577bb450727411a21ea"
+        },
+        {
+          "path": "platform/web/src/state/workspaceChat.ts",
+          "status": "A",
+          "additions": 102,
+          "deletions": 0,
+          "blobHash": "88716ae104c22b0e1f234eb33b79adaec4bbf8e9"
+        },
+        {
+          "path": "platform/web/src/views/WorkspaceHomeView.vue",
+          "status": "M",
+          "additions": 140,
+          "deletions": 46,
+          "blobHash": "e197fa72bc4343295c125733f12d7cd9c2f1b4c1"
+        }
+      ]
+    },
+    {
+      "sha": "0d1f3de512783176e5198d1f011f1857cae51c6c",
+      "subject": "fix(executor): 消除外部命令无界等待、镜像与 JDK 硬依赖",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/AgentDiagnosisRepair.java",
+          "status": "A",
+          "additions": 59,
+          "deletions": 0,
+          "blobHash": "80d5fe185e9773ccc7df63b691a90fb41d46be33"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/AutoRepairCoordinator.java",
+          "status": "A",
+          "additions": 111,
+          "deletions": 0,
+          "blobHash": "d2bf4fe83ccfbf3dc630369c0925d54d7d774086"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/AutoRepairPolicy.java",
+          "status": "A",
+          "additions": 43,
+          "deletions": 0,
+          "blobHash": "9f477fb38aa2e7d7921ba0bd8748a939e7addd1b"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 531,
+          "deletions": 104,
+          "blobHash": "ec6ae232daceeab1d2388c77104d515622f33f90"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerActionRunner.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 5,
+          "blobHash": "8688723148d156db92e53b86246b422a18649565"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvProvisioner.java",
+          "status": "M",
+          "additions": 96,
+          "deletions": 8,
+          "blobHash": "506a35de9dbb54cba692c049f2ad6af48550795f"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 139,
+          "deletions": 53,
+          "blobHash": "28a24cece7a090415fb5aefa32cc4725cd500308"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/FailureRepair.java",
+          "status": "A",
+          "additions": 90,
+          "deletions": 0,
+          "blobHash": "310b0d2c7494aa3efdab6a8ff4e9c736dda8ac0e"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "76bc0ea6cb8597845f1d772051b2dcfffbeba208"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ImagePullRepair.java",
+          "status": "A",
+          "additions": 87,
+          "deletions": 0,
+          "blobHash": "07b2a4f125a3dce6cd301b2fd6ea7823e52c9cc6"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/JschSsh.java",
+          "status": "M",
+          "additions": 91,
+          "deletions": 18,
+          "blobHash": "d22550a7d957d2889f0893ceb169c537e3da0a8f"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/LocalDevHostDeployer.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "bd8c6329bee2e97022aa2ba726ca261120dd2e44"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineConfig.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 3,
+          "blobHash": "15ea001325d9639fe4d67a68dffc80eaace99755"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ProcessExecutor.java",
+          "status": "M",
+          "additions": 32,
+          "deletions": 5,
+          "blobHash": "0459c24e1315000cff51de9865a010db9fa960e8"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxConfig.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 2,
+          "blobHash": "62b64bca38b75098cce6a6cf4ef35ecc2303fb41"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/SshExec.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 2,
+          "blobHash": "24aee7bb7b795be5858005367736cf7544bdb919"
+        }
+      ]
+    },
+    {
+      "sha": "f4f9e49a9427c866d0f45b9b8555fcb827de7096",
+      "subject": "fix(gateway,infra): 接入有界原语并修 Windows 私有仓库认证",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/bugfix/WorkspaceBugFixCheck.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 37,
+          "blobHash": "2ee811e1682eca80e71d949a4a8c1a2c125da526"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/EnvironmentDiscoveryService.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 19,
+          "blobHash": "ed90159bf0b657c9a28e039cf7cd7f166bfa0f46"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/EnvironmentController.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 14,
+          "blobHash": "3aff8a9bb9559cd97c7f9f9d7a113d89ac0c6781"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 24,
+          "deletions": 0,
+          "blobHash": "6d7adce0af636e5be479cc6e107d2ec0bc10386c"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 29,
+          "deletions": 0,
+          "blobHash": "60a77399130900051cf63132c826cd539b1fef28"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/env/LocalProcessServiceRuntime.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 7,
+          "blobHash": "66b35a1e7504ef2f130218cfd6191a52d13cf85a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+          "status": "M",
+          "additions": 73,
+          "deletions": 53,
+          "blobHash": "82795b8b6ab7e5fc611cf4b9ab05168b99686f82"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "e82d3aae245d6e997cf893b6093de83da3e4d188"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/recipe/RecipeActionResolver.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 11,
+          "blobHash": "34544a6ef56809ce5b55fd08567eb71218ce06d7"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/scaffold/RecipeScaffolder.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 4,
+          "blobHash": "597b7932c22419ff3f4951108064520225090211"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/sqlite/SqliteConnections.java",
+          "status": "M",
+          "additions": 18,
+          "deletions": 0,
+          "blobHash": "90408ceaf1a4232d72e77eb1eaca1fc62ce98935"
+        }
+      ]
+    },
+    {
+      "sha": "3d4a7633780fd76f87636599e8c44cde93415ee0",
+      "subject": "test: 补齐稳定性回归、修正部署夹具并自动释放 SQLite 连接池",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/process/BoundedCommandTest.java",
+          "status": "A",
+          "additions": 98,
+          "deletions": 0,
+          "blobHash": "78925dc7271118543b3537727bdfdd964480fc4a"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/process/CommandShellTest.java",
+          "status": "A",
+          "additions": 70,
+          "deletions": 0,
+          "blobHash": "ea65ef8cea0eb1ceeef1db6b7f1fe1cc1bac9ce0"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/process/JavaRuntimeTest.java",
+          "status": "A",
+          "additions": 35,
+          "deletions": 0,
+          "blobHash": "53a812f24eef4fa14a04cd935ac4c05cbdd20292"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AgentDiagnosisRepairTest.java",
+          "status": "A",
+          "additions": 78,
+          "deletions": 0,
+          "blobHash": "6e6b49716ab3286cebcb4b23db80beeab2478a99"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AutoRepairCoordinatorTest.java",
+          "status": "A",
+          "additions": 175,
+          "deletions": 0,
+          "blobHash": "86b48482ee8336be78891f3079aaf5edd796d15c"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerActionRunnerPrepareTest.java",
+          "status": "A",
+          "additions": 80,
+          "deletions": 0,
+          "blobHash": "212989d6abec41d82293b43fcceb9cb3ac470edf"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerEnvProvisionerImageTest.java",
+          "status": "A",
+          "additions": 71,
+          "deletions": 0,
+          "blobHash": "600afd578a7518181799d64dfa15d075a3ef2eee"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+          "status": "A",
+          "additions": 146,
+          "deletions": 0,
+          "blobHash": "ec82ed4d08a0e26f09987a7fc1a7fc46fd6fcec0"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+          "status": "A",
+          "additions": 117,
+          "deletions": 0,
+          "blobHash": "5d47ed9d017d11111e15b4aed7ae96fdea582537"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineAutoRepairTest.java",
+          "status": "A",
+          "additions": 164,
+          "deletions": 0,
+          "blobHash": "0ef7a2da9bf8530200cdbe38d0c66d70465f56ed"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineWatchdogTest.java",
+          "status": "A",
+          "additions": 124,
+          "deletions": 0,
+          "blobHash": "dc883257ffd0d37d842f350a7465196944d31b5a"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ProcessExecutorTimeoutTest.java",
+          "status": "A",
+          "additions": 45,
+          "deletions": 0,
+          "blobHash": "92a3b0e76707b31a29d59cdcae3841c3b6adf12f"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+          "status": "M",
+          "additions": 121,
+          "deletions": 14,
+          "blobHash": "03bd66450539b300edcec0fdccd5b5af94392934"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/IntakeE2ETest.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 3,
+          "blobHash": "76f17460ee1b4fc548a23175d7da7adbe9413714"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/SqlitePoolCleanupExtension.java",
+          "status": "A",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "1cfe624645796ff5182b001652e999133bad97cc"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/TestEnv.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 11,
+          "blobHash": "35a8decba1fa9a9b8bcb6638913cf7c6e7fc8593"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "9eadc6fc7fda59f2f7d948aae79c2a882344729d"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/resources/junit-platform.properties",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "6efc0d5e85ce07247175d3addc1f6e82865a198d"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/IntakeScaffoldTest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "3cd436f0187773c3620f7461b0ba393e5b7d6254"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 1,
+          "blobHash": "fa409d9875ac8ab634244b24e8d0bc394f1468ef"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/sqlite/SqlitePoolCleanupExtension.java",
+          "status": "A",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "60eccf7200e462e28572f55eb6a21dd391ab5525"
+        },
+        {
+          "path": "platform/agent-infra/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "d6c1dea136756c084114dee66b4ab2d8a60a944e"
+        },
+        {
+          "path": "platform/agent-infra/src/test/resources/junit-platform.properties",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "6efc0d5e85ce07247175d3addc1f6e82865a198d"
+        }
+      ]
+    },
+    {
+      "sha": "ac4534afe4470758c0e1b3edc1474f318a88608f",
+      "subject": "chore(build): 目标 Java 版本可覆盖，不绑定 JDK 安装路径",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/pom.xml",
+          "status": "M",
+          "additions": 5,
+          "deletions": 1,
+          "blobHash": "30bd806c4b12153c927a82701e9943496bb851fe"
+        }
+      ]
+    },
+    {
+      "sha": "0345fc19cf5a28b3699f41adf1ffab8c9342d8af",
+      "subject": "feat(web): 工作台展示运行阶段进度与自动修复状态",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "82949932619f66ed19697a91e096c1f1771eea48"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/RunLog.vue",
+          "status": "M",
+          "additions": 51,
+          "deletions": 5,
+          "blobHash": "2e8e7bddd971b7b0fe3980bb4a7cefcb1a8e8459"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 48,
+          "deletions": 2,
+          "blobHash": "dddc78cd8dd75c4ad252d33a0def6defd692e179"
+        }
+      ]
+    },
+    {
+      "sha": "435c17fa5d974b8b026d7d0d2f2f041898b86cd3",
+      "subject": "feat(platform): 新增部署配置工具与镜像自动拉取，并修正非法 YAML 报错契约",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 1,
+          "blobHash": "28100ceedfa63b775d7900431014c931b4bb76e5"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 47,
+          "deletions": 12,
+          "blobHash": "3e83f95a3c274ef4c734e750c3879551e398b519"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/FailureRepair.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 1,
+          "blobHash": "b51ed0006b1290ff9b80afcfa5e005146f168c11"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ImagePullRepair.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 4,
+          "blobHash": "4d27cf89934ac8c78179f2b05697ecc39c682195"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxConfig.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 4,
+          "blobHash": "f44a5340df056d9cb64268c38162229a1fa32444"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+          "status": "M",
+          "additions": 33,
+          "deletions": 7,
+          "blobHash": "20344c17db24b77666e193ed32db65f352d63627"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "ae001f3f9f73f2092738fd92f474a726692f597f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/EnvBindingService.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "c4e94b7d4772c1a876046428bc96a9c0b2509a34"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "90c368b396d4f0dd13a24a0e87be5123e1d811f0"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/IntakeE2ETest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "b804e8f6585345678263422653eab62dec7730aa"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "e2dd8a6d1e50e17edf51c27e3384ead64bb1c6e9"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 3,
+          "blobHash": "6bccf99c47bb4b5d387ae9a120a9e0f9f4b2a417"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/CiQueryTools.java",
+          "status": "M",
+          "additions": 33,
+          "deletions": 1,
+          "blobHash": "6921c97ee0a543ee88c9409222d8dfaa038cd8c1"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 160,
+          "deletions": 1,
+          "blobHash": "640e89ebb1b5758c8fa2749e053335d35b8df691"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvCommandTools.java",
+          "status": "M",
+          "additions": 89,
+          "deletions": 4,
+          "blobHash": "1665eb4642ca4658730b0d9baf95cdbf54d6d79e"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvQueryTools.java",
+          "status": "M",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "926b0912b06b5f4d3ede74a16d68e2521ffd2920"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DeployToolsConfigTest.java",
+          "status": "A",
+          "additions": 73,
+          "deletions": 0,
+          "blobHash": "b11bdd8c0f0d088c70b3ef0aa3784b76e0603a16"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/process/BoundedCommandTest.java",
+        "status": "A",
+        "additions": 98,
+        "deletions": 0,
+        "blobHash": "78925dc7271118543b3537727bdfdd964480fc4a"
+      },
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/process/CommandShellTest.java",
+        "status": "A",
+        "additions": 70,
+        "deletions": 0,
+        "blobHash": "ea65ef8cea0eb1ceeef1db6b7f1fe1cc1bac9ce0"
+      },
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/process/JavaRuntimeTest.java",
+        "status": "A",
+        "additions": 35,
+        "deletions": 0,
+        "blobHash": "53a812f24eef4fa14a04cd935ac4c05cbdd20292"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AgentDiagnosisRepairTest.java",
+        "status": "A",
+        "additions": 78,
+        "deletions": 0,
+        "blobHash": "6e6b49716ab3286cebcb4b23db80beeab2478a99"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AutoRepairCoordinatorTest.java",
+        "status": "A",
+        "additions": 175,
+        "deletions": 0,
+        "blobHash": "86b48482ee8336be78891f3079aaf5edd796d15c"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerActionRunnerPrepareTest.java",
+        "status": "A",
+        "additions": 80,
+        "deletions": 0,
+        "blobHash": "212989d6abec41d82293b43fcceb9cb3ac470edf"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerEnvProvisionerImageTest.java",
+        "status": "A",
+        "additions": 71,
+        "deletions": 0,
+        "blobHash": "600afd578a7518181799d64dfa15d075a3ef2eee"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+        "status": "A",
+        "additions": 146,
+        "deletions": 0,
+        "blobHash": "ec82ed4d08a0e26f09987a7fc1a7fc46fd6fcec0"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+        "status": "A",
+        "additions": 117,
+        "deletions": 0,
+        "blobHash": "5d47ed9d017d11111e15b4aed7ae96fdea582537"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineAutoRepairTest.java",
+        "status": "A",
+        "additions": 164,
+        "deletions": 0,
+        "blobHash": "0ef7a2da9bf8530200cdbe38d0c66d70465f56ed"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineWatchdogTest.java",
+        "status": "A",
+        "additions": 124,
+        "deletions": 0,
+        "blobHash": "dc883257ffd0d37d842f350a7465196944d31b5a"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ProcessExecutorTimeoutTest.java",
+        "status": "A",
+        "additions": 45,
+        "deletions": 0,
+        "blobHash": "92a3b0e76707b31a29d59cdcae3841c3b6adf12f"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+        "status": "M",
+        "additions": 121,
+        "deletions": 14,
+        "blobHash": "03bd66450539b300edcec0fdccd5b5af94392934"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/IntakeE2ETest.java",
+        "status": "M",
+        "additions": 10,
+        "deletions": 3,
+        "blobHash": "76f17460ee1b4fc548a23175d7da7adbe9413714"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/SqlitePoolCleanupExtension.java",
+        "status": "A",
+        "additions": 21,
+        "deletions": 0,
+        "blobHash": "1cfe624645796ff5182b001652e999133bad97cc"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/TestEnv.java",
+        "status": "M",
+        "additions": 6,
+        "deletions": 11,
+        "blobHash": "35a8decba1fa9a9b8bcb6638913cf7c6e7fc8593"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension",
+        "status": "A",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "9eadc6fc7fda59f2f7d948aae79c2a882344729d"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/resources/junit-platform.properties",
+        "status": "A",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "6efc0d5e85ce07247175d3addc1f6e82865a198d"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/IntakeScaffoldTest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 3,
+        "blobHash": "3cd436f0187773c3620f7461b0ba393e5b7d6254"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+        "status": "M",
+        "additions": 17,
+        "deletions": 1,
+        "blobHash": "fa409d9875ac8ab634244b24e8d0bc394f1468ef"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/sqlite/SqlitePoolCleanupExtension.java",
+        "status": "A",
+        "additions": 21,
+        "deletions": 0,
+        "blobHash": "60eccf7200e462e28572f55eb6a21dd391ab5525"
+      },
+      {
+        "path": "platform/agent-infra/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension",
+        "status": "A",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "d6c1dea136756c084114dee66b4ab2d8a60a944e"
+      },
+      {
+        "path": "platform/agent-infra/src/test/resources/junit-platform.properties",
+        "status": "A",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "6efc0d5e85ce07247175d3addc1f6e82865a198d"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+        "status": "M",
+        "additions": 33,
+        "deletions": 7,
+        "blobHash": "20344c17db24b77666e193ed32db65f352d63627"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+        "status": "M",
+        "additions": 14,
+        "deletions": 0,
+        "blobHash": "ae001f3f9f73f2092738fd92f474a726692f597f"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/IntakeE2ETest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 3,
+        "blobHash": "b804e8f6585345678263422653eab62dec7730aa"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+        "status": "M",
+        "additions": 14,
+        "deletions": 0,
+        "blobHash": "e2dd8a6d1e50e17edf51c27e3384ead64bb1c6e9"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DeployToolsConfigTest.java",
+        "status": "A",
+        "additions": 73,
+        "deletions": 0,
+        "blobHash": "b11bdd8c0f0d088c70b3ef0aa3784b76e0603a16"
+      }
+    ],
+    "casesAdded": 55,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 449, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools",
+      "pom.xml",
+      "web"
+    ],
+    "verification": "Tests run: 449, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [
+    "JDK 安装路径仍可按环境覆盖，但默认跟随当前 JVM"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-16_0021_platform-hardening"
+    ]
+  },
+  "chain": {
+    "prev": "098b38403137ba5bc992285162ecae1bd1a779bf5461021b2e8dd7dae2d759af",
+    "self": "5b842078fc099f1e146ca1c979a6df770ca8015824d344230e1e3cd3c8fed937"
+  }
+}

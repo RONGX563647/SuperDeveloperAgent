@@ -1,8 +1,8 @@
 ---
 schema: session-summary/v1
 period: 2026-11
-createdAt: 2026-11-17T09:34:02+08:00
-extends: session-archive-gate
+createdAt: 2026-11-17T10:23:47+08:00
+extends: worktree-and-gate-fixes
 refs:
   - feat/2026-11-17_0913_tool-schema-token-budget
 metrics:
@@ -25,7 +25,6 @@ metrics:
 ## 交付清单
 | 提交 | 类别 | 说明 |
 |---|---|---|
-| `fab91ab` | feat | feat(issues): 工单优先级、任务板与就绪清单改进 |
 | `02bb05e` | feat | feat(agent): 工具 schema token 预算：英文短描述 + 插件收敛 + 输出分级 |
 
 ## 测试与质量总结
@@ -44,4 +43,4 @@ metrics:
 
 ## 链接
 - 归档：`docs/process/feat/2026-11-17_0913_tool-schema-token-budget/manifest.json`
-- 上一份同域总结：session-archive-gate
+- 上一份同域总结：worktree-and-gate-fixes

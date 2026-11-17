@@ -1,0 +1,657 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-16_1456_env-binding-and-market",
+  "category": "feat",
+  "title": "环境绑定对话内确认、会话级联删除与能力市场外部目录",
+  "createdAt": "2026-11-17T10:23:16+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "环境绑定要跳菜单确认；删除会话只删主表导致刷新后复现；能力市场目录写死；流水线环境类故障需要人工修复",
+    "toolCallCount": 0
+  },
+  "problem": "环境绑定要跳菜单确认；删除会话只删主表导致刷新后复现；能力市场目录写死；流水线环境类故障需要人工修复",
+  "solution": "环境绑定改为对话内确认卡；删除会话级联清理运行账本、任务与 Agent 记忆；能力市场改读外部目录；环境故障按最新配置自动续跑（含 Docker 守护进程自愈）；前端构建改用 corepack 兼容非 root 容器",
+  "commits": [
+    {
+      "sha": "240661ff2b66b7e40fe1a2ddde9b14d002fc1a68",
+      "subject": "fix(web): 切换会话不再中断后台运行",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/web/src/layouts/components/AppAside.vue",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "1c217da18bf2a712914d4714aca0da614f189073"
+        },
+        {
+          "path": "platform/web/src/state/sessionChat.ts",
+          "status": "A",
+          "additions": 116,
+          "deletions": 0,
+          "blobHash": "0447ed733e8498321e75af1c39ffd6e792a04f16"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 68,
+          "deletions": 58,
+          "blobHash": "015430674b8fb2da3ed318ef8c1df771ee5f2f6e"
+        }
+      ]
+    },
+    {
+      "sha": "8accc9404a584d427ee35d620785e650f4d2aa15",
+      "subject": "feat(settings): 能力市场改为读取外部目录",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/CapabilityCatalog.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 223,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/CapabilityMarket.java",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "0647a11070f5197a3a2ef4595afaf5620e7299de"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/CapabilityMarketController.java",
+          "status": "M",
+          "additions": 36,
+          "deletions": 24,
+          "blobHash": "1ee5aa852b3d5ffa9b2caf8c5016ddcd38f89173"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "dcb0e371b4a0e15422316eb41861e9b88110cf0e"
+        },
+        {
+          "path": "platform/agent-infra/pom.xml",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "c3253a8518972344aadb4252dd805d6951f4f48b"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/CapabilityInstallerImpl.java",
+          "status": "M",
+          "additions": 24,
+          "deletions": 16,
+          "blobHash": "5daac3950220745e61eea786c08ed3e68bf5df1e"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/RemoteCapabilityMarket.java",
+          "status": "A",
+          "additions": 390,
+          "deletions": 0,
+          "blobHash": "de1760071629491e8659edc9e62880e7df6f915e"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SkillsStore.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "58b703ad4de1e369c3e35c761e0a4450d478de2e"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/RemoteCapabilityMarketTest.java",
+          "status": "A",
+          "additions": 98,
+          "deletions": 0,
+          "blobHash": "31793c1ee1f17d18fab097315e73442bcb1bfc89"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/CapabilityMarketTools.java",
+          "status": "M",
+          "additions": 18,
+          "deletions": 16,
+          "blobHash": "5cb69de3cdac913cc86cc77245443f370fe3a0ca"
+        },
+        {
+          "path": "platform/web/src/api/settings.ts",
+          "status": "M",
+          "additions": 6,
+          "deletions": 2,
+          "blobHash": "b406b6442209a4455f4ef9df280bcd13e0037242"
+        },
+        {
+          "path": "platform/web/src/components/settings/McpPanel.vue",
+          "status": "M",
+          "additions": 96,
+          "deletions": 5,
+          "blobHash": "47f3d6610dcb1c832a4ac54f09c656ba23892c6c"
+        },
+        {
+          "path": "platform/web/src/components/settings/SkillPanel.vue",
+          "status": "M",
+          "additions": 89,
+          "deletions": 5,
+          "blobHash": "4d1a921d7c91165e017ec737595ec4bd5f401f1e"
+        }
+      ]
+    },
+    {
+      "sha": "e91a64b083e32997249a67fd6b0cc047ae90408b",
+      "subject": "feat(workspace): 删除会话时级联清理服务端数据",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/SessionDataCleaner.java",
+          "status": "A",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "85177c8c91e961887f57a71c15e3897fa59c0d24"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/run/RunLedgerRepository.java",
+          "status": "M",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "0a5d40ab9c0ec06a93ffbb922748928eb1c81db2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/SessionDataCleanerImpl.java",
+          "status": "A",
+          "additions": 41,
+          "deletions": 0,
+          "blobHash": "d9db8c7099b4862ace18d6279333382c8b384000"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/SqliteConversationStore.java",
+          "status": "M",
+          "additions": 31,
+          "deletions": 6,
+          "blobHash": "92306f78892322e676f2c3a6cf2189b8cb18ca08"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/run/SqliteRunLedgerRepository.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "461d9496cd4e03fdff93ea3fb2f4aee454bb032a"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/SqliteConversationStoreTest.java",
+          "status": "M",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "eca3712b5fcffa12761fc901c124cfec2e464629"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationManager.java",
+          "status": "M",
+          "additions": 13,
+          "deletions": 1,
+          "blobHash": "f63ab585c23e0c3c8f28cb424cb20b01d42e0481"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "b537ce66dd0842342152069b85c48f7716bf26ea"
+        },
+        {
+          "path": "platform/web/src/layouts/components/AppAside.vue",
+          "status": "M",
+          "additions": 25,
+          "deletions": 19,
+          "blobHash": "51817de62f203b3907cec4de64c7d012664089e8"
+        }
+      ]
+    },
+    {
+      "sha": "d27edd1565ee11bd9d9482182243fef260e0cb44",
+      "subject": "feat(chat): 环境绑定改为在对话内确认",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/auth/CurrentUser.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "62d60df9cad93bd2b8b9bf91478fe512fc79c059"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/EnvBindingService.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "74974bf03d9f762484330efa29de9915f9871758"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
+          "status": "M",
+          "additions": 46,
+          "deletions": 1,
+          "blobHash": "59c2fe9e010bb79c7e1dc1547d34f16a75833031"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/EnvironmentController.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 2,
+          "blobHash": "c251f1d38eb971d267f6d7b78748ec33e6f2ff2f"
+        },
+        {
+          "path": "platform/web/src/components/chat/EnvBindingCard.vue",
+          "status": "A",
+          "additions": 191,
+          "deletions": 0,
+          "blobHash": "768cdff977d45130d83dca6d64d218524a087294"
+        },
+        {
+          "path": "platform/web/src/composables/useAgentChat.ts",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "3b28bff066ddea0da69e0c231a1b44faad15f06a"
+        },
+        {
+          "path": "platform/web/src/state/agentEventReducer.test.ts",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "60041c3b0ce78d0d8afd97c4df497ce7552a2559"
+        },
+        {
+          "path": "platform/web/src/state/agentEventReducer.ts",
+          "status": "M",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "1ab66c1f2048df32e274171ae1fcdfcd399a67d2"
+        },
+        {
+          "path": "platform/web/src/types.ts",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "386cf3529f798d13d9df6dc0875f3800fed6dc92"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "39b136fb52f2850aec5392efce1fe2c80c9dd24c"
+        }
+      ]
+    },
+    {
+      "sha": "7db1cccb946d55dd7f549b8e300c11c85ca26d58",
+      "subject": "fix(infra): 前端构建改用 corepack 子命令，兼容非 root 容器",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/scaffold/RecipeScaffolder.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 3,
+          "blobHash": "385297e6b89e9fba5a3c38b6d8dcaa939c42f41f"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "37f92dca5f239a46b4ead92426577ac027f4d60c"
+        }
+      ]
+    },
+    {
+      "sha": "3c736c6c51ab5cd164ab6c1e9d7ee7c2e29f37ae",
+      "subject": "fix(pipeline): 环境类故障自动修复，部署目标以定义为准",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/PipelineEngine.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "40b9ebfa473aac2fd132238d4ceb8082accac6e5"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/AgentDiagnosisRepair.java",
+          "status": "M",
+          "additions": 34,
+          "deletions": 4,
+          "blobHash": "ebc679e61cfce648d27e2e288ff9564e58830abd"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 136,
+          "deletions": 6,
+          "blobHash": "40c11159c66d80f7f93b55f4bd82a0b5ea184667"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDaemonRepair.java",
+          "status": "A",
+          "additions": 118,
+          "deletions": 0,
+          "blobHash": "a89f857958288aff347be3436727beebf8d819ff"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 1,
+          "blobHash": "5beabebb519e96988754ee1faf541159f4078a70"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/FailureRepair.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "4d56cb0648d6b29bbe754efa464caf9ee52f95d4"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ImagePullRepair.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 1,
+          "blobHash": "3d6c9c87bb8ce01da6ceedbb0893ec2d09f0d152"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AgentDiagnosisRepairTest.java",
+          "status": "M",
+          "additions": 56,
+          "deletions": 5,
+          "blobHash": "bdc701764da5c02230a232ad68c1a45b8ba33e40"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AutoRepairCoordinatorTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "00ba8d1862379443972d122d36ed4e40504edddf"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDaemonRepairTest.java",
+          "status": "A",
+          "additions": 117,
+          "deletions": 0,
+          "blobHash": "361b88014f2d0e2069c286ccc7e25c950fc63785"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "c9b3523d58b47219a5bd127bf96b85cd45a64fa8"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 0,
+          "blobHash": "fd07e6f84d5971ee53599d9ea7d915816ee9dfe6"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 5,
+          "blobHash": "c4ce3172f3cb46e35060eefa20f04432d9bf87e3"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineAutoRepairTest.java",
+          "status": "M",
+          "additions": 51,
+          "deletions": 0,
+          "blobHash": "cd69b0aba935f249a2dfb6dcefaa714e11ae7050"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelinePreviewRenderTest.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "fe5cc03e0a4896946fb5bd7ba844ad606dd8f1ea"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/ChatRunRecoveryAdvisor.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 2,
+          "blobHash": "f0e306cec9c5beda5fc3505571a56864fe662ad9"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 34,
+          "deletions": 9,
+          "blobHash": "a19040ed66b5664fe029b946a76419fe3690f8d6"
+        },
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "13648db4791b8707f331654858544f8ee8adc780"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 43,
+          "deletions": 20,
+          "blobHash": "74521e8681f579a8521ff46fdbff5f0c730304a8"
+        },
+        {
+          "path": "platform/web/src/views/ProjectIntakeView.vue",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "34a89cd99439d7000ba938656ef7a487f433d4f3"
+        }
+      ]
+    },
+    {
+      "sha": "9033a9b619700873c7f211ccaf22761d927126de",
+      "subject": "style(web): 设置页内容区撑满可视高度",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/web/src/views/SettingsView.vue",
+          "status": "M",
+          "additions": 6,
+          "deletions": 1,
+          "blobHash": "6838547c1a804a27d1a4a0ba87827d128677a02d"
+        }
+      ]
+    },
+    {
+      "sha": "5e7e9457d020dcac8ef4062214009bda30fe9610",
+      "subject": "chore(repo): 清理未被引用的上传图片",
+      "category": "chore",
+      "files": [
+        {
+          "path": ".uploads/047557c2-7e53-4aae-808b-e8a867d36678_image.png",
+          "status": "D",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "-"
+        },
+        {
+          "path": ".uploads/2d952aba-c1d5-48ef-9823-e054c9f732b9_image.png",
+          "status": "D",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "-"
+        },
+        {
+          "path": ".uploads/41d0a6ac-3517-4118-8708-2c9bb03e6fe6_image.png",
+          "status": "D",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "-"
+        },
+        {
+          "path": ".uploads/9646a637-dba3-44a4-b29b-ed9cd688dd8f_image.png",
+          "status": "D",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "-"
+        },
+        {
+          "path": ".uploads/a7492a25-8d6f-4672-83d1-2284da489005_image.png",
+          "status": "D",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "-"
+        }
+      ]
+    },
+    {
+      "sha": "15097cc321d48f5aaa7fc3ae7fcc5bf50a7cc3be",
+      "subject": "docs(agent): 工具说明同步对话内环境绑定确认",
+      "category": "docs",
+      "files": [
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 4,
+          "blobHash": "75b4cd4704042b91c7689d5d82166467e3413c6e"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvCommandTools.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 5,
+          "blobHash": "bf445f504e3dc0bd7e74fb9e2f458612a37023de"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/RemoteCapabilityMarketTest.java",
+        "status": "A",
+        "additions": 98,
+        "deletions": 0,
+        "blobHash": "31793c1ee1f17d18fab097315e73442bcb1bfc89"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/SqliteConversationStoreTest.java",
+        "status": "M",
+        "additions": 23,
+        "deletions": 0,
+        "blobHash": "eca3712b5fcffa12761fc901c124cfec2e464629"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "b537ce66dd0842342152069b85c48f7716bf26ea"
+      },
+      {
+        "path": "platform/web/src/state/agentEventReducer.test.ts",
+        "status": "M",
+        "additions": 10,
+        "deletions": 0,
+        "blobHash": "60041c3b0ce78d0d8afd97c4df497ce7552a2559"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 1,
+        "blobHash": "37f92dca5f239a46b4ead92426577ac027f4d60c"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AgentDiagnosisRepairTest.java",
+        "status": "M",
+        "additions": 56,
+        "deletions": 5,
+        "blobHash": "bdc701764da5c02230a232ad68c1a45b8ba33e40"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/AutoRepairCoordinatorTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "00ba8d1862379443972d122d36ed4e40504edddf"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDaemonRepairTest.java",
+        "status": "A",
+        "additions": 117,
+        "deletions": 0,
+        "blobHash": "361b88014f2d0e2069c286ccc7e25c950fc63785"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+        "status": "M",
+        "additions": 4,
+        "deletions": 0,
+        "blobHash": "c9b3523d58b47219a5bd127bf96b85cd45a64fa8"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+        "status": "M",
+        "additions": 8,
+        "deletions": 0,
+        "blobHash": "fd07e6f84d5971ee53599d9ea7d915816ee9dfe6"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+        "status": "M",
+        "additions": 21,
+        "deletions": 5,
+        "blobHash": "c4ce3172f3cb46e35060eefa20f04432d9bf87e3"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineAutoRepairTest.java",
+        "status": "M",
+        "additions": 51,
+        "deletions": 0,
+        "blobHash": "cd69b0aba935f249a2dfb6dcefaa714e11ae7050"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelinePreviewRenderTest.java",
+        "status": "M",
+        "additions": 5,
+        "deletions": 0,
+        "blobHash": "fe5cc03e0a4896946fb5bd7ba844ad606dd8f1ea"
+      }
+    ],
+    "casesAdded": 14,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 463, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools",
+      "web"
+    ],
+    "verification": "Tests run: 463, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-16_1456_env-binding-and-market"
+    ]
+  },
+  "chain": {
+    "prev": "5b842078fc099f1e146ca1c979a6df770ca8015824d344230e1e3cd3c8fed937",
+    "self": "43d49886473137a281d3fdf93d10d4699aa06da5fa3141d23951ee628aff8e5c"
+  }
+}
