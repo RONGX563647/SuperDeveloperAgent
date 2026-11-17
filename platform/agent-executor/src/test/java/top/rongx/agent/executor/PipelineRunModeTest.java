@@ -6,6 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.net.http.HttpClient;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -103,5 +106,66 @@ class PipelineRunModeTest {
     @DisplayName("非 actuator 地址不做 body 约束（可能是任意首页）")
     void healthBodyIgnoresNonActuator() {
         assertTrue(BuiltInPipelineEngine.healthBodyOk("http://127.0.0.1:8183/", "DOWN"));
+    }
+
+    @Test
+    @DisplayName("首页 5xx：健康接口通过也不能算发布成功")
+    void homepageServerErrorFailsHealth() throws Exception {
+        int[] hits = {0};
+        HttpServer server = homepageServer(hits, 500);
+        try {
+            String issue = BuiltInPipelineEngine.homepageIssue(HttpClient.newHttpClient(),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/healthz");
+            assertTrue(issue != null && issue.contains("500"), String.valueOf(issue));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("首页 404 视为没有前端（纯 API 工程），不判失败")
+    void homepageMissingIsFine() throws Exception {
+        int[] hits = {0};
+        HttpServer server = homepageServer(hits, 404);
+        try {
+            assertNull(BuiltInPipelineEngine.homepageIssue(HttpClient.newHttpClient(),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/healthz"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("探活地址本身就是首页时不再重复请求")
+    void homepageSkippedWhenHealthUrlIsRoot() throws Exception {
+        int[] hits = {0};
+        HttpServer server = homepageServer(hits, 500);
+        try {
+            assertNull(BuiltInPipelineEngine.homepageIssue(HttpClient.newHttpClient(),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/"));
+            assertEquals(0, hits[0], "根路径就是探活地址，不应再发一次请求");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    /** 探活地址固定返回 200；根路径按参数返回，并统计被访问次数。 */
+    private static HttpServer homepageServer(int[] hits, int rootStatus) throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/healthz", exchange -> respond(exchange, 200));
+        server.createContext("/", exchange -> {
+            hits[0]++;
+            respond(exchange, rootStatus);
+        });
+        server.start();
+        return server;
+    }
+
+    private static void respond(com.sun.net.httpserver.HttpExchange exchange, int status)
+            throws java.io.IOException {
+        byte[] body = "OK".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(status, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
     }
 }

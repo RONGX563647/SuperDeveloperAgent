@@ -4327,6 +4327,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         int attempts = dockerTarget && resource != null ? 90 : 60;
         long sleepMs = dockerTarget && resource != null ? 2000L : 1000L;
         boolean waitingHealth = false;
+        String homeIssue = null;
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         String body = "";
         String exitInfo = null;
@@ -4341,10 +4342,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                         : response.statusCode() == stage.expected();
                 if (statusOk && healthBodyOk(url, body)
                         && containerReady(state, resource, dockerTarget)) {
-                    state.log.append("[health] ").append(response.statusCode()).append(' ')
-                            .append(body.length() > 500 ? body.substring(0, 500) + "…" : body).append('\n');
-                    state.stages.add(StageResult.success(stage.id(), 0, List.of(), elapsed(start)));
-                    return true;
+                    // 接口活着不代表页面可用：根路径 5xx 说明静态托管/反代配错，补一次首页冒烟。
+                    homeIssue = homepageIssue(client, url);
+                    if (homeIssue == null) {
+                        state.log.append("[health] ").append(response.statusCode()).append(' ')
+                                .append(body.length() > 500 ? body.substring(0, 500) + "…" : body).append('\n');
+                        state.stages.add(StageResult.success(stage.id(), 0, List.of(), elapsed(start)));
+                        return true;
+                    }
+                    state.log.append("[health] 首页冒烟未通过：").append(homeIssue).append('\n');
+                    break;
                 }
                 if (statusOk && !waitingHealth) {
                     waitingHealth = true;
@@ -4378,10 +4385,37 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             removeFailedContainer(state, stage.id());
         }
         String summary = "健康检查未通过：" + url
+                + (homeIssue == null ? "" : "（首页：" + homeIssue + "）")
                 + (exitInfo == null ? " body=" + brief(body) : "（容器 " + exitInfo + "）")
                 + (diag == null ? "" : "；容器日志：" + diag);
         state.stages.add(StageResult.failed(stage.id(), 1, ErrorCode.ARTIFACT_MISSING.code(), summary, elapsed(start)));
         return false;
+    }
+
+    /**
+     * 首页冒烟：健康接口活着不代表页面可用——静态托管或反向代理配错时根路径会 500。
+     *
+     * <p>只拦明确的服务端错误（5xx）。404/401/403 视为「没有首页」（纯 API 工程、
+     * 或鉴权先于静态资源），3xx 交给浏览器；探活地址本身就是根路径时无需重复探。
+     *
+     * @return 失败原因；通过时返回 null
+     */
+    static String homepageIssue(HttpClient client, String healthUrl) {
+        try {
+            URI health = URI.create(healthUrl);
+            URI root = new URI(health.getScheme(), null, health.getHost(), health.getPort(),
+                    "/", null, null);
+            if (root.equals(health)) {
+                return null;
+            }
+            HttpResponse<String> response = client.send(
+                    HttpRequest.newBuilder(root).timeout(Duration.ofSeconds(2)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() >= 500 ? "/ 返回 HTTP " + response.statusCode() : null;
+        } catch (Exception noHomepage) {
+            // 首页取不到但健康接口已通过：不据此判失败（部分工程只暴露接口）
+            return null;
+        }
     }
 
     /**
