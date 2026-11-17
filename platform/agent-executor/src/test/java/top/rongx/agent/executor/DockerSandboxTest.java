@@ -78,6 +78,22 @@ class DockerSandboxTest {
     }
 
     @Test
+    @DisplayName("启用缓存卷：pnpm store 与 npm 镜像源通过 env 注入容器")
+    void npmCacheAndRegistryEnv() {
+        DockerSandbox cached = new DockerSandbox("docker", "node:20-bookworm", "bridge",
+                "2g", "2", 512, "1000:1000", "agent-cache")
+                .setNpmRegistry("https://registry.npmmirror.com");
+        List<String> cmd = cached.wrap(Path.of("E:/work/RY"), List.of("corepack", "pnpm", "install"));
+        assertTrue(cmd.contains("npm_config_store_dir=/cache/pnpm"), cmd.toString());
+        assertTrue(cmd.contains("npm_config_registry=https://registry.npmmirror.com"), cmd.toString());
+        assertTrue(cmd.contains("agent-cache-ry:/cache"), "缓存卷按项目隔离：" + cmd);
+        // 未配置镜像源时不应注入，避免覆盖用户 .npmrc
+        List<String> plain = sandbox.wrap(Path.of("E:/work/RY"), List.of("true"));
+        assertTrue(plain.stream().noneMatch(arg -> arg.startsWith("npm_config_registry=")),
+                plain.toString());
+    }
+
+    @Test
     @DisplayName("网络档位可显式收紧到 none")
     void networkCanBeLockedDown() {
         DockerSandbox locked = new DockerSandbox("docker", "img", "none", "2g", "2", 512, "1000:1000");

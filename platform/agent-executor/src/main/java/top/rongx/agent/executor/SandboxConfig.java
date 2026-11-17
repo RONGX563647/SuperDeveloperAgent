@@ -38,12 +38,14 @@ public class SandboxConfig {
             @Value("${agent.sandbox.user:1000:1000}") String user,
             @Value("${agent.sandbox.cache-volume-prefix:}") String cacheVolumePrefix,
             @Value("${agent.sandbox.precheck-image:true}") boolean precheckImage,
-            @Value("${agent.sandbox.pull-timeout-seconds:180}") long pullTimeoutSeconds) {
+            @Value("${agent.sandbox.pull-timeout-seconds:180}") long pullTimeoutSeconds,
+            @Value("${agent.sandbox.npm-registry:}") String npmRegistry) {
         // 镜像标签由 agent.sandbox.image 决定；缺镜像时自动 pull 并复核，
         // 离线/自建 registry 仍可通过 agent.sandbox.precheck-image=false 关闭预检。
         return new DockerSandbox(binary, image, network, memory, cpus, pidsLimit, user,
                 cacheVolumePrefix).setImagePrecheck(precheckImage)
-                .setImagePullTimeout(pullTimeoutSeconds * 1000L);
+                .setImagePullTimeout(pullTimeoutSeconds * 1000L)
+                .setNpmRegistry(npmRegistry);
     }
 
     @Bean

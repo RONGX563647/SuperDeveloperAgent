@@ -347,10 +347,12 @@ public class RecipeScaffolder implements ProjectScaffolder {
         return sb.toString();
     }
 
-    /** 动作级超时：测试类给足（20m），构建/镜像按经验值，其余用 15m 兜底。 */
+    /** 动作级超时：测试类给足（20m），前端构建含冷安装也给足，其余按经验值。 */
     private String timeoutFor(String action) {
         return switch (action) {
-            case "backend_build", "frontend_build" -> "10m";
+            case "backend_build" -> "10m";
+            // 前端阶段包含 pnpm install：沙箱里冷安装 + vue-tsc 很容易超过 10m
+            case "frontend_build" -> "20m";
             case "backend_test", "frontend_test" -> "20m";
             case "image_package" -> "20m";
             default -> "15m";
@@ -425,8 +427,9 @@ public class RecipeScaffolder implements ProjectScaffolder {
     private String installCommand(String pm, boolean lock) {
         return switch (pm) {
             case "pnpm" -> lock
-                    ? "pnpm install --frozen-lockfile --ignore-scripts"
-                    : "pnpm install --ignore-scripts";
+                    // prefer-offline：store 已缓存时不再为每个包额外请求元数据
+                    ? "pnpm install --frozen-lockfile --ignore-scripts --prefer-offline"
+                    : "pnpm install --ignore-scripts --prefer-offline";
             case "yarn" -> lock
                     ? "yarn install --frozen-lockfile --ignore-scripts"
                     : "yarn install --ignore-scripts";

@@ -163,6 +163,9 @@ agent:
     # 依赖缓存卷前缀（按项目隔离）：Maven ~/.m2 与 npm cache 跨构建复用，
     # 否则每次构建都冷下载依赖，大项目必然撞上 10 分钟构建超时
     cache-volume-prefix: ${AGENT_SANDBOX_CACHE_VOLUME:agent-cache}
+    # npm 源镜像：默认直连 npmjs 在沙箱里只有几 KB/s，冷安装会吃光构建预算；
+    # 内网/自建源用 AGENT_SANDBOX_NPM_REGISTRY 覆盖，留空则用容器默认源
+    npm-registry: ${AGENT_SANDBOX_NPM_REGISTRY:https://registry.npmmirror.com}
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}          # 可选：留空不阻塞启动，设置页可随时补配

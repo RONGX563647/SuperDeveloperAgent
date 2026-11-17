@@ -82,6 +82,8 @@ public class DockerSandbox {
     private boolean precheckImage = true;
     /** 缺镜像时自动拉取的硬超时。 */
     private long imagePullTimeoutMs = DEFAULT_IMAGE_PULL_TIMEOUT_MS;
+    /** npm registry 镜像：默认直连 npmjs 在国内沙箱只有几 KB/s，install 会吃光构建预算。 */
+    private String npmRegistry = "";
 
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user) {
@@ -185,6 +187,16 @@ public class DockerSandbox {
             cmd.add("-e");
             cmd.add("npm_config_store_dir=/cache/pnpm");
         }
+        // 5b-2. npm 镜像源：国内直连 registry.npmjs.org 常见 2~40 KiB/s，
+        //       冷安装会直接吃满前端阶段预算（E-302）。留空则沿用容器默认源。
+        if (npmRegistry != null && !npmRegistry.isBlank()) {
+            String registry = npmRegistry.trim();
+            cmd.add("-e");
+            cmd.add("npm_config_registry=" + registry);
+            // Corepack 拉 pnpm 自身也走镜像（旧版本忽略该变量，无副作用）
+            cmd.add("-e");
+            cmd.add("COREPACK_NPM_REGISTRY=" + registry);
+        }
         // 5c. Corepack 下载缓存：非 root 用户不能写 /usr/local/bin，
         //     用 COREPACK_HOME 指向可写目录；禁止交互式下载提示。
         cmd.add("-e");
@@ -241,6 +253,12 @@ public class DockerSandbox {
     /** 设置缺镜像时自动拉取的硬超时（由 SandboxConfig 的配置注入）。 */
     public DockerSandbox setImagePullTimeout(long millis) {
         this.imagePullTimeoutMs = millis <= 0 ? DEFAULT_IMAGE_PULL_TIMEOUT_MS : millis;
+        return this;
+    }
+
+    /** 设置 npm registry 镜像；空值表示用容器默认源。 */
+    public DockerSandbox setNpmRegistry(String registry) {
+        this.npmRegistry = registry == null ? "" : registry.trim();
         return this;
     }
 
@@ -422,7 +440,8 @@ public class DockerSandbox {
     public DockerSandbox withImage(String newImage) {
         DockerSandbox copy = new DockerSandbox(dockerBinary, newImage, network, memory, cpus,
                 pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
-        return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs);
+        return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs)
+                .setNpmRegistry(npmRegistry);
     }
 
     public String describe() {
