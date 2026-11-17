@@ -22,4 +22,10 @@ class ProcessArchiveTest {
     void gateSelfTestPasses() {
         PythonScripts.run("tools/session-archive/gate.py", "self-test", "会话归档自检");
     }
+
+    @Test
+    @DisplayName("会话对账脚本可运行（dry-run）")
+    void sweepDryRunSucceeds() {
+        PythonScripts.run("tools/session-archive/sweep.py", "--dry-run", "会话对账");
+    }
 }

@@ -295,8 +295,10 @@ def cmd_finish(args) -> int:
     }
     sha_list = [s for s in git("log", "--reverse", "--no-merges",
                                "--format=%H", f"{active['baseHead']}..{head}").splitlines() if s]
-    if not sha_list:
-        return fail("会话内没有提交，无需归档")
+    # 纯问答/分析会话可以没有代码提交：docs 类允许空 commits，
+    # 由 sweep 对账或用户手动 finish 生成"只有摘要"的归档。
+    if not sha_list and category != "docs":
+        return fail("会话内没有提交，无需归档（docs 类除外）")
     commits = []
     all_tests: list[dict] = []
     modules = set()
@@ -495,10 +497,16 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool) -> list[str]:
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00",
                          manifest.get("createdAt", "")):
         errors.append(f"{rel}: createdAt 必须为 +08:00 ISO 时间")
+    ide_session = (manifest.get("session") or {}).get("ideSessionId")
+    if ide_session and not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", str(ide_session)):
+        errors.append(f"{rel}: ideSessionId 非法 {ide_session}")
 
-    commits = manifest.get("commits") or []
-    if not commits:
-        errors.append(f"{rel}: commits 不能为空")
+    commits = manifest.get("commits")
+    if commits is None:
+        errors.append(f"{rel}: 缺少 commits 字段")
+        commits = []
+    if not commits and category not in ("docs", "chore"):
+        errors.append(f"{rel}: commits 不能为空（docs/chore 类可无提交）")
     for commit in commits:
         sha = commit.get("sha", "")
         if not SHA_RE.fullmatch(sha):
@@ -553,6 +561,17 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
                 errors.append(str(exc))
     for path, manifest in rows:
         errors.extend(validate_manifest(path, manifest, skip_git))
+    # 一个 AI 开发会话只能有一份归档：ideSessionId 全局唯一。
+    seen_ide: dict[str, str] = {}
+    for path, manifest in rows:
+        ide = (manifest.get("session") or {}).get("ideSessionId")
+        if not ide:
+            continue
+        rel = str(path.relative_to(path.parents[2])) if len(path.parents) > 2 else str(path)
+        if ide in seen_ide:
+            errors.append(f"{rel}: ideSessionId 重复 {ide}（已在 {seen_ide[ide]}）")
+        else:
+            seen_ide[ide] = rel
     for category in CATEGORIES:
         chain = sorted([m for _, m in rows if m.get("category") == category],
                        key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
@@ -737,6 +756,39 @@ def cmd_self_test(args) -> int:
         write_json(target, tampered)
         if not validate_root(root, skip_git=True):
             return fail("self-test: 篡改 self 应报错")
+
+        # 纯问答会话：docs 类允许空 commits
+        docs = {
+            "schema": "process-manifest/v2",
+            "id": "docs/2026-11-17_0930_chat-summary",
+            "category": "docs",
+            "title": "纯问答会话归档",
+            "createdAt": "2026-11-17T09:30:00+08:00",
+            "session": {"agentModel": "unknown", "promptSummary": "分析",
+                        "toolCallCount": 0, "ideSessionId": "61e6c0a1c3d4e5f6"},
+            "problem": "对话式分析，无代码改动",
+            "solution": "记录结论与证据位置",
+            "commits": [],
+            "tests": {"required": False, "files": [], "casesAdded": 0,
+                      "command": "n/a", "result": "NOT_RUN", "evidence": "无代码改动"},
+            "impact": {"modules": [], "verification": "无代码改动"},
+            "links": {"relatedIds": [], "summaryRefs": []},
+            "chain": {"prev": "GENESIS", "self": ""},
+        }
+        docs["chain"]["self"] = manifest_self(docs)
+        docs_path = (root / "docs" / "process" / "docs"
+                     / "2026-11-17_0930_chat-summary" / "manifest.json")
+        write_json(docs_path, docs)
+        write_json(target, base)
+        if validate_root(root, skip_git=True):
+            return fail("self-test: docs 空提交归档应被接受")
+
+        dup = json.loads(json.dumps(base))
+        dup["session"]["ideSessionId"] = docs["session"]["ideSessionId"]
+        dup["chain"]["self"] = manifest_self(dup)
+        write_json(target, dup)
+        if not validate_root(root, skip_git=True):
+            return fail("self-test: ideSessionId 重复应报错")
     out("self-test OK")
     return 0
 
