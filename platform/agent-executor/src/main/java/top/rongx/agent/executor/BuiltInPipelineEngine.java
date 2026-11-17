@@ -1322,7 +1322,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return history.summaries(null, 0, Integer.MAX_VALUE).stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
                         h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs(),
-                        h.version()))
+                        h.version(), h.tagStatus()))
                 .toList();
     }
 
@@ -1332,7 +1332,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return history.summaries(projectId, offset, limit).stream()
                 .map(h -> new RunSummary(h.runId(), h.projectId(), h.env(), h.pipelineId(), h.gitSha(),
                         h.status(), h.createdAt(), h.seq(), h.stageCount(), h.durationMs(),
-                        h.version()))
+                        h.version(), h.tagStatus()))
                 .toList();
     }
 
@@ -1627,15 +1627,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      */
     private void syncGitTag(RunState state) {
         if (!state.deployTagged || state.deployVersion == null
-                || state.deployVersion.isBlank() || state.deployImage != null
-                || repoLocator == null) {
+                || state.deployVersion.isBlank() || repoLocator == null) {
+            state.tagStatus = null;
             return;
         }
         try {
             top.rongx.agent.domain.port.ProjectRepoLocator.TagOutcome outcome =
                     repoLocator.createTag(state.projectId, state.deployVersion, state.gitSha);
+            // PUSHED=远端可见；LOCAL=只存在本机（无 origin/推送失败）；FAILED=创建失败
+            state.tagStatus = outcome.pushed() ? "PUSHED" : outcome.created() ? "LOCAL" : "FAILED";
             state.log.append("[tag] ").append(outcome.message()).append('\n');
         } catch (Exception e) {
+            state.tagStatus = "FAILED";
             state.log.append("[tag] 同步 git 标签失败：").append(e.getMessage()).append('\n');
         }
     }
@@ -3655,8 +3658,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 deployEnv,
                 network,
                 state.env,
-                // 未打 tag 的普通部署也要带上构建版本号（test-v3），否则环境矩阵只能显示 latest
-                rollback ? null : versionLabel(state),
+                // 版本号只认用户在流水线里填的 / 打 tag 的版本：没填就是 latest
+                rollback ? null : state.deployVersion,
                 tagged,
                 spec.volume());
 
@@ -3825,7 +3828,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             DeployResult result = dockerDeployer.deployService(runDir, state.projectId, state.env,
                     state.runId, state.gitSha, namespace, service.name(), service.image(),
                     hostPort, service.containerPort(), net, svcEnv, service.volumePath(),
-                    versionLabel(state), state.deployTagged);
+                    state.deployVersion, state.deployTagged);
             state.log.append('[').append(stageId).append("] ").append(service.name())
                     .append(" → ").append(result.endpoint()).append('\n')
                     .append(result.log()).append('\n');
@@ -4439,6 +4442,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile String deployVersion;
         /** true = 打 tag：新版本独立部署，不覆盖该环境的上一版。 */
         volatile boolean deployTagged;
+        /** 打 tag 结果：PUSHED=远端可见 / LOCAL=仅本地 / FAILED=失败；null=未打标签。 */
+        volatile String tagStatus;
         /** 端口租约分配出的宿主端口（0 = 尚未分配，health 用 pipeline 里的端口）。 */
         volatile int deployHostPort;
         /** 本次运行加载的流水线定义（deploy 段从这里读）。 */
@@ -4493,7 +4498,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     status, createdAt, seq, List.copyOf(stages), List.copyOf(artifacts),
                     ProcessExecutor.redact(log.toString(), sensitiveValues),
                     definitionSource == null ? null : definitionSource.name(), definitionNote,
-                    deployVersion);
+                    deployVersion, tagStatus);
         }
 
         RunState(String runId, String projectId, String env, String pipelineId, String gitSha) {

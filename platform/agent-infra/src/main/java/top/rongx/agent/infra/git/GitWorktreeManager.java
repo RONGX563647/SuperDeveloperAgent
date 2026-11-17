@@ -651,8 +651,23 @@ public class GitWorktreeManager {
      * <p>同名标签指向同一提交视为成功（重复发布幂等）；指向其它提交则报错，
      * 避免把用户已经发布的版本号悄悄改到别的提交上。
      */
-    public void createTag(Path repoDir, String tag, String sha) {
-        String name = validTag(tag);
+    /** 现有标签（版本降序，最多 limit 个）：版本号输入框的候选来源。 */
+    public List<String> listTags(Path repoDir, int limit) {
+        Path repo = repoDir.toAbsolutePath().normalize();
+        if (!Files.isDirectory(repo.resolve(".git")) && !Files.isDirectory(repo.resolve("objects"))) {
+            return List.of();
+        }
+        ActionResult out = run(repo, List.of("git", "tag", "-l", "--sort=-v:refname"),
+                "git tag -l");
+        int max = Math.max(1, limit);
+        return out.logTail().lines()
+                .map(String::trim)
+                .filter(line -> !line.isBlank())
+                .limit(max)
+                .toList();
+    }
+
+    public void createTag(Path repoDir, String tag, String sha) {        String name = validTag(tag);
         if (sha == null || !sha.matches("[0-9a-fA-F]{4,40}")) {
             throw new GitIntakeException("提交号不合法，无法打标签：" + sha);
         }

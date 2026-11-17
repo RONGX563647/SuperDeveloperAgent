@@ -32,19 +32,33 @@ public class PipelineController {
     private final DeployGate deployGate;
     private final top.rongx.agent.gateway.settings.EnvBindingService bindings;
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
+    private final top.rongx.agent.domain.port.ProjectRepoLocator repoLocator;
 
     public PipelineController(PipelineEngine engine,
                               @Value("${agent.deploy.server.host:}") String serverHost,
                               top.rongx.agent.domain.settings.DeployServerRepository deployServers,
                               DeployGate deployGate,
                               top.rongx.agent.gateway.settings.EnvBindingService bindings,
-                              top.rongx.agent.gateway.auth.CurrentUser currentUser) {
+                              top.rongx.agent.gateway.auth.CurrentUser currentUser,
+                              top.rongx.agent.domain.port.ProjectRepoLocator repoLocator) {
         this.engine = engine;
         this.legacyServerConfigured = serverHost != null && !serverHost.isBlank();
         this.deployServers = deployServers;
         this.deployGate = deployGate;
         this.bindings = bindings;
         this.currentUser = currentUser;
+        this.repoLocator = repoLocator;
+    }
+
+    /** 现有 git 标签（版本降序）：版本号输入框用它做候选与重复校验。 */
+    @GetMapping("/tags")
+    public Map<String, Object> tags(String projectId,
+                                    @RequestParam(defaultValue = "30") int limit) {
+        if (projectId == null || projectId.isBlank()) {
+            return Map.of("tags", java.util.List.of());
+        }
+        int size = Math.min(Math.max(1, limit), 100);
+        return Map.of("tags", repoLocator.listTags(projectId, size));
     }
 
     @GetMapping("/pipelines")
@@ -356,6 +370,8 @@ public class PipelineController {
                     row.put("gitSha", h.gitSha());
                     // 用户填写的版本号（打 tag 时同时同步为 git 标签），列表直接展示
                     row.put("version", h.version() == null ? "" : h.version());
+                    // 打 tag 结果：PUSHED / LOCAL / FAILED，空表示这次没打标签
+                    row.put("tagStatus", h.tagStatus() == null ? "" : h.tagStatus());
                     row.put("status", h.status().name());
                     row.put("createdAt", h.createdAt());
                     row.put("seq", h.seq());

@@ -100,6 +100,12 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
     }
 
     @Override
+    public java.util.List<String> listTags(String projectId, int limit) {
+        var repo = repoDir(projectId);
+        return repo.map(dir -> git.listTags(dir, limit)).orElse(java.util.List.of());
+    }
+
+    @Override
     public TagOutcome createTag(String projectId, String tag, String sha) {
         var repo = repoDir(projectId);
         if (repo.isEmpty() || sha == null || sha.isBlank()) {

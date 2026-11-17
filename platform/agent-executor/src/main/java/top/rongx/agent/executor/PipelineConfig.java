@@ -121,6 +121,8 @@ public class PipelineConfig {
                                          @Value("${agent.pipeline.auto-repair.auto-resume:true}") boolean autoResume) {
         Path root = Path.of(workspaceRoot);
         RunHistoryStore store = persist ? RunHistoryStore.file(root) : RunHistoryStore.disabled();
+        // 启动时把历史序号归一化为 1..N：修掉旧数据跳号导致的"构建顺序乱"
+        store.normalizeSeq();
         // 定义解析：仓库提交覆盖 > 环境固化脚本 > 平台定义 > 规则生成 > agent 兜底
         PipelineDefinitionResolver resolver = new PipelineDefinitionResolver(
                 defStore, scaffolder, defAuthor.getIfAvailable(), recipeStore);

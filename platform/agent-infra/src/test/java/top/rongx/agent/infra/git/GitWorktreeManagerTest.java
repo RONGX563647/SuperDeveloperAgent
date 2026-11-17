@@ -233,6 +233,7 @@ class GitWorktreeManagerTest {
 
         m.createTag(dir, "v1.2.0", head);
         assertEquals(head, m.revParse(dir, "refs/tags/v1.2.0"));
+        assertEquals(List.of("v1.2.0"), m.listTags(dir, 10), "版本号输入框的候选来源");
 
         // 同一提交重复发布：幂等成功
         m.createTag(dir, "v1.2.0", head);

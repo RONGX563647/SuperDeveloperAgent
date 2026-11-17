@@ -9,6 +9,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
 import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.run.StageResult;
@@ -22,6 +24,8 @@ import top.rongx.agent.domain.run.StageStatus;
  * 换 MySQL 时只需替换本类，接口不变。
  */
 public class RunHistoryStore {
+
+    private static final Logger log = LoggerFactory.getLogger(RunHistoryStore.class);
 
     private final Path dir;
     private final boolean enabled;
@@ -60,6 +64,50 @@ public class RunHistoryStore {
         return new RunHistoryStore(Path.of("."), false);
     }
 
+    /**
+     * 把历史序号按创建时间重排为 1..N。
+     *
+     * <p>历史数据里偶尔会出现跳号（如 15 之后直接 100），列表按时间倒序却显示
+     * #100 / #15，看起来像"顺序乱了"。启动时做一次归一化，之后 nextSeq 自然连续。
+     * 只重写 seq，不动阶段/日志/时间。
+     */
+    public void normalizeSeq() {
+        if (!enabled) {
+            return;
+        }
+        List<RunSnapshot> all = new ArrayList<>(list());
+        Map<String, List<RunSnapshot>> groups = new java.util.LinkedHashMap<>();
+        for (RunSnapshot snapshot : all) {
+            groups.computeIfAbsent(snapshot.projectId() + '\u0000' + snapshot.env(),
+                    key -> new ArrayList<>()).add(snapshot);
+        }
+        for (List<RunSnapshot> group : groups.values()) {
+            group.sort(Comparator.comparingLong(RunSnapshot::createdAt));
+            boolean clean = true;
+            for (int i = 0; i < group.size(); i++) {
+                if (group.get(i).seq() != i + 1) {
+                    clean = false;
+                    break;
+                }
+            }
+            if (clean) {
+                continue;
+            }
+            for (int i = 0; i < group.size(); i++) {
+                RunSnapshot snapshot = group.get(i);
+                int seq = i + 1;
+                // 启动时仍在"进行中"的运行已经不可能再推进：顺手落成已取消，避免历史一直挂着
+                StageStatus status = snapshot.status().isTerminal()
+                        ? snapshot.status() : StageStatus.CANCELLED;
+                if (snapshot.seq() != seq || status != snapshot.status()) {
+                    save(snapshot.withSeqAndStatus(seq, status));
+                }
+            }
+            log.info("历史序号已归一化：{} 条（{}）", group.size(), group.get(0).projectId()
+                    + "/" + group.get(0).env());
+        }
+    }
+
     /** 保存一次运行的快照（覆盖写，保证终态是最后一次结果）。 */
     public void save(RunSnapshot snapshot) {
         if (!enabled) {
@@ -77,6 +125,8 @@ public class RunHistoryStore {
             data.put("status", snapshot.status().name());
             data.put("createdAt", snapshot.createdAt());
             data.put("seq", snapshot.seq());
+            // 打 tag 的结果（PUSHED/LOCAL/FAILED）：列表直接展示，避免"以为打了其实没推上去"
+            data.put("tagStatus", snapshot.tagStatus() == null ? "" : snapshot.tagStatus());
             data.put("log", snapshot.log());
             // 定义来源：让重启后 ci_history 仍能回答"这次跑的是哪份定义"
             data.put("definitionSource", snapshot.definitionSource() == null ? "" : snapshot.definitionSource());
@@ -257,7 +307,9 @@ public class RunHistoryStore {
                 m.get("definitionNote") == null || String.valueOf(m.get("definitionNote")).isBlank()
                         ? null : String.valueOf(m.get("definitionNote")),
                 m.get("version") == null || String.valueOf(m.get("version")).isBlank()
-                        ? null : String.valueOf(m.get("version")));
+                        ? null : String.valueOf(m.get("version")),
+                m.get("tagStatus") == null || String.valueOf(m.get("tagStatus")).isBlank()
+                        ? null : String.valueOf(m.get("tagStatus")));
     }
 
     /** 读取产物 meta（旧文件没有该字段，按空处理）。 */
@@ -304,14 +356,14 @@ public class RunHistoryStore {
     /** 历史摘要（索引项）：历史列表只需要这些字段，不需要读回阶段/日志/产物。 */
     public record Summary(String runId, String projectId, String env, String pipelineId, String gitSha,
                           StageStatus status, long createdAt, int seq, int stageCount, long durationMs,
-                          String version) {
+                          String version, String tagStatus) {
 
         static Summary of(RunSnapshot snapshot) {
             return new Summary(snapshot.runId(), snapshot.projectId(), snapshot.env(),
                     snapshot.pipelineId(), snapshot.gitSha(), snapshot.status(),
                     snapshot.createdAt(), snapshot.seq(), snapshot.stages().size(),
                     snapshot.stages().stream().mapToLong(StageResult::durationMs).sum(),
-                    snapshot.version());
+                    snapshot.version(), snapshot.tagStatus());
         }
     }
 
@@ -319,12 +371,19 @@ public class RunHistoryStore {
     public record RunSnapshot(String runId, String projectId, String env, String pipelineId, String gitSha,
                               StageStatus status, long createdAt, int seq, List<StageResult> stages,
                               List<ArtifactRef> artifacts, String log,
-                              String definitionSource, String definitionNote, String version) {
+                              String definitionSource, String definitionNote, String version,
+                              String tagStatus) {
 
         /** 旧文件没有 seq：补号时保持其它字段不变。 */
         public RunSnapshot withSeq(int value) {
-            return new RunSnapshot(runId, projectId, env, pipelineId, gitSha, status, createdAt,
-                    value, stages, artifacts, log, definitionSource, definitionNote, version);
+            return withSeqAndStatus(value, status);
+        }
+
+        /** 归一化：同时修正序号与残留的"进行中"状态。 */
+        public RunSnapshot withSeqAndStatus(int value, StageStatus newStatus) {
+            return new RunSnapshot(runId, projectId, env, pipelineId, gitSha, newStatus, createdAt,
+                    value, stages, artifacts, log, definitionSource, definitionNote, version,
+                    tagStatus);
         }
     }
 }

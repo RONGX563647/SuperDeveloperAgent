@@ -1,6 +1,7 @@
 package top.rongx.agent.domain.port;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -39,6 +40,15 @@ public interface ProjectRepoLocator {
 
     /** 打标签结果：created = 本地已创建；pushed = 已推送到远端。 */
     record TagOutcome(boolean created, boolean pushed, String message) {
+    }
+
+    /**
+     * 现有 git 标签（按版本降序，供版本号输入框做候选与重复校验）。
+     *
+     * <p>默认不支持，由具体仓库实现覆盖；仓库不可用时返回空列表。
+     */
+    default List<String> listTags(String projectId, int limit) {
+        return List.of();
     }
 
     enum StorageMode {

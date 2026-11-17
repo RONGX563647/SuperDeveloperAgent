@@ -243,7 +243,7 @@ public interface PipelineEngine {
     /** 历史视图（domain 层数据结构，避免 gateway 依赖执行面具体类）。 */
     record RunSummary(String runId, String projectId, String env, String pipelineId, String gitSha,
                       StageStatus status, long createdAt, int seq, int stageCount, long durationMs,
-                      String version) {
+                      String version, String tagStatus) {
     }
 
     /**
