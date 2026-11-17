@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-17T18:55:46+08:00",
-  "sourceCommit": "5d25304b660f4104483a3080117a486b3ef35ac0",
+  "generatedAt": "2026-11-17T20:31:30+08:00",
+  "sourceCommit": "cfb0817e14b1bf895045ef363bbf915bf2833c6d",
   "docs": [
     {
       "level": "L1",
@@ -146,8 +146,8 @@
       "symbol": "ProjectIntakeService#submit",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java",
       "module": "agent-infra",
-      "start": 141,
-      "end": 157
+      "start": 155,
+      "end": 171
     },
     {
       "id": "runtime-agent-factory/create-chat",
