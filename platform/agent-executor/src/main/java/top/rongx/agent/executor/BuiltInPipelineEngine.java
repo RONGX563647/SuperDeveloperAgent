@@ -40,7 +40,10 @@ import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.error.BuildException;
+import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PromotionException;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvResource;
@@ -1117,27 +1120,27 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (requestedHash != null && !requestedHash.isBlank()) {
             PipelineEngine.DryRunReport report = dryRun(projectId, pipelineId, env, sha);
             if (!report.ok()) {
-                throw new IllegalArgumentException(ErrorCode.DRY_RUN_FAILED.code() + " dry-run 未通过："
-                        + String.join("；", report.blockers()));
+                throw new EnvironmentException(ErrorCode.DRY_RUN_FAILED,
+                        "dry-run 未通过：" + String.join("；", report.blockers()));
             }
             if (!requestedHash.equals(report.reportHash())) {
-                throw new IllegalArgumentException(
-                        ErrorCode.DRY_RUN_STALE.code() + " dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
+                throw new EnvironmentException(ErrorCode.DRY_RUN_STALE,
+                        "dry-run 报告已过期（代码/配方/环境/密钥版本已变化），请重新 dry-run");
             }
         }
         String deployTarget = params.get("deployTarget");
         // 服务器操作的前置：必须已有"测试机成功案例"（测试环境跑通并固化的脚本 + 证据运行成功）
         String problem = promotionProblem(projectId, env, sha);
         if (problem != null) {
-            throw new IllegalArgumentException(ErrorCode.ENV_NOT_PROMOTED.code() + " " + problem);
+            throw new PromotionException(ErrorCode.ENV_NOT_PROMOTED, problem);
         }
         // 不再校验"该提交里有没有 ci/pipeline.yml"：定义可以放在平台侧（默认），
         // 仓库里那份只是可选覆盖。真正缺定义时由执行期的 pipeline-def stage 说明。
         // 前置：仓库必须可定位，否则建出来的运行只会在历史里留下一条失败记录
         if (resolveRepoForRead(projectId) == null) {
-            throw new IllegalArgumentException(ErrorCode.COMPILE_FAILED.code()
-                    + " 项目仓库不可用：请先在「项目接入」页完成 clone / 本地登记，"
-                    + "或在项目详情里执行「同步到平台」后重试");
+            throw new BuildException(ErrorCode.COMPILE_FAILED,
+                    "项目仓库不可用：请先在「项目接入」页完成 clone / 本地登记，"
+                            + "或在项目详情里执行「同步到平台」后重试");
         }
         String runId = "run-" + UUID.randomUUID().toString().substring(0, 8);
         RunState state = new RunState(runId, projectId, env, pipelineId, sha);

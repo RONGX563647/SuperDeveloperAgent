@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.change.PlanHasher;
 import top.rongx.agent.domain.deploy.EnvironmentPromotion;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PromotionException;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.governance.ConfirmTokenService;
@@ -48,11 +49,11 @@ public class DeployGate {
         }
         String problem = evidenceProblem(projectId, env, sha);
         if (problem != null) {
-            throw new IllegalArgumentException(ErrorCode.ENV_NOT_PROMOTED.code() + " " + problem);
+            throw new PromotionException(ErrorCode.ENV_NOT_PROMOTED, problem);
         }
         if (confirmToken == null || confirmToken.isBlank()) {
-            throw new IllegalArgumentException(
-                    ErrorCode.CONFIRM_REQUIRED.code() + " 在服务器上操作需要人工确认：请先在部署面板点「确认发布」获取令牌");
+            throw new PromotionException(ErrorCode.CONFIRM_REQUIRED,
+                    "在服务器上操作需要人工确认：请先在部署面板点「确认发布」获取令牌");
         }
         tokens.consume(confirmToken, changeId(projectId, env, sha), planHash(projectId, env, sha));
     }

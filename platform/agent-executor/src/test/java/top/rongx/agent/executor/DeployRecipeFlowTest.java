@@ -28,6 +28,7 @@ import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.port.RecipeStore;
+import top.rongx.agent.domain.error.PromotionException;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 
@@ -67,7 +68,8 @@ class DeployRecipeFlowTest {
         BuiltInPipelineEngine engine = newEngine(ws, repo, recipes, temp);
         try {
             String runId = engine.trigger(PROJECT, "release", Map.of("gitSha", sha, "env", "test"));
-            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, runId), engine.logTail(runId));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, runId),
+                    engine.logTail(runId) + "\nstages=" + engine.stages(runId));
 
             DeployRecipe frozen = recipes.current(PROJECT, "test").orElseThrow();
             assertEquals(runId, frozen.evidenceRunId(), "固化必须带证据运行");
@@ -92,9 +94,9 @@ class DeployRecipeFlowTest {
         Path ws = temp.resolve("ws");
         BuiltInPipelineEngine engine = newEngine(ws, repo, new MemoryRecipeStore(ws), temp);
         try {
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            PromotionException e = assertThrows(PromotionException.class,
                     () -> engine.trigger(PROJECT, "release", Map.of("gitSha", sha, "env", "prod")));
-            assertTrue(e.getMessage().contains("E-601"), e.getMessage());
+            assertEquals("E-601", e.code());
             assertTrue(e.getMessage().contains("测试环境"), e.getMessage());
         } finally {
             engine.close();
@@ -111,7 +113,8 @@ class DeployRecipeFlowTest {
         BuiltInPipelineEngine engine = newEngine(ws, repo, recipes, temp);
         try {
             String testRun = engine.trigger(PROJECT, "release", Map.of("gitSha", sha, "env", "test"));
-            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, testRun));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, testRun),
+                    engine.logTail(testRun) + "\nstages=" + engine.stages(testRun));
 
             String prodRun = engine.trigger(PROJECT, "release", Map.of("gitSha", sha, "env", "prod"));
             assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, prodRun), engine.logTail(prodRun));
@@ -119,9 +122,10 @@ class DeployRecipeFlowTest {
             // 新提交未在测试环境验证过 → 拒绝
             Files.writeString(repo.resolve("second.txt"), "x", StandardCharsets.UTF_8);
             String otherSha = commit(repo, "second");
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            PromotionException e = assertThrows(PromotionException.class,
                     () -> engine.trigger(PROJECT, "release",
                             Map.of("gitSha", otherSha, "env", "prod")));
+            assertEquals("E-601", e.code());
             assertTrue(e.getMessage().contains("测试环境验证的是"), e.getMessage());
         } finally {
             engine.close();

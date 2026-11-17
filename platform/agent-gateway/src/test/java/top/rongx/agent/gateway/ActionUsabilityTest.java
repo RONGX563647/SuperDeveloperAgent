@@ -13,6 +13,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.policy.PolicyDeniedException;
 import top.rongx.agent.gateway.web.ActionController;
 import top.rongx.agent.gateway.web.ChangeController;
 
@@ -212,8 +213,9 @@ class ActionUsabilityTest {
     @Test
     @DisplayName("U7 生产环境不能直接执行构建")
     void prodBlocked() {
-        var ex = assertThrows(IllegalStateException.class,
+        var ex = assertThrows(PolicyDeniedException.class,
                 () -> actionController.run("backend_build", "RY", "prod"));
+        assertEquals("E-707", ex.code());
         assertTrue(ex.getMessage().contains("生产环境"), ex.getMessage());
     }
 

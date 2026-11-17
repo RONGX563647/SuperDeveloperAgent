@@ -11,7 +11,7 @@ summary: 服务器操作前校验测试证据与计划哈希，并消费一次�
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 部署前证据校验与确认令牌 | `DeployGate#requireIfNeeded` | `platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java:45-58` | agent-gateway |
+| 部署前证据校验与确认令牌 | `DeployGate#requireIfNeeded` | `platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java:46-59` | agent-gateway |
 <!-- generated:end -->
 
 ## 行为拆解

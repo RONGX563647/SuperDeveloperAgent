@@ -13,6 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.artifact.ArtifactRef;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.process.CommandShell;
 
@@ -76,9 +78,9 @@ public class GitWorktreeManager {
     }
 
     /** git 操作失败（带原始报错）。 */
-    public static class GitIntakeException extends RuntimeException {
+    public static class GitIntakeException extends IntakeException {
         public GitIntakeException(String message) {
-            super(message);
+            super(ErrorCode.INTAKE_FAILED, message);
         }
     }
 
