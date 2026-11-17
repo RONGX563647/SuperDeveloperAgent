@@ -1,0 +1,462 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-17_0913_tool-schema-token-budget",
+  "category": "feat",
+  "title": "工具 schema token 预算：描述瘦身 + 插件收敛 + 输出分级",
+  "createdAt": "2026-11-17T09:13:39+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "工具 schema token 预算：描述瘦身 + 插件收敛 + 输出分级",
+    "toolCallCount": 0
+  },
+  "problem": "77 个工具的完整 schema 每轮常驻（约 20-27k token）：中文长描述里塞流程指令、核心工具过多、未归类工具默认可见、输出截断一刀切",
+  "solution": "描述压到 ≤40 字符英文并把行为约束迁入系统提示；核心工具收敛为 8 个发现类；会话/任务/工作区工具移入 dispatch 插件，未归类工具进 other 插件默认不加载；首轮一次意图路由最多 2 个插件；工具输出预算按工具分级并保留头尾",
+  "commits": [
+    {
+      "sha": "fab91abc71179505b74659592e08287c30981f94",
+      "subject": "feat(issues): 工单优先级、任务板与就绪清单改进",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/WorkspacePlanItem.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "70711641752eb576789df4826ef7361ca6245819"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/gitissue/GitIssue.java",
+          "status": "M",
+          "additions": 52,
+          "deletions": 3,
+          "blobHash": "08fdb79083dd9776984ebd80ea3e921149dcc5e4"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreSeqTest.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "b840e3dc071b92650f994a6d91750a54e19a34de"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitissue/GitIssueServiceImpl.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 8,
+          "blobHash": "13870c1335342c915b82e251704285ccfea4d784"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitissue/GitIssueSyncService.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "a4dd54a866245a9ed341528e22660d3fd5c6b013"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GitIssueController.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "db993be40c765fc2b3ecd7492b2fbbd25cd3ea2f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectIntakeController.java",
+          "status": "M",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "aa41a9e01d677f6c84c9a56e6a57bb5862ea8783"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 41,
+          "deletions": 0,
+          "blobHash": "1b7d8cb9597a5d983377768dc7972b0e93e28358"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 0,
+          "blobHash": "3da4c3cd2f4bc4e1fb5222b60693ee8304793bc2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteGitIssueStore.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 29,
+          "blobHash": "572ad05a7b667ecc8312be6853fabca599f94c60"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/GitWorktreeManagerTest.java",
+          "status": "M",
+          "additions": 28,
+          "deletions": 0,
+          "blobHash": "0dfee0993c3819bd06a9cabf6af27fd89e42e153"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/GitIssueCommandTools.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 16,
+          "blobHash": "82ed95ac07df78570539fd705fc4a9e4fc7d7f3e"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/GitIssueQueryTools.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 10,
+          "blobHash": "9f2344893391e3760cbb4d6645bc732c80e69af0"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/WorkspaceSupervisorTools.java",
+          "status": "M",
+          "additions": 103,
+          "deletions": 115,
+          "blobHash": "4d14fb91180471bfba3267654f37678383bf3e89"
+        },
+        {
+          "path": "platform/web/src/api/issues.ts",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "ad05f0c30763f7583e3d1958caa9135b8fa84c41"
+        },
+        {
+          "path": "platform/web/src/api/project.ts",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "f7533555ff175a8644e09a70f73061f13f275dd8"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatIssuesView.vue",
+          "status": "M",
+          "additions": 960,
+          "deletions": 13,
+          "blobHash": "8bc641254aa9ba8965716d68e0c8538e6afefd44"
+        },
+        {
+          "path": "platform/web/src/components/project/ProjectReadiness.vue",
+          "status": "M",
+          "additions": 14,
+          "deletions": 8,
+          "blobHash": "a5473710b70e736972b9bb08c8fb8827c5e73b42"
+        },
+        {
+          "path": "platform/web/src/views/WorkspaceHomeView.vue",
+          "status": "M",
+          "additions": 54,
+          "deletions": 102,
+          "blobHash": "35b37484759aa11b9257ce9ca4b9b48247afa37a"
+        }
+      ]
+    },
+    {
+      "sha": "02bb05e19d94f3bc3fcb09fb9a7592b9d85488b2",
+      "subject": "feat(agent): 工具 schema token 预算：英文短描述 + 插件收敛 + 输出分级",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "e3e15d2e0e6fb6ce67ab71879e468bf57782fb13"
+        },
+        {
+          "path": "docs/handbook/l3/tools-deploy-tools.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "d99b8d7bc4021d507cb0a984c085506b519f8fa4"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "96cce35c0c51e7ea69dc68ae7c0c22d167a80516"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/tool/ToolPluginIndex.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 7,
+          "blobHash": "cd5b07d0ac53c1d6b171cbed4510f7953df96011"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/tool/ToolPlugins.java",
+          "status": "M",
+          "additions": 54,
+          "deletions": 37,
+          "blobHash": "104fcedf9e2e8f3a09e47f2e7147b4a67290bafe"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/tool/ToolPluginIndexTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 5,
+          "blobHash": "2dfb177b3fd112aa8aa340490efc1f74b78f9ddb"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 5,
+          "deletions": 1,
+          "blobHash": "09bca34d24a0dec2fbeaac2400dfbfe4e21297c9"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 167,
+          "deletions": 116,
+          "blobHash": "874d6eb31a8e4da87bc40840710f91b722b6fbba"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ProgressiveToolMiddleware.java",
+          "status": "M",
+          "additions": 49,
+          "deletions": 8,
+          "blobHash": "d8c243aed0ddcf84d0d7817cdd48dc9010e4a9d7"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/ProgressiveToolMiddlewareTest.java",
+          "status": "M",
+          "additions": 59,
+          "deletions": 0,
+          "blobHash": "e6803e4fd5ea3da7da31243ac24f116a47ecef23"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ActionCommandTools.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 7,
+          "blobHash": "01185c9f8ddc9bda54ab00330edc85607f2da6b5"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ActionQueryTools.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 8,
+          "blobHash": "fe0a03719bbe392923ca1343b73bdb308ea74acb"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ApiDocTools.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 11,
+          "blobHash": "f3392ff3394ea087cb26b33a13a8b1fc2c9ceef0"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/CapabilityMarketTools.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 11,
+          "blobHash": "b8557cf0dca46f6abb84221002d3d28c6a3515e6"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeTools.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 18,
+          "blobHash": "d9cd1bc07f63392fbd6f90d3ff09f5731eaa264d"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/CiCommandTools.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 17,
+          "blobHash": "5cd015c7f6182b2037cb528f0f5feec7085ec5c8"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/CiQueryTools.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 33,
+          "blobHash": "207625a733d70582cbbd0dde8406701d8b588e46"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ConfigTools.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 7,
+          "blobHash": "99aef770553a31d37613f89fea69b787f3414a32"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 42,
+          "blobHash": "3556528352eb24f48f772e0104b49bf54c7356bf"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DockerfileTools.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 13,
+          "blobHash": "36b09fc1e6319676b4f64838c6f58bb47347c0e8"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvCommandTools.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 25,
+          "blobHash": "6407f57ae71f3b86ab23b6d34a65ef11005006f0"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvQueryTools.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 17,
+          "blobHash": "b40025a68094b891f400160031eabc91b3607a12"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/OpsAgentTools.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 10,
+          "blobHash": "e9d5a2a2b9ce9bfa347dda8eadf4aead40666687"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/PatchTools.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 16,
+          "blobHash": "248b4183a0dca48064727d8816eaba9da0d13a99"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ProjectTools.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 8,
+          "blobHash": "10a3eb8a2eefb34b7a09bc5c35db6cc6bc218c70"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/RepoQueryTools.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 29,
+          "blobHash": "d303f2a9aa1aa2ccbea08355120e2c6dff7565a1"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/RuntimeTools.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 17,
+          "blobHash": "790d2bdb1a30261a96beabdb96273a111f3941a4"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalogTools.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 18,
+          "blobHash": "19b5e274fcb351dd1d2cd94c05e54666af90110b"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/cache/CachingAgentTool.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 5,
+          "blobHash": "fb259ac85efcdb7eb7f763d5d1771685e9502fa8"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/cache/ToolResultCache.java",
+          "status": "M",
+          "additions": 44,
+          "deletions": 1,
+          "blobHash": "64f15b538a36872f5156d82f66132eaa13f1eefd"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/cache/ToolResultCacheTest.java",
+          "status": "M",
+          "additions": 23,
+          "deletions": 3,
+          "blobHash": "1b74978f519dfe381900241a91e79a730733350b"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ToolSchemaBudgetTest.java",
+          "status": "A",
+          "additions": 104,
+          "deletions": 0,
+          "blobHash": "4bbb2fb996ec94c44b30402cc2950c1de5542c9a"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreSeqTest.java",
+        "status": "M",
+        "additions": 14,
+        "deletions": 0,
+        "blobHash": "b840e3dc071b92650f994a6d91750a54e19a34de"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/GitWorktreeManagerTest.java",
+        "status": "M",
+        "additions": 28,
+        "deletions": 0,
+        "blobHash": "0dfee0993c3819bd06a9cabf6af27fd89e42e153"
+      },
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/tool/ToolPluginIndexTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 5,
+        "blobHash": "2dfb177b3fd112aa8aa340490efc1f74b78f9ddb"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/ProgressiveToolMiddlewareTest.java",
+        "status": "M",
+        "additions": 59,
+        "deletions": 0,
+        "blobHash": "e6803e4fd5ea3da7da31243ac24f116a47ecef23"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/cache/ToolResultCacheTest.java",
+        "status": "M",
+        "additions": 23,
+        "deletions": 3,
+        "blobHash": "1b74978f519dfe381900241a91e79a730733350b"
+      },
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ToolSchemaBudgetTest.java",
+        "status": "A",
+        "additions": 104,
+        "deletions": 0,
+        "blobHash": "4bbb2fb996ec94c44b30402cc2950c1de5542c9a"
+      }
+    ],
+    "casesAdded": 6,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 531, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools",
+      "spec-checks",
+      "web"
+    ],
+    "verification": "Tests run: 531, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_0913_tool-schema-token-budget"
+    ]
+  },
+  "chain": {
+    "prev": "de129ace41c17afd3396469baae9bc6466e47bd523e903ee75d31577fa98652b",
+    "self": "50e512790e1794da90c791935d1a19f79114b3266935b4d8f3e64565592e3db0"
+  }
+}
