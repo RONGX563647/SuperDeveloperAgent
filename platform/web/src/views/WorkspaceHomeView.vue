@@ -975,6 +975,7 @@ onUnmounted(() => {
               <div class="item-main">
                 <span class="item-title">{{ issue.title }}</span>
                 <span class="item-meta">
+                  <em v-if="issue.code" class="mono item-code">{{ issue.code }}</em>
                   <em class="prio" :class="issue.priority.toLowerCase()">{{ issue.priority }}</em>
                   <span>{{ issue.kind === 'FEAT' ? 'Feat' : 'Bug' }}</span>
                   <span class="mono">{{ issue.number ? `#${issue.number}` : '仅本地' }}</span>
@@ -1321,6 +1322,12 @@ onUnmounted(() => {
   color: var(--ink-faint);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+/* 任务编码：FEAT-1 / BUG-3，项目内可读编号 */
+.item-code {
+  flex: none;
+  color: var(--ink-soft);
+  font-style: normal;
 }
 .item-meta .prio {
   padding: 0 4px;

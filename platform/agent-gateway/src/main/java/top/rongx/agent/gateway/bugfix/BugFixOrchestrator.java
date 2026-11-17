@@ -126,7 +126,10 @@ public class BugFixOrchestrator {
                 });
         long now = System.currentTimeMillis();
         String id = "bf-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        String branch = "agent/bugfix-" + id.substring(3);
+        // 任务编码参与 git：修复分支带上 BUG-x / FEAT-x，方便从分支反查任务
+        String code = issue.code() == null || issue.code().isBlank()
+                ? id.substring(3) : issue.code().toLowerCase(java.util.Locale.ROOT);
+        String branch = "agent/bugfix-" + code + "-" + id.substring(3);
         BugFixRun run = new BugFixRun(
                 id, issue.id(), issue.userId(), issue.projectId(), issue.provider(), issue.repo(),
                 issue.number(), issue.title(), issue.body(), branch,

@@ -11,6 +11,8 @@ export type GitIssuePriority = 'P0' | 'P1' | 'P2'
 
 export interface GitIssueRow {
   id: string
+  /** 任务编码：项目内可读编号（FEAT-1 / BUG-3），创建后不变。 */
+  code: string
   userId: string
   projectId: string
   provider: GitIssueProvider

@@ -11,6 +11,7 @@ import java.util.Locale;
  * <p>编号用字符串保存：Gitee 的 Issue 编号形如 {@code I1ABCD}，GitHub / GitLab 为纯数字。
  *
  * @param id         平台任务 ID（本地主键）
+ * @param code       任务编码（项目内可读编号，如 FEAT-1 / BUG-3），创建后不再变化
  * @param userId    所属用户（webhook 自动建任务时取集成配置的配置人）
  * @param projectId 关联项目（可空）
  * @param provider  GITEE / GITHUB / GITLAB
@@ -24,6 +25,7 @@ import java.util.Locale;
  */
 public record GitIssue(
         String id,
+        String code,
         String userId,
         String projectId,
         String provider,
@@ -44,6 +46,7 @@ public record GitIssue(
         long updatedAt) {
 
     public GitIssue {
+        code = code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
         provider = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
         repo = repo == null ? "" : repo.trim();
         number = number == null ? "" : number.trim();
@@ -67,7 +70,7 @@ public record GitIssue(
                     String number, String title, String body, String state, String kind,
                     String labels, String url, String source, String syncStatus, String syncError,
                     String assignee, long createdAt, long updatedAt) {
-        this(id, userId, projectId, provider, repo, number, title, body, state, kind,
+        this(id, "", userId, projectId, provider, repo, number, title, body, state, kind,
                 priorityOfLabels(labels), labels, url, source, syncStatus, syncError, assignee,
                 createdAt, updatedAt);
     }
@@ -77,7 +80,7 @@ public record GitIssue(
                     String number, String title, String body, String state, String labels,
                     String url, String source, String syncStatus, String syncError,
                     String assignee, long createdAt, long updatedAt) {
-        this(id, userId, projectId, provider, repo, number, title, body, state,
+        this(id, "", userId, projectId, provider, repo, number, title, body, state,
                 kindOfLabels(labels), priorityOfLabels(labels), labels, url, source,
                 syncStatus, syncError, assignee, createdAt, updatedAt);
     }

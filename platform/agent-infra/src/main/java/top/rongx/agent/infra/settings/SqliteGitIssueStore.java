@@ -31,6 +31,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
     private static final String SCHEMA = """
             CREATE TABLE IF NOT EXISTS git_issues (
                 id           TEXT PRIMARY KEY,
+                code         TEXT NOT NULL DEFAULT '',
                 user_id      TEXT NOT NULL,
                 project_id   TEXT,
                 provider     TEXT NOT NULL,
@@ -87,7 +88,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             """;
 
     private static final String ISSUE_COLUMNS = """
-            id, user_id, project_id, provider, repo, issue_number, title, body, state, kind,
+            id, code, user_id, project_id, provider, repo, issue_number, title, body, state, kind,
             priority, labels, url, source, sync_status, sync_error, assignee, created_at, updated_at
             """;
 
@@ -131,6 +132,11 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             if (!columns.contains("priority")) {
                 st.executeUpdate(
                         "ALTER TABLE git_issues ADD COLUMN priority TEXT NOT NULL DEFAULT 'P2'");
+            }
+            if (!columns.contains("code")) {
+                st.executeUpdate(
+                        "ALTER TABLE git_issues ADD COLUMN code TEXT NOT NULL DEFAULT ''");
+                backfillCodes(conn);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("git issue 表初始化失败：" + e.getMessage(), e);
@@ -229,15 +235,20 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                     exists = rs.next();
                 }
             }
+            // 编码只在首次创建时分配；更新路径沿用数据库里的值，避免被空值覆盖
+            String code = issue.code() == null ? "" : issue.code().trim();
+            if (code.isBlank()) {
+                code = exists ? existingCode(conn, issue.id()) : nextCode(conn, issue);
+            }
             if (!exists) {
                 try (PreparedStatement st = conn.prepareStatement("""
                         INSERT INTO git_issues
-                            (id, user_id, project_id, provider, repo, issue_number, title, body,
+                            (id, code, user_id, project_id, provider, repo, issue_number, title, body,
                              state, kind, priority, labels, url, source, sync_status, sync_error,
                              assignee, created_at, updated_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """)) {
-                    bindIssue(st, issue, now);
+                    bindIssue(st, issue, code, now);
                     st.executeUpdate();
                 }
             } else {
@@ -268,7 +279,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                     st.executeUpdate();
                 }
             }
-            GitIssue saved = new GitIssue(issue.id(), issue.userId(), issue.projectId(),
+            GitIssue saved = new GitIssue(issue.id(), code, issue.userId(), issue.projectId(),
                     issue.provider(), issue.repo(), issue.number(), issue.title(), issue.body(),
                     issue.state(), issue.kind(), issue.priority(), issue.labels(), issue.url(),
                     issue.source(), issue.syncStatus(), issue.syncError(), issue.assignee(),
@@ -279,26 +290,94 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
         }
     }
 
-    private void bindIssue(PreparedStatement st, GitIssue issue, long now) throws SQLException {
+    private void bindIssue(PreparedStatement st, GitIssue issue, String code, long now)
+            throws SQLException {
         st.setString(1, issue.id());
-        st.setString(2, issue.userId());
-        st.setString(3, issue.projectId());
-        st.setString(4, issue.provider());
-        st.setString(5, issue.repo());
-        st.setString(6, issue.number());
-        st.setString(7, issue.title());
-        st.setString(8, issue.body());
-        st.setString(9, issue.state());
-        st.setString(10, issue.kind());
-        st.setString(11, issue.priority());
-        st.setString(12, issue.labels());
-        st.setString(13, issue.url());
-        st.setString(14, issue.source());
-        st.setString(15, issue.syncStatus());
-        st.setString(16, issue.syncError());
-        st.setString(17, issue.assignee());
-        st.setLong(18, issue.createdAt() > 0 ? issue.createdAt() : now);
-        st.setLong(19, now);
+        st.setString(2, code);
+        st.setString(3, issue.userId());
+        st.setString(4, issue.projectId());
+        st.setString(5, issue.provider());
+        st.setString(6, issue.repo());
+        st.setString(7, issue.number());
+        st.setString(8, issue.title());
+        st.setString(9, issue.body());
+        st.setString(10, issue.state());
+        st.setString(11, issue.kind());
+        st.setString(12, issue.priority());
+        st.setString(13, issue.labels());
+        st.setString(14, issue.url());
+        st.setString(15, issue.source());
+        st.setString(16, issue.syncStatus());
+        st.setString(17, issue.syncError());
+        st.setString(18, issue.assignee());
+        st.setLong(19, issue.createdAt() > 0 ? issue.createdAt() : now);
+        st.setLong(20, now);
+    }
+
+    /**
+     * 分配任务编码：项目内按分类自增（FEAT-1 / BUG-3），创建后不再变化。
+     *
+     * <p>同一用户、同一项目、同一分类取当前最大序号 +1；旧任务没有编码时按创建顺序回填。
+     */
+    /** 更新时沿用已分配的编码：调用方没带 code 也不能把它清空。 */
+    private static String existingCode(Connection conn, String issueId) throws SQLException {
+        try (PreparedStatement st = conn.prepareStatement(
+                "SELECT code FROM git_issues WHERE id = ?")) {
+            st.setString(1, issueId);
+            try (ResultSet rs = st.executeQuery()) {
+                return rs.next() && rs.getString(1) != null ? rs.getString(1) : "";
+            }
+        }
+    }
+
+    private static String nextCode(Connection conn, GitIssue issue) throws SQLException {        String prefix = codePrefix(issue.kind());
+        String project = issue.projectId() == null ? "" : issue.projectId();
+        try (PreparedStatement st = conn.prepareStatement(
+                "SELECT COALESCE(MAX(CAST(SUBSTR(code, ?) AS INTEGER)), 0) FROM git_issues "
+                        + "WHERE user_id = ? AND kind = ? AND IFNULL(project_id, '') = ? "
+                        + "AND code LIKE ?")) {
+            st.setInt(1, prefix.length() + 1);
+            st.setString(2, issue.userId());
+            st.setString(3, issue.kind());
+            st.setString(4, project);
+            st.setString(5, prefix + "%");
+            try (ResultSet rs = st.executeQuery()) {
+                return prefix + (rs.next() ? rs.getInt(1) + 1 : 1);
+            }
+        }
+    }
+
+    private static String codePrefix(String kind) {
+        return "FEAT".equalsIgnoreCase(kind) ? "FEAT-" : "BUG-";
+    }
+
+    /** 老库升级：按创建顺序给已有任务补编码，保证任务页展示连续。 */
+    private void backfillCodes(Connection conn) throws SQLException {
+        record Pending(String id, String userId, String projectId, String kind) {
+        }
+        List<Pending> pending = new ArrayList<>();
+        try (PreparedStatement st = conn.prepareStatement(
+                "SELECT id, user_id, project_id, kind FROM git_issues "
+                        + "WHERE code = '' ORDER BY created_at, id");
+             ResultSet rs = st.executeQuery()) {
+            while (rs.next()) {
+                pending.add(new Pending(rs.getString("id"), rs.getString("user_id"),
+                        rs.getString("project_id"), rs.getString("kind")));
+            }
+        }
+        java.util.Map<String, Integer> counters = new java.util.HashMap<>();
+        try (PreparedStatement st = conn.prepareStatement(
+                "UPDATE git_issues SET code = ? WHERE id = ?")) {
+            for (Pending item : pending) {
+                String prefix = codePrefix(item.kind());
+                String key = item.userId() + "|" + (item.projectId() == null ? "" : item.projectId())
+                        + "|" + prefix;
+                int seq = counters.merge(key, 1, Integer::sum);
+                st.setString(1, prefix + seq);
+                st.setString(2, item.id());
+                st.executeUpdate();
+            }
+        }
     }
 
     @Override
@@ -543,6 +622,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
     private GitIssue mapIssue(ResultSet rs) throws SQLException {
         return new GitIssue(
                 rs.getString("id"),
+                rs.getString("code"),
                 rs.getString("user_id"),
                 rs.getString("project_id"),
                 rs.getString("provider"),

@@ -66,7 +66,8 @@ public class GitIssueServiceImpl implements GitIssueService {
         // 任务归属项目时自动使用项目托管的仓库，不再让用户手选平台/仓库
         GitIssue.Draft resolved = resolveRemote(draft, null);
         String repo = GitIssueRemoteClient.cleanRepo(resolved.repo());
-        GitIssue issue = new GitIssue(newId("task"), userId, resolved.projectId(), resolved.provider(),
+        GitIssue issue = new GitIssue(newId("task"), "", userId, resolved.projectId(),
+                resolved.provider(),
                 repo, "", resolved.title(), resolved.body(), resolved.state(), resolved.kind(),
                 resolved.priority(), resolved.labels(), "", "PLATFORM", "LOCAL", "",
                 resolved.assignee(), now, now);
@@ -98,7 +99,8 @@ public class GitIssueServiceImpl implements GitIssueService {
         String url = repoChanged ? "" : current.url();
         long now = System.currentTimeMillis();
         String priority = draft.priority().isBlank() ? current.priority() : draft.priority();
-        GitIssue updated = new GitIssue(current.id(), current.userId(), resolved.projectId(),
+        GitIssue updated = new GitIssue(current.id(), current.code(), current.userId(),
+                resolved.projectId(),
                 provider, repo, number, draft.title(), draft.body(), draft.state(), resolved.kind(),
                 priority, draft.labels(), url, "PLATFORM",
                 repoChanged ? "LOCAL" : current.syncStatus(),
@@ -306,7 +308,8 @@ public class GitIssueServiceImpl implements GitIssueService {
 
     private static GitIssue copy(GitIssue issue, String number, String url, String state,
                                  String syncStatus, String syncError, String source) {
-        return new GitIssue(issue.id(), issue.userId(), issue.projectId(), issue.provider(),
+        return new GitIssue(issue.id(), issue.code(), issue.userId(), issue.projectId(),
+                issue.provider(),
                 issue.repo(), number, issue.title(), issue.body(), state, issue.kind(),
                 issue.priority(), issue.labels(), url, source, syncStatus, syncError,
                 issue.assignee(), issue.createdAt(), System.currentTimeMillis());

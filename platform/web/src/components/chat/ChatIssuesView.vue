@@ -1179,6 +1179,7 @@ defineExpose({ openCreate, focus })
                 <span class="prio-chip" :class="(row.priority ?? 'P2').toLowerCase()">
                   {{ row.priority ?? 'P2' }}
                 </span>
+                <span v-if="row.code" class="task-code mono">{{ row.code }}</span>
                 <span class="kind-chip" :class="row.kind === 'FEAT' ? 'feat' : 'bug'">
                   {{ kindLabel(row.kind) }}
                 </span>
@@ -2177,6 +2178,12 @@ defineExpose({ openCreate, focus })
   line-height: 16px;
   letter-spacing: 0.02em;
   border-radius: 4px;
+}
+/* 任务编码：FEAT-1 / BUG-3，便于口头与提交信息引用 */
+.task-code {
+  flex: none;
+  font-size: 10px;
+  color: var(--ink-soft);
 }
 /* 优先级徽标：P0 红 / P1 琥珀 / P2 蓝，列表与详情共用 */
 .prio-chip,

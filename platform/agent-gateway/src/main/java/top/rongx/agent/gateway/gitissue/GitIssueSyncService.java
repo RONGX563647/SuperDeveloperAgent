@@ -110,7 +110,8 @@ public class GitIssueSyncService {
         String owner = config.ownerUserId().isBlank() ? FALLBACK_USER : config.ownerUserId();
         String kind = event.kind().isBlank()
                 ? GitIssue.kindOfLabels(event.labels()) : event.kind();
-        GitIssue issue = new GitIssue("task-" + randomHex(), owner, matchingProject(event.repo()),
+        GitIssue issue = new GitIssue("task-" + randomHex(), "", owner,
+                matchingProject(event.repo()),
                 event.provider(), event.repo(), event.number(),
                 event.title().isBlank() ? "Git Issue " + event.number() : event.title(),
                 event.body(), event.state(), kind, GitIssue.priorityOfLabels(event.labels()),
@@ -137,7 +138,7 @@ public class GitIssueSyncService {
         }
         String kind = !event.kind().isBlank() ? event.kind()
                 : event.labels().isBlank() ? issue.kind() : GitIssue.kindOfLabels(event.labels());
-        GitIssue updated = new GitIssue(issue.id(), issue.userId(), issue.projectId(),
+        GitIssue updated = new GitIssue(issue.id(), issue.code(), issue.userId(), issue.projectId(),
                 issue.provider(), issue.repo(), issue.number(),
                 event.title().isBlank() ? issue.title() : event.title(),
                 event.body().isBlank() ? issue.body() : event.body(),
