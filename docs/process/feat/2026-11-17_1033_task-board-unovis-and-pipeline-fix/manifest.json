@@ -1,0 +1,134 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-17_1033_task-board-unovis-and-pipeline-fix",
+  "category": "feat",
+  "title": "任务看板 Unovis 重构与流水线构建修复",
+  "createdAt": "2026-11-17T10:33:02+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "任务看板接入 Unovis 图表、移除自动修复入口；修复 pnpm workspace 导致的构建失败与缺失镜像回滚报错",
+    "toolCallCount": 0
+  },
+  "problem": "任务看板图表与真实任务页脱节且样式简陋，自动修复入口冗余；流水线前端构建因 pnpm workspace 配置非法在 552ms 内失败，回滚又因上一版镜像被清理报 E-501，一次失败被展示成两个故障且无法生成 tag",
+  "solution": "看板接入 Unovis（KPI 条、堆叠柱、四象限散点、环形图、面积图）并移除自动修复相关 UI/逻辑/样式；修正 pnpm-workspace.yaml 的 packages 与 onlyBuiltDependencies 并同步 pnpm 锁；回滚前用 docker image inspect 预检，镜像缺失时记录日志并跳过回滚，并补充回归用例",
+  "commits": [
+    {
+      "sha": "47e354f7720410e804342351678717ddceb8a3a4",
+      "subject": "feat(web): 任务看板接入 Unovis 图表并移除自动修复入口",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/package-lock.json",
+          "status": "M",
+          "additions": 1012,
+          "deletions": 1,
+          "blobHash": "028f0be97f45d896e82d0128f84a9f067a478cc6"
+        },
+        {
+          "path": "platform/web/package.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "cd3ad5194d66bfeb7ae654e2857c4bfd00b4c132"
+        },
+        {
+          "path": "platform/web/pnpm-lock.yaml",
+          "status": "M",
+          "additions": 1015,
+          "deletions": 5,
+          "blobHash": "315ecaa6a734427184e3fcd9d45ac6dd1945f84f"
+        },
+        {
+          "path": "platform/web/pnpm-workspace.yaml",
+          "status": "M",
+          "additions": 5,
+          "deletions": 2,
+          "blobHash": "8ddd474f123b8688d4aecb23e82bd73a97972fa9"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatIssuesView.vue",
+          "status": "M",
+          "additions": 664,
+          "deletions": 1233,
+          "blobHash": "1604c69932185b510bd7377a62ef4038aafb3fa4"
+        },
+        {
+          "path": "platform/web/src/styles.css",
+          "status": "M",
+          "additions": 16,
+          "deletions": 0,
+          "blobHash": "12e3a119d102d908c6d9ac65caa81bba834c8ccc"
+        }
+      ]
+    },
+    {
+      "sha": "dec8a2ce681b3cb2bedd7182bb7f741d40221872",
+      "subject": "fix(pipeline): 修正 pnpm workspace 配置并在上一版镜像缺失时跳过回滚",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "03092d5fb2ceaf13ecddc0709f2a08303c73519e"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "2c259068b434ac806891aca7157a501afc1385ef"
+        }
+      ]
+    },
+    {
+      "sha": "adcbad8bf7772eb67b4e09aacb230f590b235073",
+      "subject": "test(pipeline): 覆盖回滚预检的空镜像短路",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployersTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "e11574b4524faf4f00be3356498d627d3e8feae4"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployersTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 0,
+        "blobHash": "e11574b4524faf4f00be3356498d627d3e8feae4"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 532, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "web"
+    ],
+    "verification": "npm run typecheck/build 通过；Unovis 冒烟页四类图表与 tooltip 验证通过；mvn compile（JDK21）通过；DeployersTest、DockerDeployerTest、DeployStageTest 通过；pnpm --frozen-lockfile 校验通过；提交钩子全量 mvn -pl spec-checks -am test 通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1033_task-board-unovis-and-pipeline-fix"
+    ]
+  },
+  "chain": {
+    "prev": "0fd614aa3f4fa192deb6ff178032e97e560f1f48117162aaa847c9fbfa70856b",
+    "self": "f36f06aa5c38741b37f373ae4e90060384ba8e300d3f712d057abe3e3223ad5f"
+  }
+}
