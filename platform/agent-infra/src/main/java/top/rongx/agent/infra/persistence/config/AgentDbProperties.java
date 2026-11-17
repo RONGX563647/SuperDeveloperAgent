@@ -1,6 +1,8 @@
 package top.rongx.agent.infra.persistence.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.error.ErrorCode;
 
 /**
  * 数据库配置：{@code agent.db.url} 留空走 SQLite，配置 PostgreSQL URL 走 PG。
@@ -32,8 +34,8 @@ public record AgentDbProperties(
         if (!url.isEmpty()
                 && !url.startsWith(SQLITE_PREFIX)
                 && !url.startsWith(POSTGRES_PREFIX)) {
-            throw new IllegalArgumentException(
-                    "agent.db.url 只支持 jdbc:sqlite: 或 jdbc:postgresql: 前缀，当前值不是合法 JDBC URL");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT,
+                    "agent.db.url 只支持 jdbc:sqlite: 或 jdbc:postgresql: 前缀");
         }
     }
 

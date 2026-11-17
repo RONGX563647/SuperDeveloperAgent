@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 class AgentDbPropertiesTest {
 
@@ -33,7 +34,7 @@ class AgentDbPropertiesTest {
     @Test
     @DisplayName("不支持的 JDBC URL 必须显式失败，不能静默回落")
     void rejectsUnknownJdbcUrl() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(EnvironmentException.class,
                 () -> new AgentDbProperties("jdbc:mysql://127.0.0.1/db", "", "", "", 8, false));
     }
 }

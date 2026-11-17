@@ -11,6 +11,8 @@ import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCusto
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.error.ErrorCode;
 
 /**
  * 双库装配：默认 SQLite，配置 {@code agent.db.url} 后切 PostgreSQL。
@@ -90,7 +92,8 @@ public class DataSourceConfig {
         try {
             Files.createDirectories(parent);
         } catch (IOException e) {
-            throw new IllegalStateException("无法创建 SQLite 数据目录: " + parent, e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL,
+                    "无法创建 SQLite 数据目录: " + parent, e);
         }
     }
 }
