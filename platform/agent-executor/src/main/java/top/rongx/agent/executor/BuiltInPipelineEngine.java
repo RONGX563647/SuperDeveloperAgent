@@ -157,7 +157,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private volatile AutoRepairPolicy autoRepairPolicy = AutoRepairPolicy.defaults();
     private volatile List<FailureRepair> autoRepairs = List.of();
     /** 多服务部署（test 前后端分离）直接使用 docker 实现。 */
-    private final DockerDeployer dockerDeployer = new DockerDeployer();
+    private volatile DockerDeployer dockerDeployer = new DockerDeployer();
+    /** Docker CLI 可执行文件（可指向 podman 等兼容实现）。 */
+    private volatile DockerCli dockerCli = DockerCli.defaults();
 
     /**
      * 统一运行账本（与对话/工作区/修复共用一张表）：让流水线运行也进入统一视图与启动恢复。
@@ -418,6 +420,15 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     BuiltInPipelineEngine withAutoRepair(AutoRepairPolicy policy, List<FailureRepair> repairs) {
         this.autoRepairPolicy = policy == null ? AutoRepairPolicy.disabled() : policy;
         this.autoRepairs = repairs == null ? List.of() : List.copyOf(repairs);
+        return this;
+    }
+
+    /** 指定 Docker CLI 二进制（Spring 装配注入；默认 docker）。 */
+    public BuiltInPipelineEngine withDockerCli(DockerCli cli) {
+        if (cli != null) {
+            this.dockerCli = cli;
+            this.dockerDeployer = new DockerDeployer(cli);
+        }
         return this;
     }
 
@@ -687,7 +698,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // 有界探测：原先 readAllBytes() 在 waitFor 之前，docker CLI 不退出时 3s 超时形同虚设，
         // 会让 dry-run 门控与界面下拉永久卡住。走共用原语：并行读流 + 硬超时 + 明确结果。
         dockerProbeOk = BoundedCommand.run(
-                List.of("docker", "version", "--format", "{{.Server.Version}}"), 3_000L).ok();
+                dockerCli.cmd("version", "--format", "{{.Server.Version}}"), 3_000L).ok();
         dockerProbeAt = now;
         return dockerProbeOk;
     }
@@ -1511,7 +1522,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private boolean dockerImageExists(String tag) {
         // 只读预检：缺镜像是配置问题，5s 内给出 false，由调用方转成 E-705 明确阻塞原因。
-        return BoundedCommand.run(List.of("docker", "image", "inspect", tag), 5_000L).ok();
+        return BoundedCommand.run(dockerCli.cmd("image", "inspect", tag), 5_000L).ok();
     }
 
     @Override
@@ -3471,7 +3482,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             int removed = 0;
             for (ImageVersion v : stale) {
                 BoundedCommand.Outcome outcome = BoundedCommand.run(
-                        List.of("docker", "rmi", "-f", v.tag()), 20_000L);
+                        dockerCli.cmd("rmi", "-f", v.tag()), 20_000L);
                 if (!outcome.ok()) {
                     state.log.append("[image] 清理镜像失败（保留账本外记录不占空间）：")
                             .append(v.tag()).append(" — ")
@@ -3857,7 +3868,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                             ? List.of(oldContainer) : List.of(oldContainer, legacyContainer));
             for (String old : toRemove) {
                 ActionResult stopped = host.run(runDir, spec("deploy-stop-old",
-                        List.of(List.of("docker", "rm", "-f", old))), () -> false);
+                        List.of(dockerCli.cmd("rm", "-f", old))), () -> false);
                 if (stopped.result().status() == StageStatus.SUCCEEDED) {
                     state.log.append("[deploy] 已停止上一版容器 ").append(old).append('\n');
                 }
@@ -4452,7 +4463,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return true;
         }
         ActionResult probe = host.run(Path.of("."), spec("health-probe", List.of(
-                List.of("docker", "inspect", "-f",
+                dockerCli.cmd("inspect", "-f",
                         "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", resource))), () -> false);
         if (probe.result().status() != StageStatus.SUCCEEDED) {
             return true; // 探测失败不阻塞：HTTP 已通即认为服务可用
@@ -4464,7 +4475,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     /** docker inspect 容器状态：已退出（exited/dead）返回状态+退出码；运行中或探测失败返回 null。 */
     private String containerExitInfo(RunState state, String resource) {
         ActionResult probe = host.run(Path.of("."), spec("health-probe", List.of(
-                List.of("docker", "inspect", "-f",
+                dockerCli.cmd("inspect", "-f",
                         "{{.State.Status}} {{.State.ExitCode}}", resource))), () -> false);
         if (probe.result().status() != StageStatus.SUCCEEDED) {
             return null;
@@ -4502,7 +4513,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return;
         }
         host.run(Path.of("."), spec("health-cleanup", List.of(
-                List.of("docker", "rm", "-f", resource))), () -> false);
+                dockerCli.cmd("rm", "-f", resource))), () -> false);
         state.log.append('[').append(stageId).append("] 已移除健康检查失败的容器 ")
                 .append(resource).append('\n');
     }
@@ -4520,7 +4531,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return null;
         }
         ActionResult logs = host.run(Path.of("."), spec("health-diag", List.of(
-                List.of("docker", "logs", "--tail", "20", resource))), () -> false);
+                dockerCli.cmd("logs", "--tail", "20", resource))), () -> false);
         String tail = logs.logTail() == null ? "" : logs.logTail().trim();
         if (tail.isEmpty()) {
             return null;
@@ -4584,7 +4595,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private String imageDigest(Path runDir, String tag) {
         ActionResult r = host.run(runDir, spec("image-digest", List.of(
-                List.of("docker", "image", "inspect", "--format", "{{.Id}}", tag))), () -> false);
+                dockerCli.cmd("image", "inspect", "--format", "{{.Id}}", tag))), () -> false);
         if (r.result().status() != StageStatus.SUCCEEDED) {
             return null;
         }
@@ -4595,7 +4606,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     /** 镜像大小（字节）；取不到时返回 0，不影响构建结论。 */
     private long imageSize(Path runDir, String tag) {
         ActionResult r = host.run(runDir, spec("image-size", List.of(
-                List.of("docker", "image", "inspect", "--format", "{{.Size}}", tag))), () -> false);
+                dockerCli.cmd("image", "inspect", "--format", "{{.Size}}", tag))), () -> false);
         if (r.result().status() != StageStatus.SUCCEEDED) {
             return 0L;
         }

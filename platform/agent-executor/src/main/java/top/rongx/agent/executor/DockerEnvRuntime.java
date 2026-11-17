@@ -37,11 +37,18 @@ public class DockerEnvRuntime implements EnvRuntime {
     private final DeployServerRepository servers;
     private final SshAccess ssh;
     private final ProcessExecutor executor = new ProcessExecutor();
+    private final DockerCli docker;
 
     public DockerEnvRuntime(EnvironmentStore store, DeployServerRepository servers, SshAccess ssh) {
+        this(store, servers, ssh, DockerCli.defaults());
+    }
+
+    public DockerEnvRuntime(EnvironmentStore store, DeployServerRepository servers, SshAccess ssh,
+                            DockerCli docker) {
         this.store = store;
         this.servers = servers;
         this.ssh = ssh;
+        this.docker = docker == null ? DockerCli.defaults() : docker;
     }
 
     @Override
@@ -93,7 +100,7 @@ public class DockerEnvRuntime implements EnvRuntime {
             store.recordHealth(r.id(), true, null);
             return Result.ok(List.of());
         }
-        CmdResult res = docker(r, "docker start " + name, List.of("docker", "start", name));
+        CmdResult res = docker(r, "docker start " + name, docker.cmd("start", name));
         if (!res.ok()) {
             store.recordHealth(r.id(), false, "docker start 失败：" + res.output());
             return fail(name, "docker start 失败：" + res.output());
@@ -119,7 +126,7 @@ public class DockerEnvRuntime implements EnvRuntime {
         if (guard != null) {
             return fail(name, guard);
         }
-        CmdResult res = docker(r, "docker stop " + name, List.of("docker", "stop", name));
+        CmdResult res = docker(r, "docker stop " + name, docker.cmd("stop", name));
         if (!res.ok()) {
             return fail(name, "docker stop 失败：" + res.output());
         }
@@ -176,7 +183,7 @@ public class DockerEnvRuntime implements EnvRuntime {
     /** @return true/false 为容器运行状态；null 表示命令失败（容器不存在 / docker 不可用）。 */
     private Boolean liveRunning(EnvResource r, String name) {
         CmdResult res = docker(r, "docker inspect --format '{{.State.Running}}' " + name,
-                List.of("docker", "inspect", "--format", "{{.State.Running}}", name));
+                docker.cmd("inspect", "--format", "{{.State.Running}}", name));
         if (!res.ok()) {
             return null;
         }
