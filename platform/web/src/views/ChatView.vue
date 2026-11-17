@@ -552,9 +552,9 @@ watch(
   },
 )
 
-// 出现待确认变更单时按执行策略处理：自动展开 / 仅提示 / 只读不展开
+// 出现待确认变更单时按执行策略处理：confirm/auto 直接展开卡片；只读模式只提示
 watch(pendingChangeId, (id) => {
-  if (id && permission.value === 'auto') openApprovalCard()
+  if (id && permission.value !== 'readonly') openApprovalCard()
 })
 
 // 错误不弹 toast：reducer 已把 error 事件写进时间线（内联色块），双提示会重复。

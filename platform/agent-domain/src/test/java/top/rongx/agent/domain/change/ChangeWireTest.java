@@ -34,4 +34,19 @@ class ChangeWireTest {
     void trailingTextOnSameLineIsRejected() {
         assertNull(ChangeWire.extract("changeId: chg-3f2c9a1e-7b4d (仅供参考)"));
     }
+
+    @Test
+    void jsonSerializedToolResultIsUnwrapped() {
+        // AgentScope 会把 String 返回值再 JSON 序列化：外层引号 + 换行被转义成 \n。
+        // 之前这类结果永远匹配不到，确认卡在对话里不出现。
+        String changeId = "chg-2be49350-cf48-4ce7-9520-7682ab5c09d0";
+        String raw = """
+                status: PENDING_USER_CONFIRMATION
+                %s
+                planHash: abc
+                """.formatted(ChangeWire.line(changeId));
+        String serialized = "\"" + raw.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+
+        assertEquals(changeId, ChangeWire.extract(serialized));
+    }
 }

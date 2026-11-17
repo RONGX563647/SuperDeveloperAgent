@@ -4,6 +4,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.PromotionException;
+import top.rongx.agent.domain.tool.ToolResultText;
 
 /**
  * 工具输出与网关之间的变更单「线格式」。
@@ -44,13 +45,17 @@ public final class ChangeWire {
     /**
      * 消费端：从工具返回文本里取变更单号。
      *
+     * <p>工具结果到网关时会被再 JSON 序列化一次（换行变成字面量 {@code \n}），
+     * 必须先还原，否则「独立一行」的匹配永远失败——表现为工具明明返回了单号，
+     * 对话里的确认卡却不出现。
+     *
      * @return 单号；未按约定输出（或格式被改动）时返回 {@code null}
      */
     public static String extract(String text) {
         if (text == null || text.isEmpty()) {
             return null;
         }
-        Matcher matcher = LINE.matcher(text);
+        Matcher matcher = LINE.matcher(ToolResultText.unwrap(text));
         return matcher.find() ? matcher.group(1) : null;
     }
 }
