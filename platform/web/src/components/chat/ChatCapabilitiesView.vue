@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Connection, MagicStick, Refresh, Search, Setting, Star, Warning } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRight, Connection, MagicStick, Refresh, Search, Setting, Star, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { saveMcpServer, setSkillEnabled } from '../../api/settings'
 import type { CapabilityOption } from '../../composables/useChatCapabilities'
@@ -73,11 +73,24 @@ function visible(list: CapabilityOption[], kind: 'skill' | 'mcp'): CapabilityOpt
         .toLowerCase()
         .includes(q)
     })
-    .sort((a, b) => (sortBy.value === 'name' ? a.label.localeCompare(b.label, 'zh-CN') : 0))
+    .sort((a, b) => {
+      if (sortBy.value === 'name') return a.label.localeCompare(b.label, 'zh-CN')
+      // 默认排序：已启用的置顶，其余保持后端顺序，找「这轮开了什么」不用滚动
+      const onA = isOn(kind, a.key) ? 0 : 1
+      const onB = isOn(kind, b.key) ? 0 : 1
+      return onA - onB
+    })
 }
 
 const filteredSkills = computed(() => visible(props.skillOptions, 'skill'))
 const filteredMcp = computed(() => visible(props.mcpOptions, 'mcp'))
+
+/** 两张能力卡可折叠：能力多时先收起不关心的分组，避免一直滚动。 */
+const collapsed = ref({ skill: false, mcp: false })
+
+function toggleGroup(kind: 'skill' | 'mcp'): void {
+  collapsed.value = { ...collapsed.value, [kind]: !collapsed.value[kind] }
+}
 
 // ---------------------------------------------------------------- 成本估算
 
@@ -261,7 +274,7 @@ function goSettings(): void {
           <button type="button" :class="{ active: filter === 'off' }" @click="filter = 'off'">未启用</button>
         </div>
         <select v-model="sortBy" class="cap-sort" aria-label="排序方式">
-          <option value="default">默认排序</option>
+          <option value="default">已启用优先</option>
           <option value="name">按名称</option>
         </select>
         <button type="button" class="cap-default" :disabled="savingDefault || !ready" @click="saveAsDefault">
@@ -301,18 +314,32 @@ function goSettings(): void {
         <!-- Skill：每个目录一份说明，按需加载 -->
         <section v-if="skillOptions.length" class="cap-card">
           <header class="card-head">
+            <button
+              type="button" class="card-fold" :aria-expanded="!collapsed.skill"
+              :title="collapsed.skill ? '展开技能列表' : '收起技能列表'"
+              @click="toggleGroup('skill')"
+            >
+              <el-icon><ArrowRight v-if="collapsed.skill" /><ArrowDown v-else /></el-icon>
+            </button>
             <span class="card-icon skill"><el-icon><MagicStick /></el-icon></span>
             <span class="card-title">
-              <b>Skill</b>
+              <b>Skill <span class="card-on mono">{{ skillOn }}</span></b>
               <em>按需读取的知识包，命中相关任务时才会展开</em>
             </span>
             <span class="card-actions">
               <span class="mono">{{ skillOn }}/{{ skillOptions.length }}</span>
-              <button type="button" class="link" @click="toggleAll('skill', true)">全选</button>
-              <button type="button" class="link" @click="toggleAll('skill', false)">清空</button>
+              <button
+                type="button" class="link"
+                :disabled="skillOn === skillOptions.length"
+                @click="toggleAll('skill', true)"
+              >启用全部</button>
+              <button
+                type="button" class="link"
+                :disabled="!skillOn" @click="toggleAll('skill', false)"
+              >全部停用</button>
             </span>
           </header>
-          <ul class="cap-rows">
+          <ul v-show="!collapsed.skill" class="cap-rows">
             <li
               v-for="option in filteredSkills" :key="`skill-${option.key}`"
               class="cap-row" :class="{ on: isOn('skill', option.key) }"
@@ -323,7 +350,7 @@ function goSettings(): void {
                   <span v-if="option.fileCount" class="row-tag mono">{{ option.fileCount }} 文件</span>
                   <span class="row-tag mono" title="描述注入的粗略成本">~{{ tokenOf(option) }}t</span>
                 </span>
-                <span class="row-desc">{{ option.description || '（Skill 未写描述，模型只能靠名称判断用途）' }}</span>
+                <span class="row-desc" :title="option.description">{{ option.description || '（Skill 未写描述，模型只能靠名称判断用途）' }}</span>
               </span>
               <el-switch
                 :model-value="isOn('skill', option.key)"
@@ -339,18 +366,31 @@ function goSettings(): void {
         <!-- MCP：外部工具服务，启用后会多出一批工具 -->
         <section v-if="mcpOptions.length" class="cap-card">
           <header class="card-head">
+            <button
+              type="button" class="card-fold" :aria-expanded="!collapsed.mcp"
+              :title="collapsed.mcp ? '展开 MCP 列表' : '收起 MCP 列表'"
+              @click="toggleGroup('mcp')"
+            >
+              <el-icon><ArrowRight v-if="collapsed.mcp" /><ArrowDown v-else /></el-icon>
+            </button>
             <span class="card-icon mcp"><el-icon><Connection /></el-icon></span>
             <span class="card-title">
-              <b>MCP</b>
+              <b>MCP <span class="card-on mono">{{ mcpOn }}</span></b>
               <em>外部工具服务，启用后工具会出现在本轮可调用列表里</em>
             </span>
             <span class="card-actions">
               <span class="mono">{{ mcpOn }}/{{ mcpOptions.length }}</span>
-              <button type="button" class="link" @click="toggleAll('mcp', true)">全选</button>
-              <button type="button" class="link" @click="toggleAll('mcp', false)">清空</button>
+              <button
+                type="button" class="link"
+                :disabled="mcpOn === mcpOptions.length"
+                @click="toggleAll('mcp', true)"
+              >启用全部</button>
+              <button
+                type="button" class="link" :disabled="!mcpOn" @click="toggleAll('mcp', false)"
+              >全部停用</button>
             </span>
           </header>
-          <ul class="cap-rows">
+          <ul v-show="!collapsed.mcp" class="cap-rows">
             <li
               v-for="option in filteredMcp" :key="`mcp-${option.key}`"
               class="cap-row" :class="{ on: isOn('mcp', option.key) }"
@@ -658,6 +698,36 @@ function goSettings(): void {
   border-radius: var(--radius-sm);
 }
 
+/* 分组折叠：只影响视觉，开关与筛选状态不变 */
+.card-fold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+}
+
+.card-fold:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.card-on {
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
 .card-icon.skill {
   color: var(--accent-ink);
   background: var(--accent-soft);
@@ -711,6 +781,12 @@ function goSettings(): void {
 
 .link:hover {
   text-decoration: underline;
+}
+
+.link:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+  text-decoration: none;
 }
 
 .cap-rows {
