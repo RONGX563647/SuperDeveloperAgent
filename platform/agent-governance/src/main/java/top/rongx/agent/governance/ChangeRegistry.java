@@ -44,7 +44,8 @@ public class ChangeRegistry implements ChangeStore {
                 image_digest       TEXT,
                 frontend_dist_hash TEXT,
                 high_risk          INTEGER NOT NULL DEFAULT 0,
-                created_at         INTEGER NOT NULL
+                created_at         INTEGER NOT NULL,
+                status             TEXT NOT NULL DEFAULT 'PENDING'
             )
             """;
 
@@ -59,12 +60,34 @@ public class ChangeRegistry implements ChangeStore {
     private void initSchema() {
         try {
             Files.createDirectories(dbFile.getParent());
-            try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
-                st.executeUpdate();
+            try (Connection conn = open()) {
+                try (PreparedStatement st = conn.prepareStatement(SCHEMA)) {
+                    st.executeUpdate();
+                }
+                // 老库补状态列：已有变更单默认视为待确认
+                if (!hasColumn(conn, "change_plans", "status")) {
+                    try (PreparedStatement st = conn.prepareStatement(
+                            "ALTER TABLE change_plans ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")) {
+                        st.executeUpdate();
+                    }
+                }
             }
         } catch (SQLException | java.io.IOException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "change_plans 表初始化失败：" + e.getMessage(), e);
         }
+    }
+
+    private static boolean hasColumn(Connection conn, String table, String column)
+            throws SQLException {
+        try (PreparedStatement st = conn.prepareStatement("PRAGMA table_info(" + table + ")");
+             ResultSet rs = st.executeQuery()) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private Connection open() throws SQLException {
@@ -91,8 +114,8 @@ public class ChangeRegistry implements ChangeStore {
              PreparedStatement st = conn.prepareStatement("""
                      INSERT INTO change_plans
                          (change_id, project_id, env, kind, plan_hash, summary,
-                          image_digest, frontend_dist_hash, high_risk, created_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?)
+                          image_digest, frontend_dist_hash, high_risk, created_at, status)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
                      """)) {
             st.setString(1, plan.changeId());
             st.setString(2, plan.projectId());
@@ -104,6 +127,7 @@ public class ChangeRegistry implements ChangeStore {
             st.setString(8, plan.frontendDistHash());
             st.setInt(9, plan.highRisk() ? 1 : 0);
             st.setLong(10, plan.createdAt().toEpochMilli());
+            st.setString(11, plan.status().name());
             st.executeUpdate();
             return plan;
         } catch (SQLException e) {
@@ -119,7 +143,7 @@ public class ChangeRegistry implements ChangeStore {
         try (Connection conn = open();
              PreparedStatement st = conn.prepareStatement("""
                      SELECT change_id, project_id, env, kind, plan_hash, summary,
-                            image_digest, frontend_dist_hash, high_risk, created_at
+                            image_digest, frontend_dist_hash, high_risk, created_at, status
                      FROM change_plans WHERE change_id = ?
                      """)) {
             st.setString(1, changeId);
@@ -137,10 +161,36 @@ public class ChangeRegistry implements ChangeStore {
                         rs.getString("image_digest"),
                         rs.getString("frontend_dist_hash"),
                         rs.getInt("high_risk") == 1,
-                        Instant.ofEpochMilli(rs.getLong("created_at"))));
+                        Instant.ofEpochMilli(rs.getLong("created_at")),
+                        statusOf(rs.getString("status"))));
             }
         } catch (SQLException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void updateStatus(String changeId, ChangePlan.Status status) {
+        if (changeId == null || changeId.isBlank()) {
+            return;
+        }
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "UPDATE change_plans SET status = ? WHERE change_id = ?")) {
+            st.setString(1, (status == null ? ChangePlan.Status.PENDING : status).name());
+            st.setString(2, changeId);
+            st.executeUpdate();
+        } catch (SQLException e) {
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单状态更新失败：" + e.getMessage(), e);
+        }
+    }
+
+    /** 未知/空状态按 PENDING 处理（兼容老库与手工改库）。 */
+    private static ChangePlan.Status statusOf(String raw) {
+        try {
+            return ChangePlan.Status.valueOf(raw == null ? "PENDING" : raw.trim().toUpperCase());
+        } catch (IllegalArgumentException unknown) {
+            return ChangePlan.Status.PENDING;
         }
     }
 

@@ -235,10 +235,10 @@ public class HostDeployer implements Deployer {
             Optional<ProcessHandle> handle = ProcessHandle.of(pid);
             if (handle.isPresent()) {
                 handle.get().destroy();
-                try {
-                    handle.get().onExit().get(5, java.util.concurrent.TimeUnit.SECONDS);
-                } catch (Exception ignored) {
+                if (!waitForExit(handle.get(), 5)) {
+                    // 强杀后也要等句柄释放（Windows 上 app.log 被占用会导致目录清理失败）
                     handle.get().destroyForcibly();
+                    waitForExit(handle.get(), 3);
                 }
                 log.append("[host] stopped previous pid=").append(pid).append('\n');
             }
@@ -249,6 +249,16 @@ public class HostDeployer implements Deployer {
             Files.deleteIfExists(pidFile);
         } catch (IOException ignored) {
             // 删不掉不影响后续写入
+        }
+    }
+
+    /** 等待进程退出；超时返回 false（调用方决定是否强杀）。 */
+    private static boolean waitForExit(ProcessHandle handle, int seconds) {
+        try {
+            handle.onExit().get(seconds, java.util.concurrent.TimeUnit.SECONDS);
+            return true;
+        } catch (Exception notYet) {
+            return false;
         }
     }
 

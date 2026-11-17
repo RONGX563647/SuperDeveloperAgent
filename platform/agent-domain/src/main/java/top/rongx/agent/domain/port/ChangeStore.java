@@ -37,4 +37,7 @@ public interface ChangeStore {
 
     /** 按 id 查。 */
     Optional<ChangePlan> find(String changeId);
+
+    /** 更新流转状态（人工确认 / 执行结果）；planHash 不变。 */
+    void updateStatus(String changeId, ChangePlan.Status status);
 }

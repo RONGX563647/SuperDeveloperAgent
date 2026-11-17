@@ -40,7 +40,7 @@ refs:
 6. 非只读会话按设置页已启用集合取交集挂载 Skill 与 MCP；单服务失败只降级跳过。
 7. 工具返回后控制器按 `toolCallId` 聚合结果，核对 `changeId` 或 `bindingId` 后推送确认卡事件。
 
-确认交互：对话链路没有回传“用户已确认”的通道，因此非生产环境使用 `PermissionMode.BYPASS`。若使用 `ACCEPT_EDITS` 或 `DEFAULT`，`readOnly=false` 的工具会停在无回传的 ASK，`request_confirmation`、`ci_run` 会永远停留在执行中。真正的门禁在平台层：写工具拒绝生产、变更单人工确认、部署要 binding_id。
+确认交互：对话链路没有通用的“工具审批”回传通道，因此非生产环境使用 `PermissionMode.BYPASS`。若使用 `ACCEPT_EDITS` 或 `DEFAULT`，`readOnly=false` 的工具会停在无回传的 ASK，`request_confirmation`、`ci_run` 会永远停留在执行中。例外是变更卡 / 绑定卡：它们的确认结果会由 `ChatView.continueAfterUserAction` 回灌成一条新 user 消息（成功与失败都会回灌；流式输出中先排队），但这只覆盖这两类卡片，不是通用工具审批。真正的门禁在平台层：写工具拒绝生产、变更单人工确认、部署要 binding_id。
 
 ## 失败与降级
 

@@ -89,22 +89,30 @@ public class ChangeController {
                 .orElseThrow(() -> new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "变更不存在: " + changeId));
         // 3. 消费令牌：一次性 + 未过期 + 绑定 changeId 与当前 planHash（防篡改复用）
         tokens.consume(confirmToken, changeId, plan.planHash());
-        // 4. 补丁类变更：把补丁提交到新分支（不碰用户当前分支）
-        if (plan.kind().startsWith(PATCH_PREFIX)) {
-            return applyPatch(plan);
+        // 4. 执行：成功 → APPLIED，失败 → FAILED（Agent 可据此查状态，不再只能靠回执猜）
+        try {
+            ActionController.RunView view;
+            // 4.1 补丁类变更：把补丁提交到新分支（不碰用户当前分支）
+            if (plan.kind().startsWith(PATCH_PREFIX)) {
+                view = applyPatch(plan);
+            } else {
+                // 4.2 解析动作并解析项目上下文
+                ActionId action = ActionId.fromWire(plan.kind())
+                        .orElseThrow(() -> new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "该变更不是可执行动作（kind=" + plan.kind() + "）"));
+                ProjectContext ctx = contextResolver.resolve(plan.projectId(), plan.env(), userId);
+                // 4.3 带令牌落地执行（ActionService 再次核对 planHash）
+                // 破坏性 L2（reset/delete/migrate 等）在非生产也要确认，确认后走同一个令牌入口；
+                // applyConfirmed 会再次校验"确实是破坏性动作 + 配方哈希未变"。
+                view = ActionController.RunView.of(action.autoExecutable()
+                        ? actions.applyConfirmed(ctx, action, plan.planHash())
+                        : actions.apply(ctx, action, plan.planHash()));
+            }
+            registry.updateStatus(changeId, ChangePlan.Status.APPLIED);
+            return view;
+        } catch (RuntimeException error) {
+            registry.updateStatus(changeId, ChangePlan.Status.FAILED);
+            throw error;
         }
-        // 5. 解析动作并解析项目上下文
-        ActionId action = ActionId.fromWire(plan.kind())
-                .orElseThrow(() -> new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "该变更不是可执行动作（kind=" + plan.kind() + "）"));
-        ProjectContext ctx = contextResolver.resolve(plan.projectId(), plan.env(), userId);
-        // 5. 带令牌落地执行（ActionService 再次核对 planHash）
-        // 破坏性 L2（reset/delete/migrate 等）在非生产也要确认，确认后走同一个令牌入口；
-        // applyConfirmed 会再次校验"确实是破坏性动作 + 配方哈希未变"。
-        if (action.autoExecutable()) {
-            return ActionController.RunView.of(
-                    actions.applyConfirmed(ctx, action, plan.planHash()));
-        }
-        return ActionController.RunView.of(actions.apply(ctx, action, plan.planHash()));
     }
 
     /** 确认卡片数据：展示字段而非自然语言摘要（规约 §4.10 第四道守卫）。 */
@@ -116,7 +124,7 @@ public class ChangeController {
                 .orElseThrow(() -> new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "变更不存在: " + changeId));
         return new ChangeView(plan.changeId(), plan.projectId(), plan.env(), plan.kind(),
                 plan.summary(), plan.imageDigest(), plan.highRisk(), plan.planHash(),
-                plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN");
+                plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN", plan.status().name());
     }
 
     /** 补丁类变更的 diff（供确认卡片复核）。 */
@@ -189,6 +197,7 @@ public class ChangeController {
         }
 
         ConfirmToken token = tokens.issue(userId, plan.changeId(), plan.planHash());
+        registry.updateStatus(changeId, ChangePlan.Status.CONFIRMED);
         return new ConfirmResponse(token.token(), plan.changeId(), plan.planHash(),
                 token.expiresAt(), Map.of("note", "令牌一次性、5 分钟有效、绑定计划哈希"));
     }
@@ -196,7 +205,7 @@ public class ChangeController {
     /** 确认卡片视图。 */
     public record ChangeView(String changeId, String projectId, String env, String kind,
                              String summary, String imageDigest, boolean highRisk,
-                             String planHash, String gate) {
+                             String planHash, String gate, String status) {
     }
 
     /** 确认请求。 */

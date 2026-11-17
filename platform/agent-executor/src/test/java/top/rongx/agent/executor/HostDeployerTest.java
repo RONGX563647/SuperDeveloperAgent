@@ -1,5 +1,6 @@
 package top.rongx.agent.executor;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -8,13 +9,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
@@ -39,11 +40,15 @@ class HostDeployerTest {
 
     private final HostDeployer deployer = new HostDeployer();
 
-    @TempDir
+    /**
+     * 不用 @TempDir：真实子进程持有 app.log / app.jar 句柄，Windows 上 JUnit 自动清理
+     * 会因"文件被占用"把通过的测试判成失败。改为手动创建，清理时先杀进程再尽力删除。
+     */
     static Path workspace;
 
     @BeforeAll
     static void buildJar() throws Exception {
+        workspace = Files.createTempDirectory("host-e2e-");
         Path src = workspace.resolve("src/Main.java");
         Files.createDirectories(src.getParent());
         Files.writeString(src, """
@@ -80,11 +85,53 @@ class HostDeployerTest {
         Path pid = workspace.resolve(".agent/deploy").resolve(PROJECT).resolve("app.pid");
         try {
             if (Files.isRegularFile(pid)) {
-                long id = Long.parseLong(Files.readString(pid).trim());
-                ProcessHandle.of(id).ifPresent(ProcessHandle::destroyForcibly);
+                kill(Long.parseLong(Files.readString(pid).trim()));
             }
         } catch (Exception ignored) {
             // 清理失败不影响结论
+        }
+        // 兜底：重启/回滚可能留下命令行里带本临时目录的旧进程
+        ProcessHandle.allProcesses()
+                .filter(p -> p.info().commandLine()
+                        .map(line -> line.contains(workspace.toString())).orElse(false))
+                .forEach(handle -> kill(handle.pid()));
+        deleteQuietly(workspace);
+    }
+
+    private static void kill(long id) {
+        ProcessHandle.of(id).ifPresent(handle -> {
+            handle.destroyForcibly();
+            try {
+                handle.onExit().get(5, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // 进程可能已退出
+            }
+        });
+    }
+
+    /** 尽力删除临时目录：句柄释放有延迟时重试，删不掉也不影响测试结论。 */
+    private static void deleteQuietly(Path root) {
+        for (int i = 0; i < 10; i++) {
+            try (var walk = Files.walk(root)) {
+                walk.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (IOException ignored) {
+                        // 仍被占用，交给下一轮重试
+                    }
+                });
+            } catch (IOException ignored) {
+                // 目录可能已经被删
+            }
+            if (!Files.exists(root)) {
+                return;
+            }
+            try {
+                TimeUnit.MILLISECONDS.sleep(200);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 

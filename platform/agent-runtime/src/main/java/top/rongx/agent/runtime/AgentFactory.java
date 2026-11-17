@@ -149,7 +149,9 @@ public class AgentFactory {
                                    String modelName) {
         // 1. 权限模式按环境决定：生产 DEFAULT（写必 ASK），非生产 BYPASS
         //    非生产不能用 ACCEPT_EDITS：它只放行文件类编辑，readOnly=false 的工具仍走默认 ASK，
-        //    而对话链路没有回传"用户已确认"的通道，request_confirmation / ci_run 会永远停在执行中。
+        //    而对话链路没有通用的“工具审批”回传通道：Toolkit 的 ASK 状态不会回到对话，
+        //    request_confirmation / ci_run 会永远停在执行中。例外是变更卡/绑定卡：
+        //    它们的确认结果会由 ChatView 回灌成一条新消息，但那不是通用工具审批。
         //    真正的门禁在平台层：写工具本身拒绝生产、变更单要人工确认、部署要 binding_id。
         PolicyDecision l2 = policy.decide(ctx.env(), ToolLevel.L2_EXECUTE_ISOLATED);
         // 只读用户（VIEWER）即使处在 dev/test 也只装配只读工具面：角色不能靠提示词约束

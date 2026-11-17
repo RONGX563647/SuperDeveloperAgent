@@ -85,6 +85,10 @@ public class ChangeTools {
         String apply = manual
                 ? "不支持（该动作在 dev/test 可自动放行，登记仅用于留痕；确认卡不会执行它）"
                 : "确认后在变更卡片上执行";
+        // 留痕单不会被推成确认卡（推了也必然 apply 400），提示模型别等用户确认
+        String next = manual
+                ? "该动作仅留痕，无需人工确认，不会推送确认卡；请直接继续后续步骤。"
+                : "确认卡已推到当前对话（确认令牌 5 分钟内有效）；确认前不会执行任何操作。";
         return """
                 %s
                 planHash: %s
@@ -92,10 +96,10 @@ public class ChangeTools {
                 env: %s
                 apply: %s
                 highRisk: %s
-                next: 确认卡已推到当前对话（确认令牌 5 分钟内有效）；确认前不会执行任何操作。
+                next: %s
                 evidence: change:%s
                 """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), wire, plan.env(), apply,
-                highRisk, plan.changeId());
+                highRisk, next, plan.changeId());
     }
 
     /**
@@ -131,8 +135,19 @@ public class ChangeTools {
                     + ctx.env() + " 不一致，拒绝确认";
         }
         boolean manual = MANUAL_KINDS.contains(plan.kind());
-        String gate = manual ? "NO_TOKEN（仅留痕，确认卡不执行）"
-                : plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN";
+        if (manual) {
+            // 留痕单没有 /apply 闭环：明确告知模型不需要也不能等确认，避免反复推卡
+            return """
+                    status: RECORDED
+                    %s
+                    kind: %s
+                    env: %s
+                    gate: NO_TOKEN
+                    summary: %s
+                    next: 该变更仅用于留痕，无需确认，也不会推送确认卡；请直接继续后续步骤。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.kind(), plan.env(), plan.summary());
+        }
+        String gate = plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN";
         return """
                 status: PENDING_USER_CONFIRMATION
                 %s
@@ -149,5 +164,42 @@ public class ChangeTools {
                 plan.highRisk(), gate, plan.summary(),
                 plan.highRisk() ? "高危变更需二次密码" : "一次性令牌 5 分钟有效",
                 plan.changeId());
+    }
+
+    /**
+     * 查询变更单状态（只读）。
+     *
+     * <p>确认卡是异步广播，模型无法"等待"；有了这个工具就能在后续轮次里主动查
+     * PENDING / CONFIRMED / APPLIED / FAILED，而不用靠猜或反复推卡。
+     */
+    @Tool(name = "change_status",
+            description = "Get change status: PENDING..FAILED.",
+            readOnly = true, concurrencySafe = true)
+    public String status(
+            @ToolParam(name = "change_id",
+                    description = "request_confirmation 返回的 changeId（chg-...）")
+            String changeId,
+            ProjectContext ctx) {
+        if (changeId == null || changeId.isBlank()) {
+            return "err: change_id 不能为空";
+        }
+        ChangePlan plan = registry.find(changeId.trim()).orElse(null);
+        if (plan == null) {
+            return "err: 变更不存在或已过期：" + changeId;
+        }
+        if (!plan.projectId().equals(ctx.projectId())) {
+            return "err: 该变更不属于当前项目（" + plan.projectId() + "）";
+        }
+        return """
+                changeId: %s
+                status: %s
+                kind: %s
+                env: %s
+                executable: %s
+                highRisk: %s
+                createdAt: %s
+                summary: %s
+                """.formatted(plan.changeId(), plan.status().name(), plan.kind(), plan.env(),
+                plan.executable(), plan.highRisk(), plan.createdAt(), plan.summary());
     }
 }
