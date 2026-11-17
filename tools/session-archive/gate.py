@@ -589,6 +589,12 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
 
 def cmd_validate(args) -> int:
     errors = validate_root(ROOT)
+    gaps = archive_gap_commits()
+    if gaps:
+        errors.append(
+            "已归档锚点之前存在未归档的代码提交（归档不能跳着做）："
+            + ", ".join(sha[:7] for sha in gaps)
+            + "；必须补录归档，每个代码提交都要被某份 manifest 覆盖")
     if errors:
         for error in errors:
             print(f"- {error}", file=sys.stderr)
@@ -598,11 +604,35 @@ def cmd_validate(args) -> int:
     return 0
 
 
-def unarchived_code_commits() -> list[str]:
-    """最近一份归档之后、含代码改动的提交都必须能被某份归档覆盖。
+def archive_baseline() -> str | None:
+    """归档体系上线的那次提交：最早新增 docs/process 文件的提交。
 
-    锚点取最新归档里最后一个提交；若它不在当前分支祖先链上（归档在别的分支）则跳过，
-    避免历史遗留提交误报。
+    <p>基线之前的提交属于归档制度建立前的历史，不做回溯要求；基线之后的所有代码提交
+    必须被某份归档覆盖，否则就是"跳过归档"。
+    """
+    shas = git("log", "--reverse", "--format=%H", "--diff-filter=A",
+               "--", "docs/process").splitlines()
+    return shas[0] if shas else None
+
+
+def code_commits_between(start: str, end: str, recorded: set) -> list[str]:
+    """start..end 之间未归档、且含非豁免改动的提交。"""
+    missing = []
+    for sha in git("rev-list", f"{start}..{end}").splitlines():
+        if sha in recorded:
+            continue
+        files = git("diff-tree", "--no-commit-id", "--name-only", "-r", "-M", sha).splitlines()
+        if any(not is_exempt(path) for path in files):
+            missing.append(sha)
+    return missing
+
+
+def archive_gap_commits() -> list[str]:
+    """已归档锚点之前的漏归档（历史缺口）。
+
+    <p>锚点取最新归档里最后一个提交；锚点之后属于"本轮会话未完成"，由 pre-push 兜底，
+    这里只查锚点之前——这样多提交会话在提交过程中不会被误报，但事后想"只归档新提交、
+    跳过中间提交"会立刻失败。
     """
     rows = sorted((m for _, m in manifests() if m.get("commits")),
                   key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
@@ -614,14 +644,24 @@ def unarchived_code_commits() -> list[str]:
                            cwd=ROOT, capture_output=True, env=clean_env())
     if probe.returncode != 0:
         return []
-    missing = []
-    for sha in git("rev-list", f"{anchor}..HEAD").splitlines():
-        if sha in recorded:
-            continue
-        files = git("diff-tree", "--no-commit-id", "--name-only", "-r", "-M", sha).splitlines()
-        if any(not is_exempt(path) for path in files):
-            missing.append(sha)
-    return missing
+    baseline = archive_baseline()
+    start = baseline or anchor
+    return code_commits_between(start, anchor, recorded)
+
+
+def unarchived_code_commits() -> list[str]:
+    """pre-push 契约：每个代码提交都必须被某份归档覆盖，一个都不能漏。"""
+    rows = sorted((m for _, m in manifests() if m.get("commits")),
+                  key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
+    if not rows:
+        return []
+    recorded = {c.get("sha") for m in rows for c in m.get("commits", [])}
+    anchor = rows[-1]["commits"][-1]["sha"]
+    probe = subprocess.run(["git", "merge-base", "--is-ancestor", anchor, "HEAD"],
+                           cwd=ROOT, capture_output=True, env=clean_env())
+    if probe.returncode != 0:
+        return []
+    return code_commits_between(anchor, "HEAD", recorded)
 
 
 def handbook_check() -> int:

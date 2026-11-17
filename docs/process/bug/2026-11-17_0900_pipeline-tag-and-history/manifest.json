@@ -1,0 +1,188 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_0900_pipeline-tag-and-history",
+  "category": "bug",
+  "title": "流水线 tag 同步与构建历史编号修复",
+  "createdAt": "2026-11-17T09:00:15+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "版本号取自流水线的 tag 输入；修复打包镜像模式不打 git tag；版本输入智能候选/建议/冲突提示；历史序号归一化",
+    "toolCallCount": 0
+  },
+  "problem": "打包镜像模式不产生 git tag，流水线版本输入只能手填且无候选/冲突提示，构建历史序号在重跑后错乱",
+  "solution": "打包镜像时同步创建 git tag；版本输入改为从 git tag 取候选并给出建议与冲突提示；构建历史序号归一化，UI 展示 tag 同步结果（远端凭据不足时标注 tag 仅本地）",
+  "commits": [
+    {
+      "sha": "bd3680cf8abcb77ecd3029a5c0d3fb111634c1cc",
+      "subject": "fix(pipeline): 打包镜像时同步 git tag，构建历史序号归一化",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/PipelineEngine.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "3b53513af05a97bbe45fe58b0e9e1ef73885cda0"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/ProjectRepoLocator.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "1b006308d7e082eeb94a7564e2e70b2024a24ea6"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 13,
+          "deletions": 8,
+          "blobHash": "1444e46a7b43b1594b5d65f84e33da240179a49a"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineConfig.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "a6a10f804f9d19037f50fd0d49f1e2cc9b10d8f1"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/RunHistoryStore.java",
+          "status": "M",
+          "additions": 65,
+          "deletions": 6,
+          "blobHash": "767a923affbc64045112190cd464fcb25ff64e03"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreSeqTest.java",
+          "status": "A",
+          "additions": 42,
+          "deletions": 0,
+          "blobHash": "87a19e19dd2a63de69f37343e20f977af79ad978"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "9616539e5382a5fb0fb0871eddce37c1bc56bfc4"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 1,
+          "blobHash": "dc3b76b3e1d570a9fcc56cd39193deed5b16d4b3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 2,
+          "blobHash": "7409d86fd18af8919e5bc94b2ba2b2d7f837a57e"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/DefaultRepoLocator.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "0e819b1c8fa09b37def9e4bbeeabec46f6b90ca6"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/GitWorktreeManagerTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "42ef30c3efdd9da2bb2d414fda259d846604bb46"
+        }
+      ]
+    },
+    {
+      "sha": "e99fc8f9574a7f9b08ca409025922db5244bf85e",
+      "subject": "feat(pipeline): 版本号候选取自 git tag，历史展示 tag 同步结果",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "558b8aefd2759dd1f862b91d1d10293bd4e1399e"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/HistoryList.vue",
+          "status": "M",
+          "additions": 50,
+          "deletions": 1,
+          "blobHash": "003ec15166e0c1accd378ac2ff6ed90177f1977e"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/TriggerBar.vue",
+          "status": "M",
+          "additions": 103,
+          "deletions": 6,
+          "blobHash": "122bb928992dd7241fdb7fe9784f2e7bea02c374"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 29,
+          "deletions": 3,
+          "blobHash": "33ebad594abc0da6dd449599e407e38b55bea99c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreSeqTest.java",
+        "status": "A",
+        "additions": 42,
+        "deletions": 0,
+        "blobHash": "87a19e19dd2a63de69f37343e20f977af79ad978"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "9616539e5382a5fb0fb0871eddce37c1bc56bfc4"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/GitWorktreeManagerTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "42ef30c3efdd9da2bb2d414fda259d846604bb46"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 523, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "web"
+    ],
+    "verification": "Tests run: 523, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [
+    "远端凭据不足时 tag 只能本地创建，UI 显示 tag 仅本地"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_0900_pipeline-tag-and-history"
+    ]
+  },
+  "chain": {
+    "prev": "ffc5516b582e84ea3d3c1fb1452c024030a288b181357d4d7e4216d09caeae13",
+    "self": "7d2f105ec90e5d8b8bdb38e4e3ad551869a225914daa7f786cedf0062abee97a"
+  }
+}
