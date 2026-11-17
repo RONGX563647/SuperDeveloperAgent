@@ -753,8 +753,11 @@ public class GitWorktreeManager {
     /** 暂存全部改动并提交，返回新提交 sha。 */
     public String commitAll(Path repoDir, String message) {
         run(repoDir, List.of("git", "add", "-A"), "git add -A");
+        // --no-verify：平台自动提交（补丁落盘、Dockerfile 自愈、bugfix 分支）不执行目标仓库的本地 hook。
+        // 仓库的 hook 属于开发者流程（本仓库的 pre-commit 是"必须有会话归档"），
+        // worktree 与主仓库共享 hooks，不加 --no-verify 会把平台自己的提交误拦截。
         run(repoDir, List.of("git", "-c", "user.name=agent", "-c", "user.email=agent@local",
-                "commit", "--quiet", "-m", message), "git commit");
+                "commit", "--no-verify", "--quiet", "-m", message), "git commit");
         return revParse(repoDir, "HEAD");
     }
 

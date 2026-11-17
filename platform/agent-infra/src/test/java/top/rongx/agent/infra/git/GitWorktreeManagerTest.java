@@ -52,6 +52,31 @@ class GitWorktreeManagerTest {
                 () -> m.mergeFastForward(dir, "agent/fix-1", base));
     }
 
+    @Test
+    @DisplayName("平台自动提交绕过仓库本地 hook：归档门禁不拦截 Dockerfile 自愈")
+    void commitAllBypassesRepoHooks() throws Exception {
+        makeUserRepo("hook-demo");
+        Path dir = userSpace.resolve("hook-demo");
+        Path hooks = userSpace.resolve("blocking-hooks");
+        Files.createDirectories(hooks);
+        Path hook = hooks.resolve("pre-commit");
+        Files.writeString(hook, "#!/bin/sh\nexit 1\n");
+        try {
+            Files.setPosixFilePermissions(hook,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+        } catch (UnsupportedOperationException ignored) {
+            // Windows 没有 POSIX 权限位；hook 可能不执行，本用例在 Linux/CI 上才真正生效
+        }
+        exec(dir, "git", "config", "core.hooksPath", hooks.toAbsolutePath().toString());
+
+        Files.writeString(dir.resolve("Dockerfile"), "FROM eclipse-temurin:21\n");
+        GitWorktreeManager m = manager();
+        String sha = m.commitAll(dir, "agent: ensure dockerfile");
+
+        assertEquals(sha, m.revParse(dir, "HEAD"));
+        assertTrue(Files.exists(dir.resolve("Dockerfile")));
+    }
+
     /** 在用户空间造一个真实开发中的项目：git init + 一次提交。返回 HEAD。 */
     private String makeUserRepo(String name) throws Exception {
         Path dir = userSpace.resolve(name);
