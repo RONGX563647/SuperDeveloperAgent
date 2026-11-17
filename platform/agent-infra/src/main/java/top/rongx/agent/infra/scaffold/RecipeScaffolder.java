@@ -148,7 +148,7 @@ public class RecipeScaffolder implements ProjectScaffolder {
             String context = dockerfile.getParent().equals(repoRoot)
                     ? "." : relative(repoRoot, dockerfile.getParent());
             actions.put("image_package",
-                    "docker build -f " + dockerfileRel + " -t ${tag} " + context);
+                    "docker buildx build --load -f " + dockerfileRel + " -t ${tag} " + context);
         } else if (target == DeployTarget.HOST) {
             diags.add(Diag.info("HOST_TARGET",
                     "HOST 目标直接运行 Java jar；前端静态产物不会由平台托管"));
