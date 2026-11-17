@@ -1,0 +1,92 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_0836_env-version-label",
+  "category": "bug",
+  "title": "环境矩阵显示构建版本号",
+  "createdAt": "2026-11-17T08:36:24+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "环境矩阵显示构建版本号",
+    "toolCallCount": 0
+  },
+  "problem": "工作区环境 Tab 的部署卡片只显示 latest，看不到构建版本号，无法判断当前部署对应哪次构建。",
+  "solution": "流水线部署传给部署器的版本号从 deployVersion 改为 versionLabel：未打 tag 时回落到 <env>-v<seq>，HOST 的 version 文件与 Docker 的 agent.version 标签都写入真实版本；部署详情增加版本号一行。",
+  "commits": [
+    {
+      "sha": "921ffcae0eeaad6deb5253ca424825614cba85cc",
+      "subject": "fix(deploy): 环境矩阵显示构建版本号而不是 latest",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 2,
+          "blobHash": "649075fce8be8b586ed1289a1c97f1a26bc13e19"
+        },
+        {
+          "path": "platform/web/src/components/workspace/DeploymentMatrix.vue",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "739b5bf8a5f7872e754ce87c11839c044c84a9ea"
+        }
+      ]
+    },
+    {
+      "sha": "4a64f8309e1994921b475a9da516ad6159d82f8c",
+      "subject": "test(deploy): 覆盖部署版本号的回落规则",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 2,
+          "blobHash": "8a582f6bd2a21c18a33dc923bd5f0b89e6e17bfa"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployVersionLabelTest.java",
+          "status": "A",
+          "additions": 30,
+          "deletions": 0,
+          "blobHash": "7f903c47232096404d37196688ffccf231d85a29"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployVersionLabelTest.java",
+        "status": "A",
+        "additions": 30,
+        "deletions": 0,
+        "blobHash": "7f903c47232096404d37196688ffccf231d85a29"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 519, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "web"
+    ],
+    "verification": "Tests run: 519, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_0836_env-version-label"
+    ]
+  },
+  "chain": {
+    "prev": "GENESIS",
+    "self": "c8dbaebd207599493e20d733cfba5b345087dc056147552ef08c3951ed1386e0"
+  }
+}
