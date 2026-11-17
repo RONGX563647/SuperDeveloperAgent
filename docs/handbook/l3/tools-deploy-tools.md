@@ -11,7 +11,7 @@ summary: 只读查询某环境的配方版本、证据运行状态与可回放�
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 部署环境状态只读查询 | `DeployTools#envStatus` | `platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java:72-91` | agent-tools |
+| 部署环境状态只读查询 | `DeployTools#envStatus` | `platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java:74-93` | agent-tools |
 <!-- generated:end -->
 
 ## 行为拆解

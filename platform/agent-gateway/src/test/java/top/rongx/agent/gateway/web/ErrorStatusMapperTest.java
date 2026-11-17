@@ -28,4 +28,14 @@ class ErrorStatusMapperTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR,
                 ErrorStatusMapper.statusOf(ErrorCode.INTAKE_FAILED));
     }
+
+    @Test
+    void migrationKindsPreserveLegacyStatus() {
+        assertEquals(HttpStatus.BAD_REQUEST, ErrorStatusMapper.statusOf(ErrorCode.RUN_INVALID_INPUT));
+        assertEquals(HttpStatus.CONFLICT, ErrorStatusMapper.statusOf(ErrorCode.RUN_INVALID_STATE));
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ErrorStatusMapper.statusOf(ErrorCode.RUN_INTERNAL));
+        assertEquals(HttpStatus.BAD_REQUEST, ErrorStatusMapper.statusOf(ErrorCode.DEPLOY_INVALID_INPUT));
+        assertEquals(HttpStatus.CONFLICT, ErrorStatusMapper.statusOf(ErrorCode.DEPLOY_INVALID_STATE));
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ErrorStatusMapper.statusOf(ErrorCode.DEPLOY_INTERNAL));
+    }
 }

@@ -20,6 +20,9 @@ import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.runtime.workspace.ConversationManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 工作区 REST：会话、任务与异步运行。
@@ -85,7 +88,7 @@ public class WorkspaceController {
                 conversations.importSession(projectId, userId, session.id(), session.title(),
                         session.at());
                 imported++;
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 rejected.add(String.valueOf(session.id()));
             }
         }
@@ -101,15 +104,14 @@ public class WorkspaceController {
                 request.modelConnectionId(), request.modelName());
         return conversations.updateOwned(conversationId, userId, patch)
                 .map(ConversationView::from)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "会话不存在或无权访问：" + conversationId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId));
     }
 
     @DeleteMapping("/conversations/{conversationId}")
     public Map<String, Object> delete(@PathVariable String conversationId) {
         String userId = currentUser.requireUserId();
         if (!conversations.deleteOwned(conversationId, userId)) {
-            throw new IllegalArgumentException("会话不存在或无权访问：" + conversationId);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId);
         }
         return Map.of("deleted", true);
     }
@@ -201,8 +203,8 @@ public class WorkspaceController {
         }
         try {
             return TaskStatus.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("非法任务状态：" + value);
+        } catch (PlatformException | IllegalArgumentException e) {
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "非法任务状态：" + value);
         }
     }
 

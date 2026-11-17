@@ -3,6 +3,8 @@ package top.rongx.agent.domain.process;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 用户配置的自由格式构建/测试命令的解释器前缀（平台自适应 + 可配置）。
@@ -49,8 +51,7 @@ public final class CommandShell {
         }
         List<String> tokens = split(raw);
         if (tokens.isEmpty() || tokens.size() > MAX_PREFIX_TOKENS) {
-            throw new IllegalArgumentException(
-                    "命令解释器配置非法：应为「可执行文件 + 参数」（如 /bin/bash -c），当前为 " + raw);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "命令解释器配置非法：应为「可执行文件 + 参数」（如 /bin/bash -c），当前为 " + raw);
         }
         return List.copyOf(tokens);
     }
@@ -106,7 +107,7 @@ public final class CommandShell {
             }
         }
         if (quote != 0) {
-            throw new IllegalArgumentException("命令解释器配置存在未闭合的引号：" + text);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "命令解释器配置存在未闭合的引号：" + text);
         }
         if (touched) {
             tokens.add(current.toString());

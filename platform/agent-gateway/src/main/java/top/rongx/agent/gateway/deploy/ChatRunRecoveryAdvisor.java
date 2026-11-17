@@ -19,6 +19,8 @@ import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.run.RunRecoveryAdvisor;
 import top.rongx.agent.runtime.ChatService;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 用部署 Agent 实现「运行失败自动诊断」。
@@ -78,7 +80,7 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
             // 失败运行已经发生，环境和项目必然存在；这里只校验项目存在，不再要求
             // 环境出现在项目接入清单里（dev 常是首次运行才被平台真正使用）。
             Project project = projects.findById(context.projectId())
-                    .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + context.projectId()));
+                    .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "项目不存在: " + context.projectId()));
             ctx = new ProjectContext(project.id(), context.env(), userId, project.repoUrl(), null);
         } catch (RuntimeException e) {
             return List.of("无法解析项目上下文：" + safe(e.getMessage()));

@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * dev 本地前后端服务的端口分配与生命周期管理。
@@ -129,7 +131,7 @@ public class LocalServiceManager {
             }
             return candidate;
         }
-        throw new IllegalStateException("端口分配失败：" + env + "/" + service
+        throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "端口分配失败：" + env + "/" + service
                 + " 端口段 " + base + "–" + (base + size - 1) + " 已耗尽");
     }
 
@@ -179,15 +181,13 @@ public class LocalServiceManager {
         return switch (env) {
             case "dev" -> backend ? 18080 : 15173;
             case "test" -> backend ? 28080 : 25173;
-            default -> throw new IllegalArgumentException(
-                    "只有 dev / test 使用本地端口段：" + env);
+            default -> throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "只有 dev / test 使用本地端口段：" + env);
         };
     }
 
     private static void requireLocalEnv(String env) {
         if (!"dev".equals(env)) {
-            throw new IllegalArgumentException(
-                    "只有 dev 环境使用本机进程托管（test/prod 走容器部署）：" + env);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "只有 dev 环境使用本机进程托管（test/prod 走容器部署）：" + env);
         }
     }
 }

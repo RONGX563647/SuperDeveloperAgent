@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 外部能力市场（MCP 官方 Registry / 公开 Skill 仓库）。
@@ -22,7 +23,7 @@ public interface CapabilityMarket {
             }
             try {
                 return Optional.of(valueOf(raw.trim().toUpperCase(Locale.ROOT)));
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 return Optional.empty();
             }
         }

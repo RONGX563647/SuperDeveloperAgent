@@ -12,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.infra.sqlite.SqliteConnections;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 多实例共享的并发闸门：SQLite 租约表。
@@ -49,7 +51,7 @@ public class JdbcAgentStreamLimiter implements AgentStreamLimiter {
         try (Connection conn = open(); Statement st = conn.createStatement()) {
             st.execute(SCHEMA);
         } catch (SQLException e) {
-            throw new IllegalStateException("stream_lease 表初始化失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "stream_lease 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -80,7 +82,7 @@ public class JdbcAgentStreamLimiter implements AgentStreamLimiter {
                 throw e;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("并发许可占用失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "并发许可占用失败：" + e.getMessage(), e);
         }
     }
 

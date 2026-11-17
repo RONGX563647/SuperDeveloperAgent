@@ -1,5 +1,8 @@
 package top.rongx.agent.domain.conversation;
 
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+
 /**
  * 一次异步运行。
  *
@@ -22,7 +25,7 @@ public record ConversationRun(
 
     public ConversationRun {
         if (id == null || id.isBlank() || conversationId == null || conversationId.isBlank()) {
-            throw new IllegalArgumentException("run id / conversationId 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "run id / conversationId 不能为空");
         }
         status = status == null ? RunStatus.QUEUED : status;
         goal = goal == null ? "" : goal;

@@ -3,6 +3,8 @@ package top.rongx.agent.runtime;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 会话与项目/环境的绑定表。
@@ -32,8 +34,7 @@ public class ChatSessionRegistry {
         Binding incoming = new Binding(ctx.userId(), ctx.projectId(), ctx.env());
         Binding existing = bindings.putIfAbsent(sessionId, incoming);
         if (existing != null && !existing.equals(incoming)) {
-            throw new IllegalArgumentException(
-                    "会话 " + sessionId + " 已绑定到其他项目/环境，请新建会话后再试");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "会话 " + sessionId + " 已绑定到其他项目/环境，请新建会话后再试");
         }
         return existing == null ? incoming : existing;
     }

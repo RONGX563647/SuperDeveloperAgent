@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 新增接入面：托管账号加密与 URL 匹配、MCP 配置、Skill 目录约定。 */
 class GitHostingAndSkillStoreTest {
@@ -81,7 +82,7 @@ class GitHostingAndSkillStoreTest {
                 "https://mcp.example.com/v2", false), Map.of(), "admin");
         assertEquals("Bearer secret-value", store.headersOf(http.id()).get("Authorization"));
 
-        assertThrows(IllegalArgumentException.class, () -> store.save(
+        assertThrows(PlatformException.class, () -> store.save(
                 new McpServerRepository.McpServerView(
                         null, "Bad Name", "stdio", "npx", List.of(), null, true),
                 Map.of(), "admin"), "名称不允许空格");
@@ -117,9 +118,9 @@ class GitHostingAndSkillStoreTest {
         assertEquals("db-migration", imported.name());
         assertEquals(2, store.list().size());
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.importFrom(source.toString()), "同名技能不可重复导入");
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.create("../escape", "", ""), "目录名禁止路径穿越");
     }
 

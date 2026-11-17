@@ -41,6 +41,8 @@ import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.settings.EnvBindingService;
 import top.rongx.agent.gateway.settings.EnvironmentDiscoveryService;
 import top.rongx.agent.gateway.settings.LocalServiceManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 环境模板 / 中间件资源 / 环境变量 / 项目覆盖 / Agent 绑定。
@@ -119,7 +121,7 @@ public class EnvironmentController {
         syncResourceVars(env);
         return Map.of(
                 "template", envStore.template(env).orElseThrow(() ->
-                        new IllegalArgumentException("环境不存在：" + env)),
+                        new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境不存在：" + env)),
                 "resources", envStore.resources(env).stream().map(this::resourceView).toList(),
                 "vars", envStore.envVars(env));
     }
@@ -227,7 +229,7 @@ public class EnvironmentController {
     public Map<String, Object> checkResource(@PathVariable String env, @PathVariable String id) {
         requireRead();
         EnvResource r = envStore.resource(id).orElseThrow(() ->
-                new IllegalArgumentException("资源不存在：" + id));
+                new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "资源不存在：" + id));
         Health health = check(r);
         envStore.recordHealth(id, health.running(), health.error());
         EnvResource updated = envStore.resource(id).orElseThrow();
@@ -333,7 +335,7 @@ public class EnvironmentController {
         requireWrite();
         String key = str(body, "key", null);
         if (key == null || key.isBlank()) {
-            throw new IllegalArgumentException("变量名必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量名必填");
         }
         boolean secret = !(body.get("secret") instanceof Boolean b) || b;
         return envStore.saveEnvVar(env, key.trim(), str(body, "value", null), secret, "TEMPLATE");
@@ -351,7 +353,7 @@ public class EnvironmentController {
     public Map<String, Object> revealVar(@PathVariable String env, @PathVariable String key) {
         requireReveal();
         String value = envStore.envVarValue(env, key).orElseThrow(() ->
-                new IllegalArgumentException("变量不存在：" + key));
+                new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量不存在：" + key));
         log.info("[audit] 查看环境变量明文 env={} key={} by={}", env, key,
                 currentUser.requireUserId());
         return Map.of("env", env, "key", key, "value", value);
@@ -373,7 +375,7 @@ public class EnvironmentController {
         String env = str(body, "env", "test");
         String key = str(body, "key", null);
         if (key == null || key.isBlank()) {
-            throw new IllegalArgumentException("变量名必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量名必填");
         }
         boolean secret = !(body.get("secret") instanceof Boolean b) || b;
         return envStore.saveOverride(projectId, env, key.trim(), str(body, "value", null), secret);
@@ -525,7 +527,7 @@ public class EnvironmentController {
         requireReveal();
         String value = envStore.effective(projectId, env).values().get(key);
         if (value == null) {
-            throw new IllegalArgumentException("变量不存在或没有值：" + key);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量不存在或没有值：" + key);
         }
         log.info("[audit] 查看项目注入变量 env={} project={} key={} by={}", env, projectId, key,
                 currentUser.requireUserId());
@@ -620,9 +622,9 @@ public class EnvironmentController {
         // 否则研发运维角色（无 settings:write）会在对话确认卡里被 403 卡死。
         currentUser.checkAnyPermission("settings:write", "action:run", "change:confirm");
         EnvBinding binding = envStore.binding(bindingId).orElseThrow(() ->
-                new IllegalArgumentException("环境绑定不存在：" + bindingId));
+                new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境绑定不存在：" + bindingId));
         if (!binding.projectId().equals(projectId)) {
-            throw new IllegalArgumentException("环境绑定不属于当前项目：" + bindingId);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境绑定不属于当前项目：" + bindingId);
         }
         return bindings.confirm(bindingId, currentUser.requireUserId());
     }
@@ -631,7 +633,7 @@ public class EnvironmentController {
     public EnvBinding binding(@PathVariable String projectId, @PathVariable String bindingId) {
         requireRead();
         return envStore.binding(bindingId).orElseThrow(() ->
-                new IllegalArgumentException("环境绑定不存在：" + bindingId));
+                new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境绑定不存在：" + bindingId));
     }
 
     // ---------------------------------------------------------------- 健康检查

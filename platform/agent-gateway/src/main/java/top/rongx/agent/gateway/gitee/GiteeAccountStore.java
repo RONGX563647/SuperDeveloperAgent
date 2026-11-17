@@ -18,6 +18,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * Gitee 账号绑定存储：token 以 AES-256-GCM 加密落 SQLite（按平台主密钥加密）。
@@ -78,7 +80,7 @@ public class GiteeAccountStore implements AutoCloseable {
             log.info("已生成平台主密钥 {}（请妥善备份；丢失后已加密的凭据将无法解密）", keyFile);
             return new SecretKeySpec(raw, "AES");
         } catch (Exception e) {
-            throw new IllegalStateException("主密钥初始化失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "主密钥初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -86,7 +88,7 @@ public class GiteeAccountStore implements AutoCloseable {
         try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(TABLE)) {
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("gitee_accounts 表初始化失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "gitee_accounts 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -109,7 +111,7 @@ public class GiteeAccountStore implements AutoCloseable {
             return new Encrypted(Base64.getEncoder().encodeToString(ct),
                     Base64.getEncoder().encodeToString(iv));
         } catch (Exception e) {
-            throw new IllegalStateException("token 加密失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "token 加密失败：" + e.getMessage(), e);
         }
     }
 
@@ -121,7 +123,7 @@ public class GiteeAccountStore implements AutoCloseable {
             return new String(cipher.doFinal(Base64.getDecoder().decode(cipherB64)),
                     java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
-            throw new IllegalStateException("token 解密失败（主密钥不匹配？）：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "token 解密失败（主密钥不匹配？）：" + e.getMessage(), e);
         }
     }
 
@@ -146,7 +148,7 @@ public class GiteeAccountStore implements AutoCloseable {
             st.setLong(6, System.currentTimeMillis());
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("Gitee 绑定失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Gitee 绑定失败：" + e.getMessage(), e);
         }
     }
 
@@ -157,7 +159,7 @@ public class GiteeAccountStore implements AutoCloseable {
             st.setString(1, userId);
             return st.executeUpdate() > 0;
         } catch (SQLException e) {
-            throw new IllegalStateException("Gitee 解绑失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Gitee 解绑失败：" + e.getMessage(), e);
         }
     }
 
@@ -179,7 +181,7 @@ public class GiteeAccountStore implements AutoCloseable {
                         rs.getString("scopes"), rs.getLong("bound_at")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Gitee 绑定查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Gitee 绑定查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -201,7 +203,7 @@ public class GiteeAccountStore implements AutoCloseable {
                 return Optional.of(decrypt(rs.getString("token_enc"), rs.getString("token_iv")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("token 读取失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "token 读取失败：" + e.getMessage(), e);
         }
     }
 

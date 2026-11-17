@@ -1,6 +1,8 @@
 package top.rongx.agent.domain.conversation;
 
 import java.util.List;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * DAG 调度中的一个节点：一次子会话运行。
@@ -39,17 +41,17 @@ public record DispatchNode(
 
     public DispatchNode {
         if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("节点 id 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "节点 id 不能为空");
         }
         id = id.trim();
         if (message == null || message.isBlank()) {
-            throw new IllegalArgumentException("节点 " + id + " 的 message 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "节点 " + id + " 的 message 不能为空");
         }
         dependsOn = dependsOn == null ? List.of()
                 : dependsOn.stream().filter(d -> d != null && !d.isBlank())
                 .map(String::trim).distinct().toList();
         if (dependsOn.contains(id)) {
-            throw new IllegalArgumentException("节点 " + id + " 不能依赖自己");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "节点 " + id + " 不能依赖自己");
         }
         conversationId = blankToNull(conversationId);
         title = blankToNull(title);

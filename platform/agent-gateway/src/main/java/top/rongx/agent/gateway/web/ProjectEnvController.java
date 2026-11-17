@@ -15,6 +15,8 @@ import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.gateway.auth.CurrentUser;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 项目环境变量（部署时注入容器，不进 pipeline.yml / 仓库）。
@@ -64,7 +66,7 @@ public class ProjectEnvController {
         String env = EnvNames.normalize(str(body, "env"));
         String key = str(body, "key");
         if (key == null || key.isBlank()) {
-            throw new IllegalArgumentException("变量名必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量名必填");
         }
         boolean secret = !(body.get("secret") instanceof Boolean b) || b;
         EnvVariable saved = envStore.saveOverride(projectId, env, key.trim(),

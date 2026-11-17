@@ -25,6 +25,9 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.gateway.web.ProjectContextResolver;
 import top.rongx.agent.runtime.ChatService;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 自动修复的 Agent 适配器：把阶段提示词交给平台现有对话/部署 Agent，收集最终正文。
@@ -125,7 +128,7 @@ public class ChatBugFixAgent implements BugFixAgentPort {
             return result;
         } catch (top.rongx.agent.gateway.web.AgentExecutionException e) {
             throw e;
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             // 取消信号是业务状态冲突，保持 409 语义
             throw e;
         } catch (RuntimeException e) {
@@ -139,7 +142,7 @@ public class ChatBugFixAgent implements BugFixAgentPort {
         return Flux.interval(Duration.ofMillis(500))
                 .filter(tick -> cancellations.cancelled(runId))
                 .next()
-                .flatMap(tick -> Mono.error(new IllegalStateException("自动修复已取消")));
+                .flatMap(tick -> Mono.error(new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复已取消")));
     }
 
     /**
@@ -150,7 +153,7 @@ public class ChatBugFixAgent implements BugFixAgentPort {
     private ProjectContext context(BugFixRun run, Role role) {
         List<ProjectEnv> envs = projects.findEnvs(run.projectId());
         if (envs.isEmpty()) {
-            throw new IllegalStateException("项目未配置任何环境：" + run.projectId());
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "项目未配置任何环境：" + run.projectId());
         }
         List<String> names = envs.stream().map(ProjectEnv::env).toList();
         String preferred = policies.load(run.projectId()).testEnv();
@@ -163,14 +166,13 @@ public class ChatBugFixAgent implements BugFixAgentPort {
                         .orElseGet(() -> names.stream()
                                 .filter(name -> !productionLike(name))
                                 .findFirst()
-                                .orElseThrow(() -> new IllegalStateException(
-                                        "项目只有生产环境，自动修复已拒绝执行：" + run.projectId()))));
+                                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_STATE, "项目只有生产环境，自动修复已拒绝执行：" + run.projectId()))));
         if (preferred != null && !preferred.isBlank() && !env.equalsIgnoreCase(preferred)) {
             log.warn("策略环境 {} 不在项目 {} 的环境列表中，已回退到 {}",
                     preferred, run.projectId(), env);
         }
         if (productionLike(env)) {
-            throw new IllegalStateException("自动修复禁止使用生产环境：" + env);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复禁止使用生产环境：" + env);
         }
         ProjectContext base = contexts.resolve(run.projectId(), env, run.userId());
         boolean readOnly = role != Role.DEPLOY;
@@ -188,7 +190,7 @@ public class ChatBugFixAgent implements BugFixAgentPort {
             // 协作取消：用户取消后立即停止消费事件并中断后续工具调用，
             // 不必等整段 Agent 输出跑完（最长 15 分钟）。
             if (cancellations.cancelled(runId)) {
-                throw new IllegalStateException("自动修复已取消");
+                throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复已取消");
             }
             if (event instanceof TextBlockDeltaEvent delta && delta.getDelta() != null) {
                 text.append(delta.getDelta());

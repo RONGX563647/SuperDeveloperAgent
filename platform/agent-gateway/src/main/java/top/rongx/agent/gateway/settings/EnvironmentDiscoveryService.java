@@ -14,6 +14,8 @@ import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.domain.settings.SshAccess;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 中间件自动发现（只读）：本机 Docker / 远程 SSH。
@@ -56,7 +58,7 @@ public class EnvironmentDiscoveryService {
         DeployServer server = (serverId == null || serverId.isBlank()
                 ? servers.findDefault()
                 : servers.find(serverId)).orElseThrow(() ->
-                new IllegalArgumentException("没有可用的 SSH 服务器：请先在「设置 → 服务器」添加"));
+                new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "没有可用的 SSH 服务器：请先在「设置 → 服务器」添加"));
         String secret = servers.secretOf(server.id()).orElse(null);
         String list = sshRun(server, secret, "docker ps -a --format '{{.Names}}'");
         List<EnvResource> all = new ArrayList<>();
@@ -273,12 +275,11 @@ public class EnvironmentDiscoveryService {
         // 不退出会永久转圈且没有任何错误。现在 15s 硬超时 + 明确原因。
         BoundedCommand.Outcome outcome = BoundedCommand.run(List.of(argv), 15_000L);
         if (outcome.timedOut()) {
-            throw new IllegalArgumentException(outcome.detail());
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, outcome.detail());
         }
         if (!outcome.ok()) {
             String reason = outcome.failure() == null ? "" : outcome.failure() + "：";
-            throw new IllegalArgumentException(
-                    "Docker 不可用或命令失败：" + reason + outcome.output().trim());
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "Docker 不可用或命令失败：" + reason + outcome.output().trim());
         }
         return List.of(outcome.output().split("\\R"));
     }
@@ -286,7 +287,7 @@ public class EnvironmentDiscoveryService {
     private String sshRun(DeployServer server, String secret, String command) {
         SshAccess.Result result = ssh.run(server, secret, command, SSH_TIMEOUT_MS);
         if (!result.ok()) {
-            throw new IllegalArgumentException("远程发现失败：" + result.error());
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "远程发现失败：" + result.error());
         }
         return result.output();
     }

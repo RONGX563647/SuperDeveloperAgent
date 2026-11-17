@@ -1,5 +1,8 @@
 package top.rongx.agent.domain.project;
 
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
+
 /**
  * 会话级项目上下文。
  *
@@ -30,16 +33,16 @@ public record ProjectContext(String projectId, String env, String userId, String
 
     public ProjectContext {
         if (projectId == null || projectId.isBlank()) {
-            throw new IllegalArgumentException("projectId 不能为空（必须由服务端绑定）");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "projectId 不能为空（必须由服务端绑定）");
         }
         if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("userId 不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "userId 不能为空");
         }
         worktree = (worktree == null || worktree.isBlank()) ? null : worktree.trim();
         // 工作树名来自客户端：必须在进入工具层之前校验，杜绝 ../../ 逃逸到服务器任意目录
         if (worktree != null
                 && (!WORKTREE_NAME.matcher(worktree).matches() || worktree.contains(".."))) {
-            throw new IllegalArgumentException("工作树名不合法：" + worktree);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "工作树名不合法：" + worktree);
         }
     }
 

@@ -21,6 +21,8 @@ import java.util.Set;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * Agent Skill 仓库（设置页「Skill」）。
@@ -76,7 +78,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
                     .forEach(dir -> out.add(read(dir)));
             return out;
         } catch (IOException e) {
-            throw new IllegalStateException("技能目录读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能目录读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -101,7 +103,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
         try {
             return Optional.of(Files.readString(file, StandardCharsets.UTF_8));
         } catch (IOException e) {
-            throw new IllegalStateException("技能内容读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能内容读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -116,7 +118,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
                     withFrontmatter(body, safe, description), StandardCharsets.UTF_8);
             return read(dir);
         } catch (IOException e) {
-            throw new IllegalStateException("技能写入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -130,7 +132,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
         String safe = requireName(name);
         Path dir = root.resolve(safe);
         if (Files.exists(dir)) {
-            throw new IllegalArgumentException("同名技能已存在：" + safe);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "同名技能已存在：" + safe);
         }
         try {
             Files.createDirectories(dir);
@@ -161,7 +163,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
             if (e instanceof RuntimeException runtime) {
                 throw runtime;
             }
-            throw new IllegalStateException("技能安装失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能安装失败：" + e.getMessage(), e);
         }
     }
 
@@ -186,39 +188,39 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
     /** 从本地目录导入：源目录必须含 SKILL.md，复制到技能根目录（同名拒绝覆盖）。 */
     public Skill importFrom(String sourcePath) {
         if (sourcePath == null || sourcePath.isBlank()) {
-            throw new IllegalArgumentException("目录路径不能为空");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "目录路径不能为空");
         }
         Path source = Path.of(sourcePath).toAbsolutePath().normalize();
         if (!Files.isDirectory(source)) {
-            throw new IllegalArgumentException("目录不存在：" + source);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "目录不存在：" + source);
         }
         if (!Files.isRegularFile(source.resolve(SKILL_FILE))) {
-            throw new IllegalArgumentException("该目录不是技能：缺少 " + SKILL_FILE);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "该目录不是技能：缺少 " + SKILL_FILE);
         }
         String name = source.getFileName() == null ? "" : source.getFileName().toString();
         String safe = requireName(name.toLowerCase(Locale.ROOT));
         Path target = root.resolve(safe);
         if (Files.exists(target)) {
-            throw new IllegalArgumentException("同名技能已存在：" + safe);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "同名技能已存在：" + safe);
         }
         try {
             Files.createDirectories(root);
             copyTree(source, target);
             return read(target);
         } catch (IOException e) {
-            throw new IllegalStateException("技能导入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能导入失败：" + e.getMessage(), e);
         }
     }
 
     public void delete(String name) {
         Path dir = root.resolve(requireName(name));
         if (!Files.isDirectory(dir)) {
-            throw new IllegalArgumentException("技能不存在：" + name);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "技能不存在：" + name);
         }
         try {
             deleteTree(dir);
         } catch (IOException e) {
-            throw new IllegalStateException("技能删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -334,7 +336,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
     public boolean setEnabled(String name, boolean enabled) {
         String safe = requireName(name);
         if (!Files.isRegularFile(root.resolve(safe).resolve(SKILL_FILE))) {
-            throw new IllegalArgumentException("技能不存在：" + safe);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "技能不存在：" + safe);
         }
         synchronized (stateLock) {
             Properties properties = loadState();
@@ -377,7 +379,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
                 properties.store(out, "skill enabled state");
             }
         } catch (IOException e) {
-            throw new IllegalStateException("技能启用状态保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "技能启用状态保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -406,8 +408,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
     private static String requireName(String name) {
         String n = name == null ? "" : name.trim();
         if (!n.matches("[a-z0-9][a-z0-9-]{0,63}")) {
-            throw new IllegalArgumentException(
-                    "技能目录名只能是小写字母、数字与短横线（1-64 字符），例如 java-review");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "技能目录名只能是小写字母、数字与短横线（1-64 字符），例如 java-review");
         }
         return n;
     }

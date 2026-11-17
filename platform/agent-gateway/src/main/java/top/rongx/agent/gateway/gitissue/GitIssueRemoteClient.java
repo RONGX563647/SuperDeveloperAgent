@@ -21,6 +21,9 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.settings.GitHostingAccount;
 import top.rongx.agent.domain.settings.GitHostingAccountRepository;
 import top.rongx.agent.gateway.gitee.GiteeAccountStore;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * Gitee / GitHub / GitLab Issue 开放接口的最小封装（零新增依赖，JDK HttpClient）。
@@ -75,7 +78,7 @@ public class GitIssueRemoteClient {
             case "GITEE" -> createGitee(c, title, body, labels, kind);
             case "GITHUB" -> createGithub(c, title, body, labels, kind);
             case "GITLAB" -> createGitlab(c, title, body, labels);
-            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+            default -> throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "不支持的平台：" + c.provider());
         };
     }
 
@@ -86,7 +89,7 @@ public class GitIssueRemoteClient {
             case "GITEE" -> updateGitee(c, number, title, body, state, labels, kind);
             case "GITHUB" -> updateGithub(c, number, title, body, state, labels, kind);
             case "GITLAB" -> updateGitlab(c, number, title, body, state, labels);
-            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+            default -> throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "不支持的平台：" + c.provider());
         }
     }
 
@@ -103,7 +106,7 @@ public class GitIssueRemoteClient {
             case "GITLAB" -> send("POST",
                     gitlabBase(c) + "/projects/" + enc(c.repo()) + "/issues/" + number + "/notes",
                     gitlabHeaders(c.token()), jsonBody(Map.of("body", body)));
-            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+            default -> throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "不支持的平台：" + c.provider());
         }
     }
 
@@ -123,7 +126,7 @@ public class GitIssueRemoteClient {
                 + enc(c.token());
         try {
             return parseIssue(send("POST", url, headers(), jsonBody(payload)));
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             if (!typeUnsupported(e)) {
                 throw e;
             }
@@ -147,7 +150,7 @@ public class GitIssueRemoteClient {
                 + "?access_token=" + enc(c.token());
         try {
             send("PATCH", url, headers(), jsonBody(payload));
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             if (!typeUnsupported(e)) {
                 throw e;
             }
@@ -170,7 +173,7 @@ public class GitIssueRemoteClient {
         String url = "https://api.github.com/repos/" + c.repo() + "/issues";
         try {
             return parseIssue(send("POST", url, githubHeaders(c.token()), jsonBody(payload)));
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             if (!typeUnsupported(e)) {
                 throw e;
             }
@@ -195,7 +198,7 @@ public class GitIssueRemoteClient {
         String url = "https://api.github.com/repos/" + c.repo() + "/issues/" + number;
         try {
             send("PATCH", url, githubHeaders(c.token()), jsonBody(payload));
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             if (!typeUnsupported(e)) {
                 throw e;
             }
@@ -422,7 +425,7 @@ public class GitIssueRemoteClient {
                 payload.put("description", body);
                 url = gitlabBase(c) + "/projects/" + enc(c.repo()) + "/merge_requests";
             }
-            default -> throw new IllegalStateException("不支持的平台：" + c.provider());
+            default -> throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "不支持的平台：" + c.provider());
         }
         String resp = "GITHUB".equals(c.provider())
                 ? send("POST", url, githubHeaders(c.token()), jsonBody(payload))
@@ -438,13 +441,13 @@ public class GitIssueRemoteClient {
             String url = node.has("html_url") ? node.path("html_url").asText("")
                     : node.path("web_url").asText("");
             if (url.isBlank()) {
-                throw new IllegalStateException("PR 已创建但未返回链接（" + head + " → " + base + "）");
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "PR 已创建但未返回链接（" + head + " → " + base + "）");
             }
             return url;
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             throw e;
         } catch (Exception e) {
-            throw new IllegalStateException("解析 PR 响应失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "解析 PR 响应失败：" + e.getMessage(), e);
         }
     }
 
@@ -460,14 +463,14 @@ public class GitIssueRemoteClient {
             HttpResponse<String> resp = http.send(builder.build(),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (resp.statusCode() / 100 != 2) {
-                throw new IllegalStateException("%s %s 返回 %d：%s"
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "%s %s 返回 %d：%s"
                         .formatted(method, safeUrl(url), resp.statusCode(), snippet(resp.body())));
             }
             return resp.body();
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             throw e;
         } catch (Exception e) {
-            throw new IllegalStateException("调用 Git 接口失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "调用 Git 接口失败：" + e.getMessage(), e);
         }
     }
 
@@ -496,7 +499,7 @@ public class GitIssueRemoteClient {
         try {
             return json.writeValueAsString(payload);
         } catch (Exception e) {
-            throw new IllegalStateException("请求体序列化失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "请求体序列化失败：" + e.getMessage(), e);
         }
     }
 
@@ -510,7 +513,7 @@ public class GitIssueRemoteClient {
             String state = normalizeState(node.path("state").asText("open"));
             return new RemoteIssue(number, url, state);
         } catch (Exception e) {
-            throw new IllegalStateException("解析 Git 响应失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "解析 Git 响应失败：" + e.getMessage(), e);
         }
     }
 
@@ -561,7 +564,7 @@ public class GitIssueRemoteClient {
     }
 
     /** GitHub 个人仓库或未配置 Issue 类型时返回 400/422，可去掉 type 重试。 */
-    private static boolean typeUnsupported(IllegalStateException e) {
+    private static boolean typeUnsupported(RuntimeException e) {
         String message = e.getMessage() == null ? "" : e.getMessage();
         return message.contains("返回 400") || message.contains("返回 422");
     }

@@ -19,6 +19,8 @@ import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.infra.git.ProjectIntakeService;
 import top.rongx.agent.infra.persistence.CompositeProjectRepository;
 import top.rongx.agent.infra.persistence.IntakeProjectStore;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * 项目接入与 git 管理接口（v2）。
@@ -234,8 +236,7 @@ public class ProjectIntakeController {
         String userId = currentUser.requireUserId();
         RepoContext ctx = repoContext(id);
         if (!ctx.initialized()) {
-            throw new IllegalArgumentException(
-                    "该项目尚未完成 git 接入，无可同步内容。请先在「项目接入」页完成接入。");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "该项目尚未完成 git 接入，无可同步内容。请先在「项目接入」页完成接入。");
         }
         GitWorktreeManager.GitAuth auth = authFor(userId, ctx);
         if (ctx.direct()) {
@@ -261,11 +262,11 @@ public class ProjectIntakeController {
         Map<String, Object> payload = body == null ? Map.of() : body;
         String branch = str(payload, "branch");
         if (branch == null || branch.isBlank()) {
-            throw new IllegalArgumentException("branch 不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "branch 不能为空");
         }
         RepoContext ctx = repoContext(id);
         if (!ctx.initialized()) {
-            throw new IllegalArgumentException("该项目尚未完成 git 接入，无法切换分支。");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "该项目尚未完成 git 接入，无法切换分支。");
         }
         String worktree = str(payload, "worktree");
         Path target = checkoutTarget(id, ctx, worktree);
@@ -291,14 +292,14 @@ public class ProjectIntakeController {
         Map<String, Object> payload = body == null ? Map.of() : body;
         String branch = str(payload, "branch");
         if (branch == null || branch.isBlank()) {
-            throw new IllegalArgumentException("branch 不能为空");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "branch 不能为空");
         }
         if (!branch.matches("[A-Za-z0-9._/-]{1,120}") || branch.contains("..")) {
-            throw new IllegalArgumentException("分支名不合法：" + branch);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "分支名不合法：" + branch);
         }
         RepoContext ctx = repoContext(id);
         if (!ctx.initialized()) {
-            throw new IllegalArgumentException("该项目尚未完成 git 接入，无法合并分支。");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "该项目尚未完成 git 接入，无法合并分支。");
         }
         String into = str(payload, "into");
         if (into == null || into.isBlank()) {
@@ -327,14 +328,14 @@ public class ProjectIntakeController {
     private Path checkoutTarget(String id, RepoContext ctx, String worktree) {
         if (worktree != null && !worktree.isBlank() && !"main".equals(worktree)) {
             if (worktree.contains("..") || worktree.contains("/") || worktree.contains("\\")) {
-                throw new IllegalArgumentException("工作树名称不合法：" + worktree);
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "工作树名称不合法：" + worktree);
             }
             Path base = ctx.direct()
                     ? ctx.dir().resolve(".agent").resolve("worktrees")
                     : git.worktreesDir(id);
             Path target = base.resolve(worktree);
             if (!Files.isDirectory(target)) {
-                throw new IllegalArgumentException("工作树不存在：" + worktree);
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "工作树不存在：" + worktree);
             }
             return target;
         }
@@ -347,7 +348,7 @@ public class ProjectIntakeController {
         }
         List<GitWorktreeManager.WorktreeInfo> list = git.listWorktrees(id);
         if (list.isEmpty()) {
-            throw new IllegalArgumentException("该项目还没有可用的工作树，无法切换分支。");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "该项目还没有可用的工作树，无法切换分支。");
         }
         return Path.of(list.get(0).path());
     }
@@ -471,7 +472,7 @@ public class ProjectIntakeController {
     public Map<String, Object> decommission(@PathVariable String id) {
         currentUser.requireUserId();
         if (!composite.isIntake(id)) {
-            throw new IllegalArgumentException("项目 " + id + " 不是接入项目（预置配置项目请在 yml 中移除）");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "项目 " + id + " 不是接入项目（预置配置项目请在 yml 中移除）");
         }
         boolean removed = store.delete(id);
         return Map.of("ok", removed, "note", "bare 仓库与本地目录未删除；如需彻底清理请手动处理工作区");
@@ -492,7 +493,7 @@ public class ProjectIntakeController {
     public Map<String, Object> removeWorktree(@PathVariable String id, @PathVariable String name) {
         currentUser.requireUserId();
         if (!name.startsWith("wt-build-")) {
-            throw new IllegalArgumentException("仅允许清理构建 worktree（wt-build-*）");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "仅允许清理构建 worktree（wt-build-*）");
         }
         RepoContext ctx = repoContext(id);
         if (ctx.direct()) {

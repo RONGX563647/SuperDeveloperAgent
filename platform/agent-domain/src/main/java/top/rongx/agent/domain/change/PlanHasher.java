@@ -4,6 +4,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PromotionException;
 
 /**
  * 计划哈希（规约 §4.10 第三道守卫）。
@@ -45,7 +47,7 @@ public final class PlanHasher {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(md.digest(text.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 不可用", e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "SHA-256 不可用", e);
         }
     }
 

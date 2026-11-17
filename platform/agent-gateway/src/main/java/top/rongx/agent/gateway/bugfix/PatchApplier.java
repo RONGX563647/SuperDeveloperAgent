@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import top.rongx.agent.domain.error.PatchApplyException;
 
 /**
  * 修复片段的稳健替换。
@@ -24,50 +25,10 @@ public final class PatchApplier {
     private PatchApplier() {
     }
 
-    /** 片段无法唯一应用；message 里带文件、原因与候选行号，可直接回灌给模型。 */
-    public static class ApplyException extends IllegalArgumentException {
-
-        private final String file;
-        private final String reason;
-        private final List<Integer> candidateLines;
-
-        ApplyException(String file, String reason, List<Integer> candidateLines) {
-            super(buildMessage(file, reason, candidateLines));
-            this.file = file;
-            this.reason = reason;
-            this.candidateLines = List.copyOf(candidateLines);
-        }
-
-        public String file() {
-            return file;
-        }
-
-        public String reason() {
-            return reason;
-        }
-
-        public List<Integer> candidateLines() {
-            return candidateLines;
-        }
-
-        private static String buildMessage(String file, String reason, List<Integer> candidates) {
-            StringBuilder text = new StringBuilder("片段替换失败：").append(file)
-                    .append("（").append(reason).append("）");
-            if (!candidates.isEmpty()) {
-                text.append("；最接近的位置在第 ")
-                        .append(String.join(", ", candidates.stream().map(String::valueOf).toList()))
-                        .append(" 行，请据此提供包含完整上下文的片段");
-            } else {
-                text.append("；文件中找不到相近内容，请确认文件与片段是否来自同一基线提交");
-            }
-            return text.toString();
-        }
-    }
-
     /**
      * 在 {@code current} 中用 {@code oldText} 定位并替换成 {@code newText}。
      *
-     * @throws ApplyException 片段找不到或多处命中
+     * @throws PatchApplyException 片段找不到或多处命中
      */
     public static String replace(String path, String current, String oldText, String newText) {
         String replacement = newText == null ? "" : newText;
@@ -75,7 +36,7 @@ public final class PatchApplier {
         int exact = current.indexOf(oldText);
         if (exact >= 0) {
             if (current.indexOf(oldText, exact + oldText.length()) >= 0) {
-                throw new ApplyException(path, "片段在文件中出现多次，需要更长的唯一上下文",
+                throw new PatchApplyException(path, "片段在文件中出现多次，需要更长的唯一上下文",
                         occurrences(current, oldText, 5));
             }
             return current.substring(0, exact) + replacement + current.substring(exact + oldText.length());
@@ -96,11 +57,11 @@ public final class PatchApplier {
                 return current.substring(0, start) + replacement + current.substring(end);
             }
             if (matches.size() > 1) {
-                throw new ApplyException(path, "片段按行匹配到多处（" + matches.size()
+                throw new PatchApplyException(path, "片段按行匹配到多处（" + matches.size()
                         + " 处），需要更长的唯一上下文", matches.stream().map(i -> i + 1).toList());
             }
         }
-        throw new ApplyException(path, "片段与基线文件内容不一致（换行/缩进/上下文均不匹配）",
+        throw new PatchApplyException(path, "片段与基线文件内容不一致（换行/缩进/上下文均不匹配）",
                 candidates(lines, oldLines));
     }
 

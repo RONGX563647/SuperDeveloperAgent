@@ -1,5 +1,8 @@
 package top.rongx.agent.domain.conversation;
 
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+
 /**
  * 一个会话（工作区 = 项目，项目下可以有很多会话）。
  *
@@ -37,13 +40,13 @@ public record Conversation(
 
     public Conversation {
         if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("conversation id 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "conversation id 不能为空");
         }
         if (projectId == null || projectId.isBlank()) {
-            throw new IllegalArgumentException("projectId 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "projectId 不能为空");
         }
         if (ownerUserId == null || ownerUserId.isBlank()) {
-            throw new IllegalArgumentException("ownerUserId 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "ownerUserId 不能为空");
         }
         title = title == null || title.isBlank() ? "新会话" : title.trim();
         kind = kind == null ? ConversationKind.NORMAL : kind;

@@ -19,11 +19,11 @@
 | A7 | §4 | `tools` 不得依赖 `ProcessBuilder` | ArchUnit |
 | A9 | §10.1 | 禁止字段注入 `@Autowired` | ArchUnit |
 | R01–R15 | §5/§7/§10 | 禁令扫描（见下表） | 正则 |
-| EC1–EC5 | §1.1 / §5.3 | 异常码契约：业务异常分组、禁止通用异常携带错误码、存量棘轮 | 正则 + 字节码 |
+| EC1–EC5 | §1.1 / §5.3 | 异常码契约：业务异常分组、禁止通用异常携带错误码、通用 throw 清零 | 正则 + 字节码 |
 | C1–C5 | §1.1 A1 | 决策面配置不得含写凭证 | 正则 |
 | M1 | §5.2 | 已发布的迁移文件不得修改 | sha256 基线 |
 
-**R 规则**：R01 `Runtime.exec` · R02 `sh -c`/`bash -c`/`cmd /c` · R03 MyBatis `${}` · R04 `new Thread(` · R05 字段注入 · R06 `double` 金额 · R07 日志打凭证 · R08 `SELECT *` · R09 `java.util.Date` · R10 空 `catch {}` · R11 `System.out` · R12 `ScriptEngine`/`eval` · R13 `is_deleted` · R14 错误码字面量（`"E-xxx"`） · R15 通用 `throw new` 未配业务异常（基线棘轮，只减不增）。
+**R 规则**：R01 `Runtime.exec` · R02 `sh -c`/`bash -c`/`cmd /c` · R03 MyBatis `${}` · R04 `new Thread(` · R05 字段注入 · R06 `double` 金额 · R07 日志打凭证 · R08 `SELECT *` · R09 `java.util.Date` · R10 空 `catch {}` · R11 `System.out` · R12 `ScriptEngine`/`eval` · R13 `is_deleted` · R14 错误码字面量（`"E-xxx"`） · R15 通用 `throw new` 未配业务异常（已清零，新增即失败）。
 
 > 只扫描**生产代码**（`src/main/java`、`src/main/resources`），测试代码不受 R01–R15 约束。
 
@@ -86,15 +86,19 @@ throw new EnvironmentException(ErrorCode.DRY_RUN_FAILED, "dry-run 未通过");
 | EC1 | 错误码码段（E-1xx…E-8xx）与业务分组一致，每个分组都有异常类 |
 | EC2 | 禁止 `new IllegalArgumentException/IllegalStateException/RuntimeException(ErrorCode…)`，零容忍 |
 | EC3 | 业务异常只能位于 `domain/error`（策略异常允许 `domain/policy`） |
-| EC5 | 存量通用 `throw new` 按 `<路径> <数量>` 记录在 `error-code-baseline.txt`，只减不增 |
+| EC5 | 生产代码通用 `throw new` 已清零；基线必须保持为空，新增即失败 |
 
-基线更新（迁移后必须同步收紧）：
+存量已全部迁移：参数校验、状态断言、内部失败分别映射到各组的
+`*_INVALID_INPUT` / `*_INVALID_STATE` / `*_INTERNAL` 错误码，并由 `ErrorKind`
+保持原 HTTP 语义（400 / 409 / 500）。
+
+基线更新（仅允许收紧，正常应为空）：
 
 ```bash
 mvn -q -pl spec-checks -Dtest=ErrorCodeContractTest -Derror.code.baseline.update=true test
 ```
 
-纯编程不变量（null 校验、状态断言）可以继续用 `IllegalArgumentException`，但**不得携带 `ErrorCode`**；
+只有错误码契约自身的守卫（`ErrorGroup.of`、`PlatformException` 构造器）保留通用异常；
 确需豁免时在 `throw` 上一行写 `// spec-ignore: R15 <原因>`。
 
 ---

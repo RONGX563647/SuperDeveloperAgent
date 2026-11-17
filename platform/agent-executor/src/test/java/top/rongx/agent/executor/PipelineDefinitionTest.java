@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * pipeline.yml v3 解析测试：deploy 段（方案 C）必须被正确读出。
@@ -173,7 +174,7 @@ class PipelineDefinitionTest {
                   - id: deploy
                     type: deploy
                 """);
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+        org.junit.jupiter.api.Assertions.assertThrows(PlatformException.class,
                 () -> PipelineDefinition.load(repo));
     }
 
@@ -198,7 +199,7 @@ class PipelineDefinitionTest {
                     type: health
                     expected: ok
                 """);
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+        org.junit.jupiter.api.Assertions.assertThrows(PlatformException.class,
                 () -> PipelineDefinition.load(repo));
     }
 }

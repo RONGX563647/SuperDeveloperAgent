@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * GitWorktreeManager 真实集成测试：全部用本地目录 + 本地 bare 模拟（无网络、无真实远端）。
@@ -48,7 +49,7 @@ class GitWorktreeManagerTest {
         Files.writeString(dir.resolve("README.md"), "v2\n");
         exec(dir, "git", "add", "-A");
         exec(dir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v2");
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> m.mergeFastForward(dir, "agent/fix-1", base));
     }
 

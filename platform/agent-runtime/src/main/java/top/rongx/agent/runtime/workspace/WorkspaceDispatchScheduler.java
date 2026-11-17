@@ -22,6 +22,8 @@ import top.rongx.agent.domain.conversation.DispatchNode;
 import top.rongx.agent.domain.conversation.DispatchNodeResult;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * DAG 并行调度器：把"串行 send + wait"换成"就绪即派发、并行等待、提前终止"。
@@ -453,7 +455,7 @@ public final class WorkspaceDispatchScheduler {
         if (visited != nodes.size()) {
             List<String> cycle = nodes.keySet().stream()
                     .filter(id -> indegree.get(id) > 0).toList();
-            throw new IllegalArgumentException("调度计划存在循环依赖：" + cycle);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "调度计划存在循环依赖：" + cycle);
         }
     }
 

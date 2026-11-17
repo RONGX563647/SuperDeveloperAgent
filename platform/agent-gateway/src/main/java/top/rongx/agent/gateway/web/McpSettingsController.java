@@ -30,6 +30,8 @@ import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.settings.McpServer;
 import top.rongx.agent.domain.settings.McpServerRepository;
 import top.rongx.agent.gateway.auth.CurrentUser;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * MCP 接入（设置页）。
@@ -89,7 +91,7 @@ public class McpSettingsController {
     public Map<String, Object> test(@PathVariable String id) {
         requireWrite();
         McpServer server = servers.find(id).orElseThrow(
-                () -> new IllegalArgumentException("MCP 服务不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "MCP 服务不存在：" + id));
         return probe(server.transport(), server.command(), server.url(), servers.headersOf(id));
     }
 
@@ -134,7 +136,7 @@ public class McpSettingsController {
     public Map<String, Object> tools(@PathVariable String id) {
         requireWrite();
         McpServer server = servers.find(id).orElseThrow(
-                () -> new IllegalArgumentException("MCP 服务不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "MCP 服务不存在：" + id));
         List<String> disabled = servers.disabledToolsOf(id);
         long start = System.nanoTime();
         Map<String, Object> out = new LinkedHashMap<>();
@@ -171,7 +173,7 @@ public class McpSettingsController {
                                            @RequestBody Map<String, Object> body) {
         requireWrite();
         servers.find(id).orElseThrow(
-                () -> new IllegalArgumentException("MCP 服务不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "MCP 服务不存在：" + id));
         List<String> disabled = stringList(body == null ? null : body.get("disabled"));
         servers.setDisabledTools(id, disabled);
         return Map.of("ok", true, "disabled", servers.disabledToolsOf(id));
@@ -236,7 +238,7 @@ public class McpSettingsController {
                 return out;
             }
             if (urlValue == null || urlValue.isBlank()) {
-                throw new IllegalArgumentException("http 传输必须填写服务 URL");
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "http 传输必须填写服务 URL");
             }
             JsonNode result = initialize(urlValue, headers);
             JsonNode info = result.path("serverInfo");
@@ -298,7 +300,7 @@ public class McpSettingsController {
     private JsonNode parseRpc(String body) throws Exception {
         String text = body == null ? "" : body.trim();
         if (text.isEmpty()) {
-            throw new IllegalArgumentException("MCP 服务返回空响应");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "MCP 服务返回空响应");
         }
         if (text.startsWith("{")) {
             return mapper.readTree(text);
@@ -312,7 +314,7 @@ public class McpSettingsController {
                 }
             }
         }
-        throw new IllegalArgumentException("无法解析 MCP 响应（不是 JSON 或 SSE）");
+        throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "无法解析 MCP 响应（不是 JSON 或 SSE）");
     }
 
     /** 命令是否在 PATH 上（只看文件名，不执行任何命令）。 */

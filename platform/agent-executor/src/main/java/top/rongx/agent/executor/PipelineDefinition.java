@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.yaml.snakeyaml.Yaml;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.BuildException;
 
 /**
  * 流水线定义（来自项目仓库 {@code ci/pipeline.yml}，随代码版本化）。
@@ -133,7 +135,7 @@ public record PipelineDefinition(String name, List<StageDef> stages,
         try {
             content = java.nio.file.Files.readString(file);
         } catch (Exception e) {
-            throw new IllegalArgumentException("无法读取 " + file + "：" + e.getMessage());
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "无法读取 " + file + "：" + e.getMessage());
         }
         return parse(content, file.toString());
     }
@@ -149,16 +151,16 @@ public record PipelineDefinition(String name, List<StageDef> stages,
         try {
             loaded = new Yaml().load(content);
         } catch (Exception e) {
-            throw new IllegalArgumentException(origin + " 不是合法 YAML：" + e.getMessage(), e);
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, origin + " 不是合法 YAML：" + e.getMessage(), e);
         }
         if (!(loaded instanceof Map<?, ?> root)) {
-            throw new IllegalArgumentException(origin + " 不是合法的 YAML 映射");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, origin + " 不是合法的 YAML 映射");
         }
         String name = str(root, "name", "pipeline");
         List<StageDef> stages = parseStages(root.get("stages"), "stages");
         List<StageDef> onFailure = parseStages(root.get("on-failure"), "on-failure");
         if (stages.isEmpty()) {
-            throw new IllegalArgumentException(origin + " 没有定义任何 stage");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, origin + " 没有定义任何 stage");
         }
         return new PipelineDefinition(name, List.copyOf(stages), List.copyOf(onFailure),
                 parseDeploy(root.get("deploy")));
@@ -212,21 +214,19 @@ public record PipelineDefinition(String name, List<StageDef> stages,
             String name = str(m, "name", "").trim();
             String image = m.get("image") == null ? "" : String.valueOf(m.get("image")).trim();
             if (name.isEmpty() || image.isEmpty()) {
-                throw new IllegalArgumentException("deploy.services 每项必须声明 name 与 image");
+                throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "deploy.services 每项必须声明 name 与 image");
             }
             if (!name.matches("[a-z0-9][a-z0-9-]{0,31}")) {
-                throw new IllegalArgumentException(
-                        "deploy.services.name 只能用小写字母/数字/短横线：" + name);
+                throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "deploy.services.name 只能用小写字母/数字/短横线：" + name);
             }
             for (ServiceSpec existing : out) {
                 if (existing.name().equals(name)) {
-                    throw new IllegalArgumentException("deploy.services 服务名重复：" + name);
+                    throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "deploy.services 服务名重复：" + name);
                 }
             }
             int containerPort = m.get("containerPort") instanceof Number c ? c.intValue() : 0;
             if (containerPort <= 0 || containerPort > 65535) {
-                throw new IllegalArgumentException(
-                        "deploy.services[" + name + "].containerPort 必须是 1–65535");
+                throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "deploy.services[" + name + "].containerPort 必须是 1–65535");
             }
             int hostPort = m.get("hostPort") instanceof Number h ? h.intValue() : 0;
             String volumePath = m.get("volume") == null ? null : String.valueOf(m.get("volume"));
@@ -262,7 +262,7 @@ public record PipelineDefinition(String name, List<StageDef> stages,
             if (name != null && !name.isBlank()) {
                 String key = name.trim();
                 if (!key.matches("[A-Za-z_][A-Za-z0-9_]*")) {
-                    throw new IllegalArgumentException("env-required 变量名非法：" + key);
+                    throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "env-required 变量名非法：" + key);
                 }
                 if (!out.contains(key)) {
                     out.add(key);
@@ -284,7 +284,7 @@ public record PipelineDefinition(String name, List<StageDef> stages,
             String type = str(m, "type", "action");
             String action = m.get("action") == null ? null : str(m, "action", "");
             if ("action".equals(type) && (action == null || action.isBlank())) {
-                throw new IllegalArgumentException(field + " 中 action 类型必须声明 action 名");
+                throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, field + " 中 action 类型必须声明 action 名");
             }
             out.add(new StageDef(
                     str(m, "id", "stage-" + (out.size() + 1)),
@@ -317,8 +317,7 @@ public record PipelineDefinition(String name, List<StageDef> stages,
         try {
             return Integer.parseInt(text);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(
-                    "health.expected 只能是状态码或 2xx，实际为：" + text);
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "health.expected 只能是状态码或 2xx，实际为：" + text);
         }
     }
 

@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-17T18:41:10+08:00",
-  "sourceCommit": "477b15ffa65104a011379910397ad0be4d53db7d",
+  "generatedAt": "2026-11-17T18:55:46+08:00",
+  "sourceCommit": "5d25304b660f4104483a3080117a486b3ef35ac0",
   "docs": [
     {
       "level": "L1",
@@ -96,8 +96,8 @@
       "symbol": "BuiltInPipelineEngine#trigger",
       "source": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
       "module": "agent-executor",
-      "start": 1107,
-      "end": 1201
+      "start": 1108,
+      "end": 1203
     },
     {
       "id": "gateway-chat-controller/chat-stream",
@@ -106,8 +106,8 @@
       "symbol": "ChatController#chat",
       "source": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
       "module": "agent-gateway",
-      "start": 122,
-      "end": 209
+      "start": 124,
+      "end": 211
     },
     {
       "id": "gateway-deploy-gate/require-if-needed",
@@ -146,8 +146,8 @@
       "symbol": "ProjectIntakeService#submit",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java",
       "module": "agent-infra",
-      "start": 140,
-      "end": 156
+      "start": 141,
+      "end": 157
     },
     {
       "id": "runtime-agent-factory/create-chat",
@@ -166,8 +166,8 @@
       "symbol": "ChatService#stream",
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
       "module": "agent-runtime",
-      "start": 77,
-      "end": 100
+      "start": 79,
+      "end": 102
     },
     {
       "id": "state-agent-state-store/save",
@@ -176,8 +176,8 @@
       "symbol": "EncryptedAgentStateStore#save",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
       "module": "agent-infra",
-      "start": 70,
-      "end": 88
+      "start": 72,
+      "end": 90
     },
     {
       "id": "state-context-trimmer/trim",
@@ -196,8 +196,8 @@
       "symbol": "DeployTools#envStatus",
       "source": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
       "module": "agent-tools",
-      "start": 72,
-      "end": 91
+      "start": 74,
+      "end": 93
     }
   ]
 }

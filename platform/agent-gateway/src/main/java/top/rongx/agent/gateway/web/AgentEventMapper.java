@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * AgentScope 事件 → 前端 DTO。
@@ -87,7 +88,7 @@ public class AgentEventMapper {
                 }
             }
             dto.put("payload", payload);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             dto.put("payload", Map.of("text", String.valueOf(event)));
         }
         return dto;

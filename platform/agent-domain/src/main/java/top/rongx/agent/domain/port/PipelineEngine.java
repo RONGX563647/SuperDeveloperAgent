@@ -6,6 +6,8 @@ import java.util.Optional;
 import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 流水线引擎端口（由执行面实现）。
@@ -217,7 +219,7 @@ public interface PipelineEngine {
      * @return runId
      */
     default String retryStage(String runId, String stageId) {
-        throw new IllegalArgumentException("当前引擎不支持阶段重试");
+        throw new RunException(ErrorCode.RUN_INVALID_INPUT, "当前引擎不支持阶段重试");
     }
 
     /**

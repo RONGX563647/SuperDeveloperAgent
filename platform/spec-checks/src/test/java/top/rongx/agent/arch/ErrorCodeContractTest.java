@@ -36,7 +36,7 @@ import top.rongx.agent.domain.error.RunException;
  * 异常码强制契约。
  *
  * <p>EC1 码段与业务分组一致；EC2 禁止通用异常携带错误码；EC3 业务异常归位且分组绑定；
- * EC5 存量通用 throw 走基线棘轮（只减不增）。
+ * EC5 通用 throw 清零（基线必须为空，新增即失败）。
  *
  * <p>基线更新：{@code mvn -pl spec-checks -Dtest=ErrorCodeContractTest
  * -Derror.code.baseline.update=true test}
@@ -134,7 +134,7 @@ class ErrorCodeContractTest {
     }
 
     @Test
-    @DisplayName("EC5：存量通用 throw 只减不增（基线棘轮）")
+    @DisplayName("EC5：通用 throw 已清零，基线只允许为空")
     void genericThrowBaselineOnlyShrinks() throws IOException {
         Map<String, Integer> actual = countGenericThrows(specRoot());
         if (Boolean.getBoolean("error.code.baseline.update")) {

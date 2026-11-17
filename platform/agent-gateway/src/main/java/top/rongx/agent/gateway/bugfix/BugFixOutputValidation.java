@@ -7,6 +7,8 @@ import java.util.Locale;
 import java.util.Set;
 import top.rongx.agent.domain.bugfix.BugFixEdit;
 import top.rongx.agent.gateway.bugfix.structured.FixOutput;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 结构化输出的语义校验：schema 只能约束类型/格式，不能保证“路径安全”“证据非空”“不能同时
@@ -63,30 +65,30 @@ public final class BugFixOutputValidation {
      */
     public static List<BugFixEdit> edits(FixOutput output) {
         if (output == null) {
-            throw new IllegalArgumentException("修复结果为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "修复结果为空");
         }
         List<FixOutput.Edit> edits = output.edits() == null ? List.of() : output.edits();
         List<FixOutput.FileOutput> files = output.files() == null ? List.of() : output.files();
         if (edits.isEmpty() == files.isEmpty()) {
-            throw new IllegalArgumentException(edits.isEmpty()
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, edits.isEmpty()
                     ? "修复结果没有 edits 或 files" : "edits 与 files 只能二选一");
         }
         List<BugFixEdit> result = new ArrayList<>();
         if (!edits.isEmpty()) {
             if (edits.size() > MAX_EDITS) {
-                throw new IllegalArgumentException("改动过多（" + edits.size() + "），上限 "
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "改动过多（" + edits.size() + "），上限 "
                         + MAX_EDITS + " 处");
             }
             int index = 0;
             for (FixOutput.Edit edit : edits) {
                 index++;
                 if (edit == null) {
-                    throw new IllegalArgumentException("第 " + index + " 条改动为空");
+                    throw new RunException(ErrorCode.RUN_INVALID_INPUT, "第 " + index + " 条改动为空");
                 }
                 String path = safePath(edit.path());
                 String oldText = edit.oldText();
                 if (oldText == null || oldText.isEmpty()) {
-                    throw new IllegalArgumentException("第 " + index + " 条改动缺少 old：" + path);
+                    throw new RunException(ErrorCode.RUN_INVALID_INPUT, "第 " + index + " 条改动缺少 old：" + path);
                 }
                 result.add(BugFixEdit.replace(path, oldText,
                         edit.newText() == null ? "" : edit.newText()));
@@ -94,7 +96,7 @@ public final class BugFixOutputValidation {
             return result;
         }
         if (files.size() > MAX_FILES) {
-            throw new IllegalArgumentException("改动文件过多（" + files.size() + "），上限 "
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "改动文件过多（" + files.size() + "），上限 "
                     + MAX_FILES + " 个");
         }
         Set<String> seen = new LinkedHashSet<>();
@@ -102,11 +104,11 @@ public final class BugFixOutputValidation {
         for (FixOutput.FileOutput file : files) {
             index++;
             if (file == null) {
-                throw new IllegalArgumentException("第 " + index + " 个文件为空");
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "第 " + index + " 个文件为空");
             }
             String path = safePath(file.path());
             if (!seen.add(path)) {
-                throw new IllegalArgumentException("文件重复提交：" + path);
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件重复提交：" + path);
             }
             result.add(BugFixEdit.full(path, file.content() == null ? "" : file.content()));
         }
@@ -122,21 +124,21 @@ public final class BugFixOutputValidation {
             path = path.substring(2);
         }
         if (path.isBlank()) {
-            throw new IllegalArgumentException("文件路径不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件路径不能为空");
         }
         if (path.startsWith("/") || path.matches("^[A-Za-z]:.*")) {
-            throw new IllegalArgumentException("不允许绝对路径：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "不允许绝对路径：" + path);
         }
         if (path.equals("..") || path.startsWith("../") || path.contains("/../")) {
-            throw new IllegalArgumentException("路径不允许逃逸仓库：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径不允许逃逸仓库：" + path);
         }
         String lower = path.toLowerCase(Locale.ROOT);
         if (lower.equals(".git") || lower.startsWith(".git/") || lower.contains("/.git/")) {
-            throw new IllegalArgumentException(".git 目录不允许修改：" + path);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, ".git 目录不允许修改：" + path);
         }
         for (int i = 0; i < path.length(); i++) {
             if (Character.isISOControl(path.charAt(i))) {
-                throw new IllegalArgumentException("路径包含非法控制字符：" + raw);
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径包含非法控制字符：" + raw);
             }
         }
         return path;

@@ -6,6 +6,8 @@ import top.rongx.agent.domain.bugfix.BugFixDeployPort;
 import top.rongx.agent.domain.bugfix.BugFixPolicy;
 import top.rongx.agent.domain.bugfix.BugFixPolicyStore;
 import top.rongx.agent.domain.bugfix.BugFixRun;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 自动修复的部署适配器：复用平台运维（部署）Agent 把指定提交发布到测试环境。
@@ -30,7 +32,7 @@ public class ChatBugFixDeploy implements BugFixDeployPort {
     public String deploy(BugFixRun run, String sha) {
         BugFixPolicy policy = policies.load(run.projectId());
         if (BugFixPolicy.productionLike(policy.testEnv())) {
-            throw new IllegalStateException("自动修复禁止部署到生产环境：" + policy.testEnv());
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复禁止部署到生产环境：" + policy.testEnv());
         }
         String purpose = switch (run.stage()) {
             case REPRO_DEPLOY -> "复现 Bug";
@@ -57,7 +59,7 @@ public class ChatBugFixDeploy implements BugFixDeployPort {
                 PIPELINE, policy.bindingId());
         String text = agents.run(run, BugFixAgentPort.Role.DEPLOY, prompt);
         if (text == null || text.isBlank()) {
-            throw new IllegalStateException("运维 Agent 未返回部署结果");
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运维 Agent 未返回部署结果");
         }
         return text;
     }

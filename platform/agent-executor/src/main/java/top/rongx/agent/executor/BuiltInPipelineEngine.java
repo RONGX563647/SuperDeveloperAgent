@@ -60,6 +60,7 @@ import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.executor.RunHistoryStore.RunSnapshot;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 内置流水线引擎：把「检出 → 构建 → 测试 → 镜像 → 部署 → 健康检查」串成一次可追溯的运行。
@@ -1023,14 +1024,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return new PipelineDefinitionResolver.Resolved(runDir,
                         PipelineDefinition.load(runDir),
                         PipelineDefinitionResolver.Source.REPO, "定义来自本次提交");
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 return badDefinition(state, e);
             }
         }
         try {
             Path repoRoot = repoLocator == null ? null : repoLocator.repoDir(state.projectId).orElse(null);
             return resolver.resolveForRun(state.projectId, runDir, repoRoot, state.env);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return badDefinition(state, e);
         } catch (RuntimeException e) {
             String message = "无法准备流水线定义（自动生成失败）：" + e.getMessage()
@@ -1093,7 +1094,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .anyMatch(s -> "deploy".equals(s.type()) || "stack_deploy".equals(s.action()));
     }
 
-    private PipelineDefinitionResolver.Resolved badDefinition(RunState state, IllegalArgumentException e) {
+    private PipelineDefinitionResolver.Resolved badDefinition(RunState state, RuntimeException e) {
         String message = "ci/pipeline.yml 有语法/结构错误，无法执行：" + e.getMessage()
                 + "（stage 只能引用白名单动作，见《流水线执行器契约》）。";
         state.log.append('[').append(E_BAD_PIPELINE).append("] ").append(message).append('\n');
@@ -1107,12 +1108,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public String trigger(String projectId, String pipelineId, Map<String, String> params) {
         List<String> available = pipelines(projectId);
         if (!available.contains(pipelineId)) {
-            throw new IllegalArgumentException("流水线不在白名单：" + pipelineId
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "流水线不在白名单：" + pipelineId
                     + "（可用：" + String.join(", ", available) + "）");
         }
         String sha = params.get("gitSha");
         if (sha == null || !sha.matches("[0-9a-f]{7,40}")) {
-            throw new IllegalArgumentException("gitSha 非法（需 7-40 位小写十六进制）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "gitSha 非法（需 7-40 位小写十六进制）");
         }
         String env = normalizeEnv(params.get("env"));
         // 带 dryRunHash 的触发必须自证"预检仍然有效"：哈希由配方/提交/环境/密钥版本共同决定。
@@ -1167,7 +1168,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 || "1".equals(String.valueOf(params.get("tag")));
         state.branch = normalizeBranchName(params.get("branch"));
         if (state.deployTagged && state.deployVersion == null) {
-            throw new IllegalArgumentException("打 tag 时必须填写版本号（例如 0.1.0）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT,
+                    "打 tag 时必须填写版本号（例如 0.1.0）");
         }
         if (state.deployVersion != null) {
             ReleaseVersion version = ReleaseVersion.parse(state.deployVersion);
@@ -1207,8 +1209,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         String normalized = env.trim().toLowerCase();
         if (!EnvNames.ALL.contains(normalized)) {
-            throw new IllegalArgumentException(
-                    "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "未知环境：" + env + "（可选 dev / test / prod；不会自动回落到 test）");
         }
         return normalized;
     }
@@ -1474,7 +1475,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public boolean deleteHistory(String runId) {
         RunState state = runs.get(runId);
         if (state != null && !state.status.isTerminal()) {
-            throw new IllegalArgumentException("运行进行中，不能删除");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "运行进行中，不能删除");
         }
         // 失败运行可能保留了构建现场，删除历史时一并清掉，避免 worktree 越积越多
         if (state != null && state.keptRunDir != null && state.keptBare != null) {
@@ -1540,7 +1541,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 try {
                     restored.definitionSource =
                             PipelineDefinitionResolver.Source.valueOf(snap.definitionSource());
-                } catch (IllegalArgumentException ignored) {
+                } catch (PlatformException | IllegalArgumentException ignored) {
                     // 未知来源（旧文件或枚举演进）：保持 null
                 }
             }
@@ -2180,7 +2181,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         Path wtParent;
         if (repoLocator != null) {
             bare = repoLocator.repoDir(state.projectId).orElseThrow(
-                    () -> new IllegalStateException("项目仓库不存在（projectId=" + state.projectId
+                    () -> new BuildException(ErrorCode.BUILD_INVALID_STATE, "项目仓库不存在（projectId=" + state.projectId
                             + "），请先通过「接入项目」完成登记"));
             wtParent = repoLocator.worktreeRoot(state.projectId).orElseThrow();
             if (repoLocator.modeOf(state.projectId) == top.rongx.agent.domain.port.ProjectRepoLocator.StorageMode.DIRECT) {
@@ -2206,7 +2207,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         try {
             if (!Files.isDirectory(bare.resolve(".git"))
                     && !Files.isDirectory(bare.resolve("objects"))) {
-                throw new IllegalStateException("项目仓库不存在：" + bare
+                throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "项目仓库不存在：" + bare
                         + "（请先通过「接入项目」完成登记）");
             }
             if (state.deployImage != null) {
@@ -2401,13 +2402,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public String retryStage(String runId, String stageId) {
         RunState state = runs.get(runId);
         if (state == null) {
-            throw new IllegalArgumentException("运行不存在：" + runId);
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "运行不存在：" + runId);
         }
         if (!state.status.isTerminal()) {
-            throw new IllegalArgumentException("运行仍在进行中，不能重试");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "运行仍在进行中，不能重试");
         }
         if (state.status != StageStatus.FAILED) {
-            throw new IllegalArgumentException("只有失败的运行可以重试");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "只有失败的运行可以重试");
         }
         if (isLocalDev(state)) {
             state.stages.clear();
@@ -2424,7 +2425,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         PipelineDefinition definition = state.definition;
         Path runDir = state.keptRunDir;
         if (definition == null || runDir == null || !Files.isDirectory(runDir)) {
-            throw new IllegalArgumentException("构建现场已清理，无法从该阶段继续，请整条重跑");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "构建现场已清理，无法从该阶段继续，请整条重跑");
         }
         List<PipelineDefinition.StageDef> all = definition.stages();
         int idx = -1;
@@ -2435,7 +2436,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
         }
         if (idx < 0) {
-            throw new IllegalArgumentException("阶段不可重试：" + stageId + "（请整条重跑）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "阶段不可重试：" + stageId + "（请整条重跑）");
         }
         // 保留该阶段之前的结果，并回收该阶段及之后产生的产物（避免重试后产物重复）
         prepareResume(state, definition, idx);
@@ -2533,7 +2534,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         String value = raw.trim();
         if (!value.matches("[A-Za-z0-9._/-]{1,120}") || value.startsWith("-") || value.contains("..")) {
-            throw new IllegalArgumentException("分支名不合法：" + raw);
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "分支名不合法：" + raw);
         }
         return value;
     }
@@ -2547,25 +2548,25 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private void requireVersionBranch(RunState state, ReleaseVersion version, String sha) {
         String branch = state.branch;
         if (branch == null) {
-            throw new IllegalArgumentException("正式发布必须选择版本分支（例如 "
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "正式发布必须选择版本分支（例如 "
                     + version.branchName() + "）");
         }
         if (!ReleaseVersion.isVersionBranch(branch)) {
-            throw new IllegalArgumentException("正式发布只能使用版本分支 x.y.0-snapshot（当前："
-                    + branch + "）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT,
+                    "正式发布只能使用版本分支 x.y.0-snapshot（当前：" + branch + "）");
         }
         if (!version.onBranch(branch)) {
-            throw new IllegalArgumentException("版本 " + version + " 属于版本线 " + version.line()
-                    + "，只能发布到分支 " + version.branchName() + "（当前：" + branch + "）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "版本 " + version + " 属于版本线 "
+                    + version.line() + "，只能发布到分支 " + version.branchName() + "（当前：" + branch + "）");
         }
         if (repoLocator == null || !repoLocator.isCommitOnBranch(state.projectId, branch, sha)) {
-            throw new IllegalArgumentException("提交 " + shortSha(sha) + " 不在分支 "
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "提交 " + shortSha(sha) + " 不在分支 "
                     + branch + " 上，无法在该分支打版本标签");
         }
         String problem = versionSequenceProblem(version,
                 repoLocator.listTags(state.projectId, 500));
         if (problem != null) {
-            throw new IllegalArgumentException(problem);
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, problem);
         }
     }
 
@@ -2639,7 +2640,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 Files.createDirectories(dir);
                 Files.writeString(portFile, String.valueOf(candidate));
             } catch (IOException e) {
-                throw new IllegalStateException("无法记录版本端口：" + e.getMessage(), e);
+                throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "无法记录版本端口：" + e.getMessage(), e);
             }
             state.log.append("[port] 版本 ").append(state.deployVersion)
                     .append(" 分配端口 ").append(candidate)
@@ -2647,7 +2648,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.deployHostPort = candidate;
             return candidate;
         }
-        throw new IllegalStateException("端口分配失败：从 " + desired
+        throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "端口分配失败：从 " + desired
                 + " 起 200 个端口都不可用（版本 " + state.deployVersion + "）");
     }
 
@@ -3149,7 +3150,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                         posix(runDir), state.gitSha))));
         if (add.result().status() != StageStatus.SUCCEEDED) {
             // 新推送的提交可能还没进 bare：提示前置同步
-            throw new IllegalStateException("git worktree add " + state.gitSha
+            throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "git worktree add " + state.gitSha
                     + " 失败：" + add.result().errorSummary()
                     + "（若为最新提交，请先在项目详情里执行「同步到平台」）");
         }
@@ -3264,7 +3265,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
 
             ActionId action = ActionId.fromWire(stage.action()).orElseThrow(
-                    () -> new IllegalArgumentException("未知动作：" + stage.action()));
+                    () -> new BuildException(ErrorCode.BUILD_INVALID_INPUT, "未知动作：" + stage.action()));
             // 配方根 = 定义所在的根：仓库定义 → 检出目录；平台定义 → 平台目录。
             // 命令本身仍在 stageDir（检出目录 / 子目录）里执行。
             Optional<ActionSpec> resolved = recipes.resolve(state.recipeRoot, action);
@@ -3534,7 +3535,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return host;
             }
             // 仓库自己写的 docker 配方不给宿主执行权：那是绕过沙箱的通道。
-            throw new IllegalStateException("阶段 " + stage.id() + "（" + stage.action()
+            throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "阶段 " + stage.id() + "（" + stage.action()
                     + "）需要宿主 Docker，但配方来自仓库（" + spec.source().ref()
                     + "）。请改用平台侧 ci/actions.yml 的配方，或删除仓库里的同名配方");
         }
@@ -4114,7 +4115,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 }
             }
             if (found < 0) {
-                throw new IllegalStateException("端口分配失败：从 " + desired
+                throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "端口分配失败：从 " + desired
                         + " 起 200 个端口都不可用（宿主端口耗尽）");
             }
             state.log.append("[port] ").append(candidate).append(" 被占用 → 分配 ").append(found)
@@ -4147,7 +4148,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
             port = allocateHostPort(state, DeployTarget.HOST, port + 1, containerPort);
         }
-        throw new IllegalStateException("端口分配失败：从 " + desired + " 起找不到可用端口");
+        throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "端口分配失败：从 " + desired + " 起找不到可用端口");
     }
 
     private static boolean portFree(int port) {
@@ -4535,7 +4536,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     });
             return java.util.HexFormat.of().formatHex(md.digest());
         } catch (Exception e) {
-            throw new IllegalStateException("环境变量快照摘要失败", e);
+            throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "环境变量快照摘要失败", e);
         }
     }
 
@@ -4545,7 +4546,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return java.util.HexFormat.of().formatHex(
                     md.digest(String.valueOf(value).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         } catch (Exception e) {
-            throw new IllegalStateException("SHA-256 计算失败", e);
+            throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "SHA-256 计算失败", e);
         }
     }
 

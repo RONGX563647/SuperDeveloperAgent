@@ -28,6 +28,8 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.runtime.workspace.ConversationManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 工作区调度 Agent 的对话入口（SSE）。
@@ -85,7 +87,7 @@ public class WorkspaceSuperController {
         Conversation supervisor = conversations.ensureSupervisor(projectId, userId);
         if (request.sessionId() != null && !request.sessionId().isBlank()
                 && !request.sessionId().equals(supervisor.id())) {
-            throw new IllegalArgumentException("调度会话 id 不匹配");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "调度会话 id 不匹配");
         }
         // 打开工作区时把调度会话的环境同步为当前选择：新建会话默认沿用该环境
         if (!ctx.env().equals(supervisor.env())) {

@@ -1,6 +1,8 @@
 package top.rongx.agent.domain.policy;
 
 import top.rongx.agent.domain.tool.ToolLevel;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 分环境策略：同一动作在不同环境得到不同裁决，而不是全局二元开关。
@@ -25,7 +27,7 @@ public record EnvPolicy(
     public EnvPolicy {
         if ("prod".equals(env) && l3 == PolicyDecision.ALLOW) {
             // 生产 L3 永远不能自动放行；即使配置写错也在启动/构造时失败。
-            throw new IllegalArgumentException("prod 的 L3 策略不能为 ALLOW");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "prod 的 L3 策略不能为 ALLOW");
         }
     }
 

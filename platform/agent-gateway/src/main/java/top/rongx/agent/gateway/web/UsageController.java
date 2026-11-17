@@ -11,6 +11,8 @@ import top.rongx.agent.domain.settings.TokenUsageRepository;
 import top.rongx.agent.domain.settings.TokenUsageRepository.UsageSummary;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.runtime.workspace.ConversationManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * token 用量查询：会话累计 + 全局聚合（设置页「用量统计」）。
@@ -37,7 +39,7 @@ public class UsageController {
     public Map<String, Object> session(@PathVariable String sessionId) {
         String userId = currentUser.requireUserId();
         conversations.findOwned(sessionId, userId).orElseThrow(
-                () -> new IllegalArgumentException("会话不存在或无权访问：" + sessionId));
+                () -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + sessionId));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("sessionId", sessionId);
         out.put("totals", usage.sessionTotals(sessionId));

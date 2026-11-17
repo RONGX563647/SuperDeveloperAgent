@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 凭据加解密：往返、掩码、篡改检测。 */
 class SecretBoxTest {
@@ -48,7 +49,7 @@ class SecretBoxTest {
         String tampered = sealed.cipherB64().substring(0, 4)
                 + (sealed.cipherB64().charAt(4) == 'A' ? 'B' : 'A')
                 + sealed.cipherB64().substring(5);
-        assertThrows(IllegalStateException.class,
+        assertThrows(PlatformException.class,
                 () -> box.decrypt(tampered, sealed.ivB64()));
     }
 

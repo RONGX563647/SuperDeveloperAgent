@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.settings.CapabilityInstaller;
 import top.rongx.agent.domain.settings.CapabilityMarket;
 import top.rongx.agent.gateway.auth.CurrentUser;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 能力市场（设置页「MCP 市场」「Skill 市场」）。
@@ -61,7 +63,7 @@ public class CapabilityMarketController {
     public CapabilityInstaller.Result install(@RequestBody InstallRequest request) {
         requireWrite();
         if (request == null || request.id() == null || request.id().isBlank()) {
-            throw new IllegalArgumentException("能力 id 不能为空");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "能力 id 不能为空");
         }
         return installer.install(request.id());
     }

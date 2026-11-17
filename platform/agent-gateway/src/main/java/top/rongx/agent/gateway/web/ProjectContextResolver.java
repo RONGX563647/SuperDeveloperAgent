@@ -7,6 +7,8 @@ import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.gateway.auth.Role;
 import top.rongx.agent.gateway.auth.UserStore;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 项目上下文解析器。
@@ -53,11 +55,11 @@ public class ProjectContextResolver {
         // 1. 身份必须是平台已知用户（角色决定可写/只读与项目范围）
         UserStore.User user = users.find(userId);
         if (user == null) {
-            throw new IllegalArgumentException("用户不存在：" + userId);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "用户不存在：" + userId);
         }
         // 2. 项目必须存在（服务端校验，模型不可伪造）
         Project project = projects.findById(projectId)
-                .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + projectId));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "项目不存在: " + projectId));
         // 3. 不做项目级 RBAC：已登录用户可访问任一项目（动作/设置权限仍由角色控制）
         // 4. 环境缺省为 test
         String targetEnv = (env == null || env.isBlank()) ? "test" : env;
@@ -66,7 +68,7 @@ public class ProjectContextResolver {
                 .map(ProjectEnv::env)
                 .anyMatch(targetEnv::equals);
         if (!known) {
-            throw new IllegalArgumentException("环境不属于该项目: " + targetEnv);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "环境不属于该项目: " + targetEnv);
         }
         // 6. 构造不可变上下文（工作树名的合法性在 ProjectContext 构造器里统一校验）
         return new ProjectContext(project.id(), targetEnv, userId, project.repoUrl(), worktree,

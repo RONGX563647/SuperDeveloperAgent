@@ -1,5 +1,8 @@
 package top.rongx.agent.domain.conversation;
 
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+
 /**
  * 工作区任务：由调度 Agent 或用户登记，用来表达"这个工作区还要做什么"。
  *
@@ -19,13 +22,13 @@ public record WorkspaceTask(
 
     public WorkspaceTask {
         if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("task id 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "task id 不能为空");
         }
         if (projectId == null || projectId.isBlank()) {
-            throw new IllegalArgumentException("projectId 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "projectId 不能为空");
         }
         if (goal == null || goal.isBlank()) {
-            throw new IllegalArgumentException("任务目标不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "任务目标不能为空");
         }
         goal = goal.trim();
         expectedOutput = expectedOutput == null ? "" : expectedOutput.trim();

@@ -6,6 +6,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 登录/登出/改密接口（唯一签发会话令牌的地方）。
@@ -27,7 +29,7 @@ public class AuthController {
         UserStore.User user = users.find(userId);
         // 用户不存在与密码错误返回同一句文案：不向探测者泄露账号存在性
         if (user == null || !users.checkPassword(userId, request.password() == null ? "" : request.password())) {
-            throw new IllegalArgumentException("用户名或密码错误");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "用户名或密码错误");
         }
         StpUtil.login(user.userId());
         return Map.of(

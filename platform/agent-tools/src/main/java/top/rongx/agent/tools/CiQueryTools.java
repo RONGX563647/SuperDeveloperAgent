@@ -25,6 +25,9 @@ import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.BuildException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 流水线只读工具（L0）。
@@ -161,10 +164,10 @@ public class CiQueryTools {
             readOnly = true, concurrencySafe = true)
     public String status(@ToolParam(name = "run_id", description = "ci_run 返回的 runId") String runId) {
         if (runId == null || runId.isBlank()) {
-            throw new IllegalArgumentException("run_id 不能为空");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "run_id 不能为空");
         }
         if (!engine.hasRun(runId)) {
-            throw new IllegalArgumentException("run 不存在：" + runId + "（请核对 ci_run 返回的 runId）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "run 不存在：" + runId + "（请核对 ci_run 返回的 runId）");
         }
         List<StageResult> stageList = engine.stages(runId);
         StageStatus status = engine.status(runId);
@@ -192,10 +195,10 @@ public class CiQueryTools {
                              @ToolParam(name = "run_id", description = "ci_run / deploy_run 返回的 runId")
                              String runId) {
         if (runId == null || runId.isBlank()) {
-            throw new IllegalArgumentException("run_id 不能为空");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "run_id 不能为空");
         }
         if (!engine.hasRun(runId)) {
-            throw new IllegalArgumentException("run 不存在：" + runId + "（请核对 ci_run 返回的 runId）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "run 不存在：" + runId + "（请核对 ci_run 返回的 runId）");
         }
         String log = engine.logTail(runId);
         if (log == null || log.isBlank()) {
@@ -224,10 +227,10 @@ public class CiQueryTools {
                                   description = "最长等待秒数，默认 90，范围 5-180")
                           Integer timeoutSeconds) {
         if (runId == null || runId.isBlank()) {
-            throw new IllegalArgumentException("run_id 不能为空");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "run_id 不能为空");
         }
         if (!engine.hasRun(runId)) {
-            throw new IllegalArgumentException("run 不存在：" + runId + "（请核对 deploy_run 返回的 runId）");
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "run 不存在：" + runId + "（请核对 deploy_run 返回的 runId）");
         }
         int timeout = timeoutSeconds == null ? 90 : Math.max(5, Math.min(180, timeoutSeconds));
         long deadline = System.nanoTime() + timeout * 1_000_000_000L;
@@ -361,7 +364,7 @@ public class CiQueryTools {
             List<RuntimeInspector.ContainerStatus> containers;
             try {
                 containers = inspector.containers(projectId, env);
-            } catch (IllegalStateException e) {
+            } catch (PlatformException | IllegalStateException e) {
                 dockerDown = true;
                 continue;
             }

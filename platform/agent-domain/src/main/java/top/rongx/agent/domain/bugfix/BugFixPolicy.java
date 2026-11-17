@@ -1,6 +1,8 @@
 package top.rongx.agent.domain.bugfix;
 
 import java.util.Locale;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * Bug 自动修复策略。
@@ -57,7 +59,7 @@ public record BugFixPolicy(
     /** 保存前的强校验：自动修复绝不允许指向生产/预生产环境。 */
     public void validate() {
         if (productionLike(testEnv)) {
-            throw new IllegalArgumentException("自动修复禁止使用生产环境：" + testEnv);
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "自动修复禁止使用生产环境：" + testEnv);
         }
     }
 

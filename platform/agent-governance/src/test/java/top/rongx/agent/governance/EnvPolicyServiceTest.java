@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 class EnvPolicyServiceTest {
 
@@ -39,7 +40,7 @@ class EnvPolicyServiceTest {
     void failClosed() {
         assertEquals(PolicyDecision.DENY,
                 policy.decide("staging", ToolLevel.L2_EXECUTE_ISOLATED));
-        assertThrows(IllegalArgumentException.class, () -> new top.rongx.agent.domain.policy.EnvPolicy(
+        assertThrows(PlatformException.class, () -> new top.rongx.agent.domain.policy.EnvPolicy(
                 "prod", PolicyDecision.ALLOW, PolicyDecision.ALLOW, PolicyDecision.DENY,
                 PolicyDecision.ALLOW, false, true));
     }

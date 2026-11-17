@@ -25,6 +25,8 @@ import top.rongx.agent.domain.settings.SshAccess;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.settings.ModelProbe;
 import top.rongx.agent.infra.settings.ModelDiscoveryClient;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 设置：服务器配置 + 模型连接。
@@ -88,7 +90,7 @@ public class SettingsController {
     public Map<String, Object> deleteServer(@PathVariable String id) {
         requireWrite();
         DeployServer server = servers.find(id).orElseThrow(
-                () -> new IllegalArgumentException("服务器不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "服务器不存在：" + id));
         servers.delete(id);
         // 默认服务器也允许删除：否则只剩一台默认服务器时，删除按钮被禁用、
         // 「设默认」又不可用于它本身，用户会陷入谁都删不掉的死局。
@@ -105,7 +107,7 @@ public class SettingsController {
     @PostMapping("/servers/{id}/default")
     public Map<String, Object> defaultServer(@PathVariable String id) {
         requireWrite();
-        servers.find(id).orElseThrow(() -> new IllegalArgumentException("服务器不存在：" + id));
+        servers.find(id).orElseThrow(() -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "服务器不存在：" + id));
         servers.markDefault(id);
         return Map.of("ok", true);
     }
@@ -115,7 +117,7 @@ public class SettingsController {
     public Map<String, Object> testServer(@PathVariable String id) {
         requireWrite();
         DeployServer server = servers.find(id).orElseThrow(
-                () -> new IllegalArgumentException("服务器不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "服务器不存在：" + id));
         return runServerTest(server, servers.secretOf(id).orElse(null), id);
     }
 
@@ -165,15 +167,15 @@ public class SettingsController {
         String host = str(body, "host");
         String user = str(body, "sshUser");
         if (host == null || host.isBlank()) {
-            throw new IllegalArgumentException("host 必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "host 必填");
         }
         if (user == null || user.isBlank()) {
-            throw new IllegalArgumentException("sshUser 必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "sshUser 必填");
         }
         String authType = str(body, "authType");
         authType = authType == null || authType.isBlank() ? "KEY" : authType.toUpperCase();
         if (!"KEY".equals(authType) && !"PASSWORD".equals(authType)) {
-            throw new IllegalArgumentException("authType 只能是 KEY 或 PASSWORD");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "authType 只能是 KEY 或 PASSWORD");
         }
         int port = body.get("port") instanceof Number n ? n.intValue() : 22;
         String remoteDir = str(body, "remoteDir");
@@ -223,9 +225,9 @@ public class SettingsController {
     public Map<String, Object> deleteModel(@PathVariable String id) {
         requireWrite();
         ModelConnection connection = models.find(id).orElseThrow(
-                () -> new IllegalArgumentException("模型不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         if (connection.isDefault()) {
-            throw new IllegalStateException("默认模型不可删除，请先把其它模型设为默认");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "默认模型不可删除，请先把其它模型设为默认");
         }
         models.delete(id);
         catalog.deleteByConnection(id);
@@ -241,13 +243,13 @@ public class SettingsController {
     public Map<String, Object> discoverModels(@PathVariable String id) {
         requireWrite();
         ModelConnection connection = models.find(id).orElseThrow(
-                () -> new IllegalArgumentException("模型不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         List<String> ids;
         try {
             ids = discovery.discover(connection.baseUrl(),
                     models.apiKeyOf(id).orElse(""));
         } catch (RuntimeException e) {
-            throw new IllegalArgumentException("模型发现失败：" + e.getMessage());
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型发现失败：" + e.getMessage());
         }
         List<ModelCatalogEntry> entries = new ArrayList<>();
         long now = System.currentTimeMillis();
@@ -300,7 +302,7 @@ public class SettingsController {
     @PostMapping("/models/{id}/default")
     public Map<String, Object> defaultModel(@PathVariable String id) {
         requireWrite();
-        models.find(id).orElseThrow(() -> new IllegalArgumentException("模型不存在：" + id));
+        models.find(id).orElseThrow(() -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         models.markDefault(id);
         return Map.of("ok", true);
     }
@@ -310,7 +312,7 @@ public class SettingsController {
     public Map<String, Object> testModel(@PathVariable String id) {
         requireWrite();
         ModelConnection connection = models.find(id).orElseThrow(
-                () -> new IllegalArgumentException("模型不存在：" + id));
+                () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         String apiKey = models.apiKeyOf(id).orElse("");
         ModelProbe.Result result = modelProbe.probe(
                 connection.baseUrl(), apiKey, connection.modelName());
@@ -326,7 +328,7 @@ public class SettingsController {
         String baseUrl = str(body, "baseUrl");
         String modelName = str(body, "modelName");
         if (baseUrl == null || baseUrl.isBlank() || modelName == null || modelName.isBlank()) {
-            throw new IllegalArgumentException("baseUrl 与 modelName 必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "baseUrl 与 modelName 必填");
         }
         String apiKey = str(body, "apiKey");
         String connectionId = str(body, "connectionId");
@@ -412,10 +414,10 @@ public class SettingsController {
         String baseUrl = str(body, "baseUrl");
         String modelName = str(body, "modelName");
         if (baseUrl == null || baseUrl.isBlank()) {
-            throw new IllegalArgumentException("baseUrl 必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "baseUrl 必填");
         }
         if (modelName == null || modelName.isBlank()) {
-            throw new IllegalArgumentException("modelName 必填");
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "modelName 必填");
         }
         double temperature = body.get("temperature") instanceof Number n ? n.doubleValue() : 0.2d;
         int maxIters = body.get("maxIters") instanceof Number n ? n.intValue() : 8;

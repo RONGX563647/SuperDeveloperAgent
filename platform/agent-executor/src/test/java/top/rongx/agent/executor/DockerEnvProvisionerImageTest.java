@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 中间件镜像不再写死：可覆盖、非法值明确报错、docker run 真的用覆盖后的镜像。 */
 class DockerEnvProvisionerImageTest {
@@ -32,11 +33,11 @@ class DockerEnvProvisionerImageTest {
     @Test
     @DisplayName("未知 kind / 缺 = / 混入命令片段都明确报错，不静默忽略")
     void invalidOverridesAreRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> DockerEnvProvisioner.parseImageOverrides("oracle=oracle:19c"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> DockerEnvProvisioner.parseImageOverrides("mysql"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> DockerEnvProvisioner.parseImageOverrides("redis=redis:7 ; rm -rf /"));
     }
 
@@ -64,7 +65,7 @@ class DockerEnvProvisionerImageTest {
     @Test
     @DisplayName("镜像非法时抛错，绝不静默去拉一个未知镜像")
     void runArgvRejectsInvalidImage() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> DockerEnvProvisioner.runArgv("mysql", "env-mysql", 3306,
                         "app", "root", "secret", "net", Map.of("mysql", "")));
     }

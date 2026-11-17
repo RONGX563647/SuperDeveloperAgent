@@ -14,6 +14,8 @@ import java.util.HexFormat;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PromotionException;
 
 /**
  * 确认令牌服务（PRD §4.10 的四道守卫中的第 2、3 道）。
@@ -75,7 +77,7 @@ public class ConfirmTokenService {
                 st.executeUpdate();
             }
         } catch (SQLException | java.io.IOException e) {
-            throw new IllegalStateException("confirm_tokens 表初始化失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "confirm_tokens 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -94,7 +96,7 @@ public class ConfirmTokenService {
     public ConfirmToken issue(String userId, String changeId, String planHash) {
         // 1. 签发人必须来自已登录会话，不得为空（令牌与人绑定）
         if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("签发人不能为空");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "签发人不能为空");
         }
         // 2. 生成 24 字节随机令牌值（不可预测）
         byte[] buf = new byte[24];
@@ -120,30 +122,30 @@ public class ConfirmTokenService {
         // 1. 令牌必须存在
         ConfirmToken token = dbFile == null ? memory.get(tokenValue) : select(tokenValue);
         if (token == null) {
-            throw new IllegalStateException("确认令牌不存在");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌不存在");
         }
         // 2. 不可重复使用
         if (token.used()) {
-            throw new IllegalStateException("确认令牌已被使用");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌已被使用");
         }
         // 3. 不可过期（过期即销毁，防重放）
         if (token.expired(clock.instant())) {
             delete(tokenValue);
-            throw new IllegalStateException("确认令牌已过期");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌已过期");
         }
         // 4. 绑定变更单必须一致
         if (!token.changeId().equals(changeId)) {
-            throw new IllegalStateException("确认令牌与变更单不匹配");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌与变更单不匹配");
         }
         // 5. 关键守卫：确认的是当前计划哈希，而非"同单任意计划"（防配方篡改后复用令牌）
         if (!token.planHash().equals(planHash)) {
-            throw new IllegalStateException("计划已变更，请重新确认");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "计划已变更，请重新确认");
         }
         // 6. 原子标记为已用：并发消费只有一次能成功（一次性）
         if (dbFile == null) {
             memory.put(tokenValue, token.markUsed());
         } else if (!markUsed(tokenValue)) {
-            throw new IllegalStateException("确认令牌已被使用");
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌已被使用");
         }
         return token.markUsed();
     }
@@ -162,7 +164,7 @@ public class ConfirmTokenService {
             st.setLong(1, now.toEpochMilli());
             return st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("确认令牌清理失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌清理失败：" + e.getMessage(), e);
         }
     }
 
@@ -185,7 +187,7 @@ public class ConfirmTokenService {
             st.setInt(6, token.used() ? 1 : 0);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("确认令牌签发失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌签发失败：" + e.getMessage(), e);
         }
     }
 
@@ -205,7 +207,7 @@ public class ConfirmTokenService {
                         Instant.ofEpochMilli(rs.getLong("expires_at")), rs.getInt("used") == 1);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("确认令牌查询失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -217,7 +219,7 @@ public class ConfirmTokenService {
             st.setString(1, tokenValue);
             return st.executeUpdate() == 1;
         } catch (SQLException e) {
-            throw new IllegalStateException("确认令牌消费失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌消费失败：" + e.getMessage(), e);
         }
     }
 
@@ -232,7 +234,7 @@ public class ConfirmTokenService {
             st.setString(1, tokenValue);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("确认令牌清理失败：" + e.getMessage(), e);
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌清理失败：" + e.getMessage(), e);
         }
     }
 }

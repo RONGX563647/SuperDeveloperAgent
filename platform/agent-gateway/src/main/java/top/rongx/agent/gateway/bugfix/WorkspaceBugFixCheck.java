@@ -21,6 +21,7 @@ import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.process.CommandShell;
 import top.rongx.agent.infra.git.GitWorktreeManager;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 确定性检查实现：构建/测试命令在修复提交的临时 worktree 中执行，冒烟检查直连测试环境。
@@ -153,7 +154,7 @@ public class WorkspaceBugFixCheck implements BugFixCheckPort {
         List<String> shellPrefix;
         try {
             shellPrefix = CommandShell.prefix(shellConfig);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return new CommandResult(false, -1, e.getMessage());
         }
         BoundedCommand.Outcome outcome = BoundedCommand.run(

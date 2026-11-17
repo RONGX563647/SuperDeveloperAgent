@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import top.rongx.agent.domain.error.PlatformException;
 
 class DockerfileToolsTest {
 
@@ -52,7 +53,7 @@ class DockerfileToolsTest {
 
     @Test
     void unknownStackFailsWithActionableMessage(@TempDir Path repo) {
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> DockerfileTools.detect(repo, null));
         assertTrue(error.getMessage().contains("未能识别技术栈"));
     }

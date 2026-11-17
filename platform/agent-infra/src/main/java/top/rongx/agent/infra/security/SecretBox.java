@@ -23,6 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 平台凭据加解密（AES-256-GCM）—— Gitee token / SSH 密码 / 模型 API Key 共用。
@@ -69,7 +71,7 @@ public class SecretBox {
             log.info("已生成平台主密钥 {}（请妥善备份；丢失后已加密的凭据将无法解密）", keyFile);
             return new SecretKeySpec(raw, "AES");
         } catch (Exception e) {
-            throw new IllegalStateException("主密钥初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "主密钥初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -126,7 +128,7 @@ public class SecretBox {
             return new Sealed(Base64.getEncoder().encodeToString(ct),
                     Base64.getEncoder().encodeToString(iv));
         } catch (Exception e) {
-            throw new IllegalStateException("加密失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "加密失败：" + e.getMessage(), e);
         }
     }
 
@@ -138,7 +140,7 @@ public class SecretBox {
             return new String(cipher.doFinal(Base64.getDecoder().decode(cipherB64)),
                     StandardCharsets.UTF_8);
         } catch (Exception e) {
-            throw new IllegalStateException("解密失败（主密钥不匹配？）：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "解密失败（主密钥不匹配？）：" + e.getMessage(), e);
         }
     }
 

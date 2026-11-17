@@ -1,5 +1,8 @@
 package top.rongx.agent.domain.bugfix;
 
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
+
 /**
  * 一次 Bug 自动修复运行（状态机实例）。
  *
@@ -31,10 +34,10 @@ public record BugFixRun(
 
     public BugFixRun {
         if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("run id 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "run id 不能为空");
         }
         if (issueId == null || issueId.isBlank()) {
-            throw new IllegalArgumentException("issueId 不能为空");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "issueId 不能为空");
         }
         artifacts = artifacts == null ? BugFixRunArtifacts.EMPTY : artifacts;
     }

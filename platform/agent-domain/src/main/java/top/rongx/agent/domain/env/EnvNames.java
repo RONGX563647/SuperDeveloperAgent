@@ -1,6 +1,8 @@
 package top.rongx.agent.domain.env;
 
 import java.util.List;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /** 环境名口径：全平台只认 dev/test/prod；缺省按 test，绝不默认落到 prod。 */
 public final class EnvNames {
@@ -11,7 +13,7 @@ public final class EnvNames {
     public static String normalize(String env) {
         String value = env == null || env.isBlank() ? "test" : env.trim().toLowerCase();
         if (!ALL.contains(value)) {
-            throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境只能是 dev / test / prod：" + env);
         }
         return value;
     }
@@ -19,7 +21,7 @@ public final class EnvNames {
     /** 落库/内部边界：必须是规范值，不做默认与大小写兜底。 */
     public static void requireExact(String env) {
         if (!ALL.contains(env)) {
-            throw new IllegalArgumentException("环境只能是 dev / test / prod：" + env);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境只能是 dev / test / prod：" + env);
         }
     }
 

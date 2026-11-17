@@ -3,6 +3,8 @@ package top.rongx.agent.domain.conversation;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 一次 DAG 派发计划。
@@ -39,18 +41,18 @@ public record DispatchPlan(List<DispatchNode> nodes, boolean abortOnFailure, int
     public DispatchPlan {
         nodes = nodes == null ? List.of() : List.copyOf(nodes);
         if (nodes.isEmpty()) {
-            throw new IllegalArgumentException("调度计划至少需要一个节点");
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "调度计划至少需要一个节点");
         }
         Set<String> ids = new HashSet<>();
         for (DispatchNode node : nodes) {
             if (!ids.add(node.id())) {
-                throw new IllegalArgumentException("节点 id 重复：" + node.id());
+                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "节点 id 重复：" + node.id());
             }
         }
         for (DispatchNode node : nodes) {
             for (String dep : node.dependsOn()) {
                 if (!ids.contains(dep)) {
-                    throw new IllegalArgumentException("节点 " + node.id() + " 依赖不存在的节点：" + dep);
+                    throw new RunException(ErrorCode.RUN_INVALID_INPUT, "节点 " + node.id() + " 依赖不存在的节点：" + dep);
                 }
             }
         }

@@ -8,6 +8,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 容器沙箱：把一条业务命令包成 {@code docker run}。
@@ -248,7 +250,7 @@ public class DockerSandbox {
             return;
         }
         if (abort.getAsBoolean()) {
-            throw new IllegalStateException("构建已取消：跳过自动拉取镜像 " + image);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "构建已取消：跳过自动拉取镜像 " + image);
         }
         notify(live, "[sandbox] 镜像 " + image + " 不在本机，自动执行 "
                 + String.join(" ", imagePullCommand()) + "（最长 "
@@ -256,7 +258,7 @@ public class DockerSandbox {
         ProcessExecutor.StepOutcome pull = commandExecutor.run(imagePullCommand(),
                 imagePullTimeoutMs, abort, live);
         if (pull.errorCode() != null) {
-            throw new IllegalStateException("构建镜像未就绪（" + image + "）：自动拉取失败（"
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "构建镜像未就绪（" + image + "）：自动拉取失败（"
                     + pull.errorCode() + "：" + pull.summary()
                     + "）；请检查 Docker 网络/registry，或手动 docker pull " + image
                     + "，或用 agent.sandbox.image 指定本机已有镜像");
@@ -265,7 +267,7 @@ public class DockerSandbox {
         ProcessExecutor.StepOutcome verify = commandExecutor.run(inspect,
                 IMAGE_INSPECT_TIMEOUT_MS, abort, null);
         if (verify.errorCode() != null) {
-            throw new IllegalStateException("构建镜像未就绪（" + image + "）：拉取后仍无法通过 docker image inspect"
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "构建镜像未就绪（" + image + "）：拉取后仍无法通过 docker image inspect"
                     + "（" + verify.errorCode() + "：" + verify.summary() + "）");
         }
         notify(live, "[sandbox] ✅ 镜像已就绪：" + image + "\n");
@@ -312,7 +314,7 @@ public class DockerSandbox {
         ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, PREPARE_TIMEOUT_MS,
                 cancelled == null ? () -> false : cancelled, live);
         if (outcome.errorCode() != null) {
-            throw new IllegalStateException("缓存卷初始化失败（" + outcome.errorCode() + "）："
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "缓存卷初始化失败（" + outcome.errorCode() + "）："
                     + outcome.summary() + "；命令：" + String.join(" ", cmd));
         }
     }

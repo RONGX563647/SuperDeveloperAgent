@@ -19,6 +19,8 @@ import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
 import top.rongx.agent.gateway.bugfix.PatchApplier;
 import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
 import top.rongx.agent.gateway.bugfix.structured.FixOutput;
+import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.domain.error.PatchApplyException;
 
 /**
  * 修复阶段：修复 Agent 输出受限补丁，平台在基线提交上应用并提交到独立分支。
@@ -92,7 +94,7 @@ public class FixStage implements BugFixStageHandler {
             }
             try {
                 edits = BugFixOutputValidation.edits(output);
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 return BugFixStageResult.blocked("补丁格式不合法：" + e.getMessage());
             }
             if (edits.isEmpty()) {
@@ -116,13 +118,13 @@ public class FixStage implements BugFixStageHandler {
             }
             try {
                 sha = git.commitFix(run, edits, message);
-            } catch (PatchApplier.ApplyException e) {
+            } catch (PatchApplyException e) {
                 if (++applyAttempts > MAX_APPLY_RETRIES) {
                     return BugFixStageResult.blocked("补丁应用失败（已重试 " + MAX_APPLY_RETRIES
                             + " 次）：" + e.getMessage());
                 }
                 applyFeedback = e.getMessage();
-            } catch (IllegalArgumentException e) {
+            } catch (PlatformException | IllegalArgumentException e) {
                 return BugFixStageResult.blocked("补丁未通过校验：" + e.getMessage());
             } catch (RuntimeException e) {
                 return BugFixStageResult.failed("提交修复失败：" + AnalyzeStage.message(e));
@@ -187,7 +189,7 @@ public class FixStage implements BugFixStageHandler {
         }
         try {
             return BugFixOutputValidation.paths(parsed.get().targetFiles());
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return List.of();
         }
     }

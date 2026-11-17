@@ -10,6 +10,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 平台侧流水线部署段：端口 / 健康检查的读改写不能破坏其它阶段。 */
 class DeployToolsConfigTest {
@@ -88,7 +89,7 @@ class DeployToolsConfigTest {
     @Test
     @DisplayName("非法 YAML：明确报错而不是写坏定义")
     void invalidYamlFails() {
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        PlatformException error = assertThrows(PlatformException.class,
                 () -> DeployTools.applyDeployConfig("name: [unclosed", null, 8180, null, null, null));
         assertTrue(error.getMessage().contains("合法 YAML"), error.getMessage());
     }

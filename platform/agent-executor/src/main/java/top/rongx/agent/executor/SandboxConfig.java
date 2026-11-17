@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import top.rongx.agent.domain.port.ActionRunner;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 执行模式装配。
@@ -56,8 +58,7 @@ public class SandboxConfig {
             }
             case "docker" -> {
                 if (!sandbox.available()) {
-                    throw new IllegalStateException(
-                            "agent.sandbox.mode=docker 但 Docker 守护进程不可用；"
+                    throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "agent.sandbox.mode=docker 但 Docker 守护进程不可用；"
                                     + "请启动 Docker，或改为 mode=process（不隔离）");
                 }
                 log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
@@ -69,8 +70,7 @@ public class SandboxConfig {
                     return new DockerActionRunner(sandbox);
                 }
                 // fail-closed：绝不因为 Docker 没起来就悄悄降级为无隔离的宿主执行
-                throw new IllegalStateException(
-                        "Docker 不可用，拒绝以宿主进程执行（无隔离）。"
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "Docker 不可用，拒绝以宿主进程执行（无隔离）。"
                                 + "请启动 Docker，或仅限本地开发显式设置 "
                                 + "agent.sandbox.mode=process");
             }

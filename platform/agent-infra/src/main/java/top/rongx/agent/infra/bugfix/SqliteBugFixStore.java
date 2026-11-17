@@ -27,6 +27,8 @@ import top.rongx.agent.domain.bugfix.BugFixRunStore;
 import top.rongx.agent.domain.bugfix.BugFixStage;
 import top.rongx.agent.domain.bugfix.BugFixStageRun;
 import top.rongx.agent.domain.bugfix.BugFixStatus;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * Bug 自动修复的 SQLite 存储（运行 + 时间线 + 阶段记录 + 租约 + 通知 + 策略）。
@@ -192,7 +194,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             ensureColumn("bugfix_policy", "build_command", "TEXT NOT NULL DEFAULT ''");
             ensureColumn("bugfix_policy", "test_command", "TEXT NOT NULL DEFAULT ''");
         } catch (SQLException | IOException e) {
-            throw new IllegalStateException("automation.db 初始化失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "automation.db 初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -205,7 +207,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 columns.add(rs.getString("name"));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("读取表结构失败：" + table, e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "读取表结构失败：" + table, e);
         }
         if (columns.contains(column)) {
             return;
@@ -213,7 +215,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
         try (Connection conn = open(); Statement st = conn.createStatement()) {
             st.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + type);
         } catch (SQLException e) {
-            throw new IllegalStateException("自动升级表结构失败：" + table + "." + column, e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动升级表结构失败：" + table + "." + column, e);
         }
     }
 
@@ -262,7 +264,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.executeUpdate();
             return run;
         } catch (SQLException e) {
-            throw new IllegalStateException("自动修复运行保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复运行保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -279,7 +281,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 return rs.next() ? Optional.of(read(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("自动修复运行查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复运行查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -308,7 +310,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             }
             return runs;
         } catch (SQLException e) {
-            throw new IllegalStateException("自动修复运行列表查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复运行列表查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -329,7 +331,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             }
             return runs;
         } catch (SQLException e) {
-            throw new IllegalStateException("待合并运行查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "待合并运行查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -349,7 +351,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 return rs.next() ? Optional.of(read(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("活动运行查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "活动运行查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -368,7 +370,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.executeUpdate();
             pruneEvents(conn, event.runId());
         } catch (SQLException e) {
-            throw new IllegalStateException("自动修复事件写入失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复事件写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -408,7 +410,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             }
             return events;
         } catch (SQLException e) {
-            throw new IllegalStateException("自动修复事件查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复事件查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -447,7 +449,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             conn.commit();
             return queued;
         } catch (SQLException e) {
-            throw new IllegalStateException("运行状态恢复失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行状态恢复失败：" + e.getMessage(), e);
         }
     }
 
@@ -540,7 +542,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 throw e;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("运行租约获取失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行租约获取失败：" + e.getMessage(), e);
         }
     }
 
@@ -556,7 +558,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setString(3, owner);
             return st.executeUpdate() == 1;
         } catch (SQLException e) {
-            throw new IllegalStateException("运行租约续期失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行租约续期失败：" + e.getMessage(), e);
         }
     }
 
@@ -569,7 +571,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setString(2, owner);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("运行租约释放失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行租约释放失败：" + e.getMessage(), e);
         }
     }
 
@@ -622,7 +624,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 throw e;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("环境租约获取失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "环境租约获取失败：" + e.getMessage(), e);
         }
     }
 
@@ -640,7 +642,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setString(3, runId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("环境租约释放失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "环境租约释放失败：" + e.getMessage(), e);
         }
     }
 
@@ -652,7 +654,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setString(1, runId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("环境租约释放失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "环境租约释放失败：" + e.getMessage(), e);
         }
     }
 
@@ -676,7 +678,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 return keys.next() ? keys.getLong(1) : 0L;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("阶段记录创建失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "阶段记录创建失败：" + e.getMessage(), e);
         }
     }
 
@@ -700,7 +702,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setLong(6, stageId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("阶段记录更新失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "阶段记录更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -719,7 +721,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setString(5, runId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("阶段记录收尾失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "阶段记录收尾失败：" + e.getMessage(), e);
         }
     }
 
@@ -750,7 +752,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             }
             return result;
         } catch (SQLException e) {
-            throw new IllegalStateException("阶段记录查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "阶段记录查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -766,7 +768,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 return rs.next() ? rs.getInt(1) : 0;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("阶段尝试次数查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "阶段尝试次数查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -790,7 +792,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setLong(4, now);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("通知入队失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "通知入队失败：" + e.getMessage(), e);
         }
     }
 
@@ -822,7 +824,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             }
             return result;
         } catch (SQLException e) {
-            throw new IllegalStateException("待投递通知查询失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "待投递通知查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -836,7 +838,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setLong(1, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("通知状态更新失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "通知状态更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -853,7 +855,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 }
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("通知重试状态读取失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "通知重试状态读取失败：" + e.getMessage(), e);
         }
         int next = attempts + 1;
         boolean terminal = next >= (maxAttempts <= 0 ? 5 : maxAttempts);
@@ -871,7 +873,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.setLong(5, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("通知重试状态更新失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "通知重试状态更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -888,7 +890,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             }
             return readPolicy(rs);
         } catch (SQLException e) {
-            throw new IllegalStateException("自动修复策略读取失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复策略读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -908,7 +910,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 return readPolicy(rs);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("项目自动修复策略读取失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "项目自动修复策略读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -926,7 +928,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.executeUpdate();
             return normalized;
         } catch (SQLException e) {
-            throw new IllegalStateException("自动修复策略保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复策略保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -948,7 +950,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             st.executeUpdate();
             return normalized;
         } catch (SQLException e) {
-            throw new IllegalStateException("项目自动修复策略保存失败：" + e.getMessage(), e);
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "项目自动修复策略保存失败：" + e.getMessage(), e);
         }
     }
 

@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 工具链路测试：不经模型，直接以 RuntimeContext 注入 ProjectContext 调用 @Tool 方法。
@@ -105,7 +106,7 @@ class ToolChainTest {
         assertTrue(pipelines.contains("release"), pipelines);
 
         // 未知 runId 必须明确报错（不冒充 PENDING）；工具层以异常表达，框架统一转成错误文本
-        IllegalArgumentException bad = assertThrows(IllegalArgumentException.class,
+        PlatformException bad = assertThrows(PlatformException.class,
                 () -> ciQueryTools.status("run-nonexistent"));
         assertTrue(bad.getMessage().contains("不存在"), bad.getMessage());
 

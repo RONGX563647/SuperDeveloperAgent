@@ -19,6 +19,7 @@ import top.rongx.agent.domain.gitissue.GitIssue;
 import top.rongx.agent.domain.gitissue.GitIssueService;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.bugfix.BugFixOrchestrator;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * Bug 自动修复运行接口：任务页时间线读取、手动启动 / 重试 / 取消，以及平台策略配置。
@@ -83,6 +84,8 @@ public class BugFixController {
         }
         try {
             return orchestrator.start(issue);
+        } catch (PlatformException e) {
+            throw new ResponseStatusException(ErrorStatusMapper.statusOf(e.errorCode()), e.getMessage());
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         } catch (IllegalStateException e) {
@@ -138,7 +141,7 @@ public class BugFixController {
         try {
             // 保存前拒绝生产/预生产环境，避免把全局策略改成线上
             next.validate();
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
         return policies.save(projectId, next);

@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 可用性测试：从 HTTP 控制器入口（真实 Spring 上下文）把「列动作 → 看计划 → 构建 → L3 审批闭环」走一遍。
@@ -185,7 +186,7 @@ class ActionUsabilityTest {
     @Test
     @DisplayName("U5 未知动作 / 未认证：可读错误")
     void badRequests() {
-        var unknown = assertThrows(IllegalArgumentException.class,
+        var unknown = assertThrows(PlatformException.class,
                 () -> actionController.plan("deploy_everything", "RY", "test"));
         assertTrue(unknown.getMessage().contains("未知动作"));
 
@@ -205,7 +206,7 @@ class ActionUsabilityTest {
     @Test
     @DisplayName("U6 L3 动作不能直接执行")
     void l3CannotRunDirectly() {
-        var ex = assertThrows(IllegalStateException.class,
+        var ex = assertThrows(PlatformException.class,
                 () -> actionController.run("stack_deploy", "RY", "test"));
         assertTrue(ex.getMessage().contains("L3"), ex.getMessage());
     }
@@ -234,7 +235,7 @@ class ActionUsabilityTest {
         assertTrue(run.logTail().contains("start new container"));
         assertTrue(Files.exists(workspaceRoot.resolve("RY/deployed.txt")), "发布脚本应真的跑过");
 
-        var reuse = assertThrows(IllegalStateException.class,
+        var reuse = assertThrows(PlatformException.class,
                 () -> changeController.apply(plan.changeId(), confirmed.confirmToken()));
         assertTrue(reuse.getMessage().contains("已被使用"), reuse.getMessage());
     }
@@ -248,7 +249,7 @@ class ActionUsabilityTest {
         writeRecipes(ACTIONS_YML.replace("[\"node\", \"deploy.js\"]",
                 "[\"node\", \"deploy.js\", \"--v2\"]"));
 
-        var ex = assertThrows(IllegalStateException.class,
+        var ex = assertThrows(PlatformException.class,
                 () -> changeController.apply(plan.changeId(), confirmed.confirmToken()));
         assertTrue(ex.getMessage().contains("已被修改"), ex.getMessage());
     }
@@ -257,7 +258,7 @@ class ActionUsabilityTest {
     @DisplayName("U10 没有令牌不能执行 L3")
     void applyWithoutToken() {
         ChangePlan plan = requestDeploy();
-        var ex = assertThrows(IllegalArgumentException.class,
+        var ex = assertThrows(PlatformException.class,
                 () -> changeController.apply(plan.changeId(), null));
         assertTrue(ex.getMessage().contains("确认令牌"), ex.getMessage());
     }
@@ -269,7 +270,7 @@ class ActionUsabilityTest {
         ChangePlan second = requestDeploy();
         var token = changeController.confirm(first.changeId(), new ChangeController.ConfirmRequest(null));
 
-        var ex = assertThrows(IllegalStateException.class,
+        var ex = assertThrows(PlatformException.class,
                 () -> changeController.apply(second.changeId(), token.confirmToken()));
         assertTrue(ex.getMessage().contains("不匹配"), ex.getMessage());
     }

@@ -22,6 +22,7 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.runtime.ModelConfig;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 真实模型工具评测（PRD E4 的 LLM 实测版）。
@@ -101,7 +102,7 @@ class LiveModelToolEvalTest {
                 } else {
                     tools.add("?");
                 }
-            } catch (IllegalArgumentException ex) {
+            } catch (PlatformException | IllegalArgumentException ex) {
                 tools.add(simple);
             }
         }

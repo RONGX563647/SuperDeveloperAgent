@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import top.rongx.agent.domain.error.PatchApplyException;
 
 /** 片段匹配：精确 → 去行尾空白 → 忽略缩进；多处命中必须失败。 */
 class PatchApplierTest {
@@ -35,7 +36,7 @@ class PatchApplierTest {
     @Test
     void multipleMatchesReportCandidates() {
         String current = "a();\nb();\na();\n";
-        PatchApplier.ApplyException error = assertThrows(PatchApplier.ApplyException.class,
+        PatchApplyException error = assertThrows(PatchApplyException.class,
                 () -> PatchApplier.replace("a.js", current, "a();", "c();"));
         assertEquals("a.js", error.file());
         assertEquals(java.util.List.of(1, 3), error.candidateLines());
@@ -44,7 +45,7 @@ class PatchApplierTest {
     @Test
     void notFoundReportsClosestLines() {
         String current = "one\ntwo\nthree\n";
-        PatchApplier.ApplyException error = assertThrows(PatchApplier.ApplyException.class,
+        PatchApplyException error = assertThrows(PatchApplyException.class,
                 () -> PatchApplier.replace("a.txt", current, "two\nmore", "x"));
         assertTrue(error.getMessage().contains("第 2 行"), error.getMessage());
     }

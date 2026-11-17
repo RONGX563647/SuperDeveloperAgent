@@ -19,6 +19,8 @@ import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.gateway.deploy.DeployGate;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.DeployException;
 
 /**
  * 环境视角的部署接口：每个环境跑通过什么、重放、脚本版本、以及"上服务器"的确认。
@@ -105,7 +107,7 @@ public class DeployController {
                                        @RequestParam String sha) {
         String userId = currentUser.requireUserId();
         if (!sha.matches("[0-9a-f]{7,40}")) {
-            throw new IllegalArgumentException("sha 非法（需 7-40 位小写十六进制）");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "sha 非法（需 7-40 位小写十六进制）");
         }
         String problem = gate.evidenceProblem(projectId, env, sha);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -139,8 +141,7 @@ public class DeployController {
         boolean hasScript = recipes.current(projectId, env).isPresent()
                 || ("prod".equals(env) && recipes.current(projectId, "test").isPresent());
         if (!hasScript) {
-            throw new IllegalArgumentException(
-                    "环境 " + env + " 还没有固化脚本：请先在该环境跑通一次（平台会自动固化）");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "环境 " + env + " 还没有固化脚本：请先在该环境跑通一次（平台会自动固化）");
         }
         gate.requireIfNeeded(projectId, env, sha, confirmToken);
         Map<String, String> params = new LinkedHashMap<>();
@@ -190,7 +191,7 @@ public class DeployController {
                                         @RequestParam int version) {
         currentUser.requireUserId();
         if (!recipes.activate(projectId, env, version)) {
-            throw new IllegalArgumentException("版本不存在：v" + version);
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "版本不存在：v" + version);
         }
         return Map.of("ok", true, "env", env, "version", version);
     }

@@ -16,6 +16,8 @@ import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.ModelConnection;
 import top.rongx.agent.domain.settings.ModelConnectionRepository;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 模型连接配置（SQLite）：API Key AES-GCM 加密落库，接口只回掩码。
@@ -66,7 +68,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
         try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("model_connections 表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "model_connections 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -88,7 +90,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("模型列表查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型列表查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -102,7 +104,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("模型查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -116,7 +118,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("默认模型查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "默认模型查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -146,7 +148,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("模型保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型保存失败：" + e.getMessage(), e);
         }
         return find(id).orElseThrow();
     }
@@ -234,7 +236,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
             st.setString(1, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("模型删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "模型删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -258,7 +260,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("设置默认模型失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "设置默认模型失败：" + e.getMessage(), e);
         }
     }
 
@@ -280,7 +282,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
             st.setString(5, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("测试结果写入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "测试结果写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -302,7 +304,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
                 return Optional.of(secretBox.decrypt(enc, iv));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("API Key 读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "API Key 读取失败：" + e.getMessage(), e);
         }
     }
 

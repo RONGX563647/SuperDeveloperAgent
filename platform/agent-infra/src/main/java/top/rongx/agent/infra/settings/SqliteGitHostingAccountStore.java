@@ -18,6 +18,9 @@ import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.GitHostingAccount;
 import top.rongx.agent.domain.settings.GitHostingAccountRepository;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.IntakeException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 代码托管账号（SQLite）：token AES-GCM 加密，接口只回掩码。
@@ -60,7 +63,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
         try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("git_hosting_accounts 表初始化失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "git_hosting_accounts 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -83,7 +86,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("代码托管账号查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -98,7 +101,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("代码托管账号查询失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -134,7 +137,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
                     update(conn, id, username, sealed, now);
                 }
             } else if (existingId == null) {
-                throw new IllegalArgumentException("首次接入必须填写 Token");
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "首次接入必须填写 Token");
             } else {
                 // token 留空 = 只改用户名等非敏感字段
                 try (PreparedStatement st = conn.prepareStatement(
@@ -147,7 +150,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
             }
             return find(id, userId).orElseThrow();
         } catch (SQLException e) {
-            throw new IllegalStateException("代码托管账号保存失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号保存失败：" + e.getMessage(), e);
         }
     }
 
@@ -192,7 +195,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
             st.setString(2, userId);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("代码托管账号删除失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -210,7 +213,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
                 return Optional.of(secretBox.decrypt(rs.getString("token_enc"), rs.getString("token_iv")));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Token 读取失败：" + e.getMessage(), e);
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Token 读取失败：" + e.getMessage(), e);
         }
     }
 
@@ -250,7 +253,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
             }
             String host = uri.getHost();
             return host == null ? null : host.toLowerCase(Locale.ROOT);
-        } catch (IllegalArgumentException e) {
+        } catch (PlatformException | IllegalArgumentException e) {
             return null;
         }
     }
@@ -258,7 +261,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
     private static String normalizeProvider(String provider) {
         String p = provider == null || provider.isBlank() ? "CUSTOM" : provider.trim().toUpperCase(Locale.ROOT);
         if (!p.equals("GITHUB") && !p.equals("GITLAB") && !p.equals("CUSTOM")) {
-            throw new IllegalArgumentException("provider 只能是 GITHUB / GITLAB / CUSTOM");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "provider 只能是 GITHUB / GITLAB / CUSTOM");
         }
         return p;
     }
@@ -266,12 +269,12 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
     private static String normalizeHost(String host) {
         String h = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
         if (h.isBlank()) {
-            throw new IllegalArgumentException("host 必填（如 github.com / gitlab.com / git.example.com）");
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "host 必填（如 github.com / gitlab.com / git.example.com）");
         }
         if (h.startsWith("http://") || h.startsWith("https://")) {
             String parsed = hostOf(h);
             if (parsed == null) {
-                throw new IllegalArgumentException("host 格式不正确：" + host);
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "host 格式不正确：" + host);
             }
             return parsed;
         }

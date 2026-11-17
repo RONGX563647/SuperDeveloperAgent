@@ -12,6 +12,8 @@ import top.rongx.agent.domain.project.ProjectContext;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 对话服务：把一次用户输入变成事件流。
@@ -79,7 +81,7 @@ public class ChatService {
                                    String modelConnectionId, String modelName) {
         // 1. 空消息直接报错（不进入 Agent）
         if (text == null || text.isBlank()) {
-            return Flux.error(new IllegalArgumentException("消息不能为空"));
+            return Flux.error(new RunException(ErrorCode.RUN_INVALID_INPUT, "消息不能为空"));
         }
         // 2. 规范化会话 ID（缺失则生成），并校验它没有被绑定到别的项目/环境
         String sid = (sessionId == null || sessionId.isBlank()) ? UUID.randomUUID().toString() : sessionId;
@@ -133,7 +135,7 @@ public class ChatService {
     public Flux<AgentEvent> streamSupervisor(ProjectContext ctx, String sessionId, String text,
                                              String modelConnectionId, String modelName) {
         if (text == null || text.isBlank()) {
-            return Flux.error(new IllegalArgumentException("消息不能为空"));
+            return Flux.error(new RunException(ErrorCode.RUN_INVALID_INPUT, "消息不能为空"));
         }
         String sid = (sessionId == null || sessionId.isBlank())
                 ? UUID.randomUUID().toString() : sessionId;
@@ -160,10 +162,10 @@ public class ChatService {
     public <T> Mono<Msg> structured(ProjectContext ctx, String sessionId, String text,
                                     Class<T> structuredType) {
         if (text == null || text.isBlank()) {
-            return Mono.error(new IllegalArgumentException("消息不能为空"));
+            return Mono.error(new RunException(ErrorCode.RUN_INVALID_INPUT, "消息不能为空"));
         }
         if (structuredType == null) {
-            return Mono.error(new IllegalArgumentException("结构化输出类型不能为空"));
+            return Mono.error(new RunException(ErrorCode.RUN_INVALID_INPUT, "结构化输出类型不能为空"));
         }
         String sid = (sessionId == null || sessionId.isBlank())
                 ? UUID.randomUUID().toString() : sessionId;

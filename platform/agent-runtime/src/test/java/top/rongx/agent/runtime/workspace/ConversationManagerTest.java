@@ -38,6 +38,7 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.runtime.ChatSessionRegistry;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 工作区管理：调度会话、异步运行、防重复、取消与任务板。
@@ -145,7 +146,7 @@ class ConversationManagerTest {
         String duplicate = manager.send(a.id(), USER, "修复 构建");
         assertTrue(duplicate.startsWith("err:"), "同会话重复目标应返回明确错误文案");
         // 同一会话不能再并发派发其他目标
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> manager.send(a.id(), USER, "另一个目标"));
         // 调度会话不能给自己派发（深度固定为 1）
         Conversation supervisor = manager.ensureSupervisor(PROJECT, USER);
@@ -156,7 +157,7 @@ class ConversationManagerTest {
         assertEquals(ConversationStatus.CANCELLED,
                 manager.findOwned(a.id(), USER).orElseThrow().status());
         // 越权看不到运行
-        assertThrows(IllegalArgumentException.class, () -> manager.runStatus(first, "bob"));
+        assertThrows(PlatformException.class, () -> manager.runStatus(first, "bob"));
     }
 
     @Test
@@ -167,10 +168,10 @@ class ConversationManagerTest {
         manager.saveTranscript(c.id(), USER, "{\"messages\":[]}");
         assertEquals("{\"messages\":[]}", manager.transcript(c.id(), USER).orElseThrow());
         // 越权读写都被拒绝
-        assertThrows(IllegalArgumentException.class, () -> manager.transcript(c.id(), "bob"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class, () -> manager.transcript(c.id(), "bob"));
+        assertThrows(PlatformException.class,
                 () -> manager.saveTranscript(c.id(), "bob", "{}"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> manager.saveTranscript(c.id(), USER, "x".repeat(8_000_001)));
     }
 
@@ -185,7 +186,7 @@ class ConversationManagerTest {
         WorkspaceTask done = manager.updateTask(PROJECT, USER, task.id(), null, null,
                 TaskStatus.DONE);
         assertEquals(TaskStatus.DONE, done.status());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> manager.updateTask("OTHER", USER, task.id(), null, null, TaskStatus.TODO));
     }
 

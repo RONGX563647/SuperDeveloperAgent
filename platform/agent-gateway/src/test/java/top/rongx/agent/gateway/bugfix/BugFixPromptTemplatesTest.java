@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 提示词模板随包发布、占位符完整，避免运行时才发现模板缺失。 */
 class BugFixPromptTemplatesTest {
@@ -31,7 +32,7 @@ class BugFixPromptTemplatesTest {
 
     @Test
     void missingPlaceholderFailsFast() {
-        assertThrows(IllegalStateException.class,
+        assertThrows(PlatformException.class,
                 () -> prompts.render("analyze", Map.of("projectId", "p1")));
     }
 }

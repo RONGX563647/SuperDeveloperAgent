@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /** 项目环境变量：加密落库、敏感项掩码、部署侧可解析明文。 */
 class SqliteProjectEnvVarStoreTest {
@@ -71,7 +72,7 @@ class SqliteProjectEnvVarStoreTest {
         assertEquals("devops", updated.updatedBy());
         assertEquals("10.0.0.12", store.resolve("RY", "test").get("DB_HOST"));
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.save("RY", "test", "NEW_KEY", null, true, "admin"));
     }
 
@@ -85,11 +86,11 @@ class SqliteProjectEnvVarStoreTest {
         // 幂等删除
         store.delete("RY", "test", "A_B");
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.save("RY", "qa", "K", "v", true, "admin"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.save("RY", "test", "1BAD", "v", true, "admin"));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(PlatformException.class,
                 () -> store.save("../x", "test", "K", "v", true, "admin"));
     }
 }

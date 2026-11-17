@@ -28,6 +28,9 @@ import top.rongx.agent.domain.process.JavaRuntime;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
 import top.rongx.agent.gateway.bugfix.BugFixRedactor;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.DeployException;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 工作区「环境」视图：按 版本 × 环境 汇总部署产物（Docker 容器 / HOST 进程）并支持一键启停。
@@ -90,7 +93,7 @@ public class DeploymentControlService {
             List<ContainerStatus> containers;
             try {
                 containers = inspector.containers(projectId, env);
-            } catch (IllegalStateException e) {
+            } catch (PlatformException | IllegalStateException e) {
                 dockerAvailable = false;
                 continue;
             }
@@ -170,19 +173,19 @@ public class DeploymentControlService {
             HostSlot base = slots.stream().filter(slot -> !slot.tagged())
                     .findFirst().orElse(null);
             if (base == null || !base.releases().contains(wanted)) {
-                throw new IllegalArgumentException("该环境没有版本 " + wanted + " 的部署产物");
+                throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "该环境没有版本 " + wanted + " 的部署产物");
             }
             sha = wanted;
             stateDir = base.dir();
         } else {
-            throw new IllegalArgumentException("该环境还没有部署产物，请先在流水线完成一次部署");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "该环境还没有部署产物，请先在流水线完成一次部署");
         }
         if (sha == null || sha.isBlank()) {
-            throw new IllegalArgumentException("该环境还没有部署产物，请先在流水线完成一次部署");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "该环境还没有部署产物，请先在流水线完成一次部署");
         }
         Path jar = stateDir.resolve("releases").resolve(sha).resolve("app.jar");
         if (!Files.isRegularFile(jar)) {
-            throw new IllegalArgumentException("版本 " + sha + " 没有可运行的 app.jar（Docker 部署无法用 HOST 启动）");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "版本 " + sha + " 没有可运行的 app.jar（Docker 部署无法用 HOST 启动）");
         }
         if (host != null && host.running()) {
             return new ActionResult(true, "该版本已在运行", "RUNNING");
@@ -191,7 +194,7 @@ public class DeploymentControlService {
 
         EffectiveEnvironment effective = envStore.effective(projectId, targetEnv);
         if (!effective.missingSecrets().isEmpty()) {
-            throw new IllegalArgumentException("环境密钥缺失：" + String.join("、",
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "环境密钥缺失：" + String.join("、",
                     effective.missingSecrets()));
         }
         int preferredPort = preferredPort(projectId, targetEnv, host, effective);
@@ -218,7 +221,7 @@ public class DeploymentControlService {
             boolean exited = process.waitFor(HOST_START_PROBE_MS, TimeUnit.MILLISECONDS);
             if (exited && process.exitValue() != 0) {
                 Files.deleteIfExists(pidFile);
-                throw new IllegalArgumentException("进程启动即退出（exit " + process.exitValue()
+                throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "进程启动即退出（exit " + process.exitValue()
                         + "）：" + tail(logFile, 8));
             }
             writePortFile(stateDir, port);
@@ -229,10 +232,10 @@ public class DeploymentControlService {
                     "已启动 HOST 进程 pid=" + process.pid() + "，端口 " + port + portNote,
                     "RUNNING");
         } catch (IOException e) {
-            throw new IllegalArgumentException("无法启动进程：" + e.getMessage(), e);
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "无法启动进程：" + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalArgumentException("启动被中断");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "启动被中断");
         }
     }
 
@@ -302,7 +305,7 @@ public class DeploymentControlService {
         List<ContainerStatus> containers = List.of();
         try {
             containers = inspector.containers(projectId, targetEnv);
-        } catch (IllegalStateException ignored) {
+        } catch (PlatformException | IllegalStateException ignored) {
             // Docker 不可用：继续尝试 HOST 日志
         }
         List<ContainerStatus> matched = wanted == null ? containers : containers.stream()
@@ -313,8 +316,8 @@ public class DeploymentControlService {
             List<String> lines;
             try {
                 lines = inspector.logs(target.name(), since);
-            } catch (IllegalStateException e) {
-                throw new IllegalArgumentException(e.getMessage());
+            } catch (PlatformException | IllegalStateException e) {
+                throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, e.getMessage());
             }
             return new DeploymentLogs("DOCKER", target.name(),
                     matched.stream().map(ContainerStatus::name).toList(),
@@ -324,7 +327,7 @@ public class DeploymentControlService {
 
         HostSlot slot = findHostSlot(projectId, targetEnv, wanted);
         if (slot == null) {
-            throw new IllegalArgumentException("该环境没有可读取日志的部署产物");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "该环境没有可读取日志的部署产物");
         }
         List<String> lines = readLogTail(slot.dir().resolve("app.log"), limit);
         return new DeploymentLogs("HOST", null, List.of(), redactTail(lines, limit),
@@ -337,8 +340,7 @@ public class DeploymentControlService {
             return matched.stream()
                     .filter(status -> name.equals(status.name()))
                     .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "容器 " + name + " 不属于该环境/版本"));
+                    .orElseThrow(() -> new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "容器 " + name + " 不属于该环境/版本"));
         }
         return matched.stream().filter(ContainerStatus::running).findFirst()
                 .orElse(matched.get(0));
@@ -526,7 +528,7 @@ public class DeploymentControlService {
         }
         String commandLine = handle.get().info().commandLine().orElse("");
         if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
-            throw new IllegalArgumentException("pid=" + pid
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "pid=" + pid
                     + " 不是平台部署的 app.jar，拒绝停止（可能是 pid 被复用）");
         }
         handle.get().descendants().forEach(ProcessHandle::destroy);
@@ -592,7 +594,7 @@ public class DeploymentControlService {
                 return new PortChoice(candidate, true);
             }
         }
-        throw new IllegalArgumentException("端口分配失败：原端口 " + want
+        throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "端口分配失败：原端口 " + want
                 + " 被占用，且其后 200 个端口都不可用");
     }
 
@@ -651,9 +653,9 @@ public class DeploymentControlService {
         List<ContainerStatus> containers;
         try {
             containers = inspector.containers(projectId, env);
-        } catch (IllegalStateException e) {
+        } catch (PlatformException | IllegalStateException e) {
             if (version == null && !hasHostRelease(projectId, env)) {
-                throw new IllegalArgumentException("Docker 不可用：" + e.getMessage());
+                throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "Docker 不可用：" + e.getMessage());
             }
             return List.of();
         }
@@ -688,18 +690,18 @@ public class DeploymentControlService {
             byte[] output = process.getInputStream().readAllBytes();
             if (!process.waitFor(DOCKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
-                throw new IllegalStateException("docker " + action + " 超时：" + container);
+                throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "docker " + action + " 超时：" + container);
             }
             String text = new String(output, StandardCharsets.UTF_8).trim();
             if (process.exitValue() != 0) {
-                throw new IllegalStateException("docker " + action + " 失败：" + text);
+                throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "docker " + action + " 失败：" + text);
             }
             return text;
         } catch (IOException e) {
-            throw new IllegalStateException("Docker 不可用：" + e.getMessage(), e);
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "Docker 不可用：" + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("docker " + action + " 被中断");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "docker " + action + " 被中断");
         }
     }
 
@@ -717,7 +719,7 @@ public class DeploymentControlService {
     private Path hostDir(String projectId, String env) {
         // 与 HostDeployer 的命名保持一致：<deployRoot>/<projectId>-<env>（不再额外小写化）
         if (projectId == null || !SAFE_VERSION.matcher(projectId.trim()).matches()) {
-            throw new IllegalArgumentException("非法项目标识：" + projectId);
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "非法项目标识：" + projectId);
         }
         return deployRoot.resolve(projectId.trim() + "-" + env);
     }
@@ -725,7 +727,7 @@ public class DeploymentControlService {
     private static String requireEnv(String env) {
         String value = env == null ? "" : env.trim().toLowerCase(Locale.ROOT);
         if (!ENVS.contains(value)) {
-            throw new IllegalArgumentException("未知环境：" + env + "（可选 dev / test / prod）");
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "未知环境：" + env + "（可选 dev / test / prod）");
         }
         return value;
     }
@@ -736,7 +738,7 @@ public class DeploymentControlService {
         }
         String value = version.trim();
         if (!SAFE_VERSION.matcher(value).matches()) {
-            throw new IllegalArgumentException("非法版本标识：" + version);
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "非法版本标识：" + version);
         }
         return value;
     }

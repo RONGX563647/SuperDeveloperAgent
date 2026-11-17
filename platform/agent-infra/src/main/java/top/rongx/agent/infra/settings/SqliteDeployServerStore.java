@@ -16,6 +16,8 @@ import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 import top.rongx.agent.infra.security.SecretBox;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 部署服务器配置（SQLite）：密码/口令 AES-GCM 加密落库，接口只回掩码。
@@ -68,7 +70,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
         try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("deploy_servers 表初始化失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "deploy_servers 表初始化失败：" + e.getMessage(), e);
         }
     }
 
@@ -90,7 +92,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
                 return out;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("服务器列表查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "服务器列表查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -104,7 +106,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("服务器查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "服务器查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -118,7 +120,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
                 return rs.next() ? Optional.of(map(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("默认服务器查询失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "默认服务器查询失败：" + e.getMessage(), e);
         }
     }
 
@@ -148,7 +150,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("服务器保存失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "服务器保存失败：" + e.getMessage(), e);
         }
         return find(id).orElseThrow();
     }
@@ -236,7 +238,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
             st.setString(1, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("服务器删除失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "服务器删除失败：" + e.getMessage(), e);
         }
     }
 
@@ -260,7 +262,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("设置默认服务器失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "设置默认服务器失败：" + e.getMessage(), e);
         }
     }
 
@@ -277,7 +279,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
             st.setString(4, id);
             st.executeUpdate();
         } catch (SQLException e) {
-            throw new IllegalStateException("测试结果写入失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "测试结果写入失败：" + e.getMessage(), e);
         }
     }
 
@@ -299,7 +301,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
                 return Optional.of(secretBox.decrypt(enc, iv));
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("口令读取失败：" + e.getMessage(), e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "口令读取失败：" + e.getMessage(), e);
         }
     }
 

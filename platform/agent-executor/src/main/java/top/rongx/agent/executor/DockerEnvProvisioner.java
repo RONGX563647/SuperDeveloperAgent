@@ -26,6 +26,8 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 本机 Docker 环境自愈：按「项目 + 环境」准备隔离的中间件容器。
@@ -125,7 +127,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             String kind = eq < 0 ? "" : pair.substring(0, eq).trim().toLowerCase(Locale.ROOT);
             String image = eq < 0 ? "" : pair.substring(eq + 1).trim();
             if (!DEFAULT_MIDDLEWARE_IMAGES.containsKey(kind) || !IMAGE_REF.matcher(image).matches()) {
-                throw new IllegalArgumentException("agent.env.middleware-images 含非法条目「" + pair
+                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "agent.env.middleware-images 含非法条目「" + pair
                         + "」；格式应为 <kind>=<image>，kind 可选 "
                         + DEFAULT_MIDDLEWARE_IMAGES.keySet() + "，镜像只含字母数字与 ._/:@-");
             }
@@ -675,7 +677,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
 
     private void ensureNetwork(String network) {
         if (!NAME.matcher(network).matches()) {
-            throw new IllegalArgumentException("网络名不合法：" + network);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "网络名不合法：" + network);
         }
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome inspect =
@@ -687,7 +689,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         ProcessExecutor.StepOutcome created = executor.exec(CWD,
                 List.of("docker", "network", "create", network), 30_000, sink, () -> false);
         if (created.exitCode() != 0) {
-            throw new IllegalStateException("环境网络创建失败 " + network + "："
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境网络创建失败 " + network + "："
                     + ProcessExecutor.redact(ProcessExecutor.tail(sink)));
         }
     }
@@ -792,7 +794,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         }
         String image = images.getOrDefault(kind, DEFAULT_MIDDLEWARE_IMAGES.getOrDefault(kind, ""));
         if (image.isBlank() || !IMAGE_REF.matcher(image).matches()) {
-            throw new IllegalArgumentException("中间件 " + kind + " 的镜像引用未配置或非法：" + image);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "中间件 " + kind + " 的镜像引用未配置或非法：" + image);
         }
         switch (kind) {
             case "mysql", "mariadb" -> {
@@ -828,7 +830,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                         "-e", "MONGO_INITDB_ROOT_PASSWORD=" + nullSafe(password)));
                 argv.add(image);
             }
-            default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
+            default -> throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "不支持的中间件类型：" + kind);
         }
         return argv;
     }
@@ -920,7 +922,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             case "minio" -> 9000;
             case "postgres" -> 5432;
             case "mongo" -> 27017;
-            default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
+            default -> throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "不支持的中间件类型：" + kind);
         };
     }
 
@@ -944,7 +946,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             case "minio" -> 19000;
             case "postgres" -> 15432;
             case "mongo" -> 17017;
-            default -> throw new IllegalArgumentException("不支持的中间件类型：" + kind);
+            default -> throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "不支持的中间件类型：" + kind);
         };
     }
 
@@ -969,7 +971,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
             }
             return candidate;
         }
-        throw new IllegalStateException(kind + " 端口段 " + base + "–" + (base + 99) + " 已耗尽");
+        throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, kind + " 端口段 " + base + "–" + (base + 99) + " 已耗尽");
     }
 
     private static boolean free(int port) {

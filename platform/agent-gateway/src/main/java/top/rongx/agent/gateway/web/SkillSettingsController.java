@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.infra.settings.SkillsStore;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * Skill 接入（设置页）。
@@ -41,7 +43,7 @@ public class SkillSettingsController {
     public Map<String, Object> read(@PathVariable String name) {
         requireRead();
         String content = skills.content(name)
-                .orElseThrow(() -> new IllegalArgumentException("技能不存在：" + name));
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "技能不存在：" + name));
         return Map.of("name", name, "content", content);
     }
 

@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 受限补丁器真实集成测试：本地 git 仓库，无网络。
@@ -39,9 +40,9 @@ class WorkspaceCodePatcherTest {
         String base = new GitWorktreeManager(ws).revParse(repo, "HEAD");
         WorkspaceCodePatcher patcher = new WorkspaceCodePatcher(new GitWorktreeManager(ws), locator(repo));
 
-        assertThrows(IllegalArgumentException.class, () -> patcher.stage("P", base,
+        assertThrows(PlatformException.class, () -> patcher.stage("P", base,
                 List.of(new CodePatch.FileEdit("src/main/java/App.java", "hacked\n"))));
-        assertThrows(IllegalArgumentException.class, () -> patcher.stage("P", base,
+        assertThrows(PlatformException.class, () -> patcher.stage("P", base,
                 List.of(new CodePatch.FileEdit("../evil.sh", "rm -rf /\n"))));
     }
 

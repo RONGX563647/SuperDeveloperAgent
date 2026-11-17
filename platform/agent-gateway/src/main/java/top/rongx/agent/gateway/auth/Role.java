@@ -1,6 +1,8 @@
 package top.rongx.agent.gateway.auth;
 
 import java.util.List;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * 角色定义（权限体系的最小集合，够用即可，不做成可配置数据库表）。
@@ -46,6 +48,6 @@ public enum Role {
                 return r;
             }
         }
-        throw new IllegalArgumentException("未知角色: " + code);
+        throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "未知角色: " + code);
     }
 }

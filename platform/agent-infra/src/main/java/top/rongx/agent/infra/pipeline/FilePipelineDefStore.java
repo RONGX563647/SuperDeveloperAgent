@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.PipelineDefStore;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 
 /**
  * 平台侧流水线定义的落盘实现：{@code <workspaceRoot>/<projectId>/ci/{pipeline.yml,actions.yml}}。
@@ -33,7 +35,7 @@ public class FilePipelineDefStore implements PipelineDefStore {
     public Path rootOf(String projectId) {
         // projectId 已由接入侧校验（大写字母开头），这里再挡一次路径穿越
         if (projectId == null || !projectId.matches("[A-Za-z0-9_\\-]{1,32}")) {
-            throw new IllegalArgumentException("非法 projectId：" + projectId);
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "非法 projectId：" + projectId);
         }
         return workspaceRoot.resolve(projectId);
     }

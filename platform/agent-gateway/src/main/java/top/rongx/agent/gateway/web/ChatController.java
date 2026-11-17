@@ -36,6 +36,8 @@ import top.rongx.agent.gateway.web.dto.ChatRequest;
 import top.rongx.agent.governance.ChangeRegistry;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.runtime.workspace.ConversationManager;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 对话入口（SSE）。
@@ -128,7 +130,7 @@ public class ChatController {
         // 2.0 会话选择的模型必须真实可用：非法/停用的连接或目录外模型直接 400，不回退默认
         requireKnownModel(request.modelConnectionId(), request.modelName());
         ActiveModel active = models.resolve(request.modelConnectionId(), request.modelName())
-                .orElseThrow(() -> new IllegalArgumentException("模型连接不可用或已停用："
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "模型连接不可用或已停用："
                         + (request.modelConnectionId() == null ? "默认连接"
                         : request.modelConnectionId())));
         // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树/模型
@@ -222,7 +224,7 @@ public class ChatController {
                 .map(c -> modelName.equals(c.modelName()))
                 .orElse(false);
         if (!configured && catalog.find(connectionId, modelName).isEmpty()) {
-            throw new IllegalArgumentException("模型不在该网关的模型目录中：" + modelName
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "模型不在该网关的模型目录中：" + modelName
                     + "（可在「设置 → 模型连接」同步网关模型）");
         }
     }
