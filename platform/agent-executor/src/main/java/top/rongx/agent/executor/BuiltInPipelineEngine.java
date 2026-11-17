@@ -87,7 +87,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     /** 运行看护：扫描周期 / 落盘间隔 / 无输出心跳 / 强制终态前的宽限。 */
     private static final long WATCHDOG_TICK_MS = 5_000L;
     private static final long HEARTBEAT_SAVE_MS = 10_000L;
-    private static final long HEARTBEAT_LOG_MS = 30_000L;
+    private static final long HEARTBEAT_LOG_MS = 120_000L;
     private static final long WATCHDOG_GRACE_MS = 5 * 60_000L;
     private static final long FORCE_TERMINATE_AFTER_MS = 60_000L;
     /** 命令里的 ${var} 占位符（预览展示模板，运行时替换）。 */
@@ -1090,8 +1090,51 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (state.definition == null) {
             return false;
         }
+        // verify 永远不是"环境跑通"：即使定义被改坏带进了 deploy，也不能当成晋升证据
+        if ("verify".equals(state.pipelineId)) {
+            return false;
+        }
         return state.definition.stages().stream()
                 .anyMatch(s -> "deploy".equals(s.type()) || "stack_deploy".equals(s.action()));
+    }
+
+    /**
+     * 运行模式裁剪的唯一入口：触发与自动续跑共用。
+     *
+     * <p>此前自动续跑直接使用原始定义，verify 运行会退化成完整 release：
+     * 真的起进程、固化环境脚本，只读的检查构建因此污染环境并伪造晋升证据。
+     *
+     * @param pipelineId  {@code verify} = 只构建，不部署
+     * @param deployImage 非空 = 按版本部署（复用镜像，只跑 deploy/health）
+     * @param verifyImage verify 时是否保留镜像打包
+     * @param target      有效部署目标（触发参数覆盖后的值，可为空；预留给后续按目标裁剪）
+     */
+    static PipelineDefinition planFor(String pipelineId, String deployImage, boolean verifyImage,
+                                      String target, PipelineDefinition definition) {
+        if (definition == null) {
+            return null;
+        }
+        if (deployImage != null && !deployImage.isBlank()) {
+            return definition.forDeployOnly();
+        }
+        if ("verify".equals(pipelineId)) {
+            return definition.forVerify(verifyImage);
+        }
+        return definition;
+    }
+
+    /** 应用运行模式裁剪（verify / 按版本部署）。 */
+    private PipelineDefinition applyRunMode(RunState state, PipelineDefinition definition) {
+        return planFor(state.pipelineId, state.deployImage, state.verifyImage,
+                effectiveDeployTarget(state, definition), definition);
+    }
+
+    /** 有效部署目标：触发参数覆盖优先，否则取定义里的 deploy.target。 */
+    private static String effectiveDeployTarget(RunState state, PipelineDefinition definition) {
+        if (state.deployTargetOverride != null && !state.deployTargetOverride.isBlank()) {
+            return state.deployTargetOverride;
+        }
+        return definition.deploy() == null ? null : definition.deploy().target();
     }
 
     private PipelineDefinitionResolver.Resolved badDefinition(RunState state, RuntimeException e) {
@@ -2134,7 +2177,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return state.definition;
             }
             state.recipeRoot = resolved.recipeRoot();
-            state.definition = resolved.definition();
+            // 续跑必须重新裁剪：否则 verify 会拿到完整 release 的阶段列表，
+            // 只读的检查构建变成真实部署（并在成功后固化配方）
+            state.definition = applyRunMode(state, resolved.definition());
             state.definitionSource = resolved.source();
             state.definitionNote = resolved.note();
             appendLog(state, "[autofix] 按最新定义续跑（" + resolved.source()
@@ -2154,9 +2199,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             before.add(all.get(i).id());
         }
         List<StageResult> prefix = new ArrayList<>();
+        // checkout 是引擎内置阶段（不在 definition.stages() 里），必须保留：
+        // 否则续跑后阶段编号会从 2/6 退回 1/6，证据里也丢了检出记录
+        int normal = 0;
         for (StageResult r : state.stages) {
-            if (before.contains(r.stageId()) && prefix.size() < idx) {
+            if ("checkout".equals(r.stageId())) {
                 prefix.add(r);
+                continue;
+            }
+            if (before.contains(r.stageId()) && normal < idx) {
+                prefix.add(r);
+                normal++;
             }
         }
         state.stages.clear();
@@ -2238,10 +2291,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     .append(resolved.note()).append('\n');
             state.log.append("[env] ").append(state.env)
                     .append(" · 提交 ").append(shortSha(state.gitSha)).append('\n');
+            // 运行模式裁剪只走 applyRunMode：触发与自动续跑必须得到同一份计划，
+            // 否则 verify 续跑会退化成完整 release（部署 + 固化配方），只读检查构建污染环境。
+            definition = applyRunMode(state, definition);
             if (state.deployImage != null) {
-                // 按版本部署：复用历史镜像 tag，只跑 deploy + health（不构建、不打包）。
-                // 定义仍按该版本的提交解析，deploy 段与该版本一起受审。
-                definition = definition.forDeployOnly();
                 if (definition.stages().isEmpty()) {
                     state.log.append("[deploy] 流水线没有 deploy 阶段，无法按版本部署\n");
                     state.stages.add(StageResult.failed("deploy", 1, ErrorCode.DEPLOY_SECTION_MISSING.code(),
@@ -2261,11 +2314,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                 "localImage", state.deployImage)));
                 state.log.append("[deploy] 按版本部署：复用镜像 ").append(state.deployImage)
                         .append("（跳过构建与打包）\n");
-            } else if ("verify".equals(state.pipelineId)) {
-                // verify = 只做构建与测试（相当于 Jenkins 的 PR 检查），不部署、不打镜像。
-                // 裁剪逻辑与预览共用 PipelineDefinition.forVerify；镜像默认跳过（最贵且对"能不能编过"无价值），
-                // 需要验证 Dockerfile 时用触发参数 verifyImage=true 显式保留。
-                definition = definition.forVerify(state.verifyImage);
             }
 
             // 镜像 tag 只由「环境 + 提交」决定：同一提交重复构建复用同一个 tag（不会堆 vN），
@@ -4122,8 +4170,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     .append('\n');
             candidate = found;
         } else if (lease != null && lease.hostPort() != desired) {
+            // 端口有两个来源（定义 vs 租约）：必须把差异写清楚，否则工具/日志里
+            // ci_definition=8182、实际部署=8183，诊断时无法判断哪个才是真的
             state.log.append("[port] 沿用租约端口 ").append(candidate)
-                    .append("（容器端口 ").append(containerPort).append("）\n");
+                    .append("（定义端口 ").append(desired)
+                    .append(" 与租约不一致，容器端口 ").append(containerPort)
+                    .append("；如需改回请重置端口租约）\n");
         }
         state.deployHostPort = candidate;
         envStore.saveLease(new PortLease(state.projectId, state.env, containerPort,
@@ -4250,8 +4302,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (state.deployHostPort > 0) {
             String actual = withPort(url, state.deployHostPort);
             if (!actual.equals(url)) {
-                state.log.append("[health] 端口租约 ").append(state.deployHostPort)
-                        .append("，健康检查 URL ").append(url).append(" → ").append(actual).append('\n');
+                state.log.append("[health] 使用部署端口 ").append(state.deployHostPort)
+                        .append("，健康检查 ").append(actual).append('\n');
                 url = actual;
             }
         }
@@ -4287,7 +4339,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 boolean statusOk = stage.expected() == 0
                         ? response.statusCode() >= 200 && response.statusCode() < 300
                         : response.statusCode() == stage.expected();
-                if (statusOk && containerReady(state, resource, dockerTarget)) {
+                if (statusOk && healthBodyOk(url, body)
+                        && containerReady(state, resource, dockerTarget)) {
                     state.log.append("[health] ").append(response.statusCode()).append(' ')
                             .append(body.length() > 500 ? body.substring(0, 500) + "…" : body).append('\n');
                     state.stages.add(StageResult.success(stage.id(), 0, List.of(), elapsed(start)));
@@ -4329,6 +4382,19 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 + (diag == null ? "" : "；容器日志：" + diag);
         state.stages.add(StageResult.failed(stage.id(), 1, ErrorCode.ARTIFACT_MISSING.code(), summary, elapsed(start)));
         return false;
+    }
+
+    /**
+     * actuator 的 {@code /health} 可能返回 HTTP 200 但 status=DOWN（如 readiness 未就绪），
+     * 只看状态码会假通过；非 actuator 探测地址不做 body 约束。
+     */
+    static boolean healthBodyOk(String url, String body) {
+        if (url == null || !url.contains("/actuator/health") || body == null) {
+            return true;
+        }
+        String compact = body.replaceAll("\\s+", "");
+        return !compact.contains("\"status\":\"DOWN\"")
+                && !compact.contains("\"status\":\"OUT_OF_SERVICE\"");
     }
 
     /**

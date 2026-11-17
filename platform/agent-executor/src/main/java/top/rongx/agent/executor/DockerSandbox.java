@@ -42,6 +42,15 @@ public class DockerSandbox {
     /** 准备阶段单步预算：镜像未预热时拉镜像可能很慢，但不能无限等。 */
     private static final long PREPARE_TIMEOUT_MS = 30_000L;
 
+    /** 缓存卷初始化预算：首次创卷 + 冷镜像启动会超过 30s（线上实测偶发 E-302）。 */
+    private static final long CACHE_INIT_TIMEOUT_MS = 90_000L;
+
+    /** 缓存卷初始化尝试次数：超时属于瞬时基础设施问题，先自动重试再交给自愈。 */
+    private static final int CACHE_INIT_ATTEMPTS = 2;
+
+    /** 初始化完成标记：进程重启后据此跳过 chown -R，避免每次白白扫一遍 GB 级缓存。 */
+    private static final String READY_MARKER = "/cache/.agent-ready";
+
     /** 镜像预检预算：本机已有时秒级返回；缺镜像时不能把"没有"误判成"网络慢"。 */
     private static final long IMAGE_INSPECT_TIMEOUT_MS = 5_000L;
 
@@ -171,6 +180,10 @@ public class DockerSandbox {
             cmd.add("MAVEN_OPTS=-Dmaven.repo.local=/cache/m2");
             cmd.add("-e");
             cmd.add("npm_config_cache=/cache/npm");
+            // pnpm 的 store 默认在 <workdir>/node_modules/.pnpm-store：工作树一删就全量重下。
+            // 必须显式指到缓存卷，否则 node_modules 复用永远是 0。
+            cmd.add("-e");
+            cmd.add("npm_config_store_dir=/cache/pnpm");
         }
         // 5c. Corepack 下载缓存：非 root 用户不能写 /usr/local/bin，
         //     用 COREPACK_HOME 指向可写目录；禁止交互式下载提示。
@@ -244,8 +257,10 @@ public class DockerSandbox {
         }
         BooleanSupplier abort = cancelled == null ? () -> false : cancelled;
         List<String> inspect = List.of(dockerBinary, "image", "inspect", image);
+        // 不要把 inspect 的完整 JSON 流进运行日志：70+ 行会把真正的失败原因挤出截断窗口，
+        // 只在这里静默判断"镜像是否存在"
         ProcessExecutor.StepOutcome outcome = commandExecutor.run(inspect,
-                IMAGE_INSPECT_TIMEOUT_MS, abort, live);
+                IMAGE_INSPECT_TIMEOUT_MS, abort, null);
         if (outcome.errorCode() == null) {
             return;
         }
@@ -276,8 +291,11 @@ public class DockerSandbox {
     /**
      * 动作开始前准备依赖缓存卷：用特权容器建目录并 chown，幂等且只做一次。
      *
-     * <p>每一步都有 30s 超时与取消检查；失败时抛异常且**不**把卷标记为已初始化，
+     * <p>每一步都有 90s 超时与取消检查；失败时抛异常且**不**把卷标记为已初始化，
      * 避免后续构建误用一个属主还是 root 的缓存卷。异常信息会进入运行日志。
+     *
+     * <p>瞬时超时（冷镜像/磁盘抖动）先自动重试一次；卷里写了完成标记，
+     * 进程重启后直接跳过 chown -R，不再为一次构建重扫整个 m2 缓存。
      */
     public void prepareCacheVolume(Path workspace, BooleanSupplier cancelled, Consumer<String> live) {
         String volume = cacheVolumeName(workspace);
@@ -288,17 +306,59 @@ public class DockerSandbox {
             if (initializedVolumes.contains(volume)) {
                 return;
             }
-            notify(live, "[sandbox] 首次初始化依赖缓存卷 " + volume
-                    + "（每步 30s 超时，可取消）\n");
-            runAsRoot(volume, cancelled, live, "mkdir", "-p",
-                    "/cache/m2", "/cache/npm", "/cache/corepack");
-            runAsRoot(volume, cancelled, live, "chown", "-R", "1000:1000", "/cache");
+            if (!cacheReady(volume, cancelled)) {
+                notify(live, "[sandbox] 首次初始化依赖缓存卷 " + volume
+                        + "（每步 90s 超时，可取消）\n");
+                initCacheVolume(volume, cancelled, live);
+                notify(live, "[sandbox] ✅ 依赖缓存卷已就绪：" + volume + "\n");
+            }
             initializedVolumes.add(volume);
         }
     }
 
-    private void runAsRoot(String volume, BooleanSupplier cancelled, Consumer<String> live,
-                           String... argv) {
+    /** 完成标记探测：容器启动失败或读不到标记都按"未初始化"处理，交给初始化流程报错。 */
+    private boolean cacheReady(String volume, BooleanSupplier cancelled) {
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(
+                rootCommand(volume, "test", "-f", READY_MARKER), CACHE_INIT_TIMEOUT_MS,
+                cancelled == null ? () -> false : cancelled, null);
+        return outcome.exitCode() == 0;
+    }
+
+    /** 建目录 + 校正属主 + 写完成标记：任一步超时先自动重试，仍失败才抛给调用方。 */
+    private void initCacheVolume(String volume, BooleanSupplier cancelled, Consumer<String> live) {
+        for (int attempt = 1; attempt <= CACHE_INIT_ATTEMPTS; attempt++) {
+            try {
+                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live, "mkdir", "-p",
+                        "/cache/m2", "/cache/npm", "/cache/pnpm", "/cache/corepack");
+                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live,
+                        "chown", "-R", "1000:1000", "/cache");
+                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live, "touch", READY_MARKER);
+                return;
+            } catch (EnvironmentException e) {
+                boolean aborted = cancelled != null && cancelled.getAsBoolean();
+                if (attempt >= CACHE_INIT_ATTEMPTS || aborted) {
+                    throw e;
+                }
+                notify(live, "[sandbox] 缓存卷初始化失败，自动重试（"
+                        + (attempt + 1) + "/" + CACHE_INIT_ATTEMPTS + "）\n");
+            }
+        }
+    }
+
+    private void runAsRoot(String volume, long timeoutMs, BooleanSupplier cancelled,
+                           Consumer<String> live, String... argv) {
+        List<String> cmd = rootCommand(volume, argv);
+        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, timeoutMs,
+                cancelled == null ? () -> false : cancelled, live);
+        if (outcome.errorCode() != null) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "缓存卷初始化失败（" + outcome.errorCode() + "）："
+                    + outcome.summary() + "；命令：" + String.join(" ", cmd));
+        }
+    }
+
+    /** 特权容器命令行：只用于缓存卷初始化（需要 root 才能建目录 / chown）。 */
+    private List<String> rootCommand(String volume, String... argv) {
         List<String> cmd = new ArrayList<>();
         cmd.add(dockerBinary);
         cmd.add("run");
@@ -310,13 +370,7 @@ public class DockerSandbox {
         cmd.add(volume + ":/cache");
         cmd.add(image);
         cmd.addAll(List.of(argv));
-        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
-        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, PREPARE_TIMEOUT_MS,
-                cancelled == null ? () -> false : cancelled, live);
-        if (outcome.errorCode() != null) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "缓存卷初始化失败（" + outcome.errorCode() + "）："
-                    + outcome.summary() + "；命令：" + String.join(" ", cmd));
-        }
+        return cmd;
     }
 
     private static void notify(Consumer<String> live, String text) {

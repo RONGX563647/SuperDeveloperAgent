@@ -402,6 +402,9 @@ class DeployRecipeFlowTest {
         git(repo, "config", "user.name", "CI");
         git(repo, "config", "commit.gpgsign", "false");
         Files.writeString(repo.resolve("README.md"), "# demo\n", StandardCharsets.UTF_8);
+        // 运行期目录（worktree/日志/配方）不属于源码，真实仓库同样忽略；
+        // 否则某次运行留下 .agent/worktrees 后，后续 git add -A 会直接失败
+        Files.writeString(repo.resolve(".gitignore"), ".agent/\n", StandardCharsets.UTF_8);
         // 部署目标自愈（reconcileTarget）需要本次真有可运行产物：host 目标认 target/*.jar
         Files.createDirectories(repo.resolve("target"));
         Files.writeString(repo.resolve("target/app.jar"), "jar", StandardCharsets.UTF_8);
