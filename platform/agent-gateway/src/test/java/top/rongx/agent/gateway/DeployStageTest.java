@@ -181,10 +181,23 @@ class DeployStageTest {
 
         StageResult deployStage = stageOf(runId, "deploy");
         assertEquals(StageStatus.SUCCEEDED, deployStage.status());
-        ArtifactRef deployment = deployStage.artifacts().stream()
-                .filter(a -> "deployment".equals(a.kind())).findFirst().orElse(null);
-        assertTrue(deployment != null, "应登记 deployment 产物：" + deployStage.artifacts());
-        // 证据链：实际端口/容器端口/探活路径必须随产物落库，排障不靠日志反推
+        assertTrue(deployStage.artifacts().stream().anyMatch(a -> "deployment".equals(a.kind())),
+                "应登记 deployment 产物：" + deployStage.artifacts());
+    }
+
+    @Test
+    @DisplayName("deployment 产物固化端口/容器端口/探活路径等证据字段")
+    void recordsDeploymentEvidence() throws Exception {
+        deployer.failNext = false;
+        deployer.calls.clear();
+        String runId = engine.trigger("RY", "release", Map.of("gitSha", sha));
+        awaitTerminal(runId, 30);
+        assertEquals(StageStatus.SUCCEEDED, engine.status(runId), engine.logTail(runId));
+
+        ArtifactRef deployment = stageOf(runId, "deploy").artifacts().stream()
+                .filter(a -> "deployment".equals(a.kind()))
+                .findFirst().orElseThrow(() -> new AssertionError("缺少 deployment 产物"));
+        // 排障不靠日志反推：实际端口、容器端口、探活路径与目标随产物落库
         assertEquals("18090", deployment.meta().get("port"), deployment.meta().toString());
         assertEquals("8080", deployment.meta().get("containerPort"), deployment.meta().toString());
         assertEquals("/healthz", deployment.meta().get("healthPath"), deployment.meta().toString());
