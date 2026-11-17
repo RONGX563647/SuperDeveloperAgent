@@ -1,0 +1,42 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "docs/2026-11-17_0921_session-6afba843",
+  "category": "docs",
+  "title": "当前工作区任务存在问题：右侧任务栏是独立新写的存储，未复用已有工具栏的任务数据与工具，同时已有工具栏UI存在边界未占满、",
+  "createdAt": "2026-11-17T10:39:18+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "用户反馈当前工作区任务存在问题：右侧任务栏是独立新写的存储，未复用已有工具栏的任务数据与工具，同时已有工具栏UI存在边界未占满、缺少P0/P1/P2优先级彩色标注的问题，要求在任务页添加包含任务量化统计的可视化看板。已完成三项改造：1. 任务数据统一，工作区右栏任务改为读取GitIssue同一批工单，所有相关Agent工具全部切换为调用GitIssueService，移除独立的工作区任务板存储；2",
+    "toolCallCount": 0,
+    "ideSessionId": "6afba843162480beed7c1efd",
+    "autoSwept": true
+  },
+  "problem": "AI 开发会话（无代码提交）：当前工作区任务存在问题：右侧任务栏是独立新写的存储，未复用已有工具栏的任务数据与工具，同时已有工具栏UI存在边界未占满、",
+  "solution": "用户反馈当前工作区任务存在问题：右侧任务栏是独立新写的存储，未复用已有工具栏的任务数据与工具，同时已有工具栏UI存在边界未占满、缺少P0/P1/P2优先级彩色标注的问题，要求在任务页添加包含任务量化统计的可视化看板。已完成三项改造：1. 任务数据统一，工作区右栏任务改为读取GitIssue同一批工单，所有相关Agent工具全部切换为调用GitIssueService，移除独立的工作区任务板存储；2. 任务页UI优化，移除最大宽度限制实现内容区铺满，新增P0/P1/P2彩色优先级徽标、优先级筛选与排序功能；3. 新增纯SVG实现的任务量化看板，包含完成率环形图、优先级分布、任务类型统计、近7天活动柱状图，无新增依赖。后端各模块编译通过，单元测试全部通过，前端类型检查通过，未修改并行会话涉及的其他工具文件与未完成的会话归档。",
+  "commits": [],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "n/a",
+    "result": "NOT_RUN",
+    "evidence": "会话无代码改动，按会话摘要自动补录"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "无代码改动（自动对账生成）；代码产出见 bug/2026-11-17_0836_env-version-label"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [
+      "bug/2026-11-17_0836_env-version-label"
+    ],
+    "summaryRefs": [
+      "2026-11/2026-11-17_0921_session-6afba843"
+    ]
+  },
+  "chain": {
+    "prev": "62a1eeb896cad315fe9020a66ea767fdfaa9f7bec3908ac8e057fb5aa0d28c71",
+    "self": "1c0a6d17834a305d0a644cc3ac5bc7a5ff6eb74ba70569828e47de22a5eecdf7"
+  }
+}

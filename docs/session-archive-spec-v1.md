@@ -137,6 +137,21 @@ docs/
 - 漏归档只能补录：新建 manifest（`createdAt` 取会话开始时间，`chain.prev` 按同类时间序接上），
   不得改动或删除已有归档。
 
+### 3.6 会话覆盖契约（每次对话都归档）
+
+提交覆盖只保证"有提交的会话"，纯问答/只读排查会漏。会话维度补两层：
+
+- **docs 类允许空提交**：`commits: []`、`tests.required=false`、`result=NOT_RUN`，
+  用于记录没有代码改动的会话；feat/bug/deploy 仍然必须有提交。
+- **`session.ideSessionId` 全局唯一**：一个 AI 开发会话只能有一份归档，
+  `validate` 对重复 id 报错；老归档没有该字段视为存量，不回溯。
+- **定时对账**：`python tools/session-archive/sweep.py` 读取 IDE 自动写下的会话摘要
+  （`topics.md`），按 8 小时窗口把提交归属到会话：
+  - 窗口内提交都已被归档 → 生成 docs 归档并在 `links.relatedIds` 回指代码归档；
+  - 窗口内有未归档提交 → 跳过并报警，必须先走 `start`/`finish` 补代码归档；
+  - 已存在 `ideSessionId` 的会话不重复建档（幂等）。
+- 对账任务每 2 小时跑一次；它只是兜底，正常流程仍是 `start` → `finish` → `validate`。
+
 ## 4. summary 规范（本版核心增强）
 
 ### 4.1 定位与文件
