@@ -38,9 +38,12 @@ public class GitIssueCommandTools {
                     required = false) String priority,
             @ToolParam(name = "labels", description = "标签，逗号分隔，可空", required = false)
             String labels,
+            @ToolParam(name = "version",
+                    description = "关联版本号（如 0.1.2），可空：默认取当前分支版本",
+                    required = false) String version,
             ProjectContext ctx) {
         GitIssue issue = issues.create(ctx.userId(), new GitIssue.Draft(ctx.projectId(),
-                provider, repo, title, body, "OPEN", kind, priority, labels, ""));
+                provider, repo, title, body, "OPEN", kind, priority, labels, "", version));
         return "已创建任务 %s（%s，同步状态 %s%s）。evidence: task:%s".formatted(
                 issue.id(), issue.title(), issue.syncStatus(),
                 issue.syncError().isBlank() ? "" : "：" + issue.syncError(), issue.id());
@@ -57,6 +60,9 @@ public class GitIssueCommandTools {
             @ToolParam(name = "priority", description = "新优先级 P0 / P1 / P2，可空", required = false)
             String priority,
             @ToolParam(name = "labels", description = "新标签，可空", required = false) String labels,
+            @ToolParam(name = "version",
+                    description = "新关联版本号（如 0.1.2），可空 = 保持原值",
+                    required = false) String version,
             ProjectContext ctx) {
         GitIssue current = issues.get(ctx.userId(), issueId);
         GitIssue updated = issues.update(ctx.userId(), issueId, new GitIssue.Draft(
@@ -67,7 +73,8 @@ public class GitIssueCommandTools {
                 blank(kind) ? current.kind() : kind,
                 blank(priority) ? current.priority() : priority,
                 blank(labels) ? current.labels() : labels,
-                current.assignee()));
+                current.assignee(),
+                blank(version) ? current.version() : version));
         return "已更新任务 %s（同步状态 %s）。evidence: task:%s"
                 .formatted(updated.id(), updated.syncStatus(), updated.id());
     }

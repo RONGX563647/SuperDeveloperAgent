@@ -42,6 +42,27 @@ class SqliteGitIssueStoreCodeTest {
                 .anyMatch(issue -> "BUG-1".equals(issue.code())));
     }
 
+    @Test
+    @DisplayName("任务版本号：保存/更新往返，标签里的 semver 自动回填")
+    void keepsVersion() {
+        SqliteGitIssueStore store = new SqliteGitIssueStore(tmp.toString(),
+                new SecretBox(tmp.toString(), ""));
+        long now = System.currentTimeMillis();
+
+        GitIssue issue = store.save(new GitIssue("t1", "", "u1", "p1", "GITHUB", "o/r", "",
+                "关联版本", "", "OPEN", "FEAT", "P1", "feat", "", "PLATFORM", "LOCAL", "", "",
+                now, now, "0.2.0"));
+        assertEquals("0.2.0", issue.version());
+        assertEquals("0.2.0", store.find("t1", "u1").orElseThrow().version(), "版本号需持久化");
+
+        // Git 同步来的 Issue 没有独立字段：从 version: 标签回填版本
+        GitIssue fromLabels = new GitIssue("t2", "", "u1", "p1", "GITHUB", "o/r", "", "远端任务",
+                "", "OPEN", "BUG", "P2", "bug,version:0.3.1", "", "GIT", "SYNCED", "", "",
+                now, now);
+        assertEquals("0.3.1", fromLabels.version());
+        assertEquals("0.3.1", store.save(fromLabels).version());
+    }
+
     private static GitIssue issue(String id, String code, String projectId, String kind,
                                   String title, long at) {
         return new GitIssue(id, code, "u1", projectId, "GITHUB", "o/r", "", title, "", "OPEN",

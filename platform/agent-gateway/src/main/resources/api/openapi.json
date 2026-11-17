@@ -7285,6 +7285,9 @@
           "updatedAt" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "version" : {
+            "type" : "string"
           }
         }
       },

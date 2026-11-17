@@ -185,7 +185,8 @@ public class GitIssueController {
                 str(body, "kind"),
                 str(body, "priority"),
                 str(body, "labels"),
-                str(body, "assignee"));
+                str(body, "assignee"),
+                str(body, "version"));
     }
 
     private static String str(Map<String, Object> body, String key) {

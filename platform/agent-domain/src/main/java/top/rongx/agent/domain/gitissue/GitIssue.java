@@ -1,6 +1,8 @@
 package top.rongx.agent.domain.gitissue;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 平台任务 ↔ Git Issue 的绑定记录。
@@ -22,6 +24,7 @@ import java.util.Locale;
  * @param priority  P0 / P1 / P2，任务优先级
  * @param source    PLATFORM / AGENT / GIT，最近一次变更来源
  * @param syncStatus SYNCED / LOCAL / PENDING / FAILED
+ * @param version   关联版本号（如 0.1.2）；空 = 未指定，创建时默认取当前分支版本
  */
 public record GitIssue(
         String id,
@@ -43,7 +46,12 @@ public record GitIssue(
         String syncError,
         String assignee,
         long createdAt,
-        long updatedAt) {
+        long updatedAt,
+        String version) {
+
+    private static final Pattern VERSION_IN_LABELS = Pattern.compile(
+            "(?:^|[,\\s;])(?:version\\s*[:=]\\s*)?v?(\\d+\\.\\d+\\.\\d+)(?:$|[,\\s;])",
+            Pattern.CASE_INSENSITIVE);
 
     public GitIssue {
         code = code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
@@ -63,6 +71,22 @@ public record GitIssue(
                 ? "LOCAL" : syncStatus.toUpperCase(Locale.ROOT);
         syncError = syncError == null ? "" : syncError;
         assignee = assignee == null ? "" : assignee;
+        version = normalizeVersion(version);
+        // Git 同步来的 Issue 没有独立字段：从版本标签（如 version:0.1.2 / v0.1.2）回填
+        if (version.isBlank()) {
+            version = versionOfLabels(labels);
+        }
+    }
+
+    /** 兼容旧调用：未携带版本号时从标签推导，保持既有构造点不变。 */
+    public GitIssue(String id, String code, String userId, String projectId, String provider,
+                    String repo, String number, String title, String body, String state,
+                    String kind, String priority, String labels, String url, String source,
+                    String syncStatus, String syncError, String assignee, long createdAt,
+                    long updatedAt) {
+        this(id, code, userId, projectId, provider, repo, number, title, body, state, kind,
+                priority, labels, url, source, syncStatus, syncError, assignee, createdAt,
+                updatedAt, "");
     }
 
     /** 兼容旧调用：未显式给优先级时按标签推导（Git 同步来的 Issue 走这里）。 */
@@ -132,6 +156,29 @@ public record GitIssue(
         };
     }
 
+    /**
+     * 归一化版本号：去空白、去掉前缀 v（平台标签统一不带 v），限制长度。
+     *
+     * <p>不做严格的 x.y.z 校验：历史版本或预发布标识也应能关联到任务。
+     */
+    public static String normalizeVersion(String version) {
+        String value = version == null ? "" : version.trim();
+        if (value.length() > 1 && (value.charAt(0) == 'v' || value.charAt(0) == 'V')
+                && Character.isDigit(value.charAt(1))) {
+            value = value.substring(1);
+        }
+        return value.length() > 32 ? value.substring(0, 32) : value;
+    }
+
+    /** 从标签里识别版本号：兼容 {@code version:0.1.2} 与裸 semver {@code v0.1.2}。 */
+    public static String versionOfLabels(String labels) {
+        if (labels == null || labels.isBlank()) {
+            return "";
+        }
+        Matcher matcher = VERSION_IN_LABELS.matcher(labels.trim());
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
     /** 写入模型（创建/更新共用）。 */
     public record Draft(
             String projectId,
@@ -143,7 +190,8 @@ public record GitIssue(
             String kind,
             String priority,
             String labels,
-            String assignee) {
+            String assignee,
+            String version) {
 
         public Draft {
             provider = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
@@ -157,18 +205,26 @@ public record GitIssue(
             priority = normalizePriority(priority);
             assignee = assignee == null ? "" : assignee.trim();
             projectId = projectId == null ? "" : projectId.trim();
+            // 空串 = 创建时取当前分支版本 / 更新时保持原值
+            version = normalizeVersion(version);
+        }
+
+        /** 兼容旧调用：未携带版本号。 */
+        public Draft(String projectId, String provider, String repo, String title, String body,
+                     String state, String kind, String priority, String labels, String assignee) {
+            this(projectId, provider, repo, title, body, state, kind, priority, labels, assignee, "");
         }
 
         /** 兼容旧调用：未指定优先级时沿用当前值。 */
         public Draft(String projectId, String provider, String repo, String title, String body,
                      String state, String kind, String labels, String assignee) {
-            this(projectId, provider, repo, title, body, state, kind, "", labels, assignee);
+            this(projectId, provider, repo, title, body, state, kind, "", labels, assignee, "");
         }
 
         /** 兼容旧调用：未指定分类时按标签推导。 */
         public Draft(String projectId, String provider, String repo, String title, String body,
                      String state, String labels, String assignee) {
-            this(projectId, provider, repo, title, body, state, "", "", labels, assignee);
+            this(projectId, provider, repo, title, body, state, "", "", labels, assignee, "");
         }
     }
 }

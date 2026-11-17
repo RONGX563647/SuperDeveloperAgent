@@ -25,6 +25,8 @@ export interface GitIssueRow {
   kind: GitIssueKind
   priority: GitIssuePriority
   labels: string
+  /** 关联版本号（如 0.1.2）；空 = 未关联，创建时默认取当前分支版本。 */
+  version: string
   url: string
   source: 'PLATFORM' | 'AGENT' | 'GIT' | string
   syncStatus: 'SYNCED' | 'LOCAL' | 'FAILED' | string
@@ -53,6 +55,8 @@ export interface GitIssueInput {
   kind?: GitIssueKind
   priority?: GitIssuePriority
   labels?: string
+  /** 关联版本号；留空 = 创建时取当前分支版本 / 更新时保持原值。 */
+  version?: string
   assignee?: string
 }
 

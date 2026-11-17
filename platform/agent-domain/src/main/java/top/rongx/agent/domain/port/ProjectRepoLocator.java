@@ -71,6 +71,11 @@ public interface ProjectRepoLocator {
         return List.of();
     }
 
+    /** 当前分支名（任务默认版本号按分支版本线推导）；仓库不可用时返回空串。 */
+    default String currentBranch(String projectId) {
+        return "";
+    }
+
     /**
      * 该提交是否位于指定分支上（含分支尖端）。
      *

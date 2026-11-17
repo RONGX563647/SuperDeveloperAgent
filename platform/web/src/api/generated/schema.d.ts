@@ -3175,6 +3175,7 @@ export interface components {
             createdAt?: number;
             /** Format: int64 */
             updatedAt?: number;
+            version?: string;
         };
         SaveTranscriptRequest: {
             payload?: string;

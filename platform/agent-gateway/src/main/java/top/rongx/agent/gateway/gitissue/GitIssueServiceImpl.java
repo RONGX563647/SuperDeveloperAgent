@@ -1,10 +1,14 @@
 package top.rongx.agent.gateway.gitissue;
 
 import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -15,6 +19,7 @@ import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
 import top.rongx.agent.domain.gitissue.GitIssueRepository;
 import top.rongx.agent.domain.gitissue.GitIssueService;
 import top.rongx.agent.domain.bugfix.BugFixTrigger;
+import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.error.ErrorCode;
@@ -30,28 +35,56 @@ import top.rongx.agent.domain.error.IntakeException;
 public class GitIssueServiceImpl implements GitIssueService {
 
     private static final Logger log = LoggerFactory.getLogger(GitIssueServiceImpl.class);
+    /** 版本线分支：0.1.0-snapshot → 0.1（与流水线版本号建议保持一致）。 */
+    private static final Pattern VERSION_BRANCH =
+            Pattern.compile("^(\\d+)\\.(\\d+)\\.0-snapshot$");
 
     private final GitIssueRepository issues;
     private final GitIssueIntegrationRepository integrations;
     private final GitIssueRemoteClient remote;
     private final BugFixTrigger bugFixTrigger;
     private final ProjectRepository projects;
+    private final ProjectRepoLocator repoLocator;
 
     public GitIssueServiceImpl(GitIssueRepository issues,
                                GitIssueIntegrationRepository integrations,
                                GitIssueRemoteClient remote,
                                BugFixTrigger bugFixTrigger,
-                               ProjectRepository projects) {
+                               ProjectRepository projects,
+                               ProjectRepoLocator repoLocator) {
         this.issues = issues;
         this.integrations = integrations;
         this.remote = remote;
         this.bugFixTrigger = bugFixTrigger;
         this.projects = projects;
+        this.repoLocator = repoLocator;
     }
 
     @Override
     public List<GitIssue> list(String userId, String provider, String state, String keyword) {
-        return issues.list(userId, provider, state, keyword);
+        List<GitIssue> rows = issues.list(userId, provider, state, keyword);
+        // 历史任务没有版本号：读取时按当前分支默认值展示（不落库、不动 updatedAt），
+        // 用户编辑保存后才会真正写入。
+        Map<String, String> defaults = new HashMap<>();
+        List<GitIssue> out = new ArrayList<>(rows.size());
+        for (GitIssue row : rows) {
+            if (!row.version().isBlank() || row.projectId().isBlank()) {
+                out.add(row);
+                continue;
+            }
+            String version = defaults.computeIfAbsent(row.projectId(),
+                    id -> resolveVersion("", id));
+            out.add(version.isBlank() ? row : withVersion(row, version));
+        }
+        return out;
+    }
+
+    private static GitIssue withVersion(GitIssue issue, String version) {
+        return new GitIssue(issue.id(), issue.code(), issue.userId(), issue.projectId(),
+                issue.provider(), issue.repo(), issue.number(), issue.title(), issue.body(),
+                issue.state(), issue.kind(), issue.priority(), issue.labels(), issue.url(),
+                issue.source(), issue.syncStatus(), issue.syncError(), issue.assignee(),
+                issue.createdAt(), issue.updatedAt(), version);
     }
 
     @Override
@@ -68,11 +101,12 @@ public class GitIssueServiceImpl implements GitIssueService {
         // 任务归属项目时自动使用项目托管的仓库，不再让用户手选平台/仓库
         GitIssue.Draft resolved = resolveRemote(draft, null);
         String repo = GitIssueRemoteClient.cleanRepo(resolved.repo());
+        String version = resolveVersion(resolved.version(), resolved.projectId());
         GitIssue issue = new GitIssue(newId("task"), "", userId, resolved.projectId(),
                 resolved.provider(),
                 repo, "", resolved.title(), resolved.body(), resolved.state(), resolved.kind(),
                 resolved.priority(), resolved.labels(), "", "PLATFORM", "LOCAL", "",
-                resolved.assignee(), now, now);
+                resolved.assignee(), now, now, version);
         if (shouldPush(resolved.provider(), repo)) {
             issue = pushCreate(issue, userId);
         } else if (!resolved.provider().isBlank() && !repo.isBlank()) {
@@ -101,6 +135,8 @@ public class GitIssueServiceImpl implements GitIssueService {
         String url = repoChanged ? "" : current.url();
         long now = System.currentTimeMillis();
         String priority = draft.priority().isBlank() ? current.priority() : draft.priority();
+        // 版本号留空 = 保持原值；显式填写才改（例如把 Feat 规划到下一个版本）
+        String version = draft.version().isBlank() ? current.version() : draft.version();
         GitIssue updated = new GitIssue(current.id(), current.code(), current.userId(),
                 resolved.projectId(),
                 provider, repo, number, draft.title(), draft.body(), draft.state(), resolved.kind(),
@@ -108,7 +144,7 @@ public class GitIssueServiceImpl implements GitIssueService {
                 repoChanged ? "LOCAL" : current.syncStatus(),
                 repoChanged ? "" : current.syncError(),
                 draft.assignee().isBlank() ? current.assignee() : draft.assignee(),
-                current.createdAt(), now);
+                current.createdAt(), now, version);
         if (shouldPush(provider, repo)) {
             updated = updated.bound() ? pushUpdate(updated, userId) : pushCreate(updated, userId);
         } else if (!provider.isBlank() && !repo.isBlank() && !updated.bound()) {
@@ -132,7 +168,7 @@ public class GitIssueServiceImpl implements GitIssueService {
         GitIssue current = require(userId, id);
         GitIssue.Draft draft = new GitIssue.Draft(current.projectId(), current.provider(),
                 current.repo(), current.title(), current.body(), state, current.kind(),
-                current.priority(), current.labels(), current.assignee());
+                current.priority(), current.labels(), current.assignee(), current.version());
         return update(userId, id, draft);
     }
 
@@ -204,19 +240,62 @@ public class GitIssueServiceImpl implements GitIssueService {
             return new GitIssue.Draft(projectId, draft.provider(),
                     GitIssueRemoteClient.cleanRepo(draft.repo()), draft.title(), draft.body(),
                     draft.state(), draft.kind(), draft.priority(), draft.labels(),
-                    draft.assignee());
+                    draft.assignee(), draft.version());
         }
         return projects.findById(projectId)
                 .filter(p -> p.repoUrl() != null && !p.repoUrl().isBlank())
                 .map(p -> new GitIssue.Draft(projectId, providerOf(p),
                         GitIssueRemoteClient.cleanRepo(p.repoUrl()), draft.title(), draft.body(),
                         draft.state(), draft.kind(), draft.priority(), draft.labels(),
-                        draft.assignee()))
+                        draft.assignee(), draft.version()))
                 .filter(d -> !d.provider().isBlank())
                 .orElseGet(() -> new GitIssue.Draft(projectId, draft.provider(),
                         GitIssueRemoteClient.cleanRepo(draft.repo()), draft.title(), draft.body(),
                         draft.state(), draft.kind(), draft.priority(), draft.labels(),
-                        draft.assignee()));
+                        draft.assignee(), draft.version()));
+    }
+
+    /**
+     * 任务默认版本号：创建时未显式指定，则按当前分支的版本线推导。
+     *
+     * <p>版本线分支（{@code 0.1.0-snapshot}）取该线最大补丁号 +1，与流水线打 tag 的推荐值一致；
+     * 其他分支退回最新标签。仓库不可用时返回空串，不影响任务创建。
+     */
+    private String resolveVersion(String requested, String projectId) {
+        String version = GitIssue.normalizeVersion(requested);
+        if (!version.isBlank() || projectId == null || projectId.isBlank()) {
+            return version;
+        }
+        try {
+            return suggestVersion(repoLocator.currentBranch(projectId),
+                    repoLocator.listTags(projectId, 100));
+        } catch (RuntimeException e) {
+            log.debug("任务默认版本推导失败（project={}）：{}", projectId, e.getMessage());
+            return "";
+        }
+    }
+
+    /** 版本建议：版本线分支取最大补丁 +1；非版本分支取最新标签。 */
+    static String suggestVersion(String branch, List<String> tags) {
+        List<String> safeTags = tags == null ? List.of() : tags;
+        var matcher = VERSION_BRANCH.matcher(branch == null ? "" : branch.trim());
+        if (!matcher.matches()) {
+            return safeTags.isEmpty() ? "" : safeTags.get(0);
+        }
+        String line = matcher.group(1) + "." + matcher.group(2);
+        Pattern tagOfLine = Pattern.compile("^" + Pattern.quote(line) + "\\.(\\d+)$");
+        int best = -1;
+        for (String tag : safeTags) {
+            var m = tagOfLine.matcher(tag == null ? "" : tag.trim());
+            if (m.matches()) {
+                try {
+                    best = Math.max(best, Integer.parseInt(m.group(1)));
+                } catch (NumberFormatException ignored) {
+                    // 补丁号超长时不参与比较
+                }
+            }
+        }
+        return best < 0 ? line + ".0" : line + "." + (best + 1);
     }
 
     private static String providerOf(Project project) {
@@ -287,14 +366,17 @@ public class GitIssueServiceImpl implements GitIssueService {
                 .orElseThrow(() -> new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "未绑定 " + issue.provider() + " 账号，无法同步到 Git"));
     }
 
-    /** 把分类写进远端标签，Git 侧也能按 bug / feat 筛选。 */
+    /** 把分类与版本写进远端标签，Git 侧也能按 bug / feat / 版本筛选。 */
     private static String labelsForGit(GitIssue issue) {
         String base = issue.labels();
         String tag = "FEAT".equals(issue.kind()) ? "feat" : "bug";
-        if (base.toLowerCase(Locale.ROOT).contains(tag)) {
-            return base;
+        String labels = base.toLowerCase(Locale.ROOT).contains(tag)
+                ? base : (base.isBlank() ? tag : base + "," + tag);
+        if (issue.version().isBlank() || labels.toLowerCase(Locale.ROOT).contains("version:")) {
+            return labels;
         }
-        return base.isBlank() ? tag : base + "," + tag;
+        return labels.isBlank() ? "version:" + issue.version()
+                : labels + ",version:" + issue.version();
     }
 
     private void markSync(GitIssue issue, String status, String error) {
@@ -313,7 +395,7 @@ public class GitIssueServiceImpl implements GitIssueService {
                 issue.provider(),
                 issue.repo(), number, issue.title(), issue.body(), state, issue.kind(),
                 issue.priority(), issue.labels(), url, source, syncStatus, syncError,
-                issue.assignee(), issue.createdAt(), System.currentTimeMillis());
+                issue.assignee(), issue.createdAt(), System.currentTimeMillis(), issue.version());
     }
 
     private static String message(RuntimeException e) {

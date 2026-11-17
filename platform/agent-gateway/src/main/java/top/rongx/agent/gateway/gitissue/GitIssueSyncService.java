@@ -116,7 +116,7 @@ public class GitIssueSyncService {
                 event.title().isBlank() ? "Git Issue " + event.number() : event.title(),
                 event.body(), event.state(), kind, GitIssue.priorityOfLabels(event.labels()),
                 event.labels(), event.url(), "GIT", "SYNCED", "",
-                "", now, now);
+                "", now, now, "");
         log.info("Git Issue 已映射为平台任务：{} {}#{} → {}", event.provider(), event.repo(),
                 event.number(), issue.id());
         GitIssue saved = issues.save(issue);
@@ -138,6 +138,7 @@ public class GitIssueSyncService {
         }
         String kind = !event.kind().isBlank() ? event.kind()
                 : event.labels().isBlank() ? issue.kind() : GitIssue.kindOfLabels(event.labels());
+        String eventVersion = GitIssue.versionOfLabels(event.labels());
         GitIssue updated = new GitIssue(issue.id(), issue.code(), issue.userId(), issue.projectId(),
                 issue.provider(), issue.repo(), issue.number(),
                 event.title().isBlank() ? issue.title() : event.title(),
@@ -148,7 +149,9 @@ public class GitIssueSyncService {
                 event.labels().isBlank() ? issue.labels() : event.labels(),
                 event.url().isBlank() ? issue.url() : event.url(),
                 "GIT", "SYNCED", "", issue.assignee(), issue.createdAt(),
-                System.currentTimeMillis());
+                System.currentTimeMillis(),
+                // 远端补了版本标签就跟着更新，否则保留任务里已指定的版本
+                eventVersion.isBlank() ? issue.version() : eventVersion);
         issues.save(updated);
         // 远端重新打开/补标签后再次评估自动修复（关闭状态会被触发器拒绝）
         bugFixTrigger.onIssueUpdated(updated);
