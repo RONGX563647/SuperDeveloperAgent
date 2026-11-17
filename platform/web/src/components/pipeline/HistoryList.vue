@@ -69,6 +69,21 @@ function countOf(key: StatusKey): number {
   return key ? envItems.value.filter((h) => statusTone(h.status) === key).length : envItems.value.length
 }
 
+/** 打 tag 结果徽标：远端可见 / 仅本机 / 失败，避免"以为打了但远端没有"。 */
+function tagSyncLabel(status: string): string {
+  if (status === 'PUSHED') return 'tag ✓'
+  if (status === 'LOCAL') return 'tag 仅本地'
+  if (status === 'FAILED') return 'tag 失败'
+  return ''
+}
+
+function tagSyncTitle(status: string): string {
+  if (status === 'PUSHED') return '标签已推送到 origin，可在 Git 远端看到'
+  if (status === 'LOCAL') return '标签只在平台本机：没有 origin 或推送失败，请检查远端凭据'
+  if (status === 'FAILED') return '标签创建失败，查看本次运行日志的 [tag] 行'
+  return ''
+}
+
 const runningCount = computed(() =>
   envItems.value.filter((h) => statusTone(h.status) === 'busy').length)
 
@@ -231,9 +246,22 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
                 <em v-if="h.seq" class="hist-seq">#{{ h.seq }}</em>
                 {{ pipelineLabel(h.pipelineId) }}
                 <em class="hist-env">{{ envShort(h.env) }}</em>
-                <em v-if="h.version" class="hist-tag" :title="`标签版本 ${h.version}（发布成功后已同步 git tag）`">
+                <em v-if="h.version" class="hist-tag" :title="`标签版本 ${h.version}`">
                   {{ h.version }}
                 </em>
+                <em
+                  v-if="h.tagStatus"
+                  class="hist-tag-sync"
+                  :class="h.tagStatus.toLowerCase()"
+                  :title="tagSyncTitle(h.tagStatus)"
+                >{{ tagSyncLabel(h.tagStatus) }}</em>
+                <em
+                  v-else-if="h.version"
+                  class="hist-tag-sync failed"
+                  :title="h.status === 'SUCCEEDED'
+                    ? '填了版本号但没有创建 git 标签（旧记录）'
+                    : '运行未成功，按规则不创建标签'"
+                >{{ h.status === 'SUCCEEDED' ? 'tag 未同步' : '未打 tag' }}</em>
               </span>
               <span class="hist-status" :class="statusTone(h.status)">{{ statusLabel(h.status) }}</span>
             </span>
@@ -546,6 +574,27 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
   color: var(--ok-ink);
   background: var(--ok-soft);
   border-radius: var(--radius-xs);
+}
+.hist-tag-sync {
+  margin-left: 4px;
+  padding: 0 5px;
+  font-size: 9.5px;
+  font-style: normal;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+}
+.hist-tag-sync.pushed {
+  color: var(--ok-ink);
+  background: var(--ok-soft);
+}
+.hist-tag-sync.local {
+  color: var(--warn-ink, #8a6d3b);
+  background: var(--warn-soft, #fdf6e3);
+}
+.hist-tag-sync.failed {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 .hist-status {
   flex: none;

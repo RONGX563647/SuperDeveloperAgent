@@ -14,6 +14,7 @@ import RunLog from '../components/pipeline/RunLog.vue'
 import {
   artifactFilePath, deleteHistory, deployImageVersion, deployImages, dryRunPipeline, getHistory, getRun, isTerminalStatus,
   listPipelines, previewPipeline, retryStage, stopLocalDeploy, triggerPipeline,
+  listGitTags,
   type ArtifactView, type DryRunReportView, type HistoryItem, type ImageVersionView, type PreviewStage,
   type RunView, type StageView,
 } from '../api/pipeline'
@@ -189,6 +190,17 @@ const deployTarget = ref('')
 /** 版本号 + 是否打 tag：打 tag = 新版本独立部署，不覆盖旧版本。 */
 const deployVersionInput = ref('')
 const deployTagged = ref(false)
+/** 仓库现有 git 标签：版本号候选 + 重复校验（打 tag 不能撞名）。 */
+const gitTags = ref<string[]>([])
+
+async function loadTags(): Promise<void> {
+  try {
+    gitTags.value = await listGitTags(projectId.value)
+  } catch {
+    // 仓库不可用/未初始化时不影响触发：候选为空即可
+    gitTags.value = []
+  }
+}
 /** 只有测试环境支持多版本并存（dev 固定本机单槽、prod 走服务器发布）。 */
 const showVersionControls = computed(() => env.value === 'test')
 /** 用户是否手动切过部署方式：切过后不再被 pipeline 定义的默认值覆盖。 */
@@ -254,7 +266,13 @@ const activeMeta = ref<{ env: string, pipelineId: string, sha: string } | null>(
 const {
   run, runId, loading: runLoading, errorText, startedAt, running,
   open: openRun, attach, cancel, clear,
-} = useRunTracker({ onFinished: () => { void loadHistory(); void loadEnvs(); void loadImages() } })
+} = useRunTracker({ onFinished: () => {
+  void loadHistory()
+  void loadEnvs()
+  void loadImages()
+  // 打完 tag 后立刻刷新候选，避免继续用已占用的版本号
+  void loadTags()
+} })
 
 /** 有运行被打开/触发时，手机端自动切到「运行详情」，避免用户再多点一次。 */
 watch(runId, (id) => {
@@ -725,6 +743,10 @@ async function deployVersion(img: ImageVersionView): Promise<void> {
     ElMessage.warning('打 tag 时必须填写版本号（例如 v1.2.0）')
     return
   }
+  if (showVersionControls.value && deployTagged.value && gitTags.value.includes(version)) {
+    ElMessage.warning(`标签 ${version} 已存在，请换一个版本号`)
+    return
+  }
   const versionNote = showVersionControls.value && deployTagged.value
     ? `\n版本 ${version}：打 tag 独立部署，旧版本继续运行。`
     : `\n将覆盖 ${env.value} 环境当前部署。`
@@ -791,6 +813,9 @@ async function triggerSelected(): Promise<void> {
   const version = deployVersionInput.value.trim()
   if (showVersionControls.value && deployTagged.value && !version) {
     throw new Error('打 tag 时必须填写版本号（例如 v1.2.0）')
+  }
+  if (showVersionControls.value && deployTagged.value && gitTags.value.includes(version)) {
+    throw new Error(`标签 ${version} 已存在，请换一个版本号`)
   }
   const result = await triggerPipeline(
     pipelineId.value, projectId.value, sha.value, targetForTrigger(), env.value,
@@ -1126,7 +1151,7 @@ watch(projectId, () => {
   topError.value = ''
   sha.value = ''
   void Promise.all([
-    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
+    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(), loadTags(),
   ]).then(() => loadPreview())
 })
 
@@ -1156,7 +1181,7 @@ onMounted(async () => {
     targetTouched.value = true
   }
   await Promise.all([
-    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(),
+    loadPipelines(), loadHistory(), loadEnvs(), loadImages(), loadCommits(), loadTags(),
   ])
   await loadPreview()
   // 历史只在「有进行中的运行」时轮询，且 15s 一次：空闲页面不再每 5s 打一次接口
@@ -1275,6 +1300,7 @@ async function copyDigest(digest: string): Promise<void> {
             v-model:version="deployVersionInput"
             v-model:tagged="deployTagged"
             :show-version="showVersionControls"
+            :existing-tags="gitTags"
             :env-label="envLabel(env)"
             :primary-label="primaryLabel"
             :commits="commits"

@@ -52,6 +52,8 @@ interface Props {
   tagged: boolean
   /** 是否展示版本控制（开发/生产环境不展示多版本部署）。 */
   showVersion?: boolean
+  /** 仓库现有 git 标签（版本降序）：版本号候选 + 重复校验。 */
+  existingTags?: string[]
 }
 
 const props = defineProps<Props>()
@@ -158,6 +160,58 @@ function cardMeta(stages: PreviewStage[]): { count: number, image: boolean } {
 
 const releaseMeta = computed(() => cardMeta(props.preview))
 const verifyMeta = computed(() => cardMeta(props.verifyPreview ?? []))
+
+// ---------------------------------------------------------------- 版本号 / tag
+
+/**
+ * 推荐版本号：在已有标签里取最大的 vX.Y.Z 并递增补丁位。
+ *
+ * <p>没有标签时给 v0.1.0，保证"打开开关就有可用建议"，不用用户自己想。
+ */
+const suggestedTag = computed(() => {
+  let best: number[] | null = null
+  for (const tag of props.existingTags ?? []) {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(tag.trim())
+    if (!m) continue
+    const nums = [Number(m[1]), Number(m[2]), Number(m[3])]
+    if (!best || compareNums(nums, best) > 0) best = nums
+  }
+  if (!best) {
+    return 'v0.1.0'
+  }
+  return `v${best[0]}.${best[1]}.${best[2] + 1}`
+})
+
+function compareNums(a: number[], b: number[]): number {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i]
+  }
+  return 0
+}
+
+/** 候选标签：推荐版本（若还不存在）+ 已有标签，便于直接点选。 */
+const tagOptions = computed(() => {
+  const tags = props.existingTags ?? []
+  return props.tagged && !tags.includes(suggestedTag.value)
+    ? [suggestedTag.value, ...tags]
+    : tags
+})
+
+/** 打了 tag 却填了已有标签：git 侧会拒绝（或指向别的提交），提前拦住。 */
+const tagConflict = computed(() =>
+  props.tagged && !!props.version.trim()
+  && (props.existingTags ?? []).includes(props.version.trim()))
+
+/** 打开"打 tag"时自动补一个建议版本号，避免空着触发失败。 */
+watch(() => props.tagged, (on) => {
+  if (on && !props.version.trim()) {
+    emit('update:version', suggestedTag.value)
+  }
+})
+
+function useSuggestedTag(): void {
+  emit('update:version', suggestedTag.value)
+}
 
 const runLabel = computed(() =>
   props.action === 'verify' ? '开始检查构建' : props.primaryLabel)
@@ -296,24 +350,40 @@ const runLabel = computed(() =>
     <!-- 版本控制：打 tag = 独立版本槽（旧版本继续运行）；不打 tag = 覆盖默认部署 -->
     <div v-if="showVersion && action === 'release'" class="rc-version">
       <span class="rc-label">版本</span>
-      <el-input
+      <el-select
         :model-value="version"
         class="rc-version-input"
         size="default"
+        filterable
+        allow-create
+        default-first-option
         clearable
         placeholder="版本号，例如 v1.2.0"
         @update:model-value="(v: string) => emit('update:version', v)"
-      />
+      >
+        <el-option v-for="t in tagOptions" :key="t" :label="t" :value="t">
+          <span class="tag-option">
+            <span class="mono">{{ t }}</span>
+            <span v-if="t === suggestedTag" class="tag-option-hint">推荐</span>
+          </span>
+        </el-option>
+      </el-select>
       <el-switch
         :model-value="tagged"
         size="default"
         active-text="打 tag"
         @update:model-value="(v: boolean | string | number) => emit('update:tagged', v === true)"
       />
-      <span class="rc-version-note">
-        {{ tagged
-          ? '新版本独立部署，发布成功后同步创建 git 标签；旧版本继续运行'
-          : '不打 tag：覆盖该环境上一次成功部署' }}
+      <span v-if="tagged && !version.trim()" class="rc-tag-suggest">
+        用建议版本
+        <button type="button" @click="useSuggestedTag">{{ suggestedTag }}</button>
+      </span>
+      <span class="rc-version-note" :class="{ bad: tagConflict }">
+        {{ tagConflict
+          ? `标签 ${version.trim()} 已存在，请换一个版本号`
+          : tagged
+            ? `发布成功后创建 git 标签并推送 origin；已有 ${(existingTags ?? []).length} 个标签`
+            : '不打 tag：覆盖该环境上一次成功部署' }}
       </span>
     </div>
 
@@ -788,6 +858,33 @@ const runLabel = computed(() =>
   flex: 1 1 180px;
   font-size: 11px;
   color: var(--ink-faint);
+}
+.rc-version-note.bad {
+  color: var(--danger);
+}
+.tag-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tag-option-hint {
+  font-size: 10px;
+  color: var(--accent-ink);
+}
+.rc-tag-suggest {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.rc-tag-suggest button {
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  text-decoration: underline dotted;
 }
 .rc-local {
   display: flex;

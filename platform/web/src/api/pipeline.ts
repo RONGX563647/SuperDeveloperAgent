@@ -240,6 +240,8 @@ export interface HistoryItem {
   gitSha: string
   /** 触发时填写的标签版本号（打 tag 时会同步为 git 标签）；空 = 未填写。 */
   version: string
+  /** 打 tag 结果：PUSHED=远端可见 / LOCAL=仅本地 / FAILED=失败；空=未打标签。 */
+  tagStatus?: string
   status: string
   /** 触发时间（epoch 毫秒，0 表示旧格式文件）。 */
   createdAt: number
@@ -294,6 +296,13 @@ export function getHistory(projectId?: string, offset = 0, limit = 50): Promise<
   const q = new URLSearchParams({ offset: String(offset), limit: String(limit) })
   if (projectId) q.set('projectId', projectId)
   return apiFetch<HistoryItem[]>(`/api/v1/ci/history?${q}`)
+}
+
+/** 项目现有 git 标签（版本降序）：版本号输入框做候选与重复校验。 */
+export async function listGitTags(projectId: string, limit = 30): Promise<string[]> {
+  const q = new URLSearchParams({ projectId, limit: String(limit) })
+  const res = await apiFetch<{ tags: string[] }>(`/api/v1/ci/tags?${q}`)
+  return res.tags ?? []
 }
 
 /** 从失败阶段继续：复用后端保留的构建现场，只重跑该阶段及其后续。 */
