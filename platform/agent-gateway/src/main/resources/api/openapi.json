@@ -352,6 +352,71 @@
         }
       }
     },
+    "/api/v1/settings/mcp-servers/{id}/tools" : {
+      "put" : {
+        "tags" : [ "mcp-settings-controller" ],
+        "summary" : "update tools",
+        "operationId" : "updateTools",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "mcp-settings-controller" ],
+        "summary" : "tools",
+        "operationId" : "tools",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/git-oauth-apps/{provider}" : {
       "put" : {
         "tags" : [ "git-oauth-app-settings-controller" ],
@@ -1388,6 +1453,37 @@
         }
       }
     },
+    "/api/v1/settings/skills/probe" : {
+      "post" : {
+        "tags" : [ "skill-settings-controller" ],
+        "summary" : "probe",
+        "operationId" : "probe",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/skills/import" : {
       "post" : {
         "tags" : [ "skill-settings-controller" ],
@@ -2142,6 +2238,29 @@
                 "schema" : {
                   "type" : "object",
                   "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/mcp-servers/test-all" : {
+      "post" : {
+        "tags" : [ "mcp-settings-controller" ],
+        "summary" : "test all",
+        "operationId" : "testAll",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "object",
+                    "additionalProperties" : { }
+                  }
                 }
               }
             }
@@ -5565,7 +5684,7 @@
       "get" : {
         "tags" : [ "fs-browser-controller" ],
         "summary" : "probe",
-        "operationId" : "probe",
+        "operationId" : "probe_1",
         "parameters" : [ {
           "name" : "path",
           "in" : "query",
@@ -7304,6 +7423,10 @@
           "fileCount" : {
             "type" : "integer",
             "format" : "int32"
+          },
+          "sizeBytes" : {
+            "type" : "integer",
+            "format" : "int64"
           },
           "enabled" : {
             "type" : "boolean"

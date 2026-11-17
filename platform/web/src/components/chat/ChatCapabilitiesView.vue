@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Connection, MagicStick, Refresh, Setting, Warning } from '@element-plus/icons-vue'
+import { Connection, MagicStick, Refresh, Search, Setting, Star, Warning } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { saveMcpServer, setSkillEnabled } from '../../api/settings'
 import type { CapabilityOption } from '../../composables/useChatCapabilities'
 
 /**
@@ -36,6 +38,12 @@ const total = computed(() => props.skillOptions.length + props.mcpOptions.length
 /** 已启用项会整段进系统提示词；超过这个数量给一句成本提醒。 */
 const noisy = computed(() => skillOn.value + mcpOn.value > 10)
 
+// ---------------------------------------------------------------- 搜索 / 筛选 / 排序
+
+const keyword = ref('')
+const filter = ref<'all' | 'on' | 'off'>('all')
+const sortBy = ref<'default' | 'name'>('default')
+
 function isOn(kind: 'skill' | 'mcp', key: string): boolean {
   return (kind === 'skill' ? props.skills : props.mcp).includes(key)
 }
@@ -52,6 +60,152 @@ function toggleAll(kind: 'skill' | 'mcp', on: boolean): void {
   const next = on ? list.map((o) => o.key) : []
   if (kind === 'skill') emit('update:skills', next)
   else emit('update:mcp', next)
+}
+
+function visible(list: CapabilityOption[], kind: 'skill' | 'mcp'): CapabilityOption[] {
+  const q = keyword.value.trim().toLowerCase()
+  return list
+    .filter((option) => {
+      if (filter.value === 'on' && !isOn(kind, option.key)) return false
+      if (filter.value === 'off' && isOn(kind, option.key)) return false
+      if (!q) return true
+      return `${option.label} ${option.description} ${option.key}`
+        .toLowerCase()
+        .includes(q)
+    })
+    .sort((a, b) => (sortBy.value === 'name' ? a.label.localeCompare(b.label, 'zh-CN') : 0))
+}
+
+const filteredSkills = computed(() => visible(props.skillOptions, 'skill'))
+const filteredMcp = computed(() => visible(props.mcpOptions, 'mcp'))
+
+// ---------------------------------------------------------------- 成本估算
+
+/** 描述注入的粗略 token 成本（中文按 2.5 字符 ≈ 1 token）。 */
+function tokenOf(option: CapabilityOption): number {
+  const length = (option.description ?? '').length
+  return length ? Math.max(1, Math.ceil(length / 2.5)) : 0
+}
+
+const skillTokens = computed(() => props.skillOptions
+  .filter((option) => isOn('skill', option.key))
+  .reduce((sum, option) => sum + tokenOf(option), 0))
+
+// ---------------------------------------------------------------- 场景预设
+
+interface Preset {
+  name: string
+  skills: string[]
+  mcp: string[]
+}
+
+const PRESET_KEY = 'agent.capability-presets.v1'
+const savedPresets = ref<Preset[]>(readPresets())
+
+function readPresets(): Preset[] {
+  try {
+    const raw = localStorage.getItem(PRESET_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function persistPresets(): void {
+  try {
+    localStorage.setItem(PRESET_KEY, JSON.stringify(savedPresets.value))
+  } catch {
+    // 本地存储不可用时只保留内存态
+  }
+}
+
+const PRESET_RULES: { name: string; words: string[] }[] = [
+  { name: '前端', words: ['前端', 'vue', 'react', 'ui', 'css', 'web', 'front'] },
+  { name: '后端', words: ['后端', 'java', 'api', 'sql', '数据库', 'spring'] },
+  { name: '文档', words: ['文档', '写作', 'doc', 'readme', 'markdown'] },
+  { name: '发布', words: ['发布', '部署', 'pipeline', 'ci', 'deploy', 'docker'] },
+]
+
+function matchedKeys(list: CapabilityOption[], words: string[]): string[] {
+  return list
+    .filter((option) => {
+      const text = `${option.label} ${option.description}`.toLowerCase()
+      return words.some((word) => text.includes(word))
+    })
+    .map((option) => option.key)
+}
+
+/** 按当前已安装能力生成「前端 / 后端 / 文档 / 发布」推荐组合。 */
+const recommendedPresets = computed(() => PRESET_RULES
+  .map((rule) => ({
+    name: rule.name,
+    skills: matchedKeys(props.skillOptions, rule.words),
+    mcp: matchedKeys(props.mcpOptions, rule.words),
+  }))
+  .filter((preset) => preset.skills.length || preset.mcp.length))
+
+function applyPreset(preset: Preset): void {
+  const skillKeys = new Set(props.skillOptions.map((option) => option.key))
+  const mcpKeys = new Set(props.mcpOptions.map((option) => option.key))
+  emit('update:skills', preset.skills.filter((key) => skillKeys.has(key)))
+  emit('update:mcp', preset.mcp.filter((key) => mcpKeys.has(key)))
+  ElMessage.success(`已应用「${preset.name}」`)
+}
+
+function savePreset(): void {
+  savedPresets.value = [
+    ...savedPresets.value,
+    {
+      name: `组合 ${savedPresets.value.length + 1}`,
+      skills: [...props.skills],
+      mcp: [...props.mcp],
+    },
+  ]
+  persistPresets()
+  ElMessage.success('已保存当前组合')
+}
+
+function removePreset(index: number): void {
+  savedPresets.value = savedPresets.value.filter((_, i) => i !== index)
+  persistPresets()
+}
+
+// ---------------------------------------------------------------- 设为默认
+
+const savingDefault = ref(false)
+
+/** 把当前会话选择写回设置页默认值（Skill 直接改启用位，MCP 保留已有 headers）。 */
+async function saveAsDefault(): Promise<void> {
+  savingDefault.value = true
+  try {
+    const calls: Promise<unknown>[] = []
+    for (const option of props.skillOptions) {
+      if (option.enabled !== isOn('skill', option.key)) {
+        calls.push(setSkillEnabled(option.key, isOn('skill', option.key)))
+      }
+    }
+    for (const option of props.mcpOptions) {
+      if (option.id && option.enabled !== isOn('mcp', option.key)) {
+        calls.push(saveMcpServer({
+          id: option.id,
+          name: option.label,
+          transport: option.transport ?? 'stdio',
+          command: option.command,
+          args: (option.args ?? []).join('\n'),
+          url: option.url,
+          enabled: isOn('mcp', option.key),
+        }))
+      }
+    }
+    await Promise.all(calls)
+    ElMessage.success('已保存为默认能力')
+    emit('refresh')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存默认能力失败')
+  } finally {
+    savingDefault.value = false
+  }
 }
 
 /** MCP 的"它是什么"：stdin 命令或 HTTP 地址，一行说清。 */
@@ -91,8 +245,44 @@ function goSettings(): void {
         </span>
         <span class="sum-note">
           已启用 {{ ready ? skillOn + mcpOn : '…' }} 项
+          <template v-if="ready">· Skill 描述约 <b class="mono">{{ skillTokens }}</b> tokens</template>
           <template v-if="noisy">· 偏多，首字延迟会变长</template>
         </span>
+      </div>
+
+      <div class="cap-toolbar">
+        <label class="cap-search">
+          <el-icon><Search /></el-icon>
+          <input v-model="keyword" type="search" placeholder="搜索 Skill / MCP" aria-label="搜索能力">
+        </label>
+        <div class="cap-seg" role="group" aria-label="启用状态筛选">
+          <button type="button" :class="{ active: filter === 'all' }" @click="filter = 'all'">全部</button>
+          <button type="button" :class="{ active: filter === 'on' }" @click="filter = 'on'">已启用</button>
+          <button type="button" :class="{ active: filter === 'off' }" @click="filter = 'off'">未启用</button>
+        </div>
+        <select v-model="sortBy" class="cap-sort" aria-label="排序方式">
+          <option value="default">默认排序</option>
+          <option value="name">按名称</option>
+        </select>
+        <button type="button" class="cap-default" :disabled="savingDefault || !ready" @click="saveAsDefault">
+          <el-icon><Star /></el-icon>{{ savingDefault ? '保存中…' : '设为默认' }}
+        </button>
+      </div>
+
+      <div v-if="ready" class="cap-presets">
+        <span class="preset-label">场景</span>
+        <button
+          v-for="preset in recommendedPresets" :key="`rec-${preset.name}`"
+          type="button" class="preset" @click="applyPreset(preset)"
+        >{{ preset.name }}</button>
+        <button
+          v-for="(preset, index) in savedPresets" :key="`saved-${index}`"
+          type="button" class="preset saved" @click="applyPreset(preset)"
+        >
+          {{ preset.name }}
+          <span class="preset-x" title="删除组合" @click.stop="removePreset(index)">×</span>
+        </button>
+        <button type="button" class="preset add" @click="savePreset">+ 存为组合</button>
       </div>
 
       <p v-if="ready && noisy" class="cap-warn">
@@ -123,11 +313,15 @@ function goSettings(): void {
             </span>
           </header>
           <ul class="cap-rows">
-            <li v-for="option in skillOptions" :key="`skill-${option.key}`" class="cap-row" :class="{ on: isOn('skill', option.key) }">
+            <li
+              v-for="option in filteredSkills" :key="`skill-${option.key}`"
+              class="cap-row" :class="{ on: isOn('skill', option.key) }"
+            >
               <span class="row-main">
                 <span class="row-name">
                   {{ option.label }}
                   <span v-if="option.fileCount" class="row-tag mono">{{ option.fileCount }} 文件</span>
+                  <span class="row-tag mono" title="描述注入的粗略成本">~{{ tokenOf(option) }}t</span>
                 </span>
                 <span class="row-desc">{{ option.description || '（Skill 未写描述，模型只能靠名称判断用途）' }}</span>
               </span>
@@ -138,6 +332,7 @@ function goSettings(): void {
                 @change="(v: string | number | boolean) => toggle('skill', option.key, Boolean(v))"
               />
             </li>
+            <li v-if="!filteredSkills.length" class="row-empty">没有匹配的技能</li>
           </ul>
         </section>
 
@@ -156,7 +351,10 @@ function goSettings(): void {
             </span>
           </header>
           <ul class="cap-rows">
-            <li v-for="option in mcpOptions" :key="`mcp-${option.key}`" class="cap-row" :class="{ on: isOn('mcp', option.key) }">
+            <li
+              v-for="option in filteredMcp" :key="`mcp-${option.key}`"
+              class="cap-row" :class="{ on: isOn('mcp', option.key) }"
+            >
               <span class="row-main">
                 <span class="row-name">
                   {{ option.label }}
@@ -171,6 +369,7 @@ function goSettings(): void {
                 @change="(v: string | number | boolean) => toggle('mcp', option.key, Boolean(v))"
               />
             </li>
+            <li v-if="!filteredMcp.length" class="row-empty">没有匹配的 MCP 服务</li>
           </ul>
         </section>
       </template>
@@ -279,6 +478,157 @@ function goSettings(): void {
   background: var(--warn-faint, var(--surface-raised));
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
+}
+
+/* ---- 搜索 / 筛选 ---- */
+.cap-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.cap-search {
+  display: flex;
+  flex: 1 1 180px;
+  align-items: center;
+  gap: 6px;
+  min-width: 150px;
+  padding: 0 10px;
+  color: var(--ink-faint);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+
+.cap-search input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  outline: none;
+}
+
+.cap-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-hover);
+  border-radius: var(--radius-md);
+}
+
+.cap-seg button {
+  padding: 4px 9px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+}
+
+.cap-seg button.active {
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+}
+
+.cap-sort {
+  height: 30px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+
+.cap-default {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.cap-default:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ---- 场景预设 ---- */
+.cap-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: var(--sp-4);
+}
+
+.preset-label {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.preset {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 3px 9px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+
+.preset:hover {
+  color: var(--accent-ink);
+  border-color: var(--accent-soft);
+}
+
+.preset.saved {
+  color: var(--ink-soft);
+  background: var(--surface-hover);
+}
+
+.preset.add {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+
+.preset-x {
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.preset-x:hover {
+  color: var(--danger);
+}
+
+.row-empty {
+  padding: 14px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  text-align: center;
 }
 
 /* ---- 能力卡 ---- */

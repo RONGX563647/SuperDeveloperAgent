@@ -1019,6 +1019,48 @@ export function testMcpDraft(input: McpServerInput): Promise<McpTestResult> {
   })
 }
 
+export interface McpToolInfo {
+  name: string
+  description: string
+  parameters: string[]
+  enabled: boolean
+}
+
+export interface McpToolsResult extends TestResult {
+  tools: McpToolInfo[]
+  disabled: string[]
+}
+
+/** 真实拉起/连接服务并列出其工具；enabled 来自本地工具开关。 */
+export function listMcpTools(id: string): Promise<McpToolsResult> {
+  return apiFetch(`/api/v1/settings/mcp-servers/${encodeURIComponent(id)}/tools`, {
+    method: 'POST'
+  })
+}
+
+/** 保存工具级开关：disabled 中的工具运行时不会注册。 */
+export function saveMcpDisabledTools(
+  id: string,
+  disabled: string[]
+): Promise<{ ok: boolean; disabled: string[] }> {
+  return apiFetch(`/api/v1/settings/mcp-servers/${encodeURIComponent(id)}/tools`, {
+    method: 'PUT',
+    body: JSON.stringify({ disabled })
+  })
+}
+
+export interface McpBulkTestResult extends TestResult {
+  id: string
+  name: string
+  transport: McpTransport
+  enabled: boolean
+}
+
+/** 一次请求测试全部已保存服务，用于设置页「全部测试」。 */
+export function testAllMcpServers(): Promise<McpBulkTestResult[]> {
+  return apiFetch('/api/v1/settings/mcp-servers/test-all', { method: 'POST' })
+}
+
 // ---------------------------------------------------------------- Skill
 
 export interface SkillEntry {
@@ -1028,6 +1070,8 @@ export interface SkillEntry {
   dirName: string
   dir: string
   fileCount: number
+  /** 技能目录总字节数，用于提示体积 */
+  sizeBytes: number
   enabled: boolean
   updatedAt: number
 }
@@ -1073,6 +1117,25 @@ export function setSkillEnabled(name: string, enabled: boolean): Promise<{
   return apiFetch(`/api/v1/settings/skills/${encodeURIComponent(name)}/enabled`, {
     method: 'POST',
     body: JSON.stringify({ enabled })
+  })
+}
+
+export interface SkillProbeMatch {
+  dirName: string
+  name: string
+  description: string
+  score: number
+  tokenEstimate: number
+}
+
+/** 示例问题命中诊断：只做关键词/描述重合打分，不调用模型。 */
+export function probeSkills(query: string): Promise<{
+  query: string
+  matches: SkillProbeMatch[]
+}> {
+  return apiFetch('/api/v1/settings/skills/probe', {
+    method: 'POST',
+    body: JSON.stringify({ query })
   })
 }
 

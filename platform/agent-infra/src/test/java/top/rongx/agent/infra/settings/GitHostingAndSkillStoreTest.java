@@ -99,6 +99,15 @@ class GitHostingAndSkillStoreTest {
         var list = store.list();
         assertEquals(1, list.size());
         assertEquals(1, list.get(0).fileCount(), "新建技能只有 SKILL.md");
+        assertTrue(list.get(0).sizeBytes() > 0, "体积用于质量提示");
+
+        // 示例问题命中：Java 关键词应命中 java-review，空白输入直接返回空
+        var probes = store.probe("帮我做 Java 代码评审");
+        assertFalse(probes.isEmpty());
+        assertEquals("java-review", probes.get(0).dirName());
+        assertTrue(probes.get(0).score() > 0);
+        assertTrue(probes.get(0).tokenEstimate() > 0);
+        assertTrue(store.probe("   ").isEmpty());
 
         Path source = workspace.resolve("external").resolve("db-migration");
         Files.createDirectories(source);
@@ -112,5 +121,21 @@ class GitHostingAndSkillStoreTest {
                 () -> store.importFrom(source.toString()), "同名技能不可重复导入");
         assertThrows(IllegalArgumentException.class,
                 () -> store.create("../escape", "", ""), "目录名禁止路径穿越");
+    }
+
+    @Test
+    @DisplayName("Skill：示例问题按关键词排序，停用技能不参与命中")
+    void skillProbe() throws Exception {
+        SkillsStore store = new SkillsStore(workspace.toString());
+        store.create("java-review", "Java 代码评审与后端缺陷排查", "# 步骤");
+        store.create("doc-writer", "文档写作与 README 整理", "# 步骤");
+
+        var probes = store.probe("帮我排查 Java 后端缺陷");
+        assertEquals("java-review", probes.get(0).dirName());
+        assertTrue(probes.get(0).score() > probes.get(1).score(), "命中的技能应排在前面");
+
+        store.setEnabled("doc-writer", false);
+        assertFalse(store.probe("文档 README").stream()
+                .anyMatch(p -> "doc-writer".equals(p.dirName())), "停用技能不参与命中");
     }
 }

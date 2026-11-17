@@ -2,6 +2,9 @@ package top.rongx.agent.gateway.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.tool.mcp.McpClientBuilder;
+import io.agentscope.core.tool.mcp.McpClientWrapper;
+import io.modelcontextprotocol.spec.McpSchema;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -101,6 +104,118 @@ public class McpSettingsController {
         }
         McpServerRepository.McpServerView draft = view(id, body);
         return probe(draft.transport(), draft.command(), draft.url(), headers);
+    }
+
+    /** 批量测试已保存服务：设置页「全部测试」用一次请求拿齐健康状态。 */
+    @PostMapping("/test-all")
+    public List<Map<String, Object>> testAll() {
+        requireWrite();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (McpServer server : servers.findAll()) {
+            Map<String, Object> result = new LinkedHashMap<>(
+                    probe(server.transport(), server.command(), server.url(),
+                            servers.headersOf(server.id())));
+            result.put("id", server.id());
+            result.put("name", server.name());
+            result.put("transport", server.transport());
+            result.put("enabled", server.enabled());
+            out.add(result);
+        }
+        return out;
+    }
+
+    /**
+     * 列出该服务真实暴露的工具。
+     *
+     * <p>会真实拉起 stdio 进程 / 连接 HTTP 服务，因此用 POST；返回的 enabled 标记来自
+     * 本地禁用清单，前端可直接做工具级开关。
+     */
+    @PostMapping("/{id}/tools")
+    public Map<String, Object> tools(@PathVariable String id) {
+        requireWrite();
+        McpServer server = servers.find(id).orElseThrow(
+                () -> new IllegalArgumentException("MCP 服务不存在：" + id));
+        List<String> disabled = servers.disabledToolsOf(id);
+        long start = System.nanoTime();
+        Map<String, Object> out = new LinkedHashMap<>();
+        try (McpClientWrapper client = client(server)) {
+            client.initialize().block(Duration.ofSeconds(20));
+            List<McpSchema.Tool> tools = client.listTools().block(Duration.ofSeconds(20));
+            List<Map<String, Object>> list = new ArrayList<>();
+            for (McpSchema.Tool tool : tools == null ? List.<McpSchema.Tool>of() : tools) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("name", tool.name());
+                item.put("description", tool.description() == null ? "" : tool.description());
+                item.put("parameters", parameterNames(tool));
+                item.put("enabled", !disabled.contains(tool.name()));
+                list.add(item);
+            }
+            out.put("ok", true);
+            out.put("latencyMs", (System.nanoTime() - start) / 1_000_000L);
+            out.put("tools", list);
+            out.put("disabled", disabled);
+            return out;
+        } catch (Exception e) {
+            out.put("ok", false);
+            out.put("latencyMs", (System.nanoTime() - start) / 1_000_000L);
+            out.put("tools", List.of());
+            out.put("disabled", disabled);
+            out.put("message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            return out;
+        }
+    }
+
+    /** 保存工具级开关：disabled 里的工具运行时不会注册进 Toolkit。 */
+    @PutMapping("/{id}/tools")
+    public Map<String, Object> updateTools(@PathVariable String id,
+                                           @RequestBody Map<String, Object> body) {
+        requireWrite();
+        servers.find(id).orElseThrow(
+                () -> new IllegalArgumentException("MCP 服务不存在：" + id));
+        List<String> disabled = stringList(body == null ? null : body.get("disabled"));
+        servers.setDisabledTools(id, disabled);
+        return Map.of("ok", true, "disabled", servers.disabledToolsOf(id));
+    }
+
+    private McpClientWrapper client(McpServer server) {
+        McpClientBuilder builder = McpClientBuilder.create(server.name())
+                .timeout(Duration.ofSeconds(30))
+                .initializationTimeout(Duration.ofSeconds(15));
+        if ("http".equalsIgnoreCase(server.transport())) {
+            builder.streamableHttpTransport(server.url());
+            Map<String, String> headers = servers.headersOf(server.id());
+            if (headers != null && !headers.isEmpty()) {
+                builder.headers(headers);
+            }
+        } else {
+            builder.stdioTransport(server.command(), server.args(), Map.of());
+        }
+        return builder.buildSync();
+    }
+
+    /** 从 inputSchema 里取参数名，供前端展示；解析失败返回空列表。 */
+    private List<String> parameterNames(McpSchema.Tool tool) {
+        try {
+            JsonNode schema = mapper.valueToTree(tool.inputSchema());
+            JsonNode properties = schema.path("properties");
+            List<String> names = new ArrayList<>();
+            properties.fieldNames().forEachRemaining(names::add);
+            return names;
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+    }
+
+    private static List<String> stringList(Object raw) {
+        List<String> out = new ArrayList<>();
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                if (item != null && !String.valueOf(item).isBlank()) {
+                    out.add(String.valueOf(item).trim());
+                }
+            }
+        }
+        return out;
     }
 
     // ---------------------------------------------------------------- 探测

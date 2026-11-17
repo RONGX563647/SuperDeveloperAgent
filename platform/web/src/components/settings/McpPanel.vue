@@ -4,8 +4,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search, SetUp } from '@element-plus/icons-vue'
 import {
   deleteMcpServer, installCapability, listCapabilityMarket, listMcpServers,
-  saveMcpServer, testMcpDraft, testMcpServer,
-  type CapabilityEntry, type McpServer, type McpTransport
+  listMcpTools, saveMcpDisabledTools, saveMcpServer, testAllMcpServers, testMcpDraft,
+  testMcpServer,
+  type CapabilityEntry, type McpServer, type McpToolInfo, type McpTransport,
+  type TestResult
 } from '../../api/settings'
 
 /**
@@ -22,6 +24,66 @@ const loading = ref(false)
 const saving = ref(false)
 const testing = ref('')
 const formOpen = ref(false)
+
+/** 最近一次连接结果（按服务 ID，持久化到本地，刷新后仍能看到上次状态）。 */
+interface Health {
+  ok: boolean
+  latencyMs: number
+  message: string
+  checkedAt: number
+}
+const HEALTH_KEY = 'agent.mcp.health.v1'
+const health = ref<Record<string, Health>>(readHealth())
+const testingAll = ref(false)
+
+/** 工具清单展开状态与结果。 */
+const toolsOpen = ref('')
+const toolsLoading = ref('')
+const toolsSaving = ref('')
+const tools = ref<Record<string, McpToolInfo[]>>({})
+const toolsError = ref<Record<string, string>>({})
+
+function readHealth(): Record<string, Health> {
+  try {
+    const raw = localStorage.getItem(HEALTH_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function persistHealth(): void {
+  try {
+    localStorage.setItem(HEALTH_KEY, JSON.stringify(health.value))
+  } catch {
+    // 本地存储不可用时只保留内存态
+  }
+}
+
+function recordHealth(id: string, result: TestResult): void {
+  health.value = {
+    ...health.value,
+    [id]: {
+      ok: result.ok,
+      latencyMs: result.latencyMs ?? 0,
+      message: result.message ?? '',
+      checkedAt: Date.now(),
+    },
+  }
+  persistHealth()
+}
+
+function healthOf(id: string): Health | undefined {
+  return health.value[id]
+}
+
+function healthText(id: string): string {
+  const item = healthOf(id)
+  if (!item) return '未测试'
+  if (!item.ok) return '连接异常'
+  return item.latencyMs ? `${item.latencyMs}ms` : '已连接'
+}
 
 /** 页面分区：已接入 / MCP 市场。 */
 const tab = ref<'installed' | 'market'>('installed')
@@ -202,6 +264,22 @@ function payload() {
   }
 }
 
+/** 配置变更后丢弃该服务的工具缓存与旧健康状态，避免展示过期结果。 */
+function invalidateTools(id?: string): void {
+  if (!id) return
+  if (toolsOpen.value === id) toolsOpen.value = ''
+  const nextTools = { ...tools.value }
+  delete nextTools[id]
+  tools.value = nextTools
+  const nextError = { ...toolsError.value }
+  delete nextError[id]
+  toolsError.value = nextError
+  const nextHealth = { ...health.value }
+  delete nextHealth[id]
+  health.value = nextHealth
+  persistHealth()
+}
+
 async function save(): Promise<void> {
   if (!form.name.trim()) {
     ElMessage.warning('请填写服务名称，例如 playwright')
@@ -217,7 +295,8 @@ async function save(): Promise<void> {
   }
   saving.value = true
   try {
-    await saveMcpServer(payload())
+    const saved = await saveMcpServer(payload())
+    invalidateTools(saved?.id ?? form.id)
     ElMessage.success('MCP 服务已保存')
     formOpen.value = false
     await load()
@@ -245,12 +324,81 @@ async function test(server: McpServer): Promise<void> {
   testing.value = server.id
   try {
     const r = await testMcpServer(server.id)
+    recordHealth(server.id, r)
     if (r.ok) ElMessage.success(r.message)
     else ElMessage.error(r.message)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '测试失败')
+    const message = e instanceof Error ? e.message : '测试失败'
+    recordHealth(server.id, { ok: false, latencyMs: 0, message })
+    ElMessage.error(message)
   } finally {
     testing.value = ''
+  }
+}
+
+/** 一次请求测完所有服务，失败摘要直接落到列表状态点。 */
+async function testAll(): Promise<void> {
+  if (!servers.value.length) return
+  testingAll.value = true
+  try {
+    const results = await testAllMcpServers()
+    for (const item of results) {
+      recordHealth(item.id, item)
+    }
+    const failed = results.filter((item) => !item.ok).length
+    if (failed) ElMessage.warning(`${results.length - failed} 个正常，${failed} 个连接失败`)
+    else ElMessage.success(`${results.length} 个服务全部连接正常`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '批量测试失败')
+  } finally {
+    testingAll.value = false
+  }
+}
+
+/** 展开工具清单（真实拉起服务），顺便刷新健康状态。 */
+async function toggleTools(server: McpServer): Promise<void> {
+  if (toolsOpen.value === server.id) {
+    toolsOpen.value = ''
+    return
+  }
+  toolsOpen.value = server.id
+  if (tools.value[server.id] || toolsLoading.value === server.id) return
+  toolsLoading.value = server.id
+  toolsError.value = { ...toolsError.value, [server.id]: '' }
+  try {
+    const result = await listMcpTools(server.id)
+    recordHealth(server.id, result)
+    if (!result.ok) {
+      toolsError.value = { ...toolsError.value, [server.id]: result.message || '工具读取失败' }
+      return
+    }
+    tools.value = { ...tools.value, [server.id]: result.tools }
+  } catch (e) {
+    toolsError.value = {
+      ...toolsError.value,
+      [server.id]: e instanceof Error ? e.message : '工具读取失败',
+    }
+  } finally {
+    if (toolsLoading.value === server.id) toolsLoading.value = ''
+  }
+}
+
+/** 工具级开关：把当前所有未启用工具名整体保存，运行时不会注册。 */
+async function toggleTool(server: McpServer, tool: McpToolInfo): Promise<void> {
+  const list = tools.value[server.id] ?? []
+  const next = list.map((item) => (
+    item.name === tool.name ? { ...item, enabled: !item.enabled } : item
+  ))
+  tools.value = { ...tools.value, [server.id]: next }
+  toolsSaving.value = server.id
+  try {
+    const disabled = next.filter((item) => !item.enabled).map((item) => item.name)
+    await saveMcpDisabledTools(server.id, disabled)
+  } catch (e) {
+    tools.value = { ...tools.value, [server.id]: list }
+    ElMessage.error(e instanceof Error ? e.message : '工具开关保存失败')
+  } finally {
+    if (toolsSaving.value === server.id) toolsSaving.value = ''
   }
 }
 
@@ -262,6 +410,7 @@ async function remove(server: McpServer): Promise<void> {
   if (!ok) return
   try {
     await deleteMcpServer(server.id)
+    invalidateTools(server.id)
     ElMessage.success('已删除')
     await load()
   } catch (e) {
@@ -282,9 +431,15 @@ defineExpose({ load })
           按 mcpServers 约定配置 stdio / http 服务；请求头与令牌加密保存，只回显字段名
         </div>
       </div>
-      <el-button size="small" @click="formOpen ? (formOpen = false) : openForm()">
-        <el-icon><Plus /></el-icon> {{ formOpen ? '收起' : '新增服务' }}
-      </el-button>
+      <div class="head-actions">
+        <el-button
+          v-if="tab === 'installed'" size="small" :loading="testingAll"
+          :disabled="!servers.length" @click="testAll"
+        >全部测试</el-button>
+        <el-button size="small" @click="formOpen ? (formOpen = false) : openForm()">
+          <el-icon><Plus /></el-icon> {{ formOpen ? '收起' : '新增服务' }}
+        </el-button>
+      </div>
     </div>
 
     <div class="panel-tabs">
@@ -317,26 +472,58 @@ defineExpose({ load })
         <el-button size="small" @click="openForm()">手动新增</el-button>
       </div>
     </div>
-    <div v-for="s in servers" :key="s.id" class="mcp-row">
-      <span class="mcp-name mono">{{ s.name }}</span>
-      <span class="badge" :class="s.transport">{{ s.transport }}</span>
-      <span class="mcp-target mono">
-        {{ s.transport === 'stdio' ? [s.command, ...s.args].filter(Boolean).join(' ') : s.url }}
-      </span>
-      <span v-if="s.headerNames.length" class="mcp-meta">headers: {{ s.headerNames.join(', ') }}</span>
-      <span class="switch-cell">
-        <el-switch
-          :model-value="s.enabled" size="small"
-          :aria-label="`默认启用 ${s.name}`"
-          @change="(v: string | number | boolean) => toggleEnabled(s, Boolean(v))"
-        />
-        <span class="switch-text">{{ s.enabled ? '已启用' : '已停用' }}</span>
-      </span>
-      <span class="mcp-actions">
-        <el-button size="small" text :loading="testing === s.id" @click="test(s)">测试</el-button>
-        <el-button size="small" text @click="editForm(s)">编辑</el-button>
-        <el-button size="small" text type="danger" @click="remove(s)">删除</el-button>
-      </span>
+    <div v-for="s in servers" :key="s.id" class="mcp-item">
+      <div class="mcp-row">
+        <span class="mcp-name mono">{{ s.name }}</span>
+        <span class="badge" :class="s.transport">{{ s.transport }}</span>
+        <span class="mcp-target mono">
+          {{ s.transport === 'stdio' ? [s.command, ...s.args].filter(Boolean).join(' ') : s.url }}
+        </span>
+        <span
+          class="health" :class="healthOf(s.id) ? (healthOf(s.id)!.ok ? 'ok' : 'fail') : 'unknown'"
+          :title="healthOf(s.id)?.message || '尚未测试连接'"
+        >
+          <i class="health-dot" />{{ healthText(s.id) }}
+        </span>
+        <span v-if="s.headerNames.length" class="mcp-meta">headers: {{ s.headerNames.join(', ') }}</span>
+        <span class="switch-cell">
+          <el-switch
+            :model-value="s.enabled" size="small"
+            :aria-label="`默认启用 ${s.name}`"
+            @change="(v: string | number | boolean) => toggleEnabled(s, Boolean(v))"
+          />
+          <span class="switch-text">{{ s.enabled ? '已启用' : '已停用' }}</span>
+        </span>
+        <span class="mcp-actions">
+          <el-button size="small" text :loading="testing === s.id" @click="test(s)">测试</el-button>
+          <el-button size="small" text @click="toggleTools(s)">
+            {{ toolsOpen === s.id ? '收起工具' : '工具' }}
+          </el-button>
+          <el-button size="small" text @click="editForm(s)">编辑</el-button>
+          <el-button size="small" text type="danger" @click="remove(s)">删除</el-button>
+        </span>
+      </div>
+
+      <div v-if="toolsOpen === s.id" class="mcp-tools">
+        <div v-if="toolsLoading === s.id" class="tools-hint">正在读取工具清单…</div>
+        <div v-else-if="toolsError[s.id]" class="tools-hint error">{{ toolsError[s.id] }}</div>
+        <template v-else>
+          <div v-if="!tools[s.id]?.length" class="tools-hint">该服务没有暴露工具。</div>
+          <div v-for="tool in tools[s.id]" :key="tool.name" class="tool-row">
+            <el-checkbox
+              :model-value="tool.enabled" size="small"
+              :disabled="toolsSaving === s.id"
+              @change="() => toggleTool(s, tool)"
+            />
+            <span class="tool-name mono">{{ tool.name }}</span>
+            <span class="tool-desc">{{ tool.description || '无描述' }}</span>
+            <span v-if="tool.parameters.length" class="tool-params mono">
+              {{ tool.parameters.join(', ') }}
+            </span>
+          </div>
+          <div class="tools-foot">未勾选的工具不会注册进本轮工具列表，可显著减少 schema token。</div>
+        </template>
+      </div>
     </div>
 
     <div v-if="formOpen" class="mcp-form">
@@ -585,8 +772,104 @@ defineExpose({ load })
   border-radius: var(--radius-md);
   transition: border-color var(--dur-fast) var(--ease-out);
 }
+.mcp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
 .mcp-row:hover {
   border-color: var(--line);
+}
+.mcp-item:has(.mcp-tools) .mcp-row {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.head-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.health {
+  display: inline-flex;
+  flex: none;
+  gap: 5px;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.health-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--line-strong);
+  border-radius: 50%;
+}
+.health.ok {
+  color: var(--ok);
+}
+.health.ok .health-dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgb(46 163 107 / 12%);
+}
+.health.fail {
+  color: var(--danger);
+}
+.health.fail .health-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgb(229 77 77 / 12%);
+}
+.mcp-tools {
+  padding: 8px 12px 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+.tools-hint {
+  padding: 6px 2px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.tools-hint.error {
+  color: var(--danger);
+}
+.tool-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 2px;
+  border-top: 1px dashed var(--line-soft);
+}
+.tool-row:first-of-type {
+  border-top: 0;
+}
+.tool-name {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.tool-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-params {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tools-foot {
+  padding-top: 6px;
+  font-size: 10px;
+  color: var(--ink-faint);
 }
 .switch-cell {
   display: inline-flex;

@@ -59,6 +59,14 @@ public class SkillSettingsController {
         return skills.importFrom(str(body, "path"));
     }
 
+    /** 示例问题命中诊断：看描述是否足以被模型选中，并估算注入成本。 */
+    @PostMapping("/probe")
+    public Map<String, Object> probe(@RequestBody Map<String, Object> body) {
+        requireRead();
+        String query = str(body, "query");
+        return Map.of("query", query == null ? "" : query, "matches", skills.probe(query));
+    }
+
     /** 启用 / 停用：对话未显式勾选时，按这里的默认状态决定是否加载。 */
     @PostMapping("/{name}/enabled")
     public Map<String, Object> setEnabled(@PathVariable String name,

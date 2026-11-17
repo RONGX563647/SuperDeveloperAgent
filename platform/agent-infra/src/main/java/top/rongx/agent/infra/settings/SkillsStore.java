@@ -56,7 +56,12 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
 
     /** 技能条目（列表视图）：dirName 是目录名（接口标识），name 是 frontmatter 里的展示名。 */
     public record Skill(String name, String description, String dirName, String dir,
-                        int fileCount, boolean enabled, long updatedAt) {
+                        int fileCount, long sizeBytes, boolean enabled, long updatedAt) {
+    }
+
+    /** 示例问题命中结果：score 越高越相关，tokenEstimate 是描述注入的粗略成本。 */
+    public record Probe(String dirName, String name, String description,
+                        int score, int tokenEstimate) {
     }
 
     public List<Skill> list() {
@@ -240,7 +245,76 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
             updatedAt = 0L;
         }
         return new Skill(name, fm.description() == null ? "" : fm.description(),
-                dirName, dir.toString(), countFiles(dir), isEnabled(dirName), updatedAt);
+                dirName, dir.toString(), countFiles(dir), sizeOf(dir), isEnabled(dirName), updatedAt);
+    }
+
+    // ---------------------------------------------------------------- 命中诊断
+
+    /**
+     * 用示例问题评估技能命中情况。
+     *
+     * <p>不调用模型：按名称命中、英文关键词重合与中文双字重合打分。它回答的是
+     * 「这段描述是否足以让模型看出来该用哪个技能」，不是语义搜索。
+     */
+    public List<Probe> probe(String query) {
+        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        if (q.isBlank()) {
+            return List.of();
+        }
+        List<Probe> out = new ArrayList<>();
+        for (Skill skill : list()) {
+            if (!skill.enabled()) {
+                continue;
+            }
+            out.add(new Probe(skill.dirName(), skill.name(), skill.description(),
+                    score(q, skill), tokenEstimate(skill.description())));
+        }
+        out.sort((a, b) -> Integer.compare(b.score(), a.score()));
+        return out;
+    }
+
+    private static int score(String query, Skill skill) {
+        String name = skill.name().toLowerCase(Locale.ROOT);
+        String description = skill.description().toLowerCase(Locale.ROOT);
+        int score = 0;
+        if (!name.isBlank() && query.contains(name)) {
+            score += 5;
+        }
+        Set<String> words = new LinkedHashSet<>();
+        for (String word : (name + " " + description).split("[^a-z0-9+#.]+")) {
+            if (word.length() >= 3) {
+                words.add(word);
+            }
+        }
+        for (String word : words) {
+            if (query.contains(word)) {
+                score += 2;
+            }
+        }
+        // 中文没有空格：按相邻汉字对做重合，最多计 6 分
+        String text = name + description;
+        Set<String> pairs = new LinkedHashSet<>();
+        for (int i = 0; i + 1 < text.length(); i += 1) {
+            char a = text.charAt(i);
+            char b = text.charAt(i + 1);
+            if (Character.UnicodeScript.of(a) == Character.UnicodeScript.HAN
+                    && Character.UnicodeScript.of(b) == Character.UnicodeScript.HAN) {
+                pairs.add(text.substring(i, i + 2));
+            }
+        }
+        int cjk = 0;
+        for (String pair : pairs) {
+            if (cjk < 6 && query.contains(pair)) {
+                cjk += 1;
+            }
+        }
+        return score + cjk;
+    }
+
+    /** 粗略 token 估算：中英文混合按 2.5 字符 ≈ 1 token。 */
+    static int tokenEstimate(String description) {
+        String text = description == null ? "" : description.trim();
+        return text.isEmpty() ? 0 : Math.max(1, (int) Math.ceil(text.length() / 2.5));
     }
 
     // ---------------------------------------------------------------- 启用开关
@@ -312,6 +386,20 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
             return (int) walk.filter(Files::isRegularFile).count();
         } catch (IOException e) {
             return 0;
+        }
+    }
+
+    private static long sizeOf(Path dir) {
+        try (Stream<Path> walk = Files.walk(dir)) {
+            return walk.filter(Files::isRegularFile).mapToLong(file -> {
+                try {
+                    return Files.size(file);
+                } catch (IOException e) {
+                    return 0L;
+                }
+            }).sum();
+        } catch (IOException e) {
+            return 0L;
         }
     }
 

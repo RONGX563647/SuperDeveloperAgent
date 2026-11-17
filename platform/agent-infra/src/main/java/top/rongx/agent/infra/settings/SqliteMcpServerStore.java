@@ -50,6 +50,14 @@ public class SqliteMcpServerStore implements McpServerRepository {
             )
             """;
 
+    private static final String TOOL_SCHEMA = """
+            CREATE TABLE IF NOT EXISTS mcp_disabled_tools (
+                server_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                PRIMARY KEY (server_id, tool_name)
+            )
+            """;
+
     private static final String COLUMNS = "id, name, transport, command, args, url, "
             + "headers_enc, headers_iv, enabled, updated_at";
 
@@ -66,8 +74,11 @@ public class SqliteMcpServerStore implements McpServerRepository {
     }
 
     private void initSchema() {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(SCHEMA);
+             PreparedStatement tools = conn.prepareStatement(TOOL_SCHEMA)) {
             st.executeUpdate();
+            tools.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("mcp_servers 表初始化失败：" + e.getMessage(), e);
         }
@@ -230,6 +241,59 @@ public class SqliteMcpServerStore implements McpServerRepository {
             }
         } catch (SQLException e) {
             throw new IllegalStateException("MCP 请求头读取失败：" + e.getMessage(), e);
+        }
+    }
+
+    // ---------------------------------------------------------------- 工具开关
+
+    @Override
+    public List<String> disabledToolsOf(String id) {
+        if (id == null || id.isBlank()) {
+            return List.of();
+        }
+        try (Connection conn = open();
+             PreparedStatement st = conn.prepareStatement(
+                     "SELECT tool_name FROM mcp_disabled_tools WHERE server_id = ? ORDER BY tool_name")) {
+            st.setString(1, id);
+            try (ResultSet rs = st.executeQuery()) {
+                List<String> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(rs.getString("tool_name"));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("MCP 工具开关读取失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void setDisabledTools(String id, List<String> tools) {
+        if (id == null || id.isBlank()) {
+            return;
+        }
+        try (Connection conn = open()) {
+            try (PreparedStatement del = conn.prepareStatement(
+                    "DELETE FROM mcp_disabled_tools WHERE server_id = ?")) {
+                del.setString(1, id);
+                del.executeUpdate();
+            }
+            if (tools == null || tools.isEmpty()) {
+                return;
+            }
+            try (PreparedStatement ins = conn.prepareStatement(
+                    "INSERT OR IGNORE INTO mcp_disabled_tools (server_id, tool_name) VALUES (?,?)")) {
+                for (String tool : tools) {
+                    if (tool != null && !tool.isBlank()) {
+                        ins.setString(1, id);
+                        ins.setString(2, tool.trim());
+                        ins.addBatch();
+                    }
+                }
+                ins.executeBatch();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("MCP 工具开关保存失败：" + e.getMessage(), e);
         }
     }
 

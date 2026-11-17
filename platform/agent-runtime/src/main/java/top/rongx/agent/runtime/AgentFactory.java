@@ -265,6 +265,17 @@ public class AgentFactory {
                 client = mcp.buildSync();
                 toolkit.registerMcpClient(client).block(Duration.ofSeconds(20));
                 closeables.add(client);
+                // 工具级开关：SDK 注册的是工具原名，注册后按精确名字移除被禁用项
+                List<String> disabled = mcpServers.disabledToolsOf(server.id());
+                if (!disabled.isEmpty()) {
+                    Set<String> registered = new HashSet<>(toolkit.getToolNames());
+                    registered.removeAll(before);
+                    for (String toolName : registered) {
+                        if (disabled.contains(toolName)) {
+                            toolkit.removeTool(toolName);
+                        }
+                    }
+                }
                 Set<String> added = new HashSet<>(toolkit.getToolNames());
                 added.removeAll(before);
                 if (!added.isEmpty()) {

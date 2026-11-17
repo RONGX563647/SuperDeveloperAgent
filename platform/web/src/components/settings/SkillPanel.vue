@@ -4,8 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import {
   deleteSkill, importSkill, installCapability, listCapabilityMarket, listSkills,
-  readSkill, saveSkill, setSkillEnabled,
-  type CapabilityEntry, type SkillEntry
+  probeSkills, readSkill, saveSkill, setSkillEnabled,
+  type CapabilityEntry, type SkillEntry, type SkillProbeMatch
 } from '../../api/settings'
 
 /**
@@ -235,6 +235,68 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleString('zh-CN', { hour12: false })
 }
 
+// ---------------------------------------------------------------- 质量检查 / 命中试跑
+
+/** 体积按 KB / MB 展示，避免一长串字节。 */
+function sizeText(bytes: number): string {
+  if (!bytes) return '0 KB'
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 返回可操作的描述/体积问题；空数组表示没有明显问题。 */
+function issuesOf(skill: SkillEntry): string[] {
+  const issues: string[] = []
+  const description = skill.description.trim()
+  if (!description) {
+    issues.push('缺少 description，模型只能靠目录名猜用途')
+  } else if (description.length < 12) {
+    issues.push('description 过短，建议写清「什么时候用」')
+  } else if (description.length > 160) {
+    issues.push('description 过长，会稀释其他技能的匹配度')
+  }
+  if (skill.sizeBytes > 300 * 1024) {
+    issues.push(`目录 ${sizeText(skill.sizeBytes)}，建议把大文件放到 references 按需读取`)
+  }
+  return issues
+}
+
+const probeOpen = ref(false)
+const probeQuery = ref('')
+const probing = ref(false)
+const probeDone = ref(false)
+const probeResults = ref<SkillProbeMatch[]>([])
+
+function openProbe(): void {
+  probeOpen.value = true
+  if (!probeQuery.value) {
+    probeQuery.value = ''
+    probeDone.value = false
+  }
+}
+
+async function runProbe(): Promise<void> {
+  const query = probeQuery.value.trim()
+  if (!query) {
+    ElMessage.warning('输入一个示例问题，例如「帮我排查部署失败」')
+    return
+  }
+  probing.value = true
+  try {
+    const result = await probeSkills(query)
+    probeResults.value = result.matches
+    probeDone.value = true
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '命中测试失败')
+  } finally {
+    probing.value = false
+  }
+}
+
+function closeProbe(): void {
+  probeOpen.value = false
+}
+
 load()
 defineExpose({ load })
 </script>
@@ -250,6 +312,9 @@ defineExpose({ load })
         </div>
       </div>
       <div class="head-actions">
+        <el-button v-if="tab === 'installed'" size="small" @click="probeOpen ? closeProbe() : openProbe()">
+          {{ probeOpen ? '收起测试' : '命中测试' }}
+        </el-button>
         <el-button size="small" @click="importFromDir">
           <el-icon><Upload /></el-icon> 导入目录
         </el-button>
@@ -276,6 +341,38 @@ defineExpose({ load })
 
     <template v-if="tab === 'installed'">
     <div class="panel-scroll">
+    <div v-if="probeOpen" class="probe-card">
+      <div class="probe-head">
+        <span class="probe-title">示例问题命中测试</span>
+        <span class="probe-hint">按名称与描述关键词打分，不调用模型</span>
+      </div>
+      <div class="probe-row">
+        <el-input
+          v-model="probeQuery" size="default" clearable
+          placeholder="例如：帮我排查测试环境部署失败"
+          @keyup.enter="runProbe"
+        />
+        <el-button size="default" type="primary" :loading="probing" @click="runProbe">测试</el-button>
+      </div>
+      <div v-if="probeDone" class="probe-results">
+        <div v-if="!probeResults.length" class="probe-empty">没有已启用的技能。</div>
+        <template v-else>
+          <div
+            v-for="item in probeResults.slice(0, 5)" :key="item.dirName"
+            class="probe-item" :class="{ hit: item.score > 0 }"
+          >
+            <span class="probe-name mono">{{ item.name }}</span>
+            <span class="probe-score mono">{{ item.score > 0 ? `命中 ${item.score}` : '未命中' }}</span>
+            <span class="probe-desc">{{ item.description || '（无描述）' }}</span>
+            <span class="probe-token mono">~{{ item.tokenEstimate }}t</span>
+          </div>
+          <div v-if="!probeResults.some((item) => item.score > 0)" class="probe-empty">
+            所有技能都没命中。把示例问题里的关键词补进 description，模型才能选中它。
+          </div>
+        </template>
+      </div>
+    </div>
+
     <div v-if="loading" class="empty">加载中…</div>
     <div v-else-if="!skills.length" class="empty-state">
       <span class="empty-icon"><el-icon><MagicStick /></el-icon></span>
@@ -295,9 +392,16 @@ defineExpose({ load })
         <div class="skill-title">
           <span class="skill-name mono">{{ s.name }}</span>
           <span class="skill-meta">{{ s.fileCount }} 个文件</span>
+          <span class="skill-meta mono">{{ sizeText(s.sizeBytes) }}</span>
           <span v-if="s.updatedAt" class="skill-meta">{{ formatTime(s.updatedAt) }}</span>
+          <span v-if="issuesOf(s).length" class="quality-badge">
+            检查 {{ issuesOf(s).length }}
+          </span>
         </div>
         <div class="skill-desc">{{ s.description || '（SKILL.md 未填写 description）' }}</div>
+        <div v-if="issuesOf(s).length" class="skill-issues">
+          <span v-for="issue in issuesOf(s)" :key="issue" class="skill-issue">{{ issue }}</span>
+        </div>
       </div>
       <span class="switch-cell">
         <el-switch
@@ -519,6 +623,97 @@ defineExpose({ load })
 .market-hint.end {
   padding: 6px 0 2px;
   text-align: center;
+}
+.quality-badge {
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--warn);
+  background: var(--warn-faint, #fdf6e3);
+  border-radius: var(--radius-pill);
+}
+.skill-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-top: 4px;
+}
+.skill-issue {
+  font-size: 10.5px;
+  color: var(--warn);
+}
+.skill-issue::before {
+  content: '· ';
+}
+.probe-card {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.probe-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.probe-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.probe-hint {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.probe-row {
+  display: flex;
+  gap: 8px;
+}
+.probe-results {
+  padding-top: 8px;
+  margin-top: 8px;
+  border-top: 1px dashed var(--line-soft);
+}
+.probe-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 2px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.probe-item.hit {
+  color: var(--ink-muted);
+}
+.probe-name {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.probe-score {
+  flex: none;
+  color: var(--ink-faint);
+}
+.probe-item.hit .probe-score {
+  color: var(--ok);
+}
+.probe-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.probe-token {
+  flex: none;
+  font-size: 10px;
+}
+.probe-empty {
+  padding: 6px 2px;
+  font-size: 11px;
+  color: var(--ink-faint);
 }
 .skill-card {
   display: flex;

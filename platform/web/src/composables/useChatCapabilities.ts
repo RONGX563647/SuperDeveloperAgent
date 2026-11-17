@@ -11,7 +11,10 @@ export interface CapabilityOption {
   enabled: boolean
   /** Skill：文件数与更新时间（详情页展示） */
   fileCount?: number
+  sizeBytes?: number
   updatedAt?: number
+  /** MCP：服务 ID（设为默认时需要回写配置） */
+  id?: string
   /** MCP：传输方式与连接配置（详情页展示） */
   transport?: 'stdio' | 'http'
   command?: string
@@ -79,11 +82,13 @@ export function useChatCapabilities(sessionId: Ref<string>) {
         description: s.description,
         enabled: s.enabled,
         fileCount: s.fileCount,
+        sizeBytes: s.sizeBytes,
         updatedAt: s.updatedAt,
       }))
       mcpOptions.value = servers.map((s) => ({
         key: s.name,
         label: s.name,
+        id: s.id,
         description: s.transport === 'http' ? (s.url ?? 'http') : [s.command, ...s.args].filter(Boolean).join(' '),
         enabled: s.enabled,
         transport: s.transport,
