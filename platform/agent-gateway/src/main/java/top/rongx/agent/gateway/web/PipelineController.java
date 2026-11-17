@@ -61,6 +61,21 @@ public class PipelineController {
         return Map.of("tags", repoLocator.listTags(projectId, size));
     }
 
+    /**
+     * 重推已存在的本地标签（幂等）：LOCAL/FAILED 时由用户在历史里手动重试，
+     * 使用当前登录用户保存的托管账号 token 推送，不依赖主机本机凭据。
+     */
+    @PostMapping("/tags/push")
+    public Map<String, Object> pushTag(@RequestParam String projectId,
+                                       @RequestParam String tag) {
+        String userId = currentUser.requireUserId();
+        var outcome = repoLocator.pushTag(projectId, tag, userId);
+        return Map.of(
+                "created", outcome.created(),
+                "pushed", outcome.pushed(),
+                "message", outcome.message() == null ? "" : outcome.message());
+    }
+
     @GetMapping("/pipelines")
     public Map<String, Object> pipelines(String projectId) {
         return Map.of("engine", engine.id(), "pipelines", engine.pipelines(projectId));

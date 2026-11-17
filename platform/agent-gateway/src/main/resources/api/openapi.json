@@ -3527,6 +3527,41 @@
         }
       }
     },
+    "/api/v1/ci/tags/push" : {
+      "post" : {
+        "tags" : [ "pipeline-controller" ],
+        "summary" : "push tag",
+        "operationId" : "pushTag",
+        "parameters" : [ {
+          "name" : "projectId",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "tag",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ci/runs/{runId}/retry" : {
       "post" : {
         "tags" : [ "pipeline-controller" ],

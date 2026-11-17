@@ -1681,14 +1681,28 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         try {
             top.rongx.agent.domain.port.ProjectRepoLocator.TagOutcome outcome =
-                    repoLocator.createTag(state.projectId, state.deployVersion, state.gitSha);
+                    repoLocator.createTag(state.projectId, state.deployVersion, state.gitSha,
+                            userIdOf(state.actor));
             // PUSHED=远端可见；LOCAL=只存在本机（无 origin/推送失败）；FAILED=创建失败
             state.tagStatus = outcome.pushed() ? "PUSHED" : outcome.created() ? "LOCAL" : "FAILED";
             state.log.append("[tag] ").append(outcome.message()).append('\n');
+            if (!outcome.pushed()) {
+                state.log.append("[tag] 标签未同步到远端：检查代码托管账号的凭据后，"
+                        + "可在构建历史里点「重推标签」。\n");
+            }
         } catch (Exception e) {
             state.tagStatus = "FAILED";
             state.log.append("[tag] 同步 git 标签失败：").append(e.getMessage()).append('\n');
         }
+    }
+
+    /** 触发者形如 {@code ui:<userId>}；agent 触发时没有用户，返回 null（退回本机凭据）。 */
+    private static String userIdOf(String actor) {
+        if (actor == null) {
+            return null;
+        }
+        String value = actor.trim();
+        return value.startsWith("ui:") && value.length() > 3 ? value.substring(3) : null;
     }
 
     /**

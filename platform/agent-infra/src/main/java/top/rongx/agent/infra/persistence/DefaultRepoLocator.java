@@ -27,13 +27,16 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
     private final IntakeProjectStore store;
     private final Path workspaceRoot;
     private final GitWorktreeManager git;
+    private final top.rongx.agent.domain.settings.GitHostingAccountRepository accounts;
 
     public DefaultRepoLocator(IntakeProjectStore store,
                               GitWorktreeManager git,
+                              top.rongx.agent.domain.settings.GitHostingAccountRepository accounts,
                               @org.springframework.beans.factory.annotation.Value(
                                       "${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.store = store;
         this.git = git;
+        this.accounts = accounts;
         this.workspaceRoot = Path.of(workspaceRoot).toAbsolutePath().normalize();
     }
 
@@ -107,6 +110,11 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
 
     @Override
     public TagOutcome createTag(String projectId, String tag, String sha) {
+        return createTag(projectId, tag, sha, null);
+    }
+
+    @Override
+    public TagOutcome createTag(String projectId, String tag, String sha, String userId) {
         var repo = repoDir(projectId);
         if (repo.isEmpty() || sha == null || sha.isBlank()) {
             return new TagOutcome(false, false, "仓库或提交不存在，未创建 git 标签 " + tag);
@@ -117,23 +125,63 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
         } catch (GitWorktreeManager.GitIntakeException e) {
             return new TagOutcome(false, false, e.getMessage());
         }
-        String remoteUrl = git.remotes(dir).stream()
+        String remoteUrl = originUrl(dir);
+        if (remoteUrl == null) {
+            return new TagOutcome(true, false, "已创建本地标签 " + tag + "（仓库没有 origin，未推送）");
+        }
+        return push(projectId, dir, tag, remoteUrl, userId);
+    }
+
+    @Override
+    public TagOutcome pushTag(String projectId, String tag, String userId) {
+        if (tag == null || tag.isBlank()) {
+            return new TagOutcome(false, false, "标签名不能为空");
+        }
+        var repo = repoDir(projectId);
+        if (repo.isEmpty()) {
+            return new TagOutcome(false, false, "项目仓库不存在，无法推送标签 " + tag);
+        }
+        Path dir = repo.get();
+        if (!git.listTags(dir, 500).contains(tag)) {
+            return new TagOutcome(false, false,
+                    "本地不存在标签 " + tag + "，请重新发布生成标签后再推送");
+        }
+        String remoteUrl = originUrl(dir);
+        if (remoteUrl == null) {
+            return new TagOutcome(true, false, "仓库没有 origin，标签 " + tag + " 仍只在本地");
+        }
+        return push(projectId, dir, tag, remoteUrl, userId);
+    }
+
+    /** 推送标签：优先用该用户保存的托管账号 token，未配置时退回本机凭据。 */
+    private TagOutcome push(String projectId, Path dir, String tag, String remoteUrl, String userId) {
+        try {
+            git.pushTagTo(dir, tag, remoteUrl, authFor(userId, remoteUrl));
+            return new TagOutcome(true, true, "已创建并推送标签 " + tag + " → " + remoteUrl);
+        } catch (GitWorktreeManager.GitIntakeException e) {
+            log.warn("标签 {} 推送失败 project={}：{}", tag, projectId, e.getMessage());
+            String detail = e.getMessage() == null ? "" : e.getMessage().lines()
+                    .filter(line -> !line.isBlank()).findFirst().orElse("");
+            return new TagOutcome(true, false,
+                    "已创建本地标签 " + tag + "，推送远端失败：" + detail
+                    + "（可在流水线历史里手动重推）");
+        }
+    }
+
+    private String originUrl(Path dir) {
+        return git.remotes(dir).stream()
                 .filter(remote -> "origin".equals(remote.name()))
                 .map(GitWorktreeManager.RemoteInfo::url)
                 .filter(url -> url != null && !url.isBlank())
                 .findFirst().orElse(null);
-        if (remoteUrl == null) {
-            return new TagOutcome(true, false, "已创建本地标签 " + tag + "（仓库没有 origin，未推送）");
+    }
+
+    private GitWorktreeManager.GitAuth authFor(String userId, String remoteUrl) {
+        if (userId == null || userId.isBlank() || accounts == null) {
+            return null;
         }
-        try {
-            // 复用用户本机凭据（credential.helper / SSH key）；无凭据时推送失败只提示
-            git.pushTagTo(dir, tag, remoteUrl, null);
-            return new TagOutcome(true, true, "已创建并推送标签 " + tag + " → " + remoteUrl);
-        } catch (GitWorktreeManager.GitIntakeException e) {
-            log.warn("标签 {} 推送失败：{}", tag, e.getMessage());
-            String detail = e.getMessage() == null ? "" : e.getMessage().lines()
-                    .filter(line -> !line.isBlank()).findFirst().orElse("");
-            return new TagOutcome(true, false, "已创建本地标签 " + tag + "，推送远端失败：" + detail);
-        }
+        return accounts.credentialFor(userId, remoteUrl)
+                .map(c -> new GitWorktreeManager.GitAuth(c.username(), c.token()))
+                .orElse(null);
     }
 }

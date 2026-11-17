@@ -94,6 +94,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/mcp-servers/{id}/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** update tools */
+        put: operations["updateTools"];
+        /** tools */
+        post: operations["tools"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/git-oauth-apps/{provider}": {
         parameters: {
             query?: never;
@@ -293,6 +311,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{projectId}/deployments/{env}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** restart */
+        post: operations["restart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{projectId}/conversations": {
         parameters: {
             query?: never;
@@ -391,6 +426,23 @@ export interface paths {
         put?: never;
         /** set enabled */
         post: operations["setEnabled"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/skills/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** probe */
+        post: operations["probe"];
         delete?: never;
         options?: never;
         head?: never;
@@ -741,6 +793,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/mcp-servers/test-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** test all */
+        post: operations["testAll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/git-hosts": {
         parameters: {
             query?: never;
@@ -981,6 +1050,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/git/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** git merge */
+        post: operations["gitMerge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/git/checkout": {
         parameters: {
             query?: never;
@@ -992,6 +1078,23 @@ export interface paths {
         put?: never;
         /** checkout */
         post: operations["checkout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/dockerfile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** generate dockerfile */
+        post: operations["generateDockerfile"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1154,6 +1257,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/git-issues/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** upload image */
+        post: operations["uploadImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/deploy/{projectId}/replay": {
         parameters: {
             query?: never;
@@ -1236,6 +1356,23 @@ export interface paths {
         put?: never;
         /** send */
         post: operations["send"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ci/tags/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** push tag */
+        post: operations["pushTag"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1633,6 +1770,23 @@ export interface paths {
         };
         /** matrix */
         get: operations["matrix"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{projectId}/deployments/{env}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** logs */
+        get: operations["logs"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2254,6 +2408,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/git-issue-images/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** image */
+        get: operations["image"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/fs/roots": {
         parameters: {
             query?: never;
@@ -2296,7 +2467,7 @@ export interface paths {
             cookie?: never;
         };
         /** probe */
-        get: operations["probe"];
+        get: operations["probe_1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2382,6 +2553,23 @@ export interface paths {
         };
         /** conversation runs */
         get: operations["conversationRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ci/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** tags */
+        get: operations["tags"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2957,6 +3145,7 @@ export interface components {
             body?: string;
             state?: string;
             kind?: string;
+            priority?: string;
             labels?: string;
             url?: string;
             source?: string;
@@ -3059,6 +3248,8 @@ export interface components {
             dir?: string;
             /** Format: int32 */
             fileCount?: number;
+            /** Format: int64 */
+            sizeBytes?: number;
             enabled?: boolean;
             /** Format: int64 */
             updatedAt?: number;
@@ -3261,6 +3452,9 @@ export interface components {
             /** Format: int64 */
             deployedAt?: number;
             detail?: string;
+            release?: string;
+            /** Format: int64 */
+            pid?: number;
         };
         EnvColumn: {
             key?: string;
@@ -3271,6 +3465,13 @@ export interface components {
             versions?: string[];
             cells?: components["schemas"]["Cell"][];
             dockerAvailable?: boolean;
+            note?: string;
+        };
+        DeploymentLogs: {
+            source?: string;
+            container?: string;
+            containers?: string[];
+            lines?: string[];
             note?: string;
         };
         DailyUsage: {
@@ -3652,6 +3853,60 @@ export interface operations {
         };
     };
     delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    updateTools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    tools: {
         parameters: {
             query?: never;
             header?: never;
@@ -4177,6 +4432,33 @@ export interface operations {
             };
         };
     };
+    restart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionResult"];
+                };
+            };
+        };
+    };
     list_1: {
         parameters: {
             query?: {
@@ -4378,6 +4660,34 @@ export interface operations {
             path: {
                 name: string;
             };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    probe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody: {
@@ -5008,6 +5318,28 @@ export interface operations {
             };
         };
     };
+    testAll: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
     list_5: {
         parameters: {
             query?: never;
@@ -5423,6 +5755,36 @@ export interface operations {
             };
         };
     };
+    gitMerge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     checkout: {
         parameters: {
             query?: never;
@@ -5439,6 +5801,32 @@ export interface operations {
                 };
             };
         };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    generateDockerfile: {
+        parameters: {
+            query?: {
+                env?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {
@@ -5747,6 +6135,35 @@ export interface operations {
             };
         };
     };
+    uploadImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
     replay: {
         parameters: {
             query: {
@@ -5869,6 +6286,31 @@ export interface operations {
                 "application/json": components["schemas"]["SendRequest"];
             };
         };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    pushTag: {
+        parameters: {
+            query: {
+                projectId: string;
+                tag: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {
@@ -6497,6 +6939,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Matrix"];
+                };
+            };
+        };
+    };
+    logs: {
+        parameters: {
+            query?: {
+                version?: string;
+                container?: string;
+                tail?: number;
+                sinceMinutes?: number;
+            };
+            header?: never;
+            path: {
+                projectId: string;
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentLogs"];
                 };
             };
         };
@@ -7389,6 +7859,28 @@ export interface operations {
             };
         };
     };
+    image: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+        };
+    };
     roots: {
         parameters: {
             query?: never;
@@ -7433,7 +7925,7 @@ export interface operations {
             };
         };
     };
-    probe: {
+    probe_1: {
         parameters: {
             query: {
                 path: string;
@@ -7576,6 +8068,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunView"][];
+                };
+            };
+        };
+    };
+    tags: {
+        parameters: {
+            query: {
+                projectId: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

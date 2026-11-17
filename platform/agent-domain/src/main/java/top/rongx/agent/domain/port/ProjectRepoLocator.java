@@ -38,6 +38,21 @@ public interface ProjectRepoLocator {
         return new TagOutcome(false, false, "当前仓库模式不支持创建 git 标签");
     }
 
+    /**
+     * 同上，但带上触发用户：仓库实现可用该用户保存的托管账号 token 推送，
+     * 私有仓库不再依赖运行平台主机的本机凭据。
+     */
+    default TagOutcome createTag(String projectId, String tag, String sha, String userId) {
+        return createTag(projectId, tag, sha);
+    }
+
+    /**
+     * 重新推送已存在的本地标签（幂等）：标签只在本地/推送失败后由用户手动重试。
+     */
+    default TagOutcome pushTag(String projectId, String tag, String userId) {
+        return new TagOutcome(false, false, "当前仓库模式不支持推送 git 标签");
+    }
+
     /** 打标签结果：created = 本地已创建；pushed = 已推送到远端。 */
     record TagOutcome(boolean created, boolean pushed, String message) {
     }

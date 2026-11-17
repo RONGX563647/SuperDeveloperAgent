@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheckFilled, CircleCloseFilled, RefreshRight } from '@element-plus/icons-vue'
+import { CircleCheckFilled, CircleCloseFilled, InfoFilled, RefreshRight } from '@element-plus/icons-vue'
 import {
   generateDockerfile, gitMerge, projectReadiness, scaffoldApply,
   type Readiness, type ReadinessStep,
@@ -172,13 +172,14 @@ async function fixDockerfile(step: ReadinessStep): Promise<void> {
           class="rd-row"
           :class="{ ok: s.ok, optional: !s.required }"
         >
-          <el-icon class="rd-icon">
-            <CircleCheckFilled v-if="s.ok" />
+          <el-icon class="rd-icon" :class="{ result: !s.required }">
+            <InfoFilled v-if="!s.required" />
+            <CircleCheckFilled v-else-if="s.ok" />
             <CircleCloseFilled v-else />
           </el-icon>
           <span class="rd-label">{{ s.label }}</span>
           <span class="rd-detail" :title="s.detail">{{ s.detail }}</span>
-          <span v-if="!s.required" class="rd-tag">结果</span>
+          <span v-if="!s.required" class="rd-tag" title="仅展示当前进度，不影响是否可以发布">结果</span>
           <button
             v-else-if="!s.ok && s.fix"
             type="button"
@@ -291,6 +292,10 @@ async function fixDockerfile(step: ReadinessStep): Promise<void> {
 }
 .rd-row.ok .rd-icon {
   color: var(--ok);
+}
+/* 结果项（首次发布）不参与就绪判定：中性图标 + 浅色说明，不能再画红叉 */
+.rd-icon.result {
+  color: var(--ink-faint);
 }
 .rd-label {
   flex: none;

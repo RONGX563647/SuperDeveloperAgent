@@ -302,11 +302,10 @@ public class ProjectReadinessController {
         Optional<top.rongx.agent.domain.deploy.DeployRecipe> current = recipes.current(id, env);
         if (current.isPresent()) {
             return step("first-run", "首次发布", true, false,
-                    "已在 " + env + " 跑通（脚本 v" + current.get().version() + "）", null);
+                    "已有 " + env + " 的成功发布记录（固化脚本 v" + current.get().version() + "）", null);
         }
         return step("first-run", "首次发布", false, false,
-                "还没有在 " + env + " 跑通过一次（发布会自动固化脚本）",
-                fixRoute("/pipeline", "去发布"));
+                "尚无 " + env + " 的成功发布记录（首次发布会自动固化脚本）", null);
     }
 
     // ---------------------------------------------------------------- 定义读取

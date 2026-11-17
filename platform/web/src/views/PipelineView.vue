@@ -14,7 +14,7 @@ import RunLog from '../components/pipeline/RunLog.vue'
 import {
   artifactFilePath, deleteHistory, deployImageVersion, deployImages, dryRunPipeline, getHistory, getRun, isTerminalStatus,
   listPipelines, previewPipeline, retryStage, stopLocalDeploy, triggerPipeline,
-  listGitTags,
+  listGitTags, pushGitTag,
   type ArtifactView, type DryRunReportView, type HistoryItem, type ImageVersionView, type PreviewStage,
   type RunView, type StageView,
 } from '../api/pipeline'
@@ -261,7 +261,13 @@ const topError = ref('')
 const mobilePane = ref<'config' | 'run'>('config')
 
 /** 当前右侧查看的运行来自哪次触发/哪条历史（运行详情本身不带 env/pipeline）。 */
-const activeMeta = ref<{ env: string, pipelineId: string, sha: string } | null>(null)
+const activeMeta = ref<{
+  env: string
+  pipelineId: string
+  sha: string
+  version?: string
+  tagStatus?: string
+} | null>(null)
 
 const {
   run, runId, loading: runLoading, errorText, startedAt, running,
@@ -1041,8 +1047,47 @@ async function stopLocalServices(): Promise<void> {
 
 /* ---------------------------------------------------------------- 历史 / 详情 */
 
+/** 标签只在本地/失败时的告警文案（PUSHED 不提示）。 */
+const tagAlert = computed(() => {
+  const meta = activeMeta.value
+  if (!meta?.tagStatus || !meta.version) return ''
+  if (meta.tagStatus === 'LOCAL') {
+    return `版本 ${meta.version} 的标签只创建在平台本机，Git 远端看不到：`
+      + '通常是推送凭据不可用，检查代码托管账号后重推。'
+  }
+  if (meta.tagStatus === 'FAILED') {
+    return `版本 ${meta.version} 的标签创建失败：查看本次运行日志的 [tag] 行后重试。`
+  }
+  return ''
+})
+
+const pushingTag = ref(false)
+
+async function pushTag(): Promise<void> {
+  const meta = activeMeta.value
+  if (!meta?.version) return
+  pushingTag.value = true
+  try {
+    const result = await pushGitTag(projectId.value, meta.version)
+    if (result.pushed) {
+      meta.tagStatus = 'PUSHED'
+      ElMessage.success(`标签 ${meta.version} 已推送到远端`)
+    } else {
+      ElMessage.warning(result.message || '推送失败，请检查代码托管账号 token')
+    }
+    void loadHistory()
+  } catch (e) {
+    ElMessage.error(`重推标签失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    pushingTag.value = false
+  }
+}
+
 function openedRun(item: HistoryItem): void {
-  activeMeta.value = { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha }
+  activeMeta.value = {
+    env: item.env, pipelineId: item.pipelineId, sha: item.gitSha,
+    version: item.version, tagStatus: item.tagStatus,
+  }
   void openRun(item.runId, { startedAt: item.createdAt })
   syncUrl(item.runId)
 }
@@ -1193,7 +1238,12 @@ onMounted(async () => {
   const fromUrl = typeof route.query.runId === 'string' ? route.query.runId : ''
   if (fromUrl) {
     const item = history.value.find((h) => h.runId === fromUrl)
-    if (item) activeMeta.value = { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha }
+    if (item) {
+      activeMeta.value = {
+        env: item.env, pipelineId: item.pipelineId, sha: item.gitSha,
+        version: item.version, tagStatus: item.tagStatus,
+      }
+    }
     void openRun(fromUrl)
   } else if (history.value.length) {
     // 打开页面就展示最近一次"有内容"的运行：空白详情页对"看看刚才跑成什么样"毫无帮助
@@ -1483,6 +1533,17 @@ async function copyDigest(digest: string): Promise<void> {
                 <el-icon><VideoPlay /></el-icon> 整条重跑
               </button>
             </div>
+          </section>
+
+          <!-- 标签只在本地/创建失败：结果区显式告警，并提供幂等重推入口 -->
+          <section v-if="tagAlert" class="tag-card" aria-label="git 标签同步">
+            <span class="tc-text">{{ tagAlert }}</span>
+            <button
+              type="button" class="fc-btn primary"
+              :disabled="pushingTag" @click="pushTag"
+            >
+              <el-icon><RefreshRight /></el-icon> {{ pushingTag ? '推送中…' : '重推标签' }}
+            </button>
           </section>
 
           <div class="run-detail">
@@ -2156,8 +2217,7 @@ async function copyDigest(digest: string): Promise<void> {
   display: flex;
   align-items: baseline;
   gap: 8px;
-}
-.fc-title {
+}.fc-title {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--danger);
@@ -2183,6 +2243,24 @@ async function copyDigest(digest: string): Promise<void> {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+}
+.tag-card {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.tc-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
 }
 .fc-btn {
   display: inline-flex;

@@ -305,6 +305,18 @@ export async function listGitTags(projectId: string, limit = 30): Promise<string
   return res.tags ?? []
 }
 
+/** 重推已存在的本地标签（幂等）：用当前用户保存的托管账号 token 推送。 */
+export interface TagPushResult {
+  created: boolean
+  pushed: boolean
+  message: string
+}
+
+export function pushGitTag(projectId: string, tag: string): Promise<TagPushResult> {
+  const q = new URLSearchParams({ projectId, tag })
+  return apiFetch<TagPushResult>(`/api/v1/ci/tags/push?${q}`, { method: 'POST' })
+}
+
 /** 从失败阶段继续：复用后端保留的构建现场，只重跑该阶段及其后续。 */
 export function retryStage(runId: string, stageId: string): Promise<{ runId: string, retrying: boolean, message?: string }> {
   const q = new URLSearchParams({ stageId })
