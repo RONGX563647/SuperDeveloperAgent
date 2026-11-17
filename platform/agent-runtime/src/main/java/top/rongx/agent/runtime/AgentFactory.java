@@ -552,6 +552,10 @@ public class AgentFactory {
                 - Tools are grouped into plugins; only core tools are loaded by default. Call
                   tool_load(plugin[,plugin]) before using a capability group; use tool_search(keyword)
                   when unsure of names and tool_get(name) for full parameters.
+                - Hard rule: if the capability you need is not in the tool list, never refuse and never
+                  ask the user to do it by hand; run tool_search / tool_plugins and tool_load the
+                  matching plugin first. For example, creating, commenting on, closing or reopening a
+                  Git issue requires tool_load("issue") before calling those tools.
                 - Never load all plugins at once. Loaded plugins stay active for the session; do not
                   load them again. Unloaded tools are not callable yet.
                 - The tool set is fixed once the session starts; avoid re-planning around tools you do

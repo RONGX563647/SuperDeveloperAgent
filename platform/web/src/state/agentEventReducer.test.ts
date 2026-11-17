@@ -168,5 +168,22 @@ import { renderMarkdown } from '../utils/markdown'
   check('ask 无问题不落卡片', empty.messages.length === 0)
 }
 
+// 12. 工具入参：稳定协议 args 优先，增量按 toolCallId 累积；终态事件可兜底补齐
+{
+  let p = emptyAgentProjection()
+  p = reduceAgentEvent(p, ev('tool.started', 1, { name: 'create_git_issue', toolCallId: 't-1' }))
+  p = reduceAgentEvent(p, ev('tool.arguments', 2, { toolCallId: 't-1', args: '{"tit' }))
+  p = reduceAgentEvent(p, ev('tool.arguments', 3, { toolCallId: 't-1', args: 'le":"x"}' }))
+  check('args 增量累积', p.tools['t-1']?.arguments === '{"title":"x"}',
+    JSON.stringify(p.tools['t-1']))
+
+  // 增量丢失（只有终态事件带完整入参）时不能留空
+  let q = emptyAgentProjection()
+  q = reduceAgentEvent(q, ev('tool.started', 1, { name: 'create_git_issue', toolCallId: 't-2' }))
+  q = reduceAgentEvent(q, ev('tool.completed', 2, { toolCallId: 't-2', args: '{"priority":"P1"}' }))
+  check('终态入参兜底', q.tools['t-2']?.arguments === '{"priority":"P1"}',
+    JSON.stringify(q.tools['t-2']))
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

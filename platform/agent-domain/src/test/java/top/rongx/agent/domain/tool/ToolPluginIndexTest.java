@@ -69,6 +69,19 @@ class ToolPluginIndexTest {
     }
 
     @Test
+    @DisplayName("工单相关意图（关闭/评论/优先级/合并）能路由到 issue 插件")
+    void routesIssueIntent() {
+        ToolPluginIndex index = ToolPluginIndex.of(ToolPlugins.standard(),
+                Set.of("list_git_issues", "create_git_issue", "close_git_issue",
+                        "comment_git_issue", "update_git_issue"),
+                ToolPlugins.CORE);
+
+        assertEquals(Set.of("issue"), index.route("把这个工单关闭"));
+        assertEquals(Set.of("issue"), index.route("给 issue 加评论并调整优先级"));
+        assertEquals(Set.of("issue"), index.route("合并重复的缺陷单"));
+    }
+
+    @Test
     @DisplayName("提示词索引只给插件摘要，不含完整 schema，且顺序稳定")
     void promptIndexIsCompactAndStable() {
         String text = index().promptIndex();

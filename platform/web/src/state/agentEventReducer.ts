@@ -152,13 +152,17 @@ function normalizeEvent(event: AgentEvent): AgentEvent {
     return { ...event, type: 'tool.result.delta' }
   }
   if (type === 'ToolResultEndEvent' || type === 'tool.completed') {
+    // 只有显式失败态才算失败：缺 state（旧协议/骨架事件）与 state=running 都是正常完成，
+    // 否则每个工具都会显示红叉；真正的失败还会由返回文本 "Error: " 前缀兜底识别。
+    const state = typeof p.state === 'string' ? p.state.toLowerCase() : ''
+    const failed = state === 'error' || state === 'denied' || state === 'interrupted'
     return {
       ...event,
       type: 'tool.completed',
       payload: {
         ...p,
         name: p.name ?? p.toolCallName,
-        ...(p.state === 'success' ? {} : { error: true }),
+        ...(failed ? { error: true } : {}),
       },
     }
   }
@@ -327,7 +331,9 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
         toolCallId,
         toolName: name,
         // 入参主体由 tool.arguments 增量补齐；start 事件偶尔会带全量，两者都要保
-        arguments: stringData(event, 'arguments') ?? next.tools[toolCallId]?.arguments,
+        arguments: stringData(event, 'args')
+          ?? stringData(event, 'arguments')
+          ?? next.tools[toolCallId]?.arguments,
         status: 'RUNNING',
       }
       pushMessage(next, 'step', toolDisplayName(name), '工具调用', toolCallId)
@@ -349,7 +355,10 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
       next.tools[toolCallId] = {
         toolCallId,
         toolName: existing?.toolName ?? stringData(event, 'name') ?? 'unknown_tool',
-        arguments: existing?.arguments ?? stringData(event, 'arguments'),
+        // 终态事件若携带完整入参（args/arguments），用于补齐增量丢失的情况
+        arguments: existing?.arguments
+          || stringData(event, 'args')
+          || stringData(event, 'arguments'),
         status: failed ? 'FAILED' : 'COMPLETED',
         code: stringData(event, 'code'),
         resultText: existing?.resultText,
@@ -497,9 +506,11 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
     case 'tool.arguments': {
       // 工具入参是碎片增量（ToolCallDeltaEvent.delta），必须按 toolCallId 累积；
       // 之前这里直接 break，导致真实会话里所有工具的 arguments 都是空的。
-      // 兼容上游直接给全量字段（arguments / content）的形态。
-      const delta = stringData(event, 'delta')
+      // 后端稳定协议统一为 args；仍兼容旧协议的 delta / arguments / text / content。
+      const delta = stringData(event, 'args')
+        ?? stringData(event, 'delta')
         ?? stringData(event, 'arguments')
+        ?? stringData(event, 'text')
         ?? stringData(event, 'content')
         ?? ''
       if (!delta) break

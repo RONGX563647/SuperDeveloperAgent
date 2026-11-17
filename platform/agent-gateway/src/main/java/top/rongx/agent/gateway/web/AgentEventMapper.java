@@ -72,6 +72,20 @@ public class AgentEventMapper {
                     && (type == AgentEventType.TOOL_CALL_START || type == AgentEventType.TOOL_RESULT_END)) {
                 payload.put("name", toolName);
             }
+            // 工具入参增量：上游字段名在不同版本间是 delta / args / arguments，
+            // 稳定协议统一为 args，前端只累积这一个字段，不再猜字段名
+            if (type == AgentEventType.TOOL_CALL_DELTA) {
+                Object args = payload.get("delta");
+                if (args == null) {
+                    args = payload.get("args");
+                }
+                if (args == null) {
+                    args = payload.get("arguments");
+                }
+                if (args != null) {
+                    payload.put("args", args);
+                }
+            }
             dto.put("payload", payload);
         } catch (IllegalArgumentException e) {
             dto.put("payload", Map.of("text", String.valueOf(event)));

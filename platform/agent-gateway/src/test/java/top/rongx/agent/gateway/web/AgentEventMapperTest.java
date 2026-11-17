@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.event.AgentEventType;
 import io.agentscope.core.event.CustomEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.ToolCallDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.message.ToolResultState;
@@ -55,6 +56,18 @@ class AgentEventMapperTest {
         Map<String, Object> payload = (Map<String, Object>) dto.get("payload");
         assertEquals("read_file", payload.get("name"));
         assertEquals("success", String.valueOf(payload.get("state")).toLowerCase());
+    }
+
+    @Test
+    void toolCallDeltaNormalizesArgumentsToArgs() {
+        Map<String, Object> dto = mapper.toDto(
+                new ToolCallDeltaEvent("reply-1", "call-1", "create_git_issue", "{\"title\":"));
+
+        assertEquals("tool.arguments", dto.get("type"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) dto.get("payload");
+        assertEquals("{\"title\":", payload.get("args"));
+        assertEquals("call-1", payload.get("toolCallId"));
     }
 
     @Test

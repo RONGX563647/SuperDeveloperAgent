@@ -48,13 +48,32 @@ public class ToolCatalogTools {
                          @ToolParam(name = "read_only", required = false,
                                  description = "只返回只读工具，默认 false") Boolean readOnlyOnly,
                          @ToolParam(name = "limit", required = false,
-                                 description = "返回条数，默认 10，最大 30") Integer limit) {
+                                 description = "返回条数，默认 10，最大 30") Integer limit,
+                         RuntimeContext rc) {
         List<AgentToolCatalog.Entry> hits = catalog.search(keyword, readOnlyOnly, limit);
         if (hits.isEmpty()) {
             return "(无匹配工具) 换关键词，或用 tool_plugins 查看能力分组。";
         }
-        return AgentToolCatalog.format(hits)
-                + "\n提示：调用前先用 tool_load 加载对应插件；参数细节用 tool_get。";
+        return AgentToolCatalog.format(hits) + "\n" + loadHint(hits, index(rc));
+    }
+
+    /**
+     * 搜索结果直接给出加载指令：模型看到工具名却不知道它属于哪个插件时，
+     * 会误以为「工具不可用」并放弃，必须把 tool_load 的参数一并写出来。
+     */
+    private static String loadHint(List<AgentToolCatalog.Entry> hits, ToolPluginIndex index) {
+        Set<String> plugins = new LinkedHashSet<>();
+        for (AgentToolCatalog.Entry hit : hits) {
+            index.pluginOf(hit.name()).ifPresent(plugins::add);
+        }
+        StringBuilder out = new StringBuilder();
+        if (!plugins.isEmpty()) {
+            out.append("加载提示：先 tool_load(\"")
+                    .append(String.join(",", plugins))
+                    .append("\") 激活对应插件，再调用上面的工具。\n");
+        }
+        out.append("参数细节用 tool_get(name)。");
+        return out.toString();
     }
 
     @Tool(name = "tool_get", description = "Read a tool's full parameter schema.",
