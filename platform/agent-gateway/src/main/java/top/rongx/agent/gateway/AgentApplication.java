@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import top.rongx.agent.infra.persistence.config.AgentDbProperties;
 import top.rongx.agent.runtime.AgentProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -18,7 +19,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * 该文件已被 .gitignore 忽略，凭证不入配置库（规约 §8）。
  */
 @SpringBootApplication(scanBasePackages = "top.rongx.agent")
-@EnableConfigurationProperties(AgentProperties.class)
+@EnableConfigurationProperties({AgentProperties.class, AgentDbProperties.class})
 @EnableScheduling
 public class AgentApplication {
 
