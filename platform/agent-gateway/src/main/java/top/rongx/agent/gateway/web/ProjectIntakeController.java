@@ -388,14 +388,52 @@ public class ProjectIntakeController {
                     "该项目尚未完成 git 接入，无法创建分支。");
         }
         String from = str(payload, "from");
+        if (from == null || from.isBlank()) {
+            // 新版本线默认从上一版本线的最后一个补丁标签切出；第一条版本线从 main 切
+            from = defaultBranchBase(ctx.dir(), branch);
+        }
         boolean created = git.createBranchAt(ctx.dir(), branch,
                 from == null || from.isBlank() ? "HEAD" : from);
         Map<String, Object> out = new java.util.LinkedHashMap<>();
         out.put("ok", true);
         out.put("created", created);
         out.put("branch", branch);
+        out.put("from", from == null || from.isBlank() ? "HEAD" : from);
         out.put("head", git.revParse(ctx.dir(), "refs/heads/" + branch));
         return out;
+    }
+
+    /**
+     * 版本线分支的默认起点。
+     *
+     * <p>规则：{@code 0.2.0-snapshot} 从 {@code 0.1} 的最后一个补丁标签（如 0.1.2）切；
+     * 第一条版本线（{@code 0.1.0-snapshot}）从 {@code main} 切。
+     * 找不到对应标签时退回 main/HEAD，由调用方日志体现实际起点。
+     */
+    private String defaultBranchBase(java.nio.file.Path dir, String branch) {
+        top.rongx.agent.domain.release.ReleaseVersion base =
+                top.rongx.agent.domain.release.ReleaseVersion.baseOfBranch(branch);
+        if (base != null && (base.major() > 0 || base.minor() > 0)) {
+            String previousLine = base.minor() > 0
+                    ? base.major() + "." + (base.minor() - 1)
+                    : null;
+            if (previousLine != null) {
+                java.util.regex.Pattern patch =
+                        java.util.regex.Pattern.compile("^" + previousLine.replace(".", "\\.")
+                                + "\\.(\\d+)$");
+                int max = -1;
+                for (String tag : git.listTags(dir, 500)) {
+                    java.util.regex.Matcher matcher = patch.matcher(tag.trim());
+                    if (matcher.matches()) {
+                        max = Math.max(max, Integer.parseInt(matcher.group(1)));
+                    }
+                }
+                if (max >= 0) {
+                    return previousLine + "." + max;
+                }
+            }
+        }
+        return git.localBranches(dir).contains("main") ? "main" : null;
     }
 
     /** 远程分支列表（UI 选择对比目标用）。 */
