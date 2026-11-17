@@ -1,0 +1,327 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_1131_workspace-supervisor-stream-ask",
+  "category": "bug",
+  "title": "工作区助手流不结束与 ask 选项卡片",
+  "createdAt": "2026-11-17T11:31:37+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "工作区助手流不结束与 ask 选项卡片",
+    "toolCallCount": 0
+  },
+  "problem": "工作区助手每轮对话结束必须手动点停止才能发下一条；对话缺少 ask 选项卡片供用户选择",
+  "solution": "运行终态（run.completed/failed/cancelled）到达即收尾并断开读流，工作区 SSE 在 AGENT_END 主动关流释放配额；新增 ask_user 工具 + AskUserMiddleware 下发 ask.requested，前端 AskUserCard 渲染可点选卡片并作为下一条用户消息发回；同时补齐宿主 Docker 阶段的可信配方规则与 DeployStageTest 夹具",
+  "commits": [
+    {
+      "sha": "dbadfba9fee59f83506572ed276bf9855b925eeb",
+      "subject": "fix(workspace): 运行终态即收尾，避免工作区对话必须手动停止",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 40,
+          "deletions": 2,
+          "blobHash": "47b300f0607947eb140c1ae05870b80fa26192fb"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/SandboxRunnerSelectionTest.java",
+          "status": "A",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "ced348cbbdecd6442cbf7534039c55dc4862c0d0"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceSuperController.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 0,
+          "blobHash": "312f9a185c9ee86928b9c94de2fffd0bd9b884a1"
+        },
+        {
+          "path": "platform/web/src/composables/useAgentChat.ts",
+          "status": "M",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "b73ada2e14c584257eb74c3f8bdb8817d4f21fdf"
+        }
+      ]
+    },
+    {
+      "sha": "4899aeff643e4d987afa16d2c67547f7b8f6214e",
+      "subject": "fix(pipeline): 镜像打包用内置配方上宿主，夹具改用宿主执行器替身",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+          "status": "M",
+          "additions": 40,
+          "deletions": 14,
+          "blobHash": "efa5ea4bd530b5b8a43fc9ea61c1a0beeaa05f79"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/recipe/RecipeActionResolver.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 1,
+          "blobHash": "82f6dfaf21acd4a88b928283e215598e7d49dfb1"
+        }
+      ]
+    },
+    {
+      "sha": "965c8c1a65c13d7ee05b682a7c4489827a639956",
+      "subject": "feat(chat): ask_user 工具下发选项卡片，对话里直接点选用答案",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "76afe283f7e178ceadd04f36e1ac90f92cb5387d"
+        },
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "99a54f75fd9e7b4ab5acc989518b36c14e79cc08"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 5,
+          "deletions": 5,
+          "blobHash": "56549858aa762927c8353ad0548b1074c6237aab"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 50,
+          "deletions": 3,
+          "blobHash": "dcf2eb71994485c921c285fc2974c47a3872a845"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImageStageDryRunTest.java",
+          "status": "A",
+          "additions": 68,
+          "deletions": 0,
+          "blobHash": "956d5ee28e166342aaacf9df596f1d56ba165dfd"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/AgentEventMapper.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "3a0f2b7902b3aab44dfd2e7acb20d5bb8d959db5"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/AgentEventMapperTest.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 0,
+          "blobHash": "8d03663f6453b8bb7f0460d45a67bb910463f787"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 1,
+          "blobHash": "c5cd9e650c700d3efa80ffec0847f4a9f2bc10be"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AskUserMiddleware.java",
+          "status": "A",
+          "additions": 114,
+          "deletions": 0,
+          "blobHash": "f5a5a51f6e3d4a0bf18fcba027ddeb9c0cacd952"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AskUserMiddlewareTest.java",
+          "status": "A",
+          "additions": 89,
+          "deletions": 0,
+          "blobHash": "0603998cc58fcc31935692b431da2ff40687cac3"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/AskUserTools.java",
+          "status": "A",
+          "additions": 45,
+          "deletions": 0,
+          "blobHash": "b0f58641ac06c7547f123ef25bbffc0959d7d04e"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalog.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 3,
+          "blobHash": "3e890cb8d1d385f7269bca69e3c83e8ba0e5ff0b"
+        },
+        {
+          "path": "platform/web/src/components/chat/AskUserCard.vue",
+          "status": "A",
+          "additions": 222,
+          "deletions": 0,
+          "blobHash": "ee40334c31639df72f677c7f510f8eac5ab56ba3"
+        },
+        {
+          "path": "platform/web/src/components/chat/ConversationTimeline.vue",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "628ce155274a9b74f39b58217ec8b9e672d4ed9d"
+        },
+        {
+          "path": "platform/web/src/components/chat/MessageItem.vue",
+          "status": "M",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "2869059e07756675dd4758d4f8785d6d5e4a31db"
+        },
+        {
+          "path": "platform/web/src/state/agentEventReducer.test.ts",
+          "status": "M",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "9eb97bd2aaa116a3654367a190f3605f2ec4ffdb"
+        },
+        {
+          "path": "platform/web/src/state/agentEventReducer.ts",
+          "status": "M",
+          "additions": 54,
+          "deletions": 2,
+          "blobHash": "2b51b48f8f7ebf445867b4b9b4111e90cbb6dfb3"
+        },
+        {
+          "path": "platform/web/src/types.ts",
+          "status": "M",
+          "additions": 19,
+          "deletions": 1,
+          "blobHash": "6c22076ca5bff7339d850222d9ba6d769b8df2d4"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "d4f9f2aa9fe44f0d66df9186fcfeb0cba86144cb"
+        },
+        {
+          "path": "platform/web/src/views/WorkspaceHomeView.vue",
+          "status": "M",
+          "additions": 12,
+          "deletions": 0,
+          "blobHash": "52df5e6f07617504aacd4a86d04009787f1e2b9c"
+        }
+      ]
+    },
+    {
+      "sha": "4b06e4fb62d546a9d163226ea36d2f80cc3f2a04",
+      "subject": "chore(gate): write-tree 遇到 index.lock 时短重试，避免并行 git 操作误拦截",
+      "category": "chore",
+      "files": [
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 23,
+          "deletions": 1,
+          "blobHash": "92448cb7c8b6f846045b622cab74fe4e39fb4c4c"
+        }
+      ]
+    },
+    {
+      "sha": "dd9d7915644840a9ee983dd97cc4f36fb0142644",
+      "subject": "test(chat): 覆盖 ask_user 的 allowText 缺省行为",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AskUserMiddlewareTest.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 0,
+          "blobHash": "2a21057b1799bdd15d9f294e44b431c1d5b83af4"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/SandboxRunnerSelectionTest.java",
+        "status": "A",
+        "additions": 55,
+        "deletions": 0,
+        "blobHash": "ced348cbbdecd6442cbf7534039c55dc4862c0d0"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+        "status": "M",
+        "additions": 40,
+        "deletions": 14,
+        "blobHash": "efa5ea4bd530b5b8a43fc9ea61c1a0beeaa05f79"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImageStageDryRunTest.java",
+        "status": "A",
+        "additions": 68,
+        "deletions": 0,
+        "blobHash": "956d5ee28e166342aaacf9df596f1d56ba165dfd"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/AgentEventMapperTest.java",
+        "status": "M",
+        "additions": 19,
+        "deletions": 0,
+        "blobHash": "8d03663f6453b8bb7f0460d45a67bb910463f787"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AskUserMiddlewareTest.java",
+        "status": "A",
+        "additions": 89,
+        "deletions": 0,
+        "blobHash": "0603998cc58fcc31935692b431da2ff40687cac3"
+      },
+      {
+        "path": "platform/web/src/state/agentEventReducer.test.ts",
+        "status": "M",
+        "additions": 21,
+        "deletions": 0,
+        "blobHash": "9eb97bd2aaa116a3654367a190f3605f2ec4ffdb"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AskUserMiddlewareTest.java",
+        "status": "M",
+        "additions": 19,
+        "deletions": 0,
+        "blobHash": "2a21057b1799bdd15d9f294e44b431c1d5b83af4"
+      }
+    ],
+    "casesAdded": 2,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 546, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools",
+      "web"
+    ],
+    "verification": "vue-tsc 类型检查通过；AskUserMiddlewareTest 4 例、AgentEventMapperTest 新增 1 例、DeployStageTest 5 例通过；mvn -B -pl spec-checks -am test 546 用例 0 失败"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1131_workspace-supervisor-stream-ask"
+    ]
+  },
+  "chain": {
+    "prev": "7d2f105ec90e5d8b8bdb38e4e3ad551869a225914daa7f786cedf0062abee97a",
+    "self": "58048d70f6955b3bc9f22ed7ce08af56f436c6442f7a7cb1717126f3425d702d"
+  }
+}
