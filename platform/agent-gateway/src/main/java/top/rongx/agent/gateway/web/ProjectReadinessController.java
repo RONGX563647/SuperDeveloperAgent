@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,8 +24,12 @@ import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.port.RecipeStore;
+import top.rongx.agent.domain.port.RepoInspector;
+import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.domain.settings.DeployServerRepository;
+import top.rongx.agent.gateway.auth.CurrentUser;
+import top.rongx.agent.tools.DockerfileTools;
 
 /**
  * 「首次发布就绪检查」：把散落在设置页与接入页的前置条件聚合成一张清单。
@@ -53,6 +58,9 @@ public class ProjectReadinessController {
     private final EnvironmentStore envStore;
     private final PipelineEngine engine;
     private final PipelineDefinitionInspector definitions;
+    private final RepoInspector repoInspector;
+    private final DockerfileTools dockerfileTools;
+    private final CurrentUser currentUser;
     private final boolean legacyServerConfigured;
 
     public ProjectReadinessController(ProjectRepoLocator repoLocator,
@@ -63,6 +71,9 @@ public class ProjectReadinessController {
                                       EnvironmentStore envStore,
                                       PipelineEngine engine,
                                       PipelineDefinitionInspector definitions,
+                                      RepoInspector repoInspector,
+                                      DockerfileTools dockerfileTools,
+                                      CurrentUser currentUser,
                                       @Value("${agent.deploy.server.host:}") String legacyServerHost) {
         this.repoLocator = repoLocator;
         this.defStore = defStore;
@@ -72,6 +83,9 @@ public class ProjectReadinessController {
         this.envStore = envStore;
         this.engine = engine;
         this.definitions = definitions;
+        this.repoInspector = repoInspector;
+        this.dockerfileTools = dockerfileTools;
+        this.currentUser = currentUser;
         this.legacyServerConfigured = legacyServerHost != null && !legacyServerHost.isBlank();
     }
 
@@ -116,6 +130,67 @@ public class ProjectReadinessController {
         out.put("readyCount", done);
         out.put("totalCount", required);
         out.put("steps", steps);
+        return out;
+    }
+
+    // ---------------------------------------------------------------- 一键修复
+
+    /**
+     * 补齐 Docker 镜像发布链路（就绪清单「运行条件」的一键修复）。
+     *
+     * <p>和 Agent 的 {@code ensure_dockerfile} 是同一套逻辑：按仓库结构生成 Dockerfile，
+     * 需要时补 {@code image_package} 阶段与动作配方，并登记为**待确认补丁**（不直接改仓库）。
+     * 返回 changeId + diff；前端确认后走 {@code /changes/{id}/confirm + /apply} 提交到
+     * {@code agent/fix-*} 分支，再用返回的 sha 发布。
+     *
+     * <p>只读用户与生产环境不放行：生成 Dockerfile 属于写仓库。
+     */
+    @PostMapping("/{id}/dockerfile")
+    public Map<String, Object> generateDockerfile(@PathVariable String id,
+                                                  @RequestParam(defaultValue = DEFAULT_ENV) String env) {
+        String userId = currentUser.requireUserId();
+        String target = env.trim().toLowerCase();
+        if ("prod".equals(target)) {
+            throw new IllegalArgumentException("生产环境不允许生成 Dockerfile：请先在 dev/test 验证");
+        }
+        String baseSha = repoInspector.status(id).head();
+        if (baseSha == null || baseSha.isBlank()) {
+            throw new IllegalArgumentException("仓库没有可用提交：请先把代码提交一次再修复");
+        }
+        ProjectContext ctx = new ProjectContext(id, target, userId, null, null);
+        String report = dockerfileTools.ensure(baseSha, null, ctx);
+        if (report.startsWith("err:")) {
+            throw new IllegalArgumentException(report.substring(4).trim());
+        }
+        Map<String, Object> out = new LinkedHashMap<>(parseReport(report));
+        out.put("baseSha", baseSha);
+        return out;
+    }
+
+    /**
+     * 解析 {@code ensure_dockerfile} 的 {@code key: value} 报告（diff 之前的部分）。
+     *
+     * <p>这里只取前端要用的字段；输出格式是该工具的稳定契约（见 DockerfileTools）。
+     */
+    static Map<String, Object> parseReport(String report) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (report == null) {
+            return out;
+        }
+        for (String line : report.split("\n")) {
+            if (line.startsWith("---")) {
+                break; // 后面是 diff 正文，不参与解析
+            }
+            int colon = line.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            String key = line.substring(0, colon).trim();
+            String value = line.substring(colon + 1).trim();
+            if (!key.isEmpty() && !"note".equals(key)) {
+                out.put(key, value);
+            }
+        }
         return out;
     }
 
@@ -179,7 +254,9 @@ public class ProjectReadinessController {
                 ? "本机 Docker 不可用：可以改用「直接部署」（本机进程）"
                 : "仓库没有 Dockerfile，镜像无法构建";
         return step("runtime", "运行条件", false, true, detail,
-                !docker ? fixRoute("/pipeline?target=host", "改用直接部署") : null);
+                !docker
+                        ? fixRoute("/pipeline?target=host", "改用直接部署")
+                        : fixAction("dockerfile", "生成 Dockerfile"));
     }
 
     private Map<String, Object> serverRuntime() {
@@ -314,5 +391,10 @@ public class ProjectReadinessController {
     /** 修复动作交给前端调用既有的脚手架保存接口（POST /projects/{id}/scaffold）。 */
     private static Map<String, Object> fixScaffold(String label) {
         return Map.of("kind", "scaffold", "target", "auto", "label", label);
+    }
+
+    /** 平台内可执行的一键修复（当前只有生成 Dockerfile）。 */
+    private static Map<String, Object> fixAction(String action, String label) {
+        return Map.of("kind", "action", "target", action, "label", label);
     }
 }

@@ -2730,6 +2730,42 @@
         }
       }
     },
+    "/api/v1/projects/{id}/dockerfile" : {
+      "post" : {
+        "tags" : [ "project-readiness-controller" ],
+        "summary" : "generate dockerfile",
+        "operationId" : "generateDockerfile",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "env",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string",
+            "default" : "test"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/intake/validate" : {
       "post" : {
         "tags" : [ "project-intake-controller" ],
@@ -5683,6 +5719,43 @@
                   "items" : {
                     "$ref" : "#/components/schemas/RunView"
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ci/tags" : {
+      "get" : {
+        "tags" : [ "pipeline-controller" ],
+        "summary" : "tags",
+        "operationId" : "tags",
+        "parameters" : [ {
+          "name" : "projectId",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "limit",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 30
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
                 }
               }
             }

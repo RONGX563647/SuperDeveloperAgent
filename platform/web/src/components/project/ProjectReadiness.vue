@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, CircleCloseFilled, RefreshRight } from '@element-plus/icons-vue'
 import {
-  projectReadiness, scaffoldApply,
+  generateDockerfile, projectReadiness, scaffoldApply,
   type Readiness, type ReadinessStep,
 } from '../../api/project'
+import { applyChange, confirmChange } from '../../api/change'
 
 /**
  * 首次发布就绪清单（项目操作台顶部）。
@@ -75,6 +76,10 @@ const summary = computed(() => {
 async function runFix(step: ReadinessStep): Promise<void> {
   const fix = step.fix
   if (!fix) return
+  if (fix.kind === 'action' && fix.target === 'dockerfile') {
+    await fixDockerfile(step)
+    return
+  }
   if (fix.kind === 'scaffold') {
     fixingKey.value = step.key
     try {
@@ -93,6 +98,44 @@ async function runFix(step: ReadinessStep): Promise<void> {
     return
   }
   void router.push(fix.target)
+}
+
+/**
+ * 一键生成 Dockerfile：确认 → 生成待确认补丁 → 确认变更 → 应用到 agent/fix-* 分支。
+ *
+ * <p>仓库内容不直接改：补丁单独提交，拿到 sha 后用该提交发布，出问题也不影响当前分支。
+ */
+async function fixDockerfile(step: ReadinessStep): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '将按仓库结构生成 Dockerfile（需要时补 image_package 阶段），'
+      + '并提交到独立分支 agent/fix-*，不会改动当前分支。',
+      '生成 Dockerfile',
+      { confirmButtonText: '生成并提交', cancelButtonText: '取消', type: 'info' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  fixingKey.value = step.key
+  try {
+    const plan = await generateDockerfile(props.projectId, 'test')
+    if (!plan.changeId) {
+      ElMessage.success('镜像发布链路已就绪，无需变更')
+    } else {
+      const { confirmToken } = await confirmChange(plan.changeId)
+      const applied = await applyChange(plan.changeId, confirmToken)
+      const sha = /commit:\s*([0-9a-f]{7,40})/.exec(applied.logTail ?? '')?.[1] ?? ''
+      ElMessage.success(
+        `已生成 ${plan.dockerfile ?? 'Dockerfile'} 并提交${sha ? `（${sha.slice(0, 7)}）` : ''}；`
+        + '用该提交发布即可',
+      )
+    }
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '生成 Dockerfile 失败')
+  } finally {
+    fixingKey.value = ''
+  }
 }
 </script>
 

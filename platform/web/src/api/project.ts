@@ -335,8 +335,8 @@ export function decommission(projectId: string): Promise<{ ok: boolean; note: st
 // ---------------------------------------------------------------- 首次发布就绪
 
 export interface ReadinessFix {
-  /** route：跳转页面；scaffold：调用脚手架保存生成流水线定义。 */
-  kind: 'route' | 'scaffold' | string
+  /** route：跳转页面；scaffold：脚手架保存生成流水线定义；action：平台内一键修复。 */
+  kind: 'route' | 'scaffold' | 'action' | string
   target: string
   label: string
 }
@@ -366,6 +366,27 @@ export interface Readiness {
 export function projectReadiness(projectId: string, env = 'test'): Promise<Readiness> {
   const q = new URLSearchParams({ env })
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/readiness?${q}`)
+}
+
+/** 一键补齐 Docker 镜像链路的结果（status=already_ready 时没有 changeId）。 */
+export interface DockerfileFix {
+  status: string
+  stack?: string
+  dockerfile?: string
+  changeId?: string
+  baseSha: string
+}
+
+/**
+ * 生成 Dockerfile（+ 需要时补 image_package）并登记为待确认补丁。
+ *
+ * <p>不直接写仓库：调用方拿 changeId 走 /changes/{id}/confirm + /apply 才落提交。
+ */
+export function generateDockerfile(projectId: string, env = 'test'): Promise<DockerfileFix> {
+  const q = new URLSearchParams({ env })
+  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/dockerfile?${q}`, {
+    method: 'POST'
+  })
 }
 
 /** 一键准备结果：本次自动补齐了哪些项，以及仍需人工处理的提示。 */

@@ -35,11 +35,18 @@ class ProjectReadinessControllerTest {
     private final DeployServerRepository servers = mock(DeployServerRepository.class);
     private final EnvironmentStore envStore = mock(EnvironmentStore.class);
     private final PipelineEngine engine = mock(PipelineEngine.class);
+    private final top.rongx.agent.domain.port.RepoInspector repoInspector =
+            mock(top.rongx.agent.domain.port.RepoInspector.class);
+    private final top.rongx.agent.tools.DockerfileTools dockerfileTools =
+            mock(top.rongx.agent.tools.DockerfileTools.class);
+    private final top.rongx.agent.gateway.auth.CurrentUser currentUser =
+            mock(top.rongx.agent.gateway.auth.CurrentUser.class);
 
     private ProjectReadinessController controller(String legacyServerHost) {
         return new ProjectReadinessController(
                 locator, defStore, projects, recipes, servers, envStore, engine,
                 new top.rongx.agent.executor.PipelineDefinitionInspectorImpl(),
+                repoInspector, dockerfileTools, currentUser,
                 legacyServerHost);
     }
 
@@ -138,6 +145,53 @@ class ProjectReadinessControllerTest {
         assertThat(vars.get("ok")).isEqualTo(false);
         assertThat(String.valueOf(vars.get("detail"))).contains("DB_PASSWORD");
         assertThat(out.get("ready")).isEqualTo(false);
+    }
+
+    @Test
+    void dockerProjectWithoutDockerfileOffersOneClickFix() throws Exception {
+        Path ci = Files.createDirectories(repo.resolve("ci"));
+        Files.writeString(ci.resolve("pipeline.yml"), """
+                name: release
+                stages:
+                  - id: deploy
+                    type: deploy
+                deploy:
+                  target: docker
+                  port: 8080
+                """);
+        when(locator.repoDir("SHOP")).thenReturn(Optional.of(repo));
+        when(defStore.exists("SHOP")).thenReturn(false);
+        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "", "")));
+        when(engine.dockerAvailable()).thenReturn(true);
+
+        Map<String, Object> out = controller("").readiness("SHOP", "test");
+
+        Map<String, Object> runtime = step(out, "runtime");
+        assertThat(runtime.get("ok")).isEqualTo(false);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> fix = (Map<String, Object>) runtime.get("fix");
+        assertThat(fix.get("kind")).isEqualTo("action");
+        assertThat(fix.get("target")).isEqualTo("dockerfile");
+        assertThat(fix.get("label")).isEqualTo("生成 Dockerfile");
+    }
+
+    @Test
+    void parseReportKeepsKeysBeforeDiff() {
+        Map<String, Object> parsed = ProjectReadinessController.parseReport("""
+                status: patch_required
+                stack: JAVA_WEB
+                dockerfile: Dockerfile
+                changeId: ch-1234
+                note: 已让旧固化脚本失效
+                ---
+                diff --git a/Dockerfile b/Dockerfile
+                +FROM eclipse-temurin:21
+                """);
+
+        assertThat(parsed.get("status")).isEqualTo("patch_required");
+        assertThat(parsed.get("dockerfile")).isEqualTo("Dockerfile");
+        assertThat(parsed.get("changeId")).isEqualTo("ch-1234");
+        assertThat(parsed).doesNotContainKey("+FROM eclipse-temurin");
     }
 
     private static Map<String, Object> step(Map<String, Object> out, String key) {
