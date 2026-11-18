@@ -1,0 +1,85 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_0024_sandbox-structured-denied",
+  "category": "feat",
+  "title": "沙箱违规返回结构化 SANDBOX_DENIED",
+  "createdAt": "2026-11-19T00:24:25+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "task-4730f75e69: 流水线沙箱脆弱不安全；gVisor/cap-drop/只读根等隔离已就绪，缺的是违规时的结构化拒绝码与策略快照，裸异常会丢掉原因",
+    "toolCallCount": 0
+  },
+  "problem": "task-4730f75e69（流水线沙箱脆弱且不安全）：隔离参数（gVisor、cap-drop ALL、no-new-privileges、只读根 + tmpfs、资源上限、缓存卷用可信最小镜像初始化）已在前几次会话落地，但违规时的表达是裸异常/裸退出码——网络被策略关断、追加宿主挂载、要求特权、要求的运行时不可用这四类拒绝都被压成一句 stderr 或笼统的 EXECUTABLE_NOT_FOUND，页面与自愈无法区分「该改配置」还是「该改代码」。",
+  "solution": "新增 SandboxDeniedException（固定 E-707 ENV_POLICY_DENIED），带 NETWORK/MOUNT/PRIVILEGE/IMAGE/RUNTIME/RESOURCE 六类规则、命中详情、当前隔离快照与可执行建议；DockerSandbox 增加 isolationSnapshot/logIsolation 与 requireNetworkFor/requireNoExtraMounts/requireUnprivileged/requireRuntimeAvailable 四个校验（运行时不可用时明确拒绝，绝不静默回落 runc）；DockerActionRunner 在准备阶段先落隔离快照，并把拒绝转成结构化失败（exit 126 + E-707）而不是笼统错误码。",
+  "commits": [
+    {
+      "sha": "6fa64cd36b9e27ffd415e2d87a0e3f1de22e97d9",
+      "subject": "feat(sandbox): 策略违规返回结构化 SANDBOX_DENIED 与隔离快照",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/SandboxDeniedException.java",
+          "status": "A",
+          "additions": 88,
+          "deletions": 0,
+          "blobHash": "c77a42596fcfff7c564ca872e41cb6649b30826c"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerActionRunner.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 0,
+          "blobHash": "81d6a5e720174ec3e03a8003ce3e67c2b40daa35"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 112,
+          "deletions": 0,
+          "blobHash": "677c1cabb4f55186de4af7245ab56bb5e751e81a"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxDeniedTest.java",
+          "status": "A",
+          "additions": 118,
+          "deletions": 0,
+          "blobHash": "72a5e56225d981954358500dc9853eacad022059"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxDeniedTest.java",
+        "status": "A",
+        "additions": 118,
+        "deletions": 0,
+        "blobHash": "72a5e56225d981954358500dc9853eacad022059"
+      }
+    ],
+    "casesAdded": 7,
+    "command": "mvn -B -nsu -pl agent-domain,agent-executor,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-executor test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 246, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor"
+    ],
+    "verification": "Tests run: 246, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_0024_sandbox-structured-denied"
+    ]
+  },
+  "chain": {
+    "prev": "d212060751b2bac5bf9507ef94df948a208f8e773ebb8b7277e3f4b5edef17d5",
+    "self": "556047b490bf6a6af11a27135b67928554fdf7383c45a2bc416e6db7647d4682"
+  }
+}
