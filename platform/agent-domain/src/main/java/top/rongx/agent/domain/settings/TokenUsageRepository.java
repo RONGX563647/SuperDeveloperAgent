@@ -51,6 +51,12 @@ public interface TokenUsageRepository {
         public static UsageTotals empty() {
             return new UsageTotals(0, 0, 0, 0, 0, 0);
         }
+
+        /** 缓存命中率（0–100 的整数百分比）；没有输入 token 时为 0。 */
+        public int cacheHitRate() {
+            return inputTokens <= 0 ? 0
+                    : (int) Math.round(cachedTokens * 100.0 / inputTokens);
+        }
     }
 
     record DailyUsage(

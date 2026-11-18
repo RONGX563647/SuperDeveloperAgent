@@ -16,6 +16,8 @@
 
 可用环境变量 TRAE_MEMORY_ROOT 覆盖记忆根目录；定时任务默认每天跑一次。
 """
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json

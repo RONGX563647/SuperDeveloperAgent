@@ -41,9 +41,10 @@ public class AgentStateConfig {
             @Value("${agent.state.root:}") String stateRoot,
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             @Value("${agent.context.max-chars:60000}") int contextMaxChars,
-            @Value("${agent.context.keep-messages:24}") int contextKeepMessages) {
+            @Value("${agent.context.keep-messages:24}") int contextKeepMessages,
+            @Value("${agent.context.summary-chars:4000}") int contextSummaryChars) {
         return new EncryptedAgentStateStore(stateDirectory(stateRoot, workspaceRoot), secretBox,
-                contextMaxChars, contextKeepMessages);
+                contextMaxChars, contextKeepMessages, contextSummaryChars);
     }
 
     /**

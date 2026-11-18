@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-18T07:58:15+08:00",
-  "sourceCommit": "854f4ccd94b567d827a66882deca2e624155507f",
+  "generatedAt": "2026-11-18T13:26:52+08:00",
+  "sourceCommit": "fa90b56cefe5dede5a7809abcb8e2532e75316b0",
   "docs": [
     {
       "level": "L1",
@@ -176,8 +176,8 @@
       "symbol": "EncryptedAgentStateStore#save",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
       "module": "agent-infra",
-      "start": 72,
-      "end": 90
+      "start": 80,
+      "end": 98
     },
     {
       "id": "state-context-trimmer/trim",
@@ -186,8 +186,8 @@
       "symbol": "ConversationContextTrimmer#trim",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java",
       "module": "agent-infra",
-      "start": 29,
-      "end": 90
+      "start": 61,
+      "end": 128
     },
     {
       "id": "tools-deploy-tools/env-status",

@@ -219,6 +219,8 @@ agent:
     # 落盘前保留的上下文字符预算（不含开头的 SYSTEM 提示）与最少保留消息数
     max-chars: ${AGENT_CONTEXT_MAX_CHARS:80000}
     keep-messages: ${AGENT_CONTEXT_KEEP_MESSAGES:24}
+    # 被裁掉的旧历史折叠成一条摘要消息的字符上限（0 = 不生成摘要，退回直接丢弃）
+    summary-chars: ${AGENT_CONTEXT_SUMMARY_CHARS:4000}
 
 logging:
   level:

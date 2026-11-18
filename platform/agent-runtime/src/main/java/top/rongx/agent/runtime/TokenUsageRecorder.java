@@ -45,7 +45,12 @@ public class TokenUsageRecorder {
         } catch (RuntimeException e) {
             log.warn("用量落库失败 session={}：{}", sessionId, e.getMessage());
         }
-        usageLog.info("session={} project={} user={} connection={} model={} in={} cached={} out={} total={}",
-                sessionId, projectId, userId, connectionId, modelName, input, cached, output, total);
+        // 命中率与前端/接口同一口径：cached/input，input 为 0 时记 0，
+        // 便于直接看 logs/token-usage.log 判断前缀缓存是否持续生效。
+        int hitRate = input <= 0 ? 0 : (int) Math.round(cached * 100.0 / input);
+        usageLog.info("session={} project={} user={} connection={} model={} in={} cached={} "
+                        + "out={} total={} hit={}%",
+                sessionId, projectId, userId, connectionId, modelName, input, cached, output,
+                total, hitRate);
     }
 }
