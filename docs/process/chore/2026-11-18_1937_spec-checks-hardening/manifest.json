@@ -1,0 +1,303 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-18_1937_spec-checks-hardening",
+  "category": "chore",
+  "title": "spec-checks 编码读取加固与迁移基线补录；Db* 存储改名收尾与 Flyway 统一迁移",
+  "createdAt": "2026-11-18T19:37:46+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "归档会话并提交工作区代码：补完 Db* 改名正文，落地 Flyway 统一迁移，分两笔提交后推送",
+    "toolCallCount": 0
+  },
+  "problem": "上一提交只把 Sqlite* 存储实现文件改名成 Db*，正文类名/构造器/静态引用仍是 Sqlite*，编译与 Spring 装配对不上；同时双库（SQLite/PostgreSQL）schema 仍靠 Hibernate ddl-auto=update 现场生成，没有正式迁移脚本与二级索引。",
+  "solution": "补完 Db* 改名的正文（类名、构造器、静态方法引用、对应测试）；agent-infra 新增 Flyway 迁移 V1 建表 / V2 自增表（postgresql、sqlite 各一份方言）/ V3 索引，agent-gateway 引入 flyway-core、flyway-database-postgresql、spring-boot-flyway 并把 ddl-auto 降级为缺列安全网；LegacySqliteImporter 改为逐文件写 platform_meta 完成标记，一次性导入幂等、崩溃可重放。",
+  "commits": [
+    {
+      "sha": "a788ae36b40126179d2fa79a010ddbe502d4c636",
+      "subject": "test(spec-checks): UTF-8 读取失败时报出具体文件路径；补录 4 个迁移文件基线",
+      "category": "chore",
+      "files": [
+        {
+          "path": ".trae-html-share-packages/dashboard-redesign.html.zip",
+          "status": "D",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/bugfix/DbBugFixStore.java",
+          "status": "R",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "b1be2fe935990e272bfd2062b8a8fd1a35a604be"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/DbConversationStore.java",
+          "status": "R",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "22b85c10ed073b33df3be47e62bf3c45a11d5bb3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/env/DbEnvironmentStore.java",
+          "status": "R",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "be9f372d6d8f9499950032aeeb312d6c7c7a5db3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/run/DbRunLedgerRepository.java",
+          "status": "R",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "6ac126204fcf08f8b290b3c092b227dacc8b4826"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/DbConversationStoreTest.java",
+          "status": "R",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "bfec322d19a61b4d4ee13d0d035227da0c072f50"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/env/DbEnvironmentStoreSecretTest.java",
+          "status": "R",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "89b8a5006d01e74fd897a186089798dbb741a001"
+        },
+        {
+          "path": "platform/spec-checks/migration-baseline.txt",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "9f6c28201fd7961ee17eabe27db50100212c6d1a"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ErrorCodeContractTest.java",
+          "status": "M",
+          "additions": 24,
+          "deletions": 3,
+          "blobHash": "231b9b4b5f8cfc17b3c05c25abd0c6eb5231ece7"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ForbiddenPatternScanTest.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 1,
+          "blobHash": "db51c69191987aab8364a0b2f739371ad75091a8"
+        }
+      ]
+    },
+    {
+      "sha": "792c4fd05b6e85b77305de5e47661058501a746b",
+      "subject": "refactor(infra): 存储实现 Sqlite*→Db* 改名的正文收尾，接入 Flyway 统一迁移",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/README.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "fea5415b7b1061699414a65d50a14951a8f1d4ac"
+        },
+        {
+          "path": "platform/agent-gateway/pom.xml",
+          "status": "M",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "d390e9e1e5f908818eaec5bbcee6014b0a1df417"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 10,
+          "deletions": 1,
+          "blobHash": "837e14d70ffbaf28806029caacc8283b60289214"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/bugfix/BugFixOrchestratorTest.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 15,
+          "blobHash": "5a7504cfc923e6e39202a3ed4223867b65ac7299"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/bugfix/DbBugFixStore.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 9,
+          "blobHash": "fb683aba6a45f6d1203218cf729f0294a14a42a2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/DbConversationStore.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 14,
+          "blobHash": "abc00c3b7c575e58a1c8dd83b4d71509e7efa741"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/env/DbEnvironmentStore.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 8,
+          "blobHash": "efcfbd0ab86deb5c7ffb3521d0ee4976553c6561"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/LegacySqliteImporter.java",
+          "status": "M",
+          "additions": 74,
+          "deletions": 53,
+          "blobHash": "94790d8206d6332a1198b47c5e597a44baf41cc2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DataSourceConfig.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "a995b4e04b00c94b64bec9e49b4988992609712a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/run/DbRunLedgerRepository.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "b372fcf7aff88fb193706172871c1b780b522580"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/common/V1__platform_schema.sql",
+          "status": "A",
+          "additions": 520,
+          "deletions": 0,
+          "blobHash": "79e01321c2a7dfa6b67ba63b19fbe90afaccd158"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/common/V3__platform_indexes.sql",
+          "status": "A",
+          "additions": 11,
+          "deletions": 0,
+          "blobHash": "1539d746fab8158ac223e0e9eed547f6489a57d3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/postgresql/V2__identity_tables.sql",
+          "status": "A",
+          "additions": 62,
+          "deletions": 0,
+          "blobHash": "65b7cedff7628bd44d53487358d818ee81fe191a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/sqlite/V2__identity_tables.sql",
+          "status": "A",
+          "additions": 57,
+          "deletions": 0,
+          "blobHash": "17b929b449d02862e073e97b2e936610d35a6d01"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/DbConversationStoreTest.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 10,
+          "blobHash": "7be130b7cc013706dc3980221e2c6f579071db49"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/env/DbEnvironmentStoreSecretTest.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "208105647b9f69e172c0deaa5d6c5cd7cc3ec877"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+          "status": "M",
+          "additions": 73,
+          "deletions": 0,
+          "blobHash": "482fe1e10fc21c48109a5e1462dc2655f794cc1a"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/DbConversationStoreTest.java",
+        "status": "R",
+        "additions": 0,
+        "deletions": 0,
+        "blobHash": "bfec322d19a61b4d4ee13d0d035227da0c072f50"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/env/DbEnvironmentStoreSecretTest.java",
+        "status": "R",
+        "additions": 0,
+        "deletions": 0,
+        "blobHash": "89b8a5006d01e74fd897a186089798dbb741a001"
+      },
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ErrorCodeContractTest.java",
+        "status": "M",
+        "additions": 24,
+        "deletions": 3,
+        "blobHash": "231b9b4b5f8cfc17b3c05c25abd0c6eb5231ece7"
+      },
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ForbiddenPatternScanTest.java",
+        "status": "M",
+        "additions": 12,
+        "deletions": 1,
+        "blobHash": "db51c69191987aab8364a0b2f739371ad75091a8"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/bugfix/BugFixOrchestratorTest.java",
+        "status": "M",
+        "additions": 15,
+        "deletions": 15,
+        "blobHash": "5a7504cfc923e6e39202a3ed4223867b65ac7299"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/DbConversationStoreTest.java",
+        "status": "M",
+        "additions": 10,
+        "deletions": 10,
+        "blobHash": "7be130b7cc013706dc3980221e2c6f579071db49"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/env/DbEnvironmentStoreSecretTest.java",
+        "status": "M",
+        "additions": 6,
+        "deletions": 6,
+        "blobHash": "208105647b9f69e172c0deaa5d6c5cd7cc3ec877"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+        "status": "M",
+        "additions": 73,
+        "deletions": 0,
+        "blobHash": "482fe1e10fc21c48109a5e1462dc2655f794cc1a"
+      }
+    ],
+    "casesAdded": 11,
+    "command": "mvn -B -pl agent-gateway,agent-infra,!spec-checks -amd test",
+    "result": "PASSED",
+    "evidence": "Tests run: 521, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "agent-infra",
+      "spec-checks"
+    ],
+    "verification": "pre-commit 门禁 mvn -B -pl agent-gateway,agent-infra,!spec-checks -amd test：521 用例，0 失败 0 错误，跳过 2；迁移脚本随 agent-infra 打包进 db/migration。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_1937_spec-checks-hardening"
+    ]
+  },
+  "chain": {
+    "prev": "cd638e2f03919bae7cb42be9167f61eb8d62045df4d5e134c9172622a8e8678c",
+    "self": "d3c35a77bd23d5b5c8fbafd4dbbeebd7827a67947d3acf39a07bea92f373e827"
+  }
+}
