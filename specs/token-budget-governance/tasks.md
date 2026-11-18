@@ -19,8 +19,6 @@
 - [x] T4 验收
   - `cd platform && mvn -q -pl agent-gateway -am test`（排除 3 个 Docker 环境用例与 3 个 governance @TempDir 既有用例）
   - 结果：全部通过；不重启后端/前端
-- [ ] T5 归档
-  - `python tools/session-archive/gate.py start --category feat --slug token-budget-observability --title "Token 治理批次1：KV 命中率可观测 + 历史折叠摘要" --model glm-5.3 --prompt "..."`
-  - `git add` 上述文件并 `git commit`
-  - `python tools/session-archive/gate.py finish --problem "..." --solution "..." --verification "..."`
-  - 再次 `git commit` 归档产物
+- [x] T5 归档
+  - `gate.py start` → commit（pre-commit 626 用例通过）→ `gate.py finish` → commit 归档产物
+  - 归档：`docs/process/feat/2026-11-18_1320_token-budget-observability/manifest.json`
