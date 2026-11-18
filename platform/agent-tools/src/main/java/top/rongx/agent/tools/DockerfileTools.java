@@ -493,7 +493,7 @@ public class DockerfileTools {
         String block = "  image_package:\n"
                 + "    # 平台自动补齐：镜像在宿主机构建，${tag} 由引擎注入\n"
                 + "    run:\n"
-                + "      - [\"docker\", \"build\", \"-f\", \"" + file + "\", \"-t\", \"${tag}\", \".\"]\n"
+                + "      - [\"docker\", \"buildx\", \"build\", \"--load\", \"-f\", \"" + file + "\", \"-t\", \"${tag}\", \".\"]\n"
                 + "    timeout: 20m\n";
         if (yaml == null || yaml.isBlank()) {
             return "actions:\n" + block;

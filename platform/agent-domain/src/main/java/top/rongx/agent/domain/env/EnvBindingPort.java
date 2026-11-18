@@ -14,6 +14,16 @@ public interface EnvBindingPort {
     /** 生成草案（DRAFT）；不包含任何变量值。 */
     EnvBinding draft(String projectId, String env, String actor);
 
+    /**
+     * 平台自动确认（不需要人工补值）。
+     *
+     * <p>只有能自证"变量齐全、没有缺失项"的场景才应调用；不支持自动确认的实现
+     * 保持默认抛错，工具层会退回人工确认卡，而不是把未确认的绑定当成可用。
+     */
+    default EnvBinding confirm(String bindingId, String confirmedBy) {
+        throw new UnsupportedOperationException("该绑定实现不支持自动确认：" + bindingId);
+    }
+
     /** 运行前校验：必须已人工确认、未过期、项目/环境一致、变量未变更。 */
     EnvBinding requireForRun(String bindingId, String projectId, String env);
 

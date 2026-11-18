@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
+import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
@@ -182,6 +183,25 @@ class DeployStageTest {
         assertEquals(StageStatus.SUCCEEDED, deployStage.status());
         assertTrue(deployStage.artifacts().stream().anyMatch(a -> "deployment".equals(a.kind())),
                 "应登记 deployment 产物：" + deployStage.artifacts());
+    }
+
+    @Test
+    @DisplayName("deployment 产物固化端口/容器端口/探活路径等证据字段")
+    void recordsDeploymentEvidence() throws Exception {
+        deployer.failNext = false;
+        deployer.calls.clear();
+        String runId = engine.trigger("RY", "release", Map.of("gitSha", sha));
+        awaitTerminal(runId, 30);
+        assertEquals(StageStatus.SUCCEEDED, engine.status(runId), engine.logTail(runId));
+
+        ArtifactRef deployment = stageOf(runId, "deploy").artifacts().stream()
+                .filter(a -> "deployment".equals(a.kind()))
+                .findFirst().orElseThrow(() -> new AssertionError("缺少 deployment 产物"));
+        // 排障不靠日志反推：实际端口、容器端口、探活路径与目标随产物落库
+        assertEquals("18090", deployment.meta().get("port"), deployment.meta().toString());
+        assertEquals("8080", deployment.meta().get("containerPort"), deployment.meta().toString());
+        assertEquals("/healthz", deployment.meta().get("healthPath"), deployment.meta().toString());
+        assertEquals("docker", deployment.meta().get("target"), deployment.meta().toString());
     }
 
     @Test

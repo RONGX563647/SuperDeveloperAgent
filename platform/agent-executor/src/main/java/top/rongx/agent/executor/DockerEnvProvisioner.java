@@ -92,6 +92,8 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     private final Map<String, String> middlewareImages;
     /** 创建容器前是否预检镜像已在本地；离线/自建 registry 可关闭。 */
     private final boolean precheckImages;
+    /** Docker CLI 可执行文件（可指向 podman 等兼容实现）。 */
+    private final DockerCli docker;
 
     public DockerEnvProvisioner(EnvironmentStore store) {
         this(store, null);
@@ -106,10 +108,19 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                                 top.rongx.agent.domain.port.ProjectRepoLocator repos,
                                 Map<String, String> middlewareImages,
                                 boolean precheckImages) {
+        this(store, repos, middlewareImages, precheckImages, DockerCli.defaults());
+    }
+
+    public DockerEnvProvisioner(EnvironmentStore store,
+                                top.rongx.agent.domain.port.ProjectRepoLocator repos,
+                                Map<String, String> middlewareImages,
+                                boolean precheckImages,
+                                DockerCli docker) {
         this.store = store;
         this.repos = repos;
         this.middlewareImages = middlewareImages == null ? Map.of() : Map.copyOf(middlewareImages);
         this.precheckImages = precheckImages;
+        this.docker = docker == null ? DockerCli.defaults() : docker;
     }
 
     /** 解析 {@code mysql=xxx,redis=yyy} 形式的镜像覆盖；非法条目直接报出，不静默忽略。 */
@@ -667,7 +678,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     private String dockerProblem() {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
-                executor.exec(CWD, List.of("docker", "version", "--format", "{{.Server.Version}}"),
+                executor.exec(CWD, docker.cmd("version", "--format", "{{.Server.Version}}"),
                         20_000, sink, () -> false);
         if (outcome.exitCode() == 0) {
             return null;
@@ -681,13 +692,13 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         }
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome inspect =
-                executor.exec(CWD, List.of("docker", "network", "inspect", network), 15_000,
+                executor.exec(CWD, docker.cmd("network", "inspect", network), 15_000,
                         sink, () -> false);
         if (inspect.exitCode() == 0) {
             return;
         }
         ProcessExecutor.StepOutcome created = executor.exec(CWD,
-                List.of("docker", "network", "create", network), 30_000, sink, () -> false);
+                docker.cmd("network", "create", network), 30_000, sink, () -> false);
         if (created.exitCode() != 0) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境网络创建失败 " + network + "："
                     + ProcessExecutor.redact(ProcessExecutor.tail(sink)));
@@ -698,7 +709,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     private Boolean liveRunning(String name) {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome = executor.exec(CWD,
-                List.of("docker", "inspect", "--format", "{{.State.Running}}", name), 15_000,
+                docker.cmd("inspect", "--format", "{{.State.Running}}", name), 15_000,
                 sink, () -> false);
         if (outcome.exitCode() != 0) {
             return null;
@@ -709,19 +720,19 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     private boolean containerExists(String name) {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome = executor.exec(CWD,
-                List.of("docker", "inspect", "--format", "{{.Name}}", name), 15_000, sink,
+                docker.cmd("inspect", "--format", "{{.Name}}", name), 15_000, sink,
                 () -> false);
         return outcome.exitCode() == 0;
     }
 
     private void removeContainer(String name) {
         StringBuilder sink = new StringBuilder();
-        executor.exec(CWD, List.of("docker", "rm", "-f", name), 60_000, sink, () -> false);
+        executor.exec(CWD, docker.cmd("rm", "-f", name), 60_000, sink, () -> false);
     }
 
     private void removeVolume(String name) {
         StringBuilder sink = new StringBuilder();
-        executor.exec(CWD, List.of("docker", "volume", "rm", "-f", name + "-data"), 60_000, sink,
+        executor.exec(CWD, docker.cmd("volume", "rm", "-f", name + "-data"), 60_000, sink,
                 () -> false);
     }
 
@@ -749,7 +760,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         // 先用 docker image inspect 在 5s 内确认，缺了直接给出可操作的两条路径。
         if (precheckImages) {
             BoundedCommand.Outcome check = BoundedCommand.run(
-                    List.of("docker", "image", "inspect", image), 5_000L);
+                    docker.cmd("image", "inspect", image), 5_000L);
             if (!check.ok()) {
                 return "环境中间件镜像未就绪（" + image + "）：请先执行 docker pull " + image
                         + "，或通过 agent.env.middleware-images." + kind
@@ -759,7 +770,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         }
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
-                executor.exec(CWD, runArgv(kind, name, port, database, username, password,
+                executor.exec(CWD, runArgv(docker, kind, name, port, database, username, password,
                         network, middlewareImages), TIMEOUT_MS, sink, () -> false);
         if (outcome.exitCode() != 0) {
             return ProcessExecutor.redact(ProcessExecutor.tail(sink));
@@ -772,15 +783,22 @@ public class DockerEnvProvisioner implements EnvProvisioner {
 
     static List<String> runArgv(String kind, String name, int port, String database,
                                 String username, String password, String network) {
-        return runArgv(kind, name, port, database, username, password, network,
-                DEFAULT_MIDDLEWARE_IMAGES);
+        return runArgv(DockerCli.defaults(), kind, name, port, database, username, password,
+                network, DEFAULT_MIDDLEWARE_IMAGES);
     }
 
     /** 带镜像覆盖的构造：镜像引用由配置决定，不再写死在 switch 里。 */
     static List<String> runArgv(String kind, String name, int port, String database,
                                 String username, String password, String network,
                                 Map<String, String> images) {
-        List<String> argv = new ArrayList<>(List.of("docker", "run", "-d", "--name", name,
+        return runArgv(DockerCli.defaults(), kind, name, port, database, username, password,
+                network, images);
+    }
+
+    static List<String> runArgv(DockerCli docker, String kind, String name, int port,
+                                String database, String username, String password,
+                                String network, Map<String, String> images) {
+        List<String> argv = new ArrayList<>(docker.cmd("run", "-d", "--name", name,
                 "--restart", "unless-stopped", "--network", network,
                 // 与应用容器同一 compose 组：Docker Desktop 里一个环境一个组
                 "--label", "com.docker.compose.project="

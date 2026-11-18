@@ -163,9 +163,15 @@ agent:
   # 动作执行沙箱：默认 fail-closed（Docker 不可用则启动失败）；仅本地开发显式设为 process
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:docker}        # docker | process
+    # docker 可执行文件：可指向 podman（rootless）或远程 buildkitd，避免强依赖 Docker Desktop
+    docker-binary: ${AGENT_SANDBOX_DOCKER_BINARY:docker}
     # 工具链镜像：默认只是兜底，本机没有就换成已安装的镜像（或先 docker pull）。
     # 平台在动作前做一次 docker image inspect 预检；缺镜像会自动 pull 并复核，失败才明确报错。
     image: ${AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
+    # 可选运行时（gVisor 的 runsc 等）：留空走默认 runc；跑不可信代码时设 runsc 强化隔离
+    runtime: ${AGENT_SANDBOX_RUNTIME:}
+    # 缓存卷初始化用的可信最小镜像（只 mkdir/chown/touch），绝不用构建镜像
+    init-image: ${AGENT_SANDBOX_INIT_IMAGE:busybox:1.36}
     # 自动拉取的硬超时（秒）；网络慢的 registry 可调大，离线环境可关闭预检
     pull-timeout-seconds: ${AGENT_SANDBOX_PULL_TIMEOUT_SECONDS:180}
     # 离线/自建 registry 场景可关闭预检（关闭后会回到 docker CLI 自行拉取的行为）
@@ -180,6 +186,9 @@ agent:
     # 依赖缓存卷前缀（按项目隔离）：Maven ~/.m2 与 npm cache 跨构建复用，
     # 否则每次构建都冷下载依赖，大项目必然撞上 10 分钟构建超时
     cache-volume-prefix: ${AGENT_SANDBOX_CACHE_VOLUME:agent-cache}
+    # npm 源镜像：默认直连 npmjs 在沙箱里只有几 KB/s，冷安装会吃光构建预算；
+    # 内网/自建源用 AGENT_SANDBOX_NPM_REGISTRY 覆盖，留空则用容器默认源
+    npm-registry: ${AGENT_SANDBOX_NPM_REGISTRY:https://registry.npmmirror.com}
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}          # 可选：留空不阻塞启动，设置页可随时补配

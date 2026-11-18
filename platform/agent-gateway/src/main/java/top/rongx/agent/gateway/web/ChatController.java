@@ -346,6 +346,11 @@ public class ChatController {
             log.warn("忽略无法核对的变更单：{}（project={}）", changeId, ctx.projectId());
             return null;
         }
+        // 只有能走 /apply 的变更才值得弹确认卡；留痕单（env_ensure 等）推卡必然 400
+        if (!plan.executable()) {
+            log.debug("跳过不可执行变更的确认卡：{}（kind={}）", changeId, plan.kind());
+            return null;
+        }
         return changeId;
     }
 

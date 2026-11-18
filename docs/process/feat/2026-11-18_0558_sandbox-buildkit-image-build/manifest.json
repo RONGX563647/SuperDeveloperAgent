@@ -1,0 +1,106 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_0558_sandbox-buildkit-image-build",
+  "category": "feat",
+  "title": "镜像构建切换到 BuildKit(buildx)",
+  "createdAt": "2026-11-18T05:58:15+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "镜像构建切换到 BuildKit(buildx)",
+    "toolCallCount": 0
+  },
+  "problem": "镜像打包走宿主 docker build（runc 冷容器、无 BuildKit 缓存、构建不进沙箱），且配方三处硬编码不一致",
+  "solution": "image_package 统一改为 docker buildx build --load：内置配方、脚手架、Dockerfile 自动补齐三处一致，构建交给 BuildKit 内容寻址缓存与沙箱执行",
+  "commits": [
+    {
+      "sha": "a83d4ff00867f12532803eb9b62cf3546f9db0af",
+      "subject": "feat(sandbox): 镜像构建切换到 BuildKit(buildx build --load)",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/recipe/RecipeActionResolver.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "9d1db0c88cfa6fb561436ef082d1c28f3269859a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/scaffold/RecipeScaffolder.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "01ae703b21881615e1ff06a8066420381a16787e"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DockerfileTools.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "8bc8ed4c405ea58dbe775504c9c15c2b2000350f"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DockerfileToolsTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "b19dfd218733a1e95ff4d1b6985c28b685039bb5"
+        }
+      ]
+    },
+    {
+      "sha": "97f91d68f91883726e1c2b441c93faea946c9486",
+      "subject": "test(scaffold): 断言 image_package 配方走 BuildKit(buildx)",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "a5f0177c4ad0c3e58a7c1cd52e78e6d001e83fcf"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DockerfileToolsTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "b19dfd218733a1e95ff4d1b6985c28b685039bb5"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+        "status": "M",
+        "additions": 14,
+        "deletions": 0,
+        "blobHash": "a5f0177c4ad0c3e58a7c1cd52e78e6d001e83fcf"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 610, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-infra",
+      "agent-tools"
+    ],
+    "verification": "mvn -B -pl spec-checks -am test 全绿 610 例；RecipeScaffolderTest.imageRecipeUsesBuildkit 断言 buildx/--load 且不含 docker build -f"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_0558_sandbox-buildkit-image-build"
+    ]
+  },
+  "chain": {
+    "prev": "d099cf52553b72e6f0384fa76cfc31d61256926a6358f51d8d0f555a1c44a2dd",
+    "self": "0d9b487478cd1c32ee9a8c98bfc3cca55293270e9c9e44c14509eda575d3ec71"
+  }
+}

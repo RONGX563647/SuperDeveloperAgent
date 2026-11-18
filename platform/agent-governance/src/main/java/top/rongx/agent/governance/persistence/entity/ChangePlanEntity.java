@@ -41,4 +41,7 @@ public class ChangePlanEntity {
     @Column(name = "created_at", columnDefinition = "bigint", nullable = false)
     private Long createdAt;
 
+    @Column(name = "status", columnDefinition = "text default 'PENDING'", nullable = false)
+    private String status;
+
 }

@@ -61,6 +61,9 @@ export interface ChatMessage {
   at: number
 }
 
+/** 变更单状态：人工确认与执行结果的唯一口径。 */
+export type ChangeStatus = 'PENDING' | 'CONFIRMED' | 'APPLIED' | 'FAILED'
+
 /** 确认卡片（GET /api/v1/changes/{id}）。 */
 export interface ChangeView {
   changeId: string
@@ -72,6 +75,7 @@ export interface ChangeView {
   highRisk: boolean
   planHash: string
   gate: 'CONFIRM_TOKEN' | 'SECOND_PASSWORD'
+  status: ChangeStatus
 }
 
 /** 确认结果（POST /api/v1/changes/{id}/confirm）。 */

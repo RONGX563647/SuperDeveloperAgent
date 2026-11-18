@@ -42,11 +42,23 @@ public class DockerSandbox {
     /** 准备阶段单步预算：镜像未预热时拉镜像可能很慢，但不能无限等。 */
     private static final long PREPARE_TIMEOUT_MS = 30_000L;
 
+    /** 缓存卷初始化预算：首次创卷 + 冷镜像启动会超过 30s（线上实测偶发 E-302）。 */
+    private static final long CACHE_INIT_TIMEOUT_MS = 90_000L;
+
+    /** 缓存卷初始化尝试次数：超时属于瞬时基础设施问题，先自动重试再交给自愈。 */
+    private static final int CACHE_INIT_ATTEMPTS = 2;
+
+    /** 初始化完成标记：进程重启后据此跳过 chown -R，避免每次白白扫一遍 GB 级缓存。 */
+    private static final String READY_MARKER = "/cache/.agent-ready";
+
     /** 镜像预检预算：本机已有时秒级返回；缺镜像时不能把"没有"误判成"网络慢"。 */
     private static final long IMAGE_INSPECT_TIMEOUT_MS = 5_000L;
 
     /** 自动拉取工具链镜像的默认预算（可由 agent.sandbox.pull-timeout-seconds 覆盖）。 */
     private static final long DEFAULT_IMAGE_PULL_TIMEOUT_MS = 180_000L;
+
+    /** 缓存卷初始化的可信最小镜像：只做 mkdir/chown/touch，绝不用构建镜像（可能是不可信代码）。 */
+    private static final String DEFAULT_INIT_IMAGE = "busybox:1.36";
 
     /** 外部命令执行器：抽出以便超时逻辑复用、也便于在不依赖 Docker 的情况下单测。 */
     @FunctionalInterface
@@ -73,6 +85,12 @@ public class DockerSandbox {
     private boolean precheckImage = true;
     /** 缺镜像时自动拉取的硬超时。 */
     private long imagePullTimeoutMs = DEFAULT_IMAGE_PULL_TIMEOUT_MS;
+    /** npm registry 镜像：默认直连 npmjs 在国内沙箱只有几 KB/s，install 会吃光构建预算。 */
+    private String npmRegistry = "";
+    /** docker 运行时（如 gVisor 的 runsc）；空 = 默认 runc。 */
+    private String runtime = "";
+    /** 缓存卷初始化使用的可信镜像（只做 mkdir/chown/touch）。 */
+    private String initImage = DEFAULT_INIT_IMAGE;
 
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user) {
@@ -133,6 +151,11 @@ public class DockerSandbox {
         cmd.add(dockerBinary);
         cmd.add("run");
         cmd.add("--rm");
+        // 1a. 可选运行时（gVisor runsc 等）：空则用默认 runc
+        if (runtime != null && !runtime.isBlank()) {
+            cmd.add("--runtime");
+            cmd.add(runtime);
+        }
         // 1b. 固定容器名：超时/取消时据此 docker rm -f，防止 CLI 被杀后容器成孤儿
         String containerName = ACTIVE_CONTAINER.get();
         if (containerName != null) {
@@ -171,6 +194,20 @@ public class DockerSandbox {
             cmd.add("MAVEN_OPTS=-Dmaven.repo.local=/cache/m2");
             cmd.add("-e");
             cmd.add("npm_config_cache=/cache/npm");
+            // pnpm 的 store 默认在 <workdir>/node_modules/.pnpm-store：工作树一删就全量重下。
+            // 必须显式指到缓存卷，否则 node_modules 复用永远是 0。
+            cmd.add("-e");
+            cmd.add("npm_config_store_dir=/cache/pnpm");
+        }
+        // 5b-2. npm 镜像源：国内直连 registry.npmjs.org 常见 2~40 KiB/s，
+        //       冷安装会直接吃满前端阶段预算（E-302）。留空则沿用容器默认源。
+        if (npmRegistry != null && !npmRegistry.isBlank()) {
+            String registry = npmRegistry.trim();
+            cmd.add("-e");
+            cmd.add("npm_config_registry=" + registry);
+            // Corepack 拉 pnpm 自身也走镜像（旧版本忽略该变量，无副作用）
+            cmd.add("-e");
+            cmd.add("COREPACK_NPM_REGISTRY=" + registry);
         }
         // 5c. Corepack 下载缓存：非 root 用户不能写 /usr/local/bin，
         //     用 COREPACK_HOME 指向可写目录；禁止交互式下载提示。
@@ -231,6 +268,24 @@ public class DockerSandbox {
         return this;
     }
 
+    /** 设置 npm registry 镜像；空值表示用容器默认源。 */
+    public DockerSandbox setNpmRegistry(String registry) {
+        this.npmRegistry = registry == null ? "" : registry.trim();
+        return this;
+    }
+
+    /** 设置 docker 运行时（gVisor runsc 等）；空值回落到默认 runc。 */
+    public DockerSandbox setRuntime(String runtime) {
+        this.runtime = runtime == null ? "" : runtime.trim();
+        return this;
+    }
+
+    /** 设置缓存卷初始化的可信镜像；空值回落到默认最小镜像。 */
+    public DockerSandbox setInitImage(String initImage) {
+        this.initImage = initImage == null || initImage.isBlank() ? DEFAULT_INIT_IMAGE : initImage.trim();
+        return this;
+    }
+
     /**
      * 动作前确认工具链镜像已在本机；缺失时先自动拉取，再复核。
      *
@@ -244,8 +299,10 @@ public class DockerSandbox {
         }
         BooleanSupplier abort = cancelled == null ? () -> false : cancelled;
         List<String> inspect = List.of(dockerBinary, "image", "inspect", image);
+        // 不要把 inspect 的完整 JSON 流进运行日志：70+ 行会把真正的失败原因挤出截断窗口，
+        // 只在这里静默判断"镜像是否存在"
         ProcessExecutor.StepOutcome outcome = commandExecutor.run(inspect,
-                IMAGE_INSPECT_TIMEOUT_MS, abort, live);
+                IMAGE_INSPECT_TIMEOUT_MS, abort, null);
         if (outcome.errorCode() == null) {
             return;
         }
@@ -276,8 +333,11 @@ public class DockerSandbox {
     /**
      * 动作开始前准备依赖缓存卷：用特权容器建目录并 chown，幂等且只做一次。
      *
-     * <p>每一步都有 30s 超时与取消检查；失败时抛异常且**不**把卷标记为已初始化，
+     * <p>每一步都有 90s 超时与取消检查；失败时抛异常且**不**把卷标记为已初始化，
      * 避免后续构建误用一个属主还是 root 的缓存卷。异常信息会进入运行日志。
+     *
+     * <p>瞬时超时（冷镜像/磁盘抖动）先自动重试一次；卷里写了完成标记，
+     * 进程重启后直接跳过 chown -R，不再为一次构建重扫整个 m2 缓存。
      */
     public void prepareCacheVolume(Path workspace, BooleanSupplier cancelled, Consumer<String> live) {
         String volume = cacheVolumeName(workspace);
@@ -288,35 +348,88 @@ public class DockerSandbox {
             if (initializedVolumes.contains(volume)) {
                 return;
             }
-            notify(live, "[sandbox] 首次初始化依赖缓存卷 " + volume
-                    + "（每步 30s 超时，可取消）\n");
-            runAsRoot(volume, cancelled, live, "mkdir", "-p",
-                    "/cache/m2", "/cache/npm", "/cache/corepack");
-            runAsRoot(volume, cancelled, live, "chown", "-R", "1000:1000", "/cache");
+            if (!cacheReady(volume, cancelled)) {
+                notify(live, "[sandbox] 首次初始化依赖缓存卷 " + volume
+                        + "（每步 90s 超时，可取消）\n");
+                initCacheVolume(volume, cancelled, live);
+                notify(live, "[sandbox] ✅ 依赖缓存卷已就绪：" + volume + "\n");
+            }
             initializedVolumes.add(volume);
         }
     }
 
-    private void runAsRoot(String volume, BooleanSupplier cancelled, Consumer<String> live,
-                           String... argv) {
-        List<String> cmd = new ArrayList<>();
-        cmd.add(dockerBinary);
-        cmd.add("run");
-        cmd.add("--rm");
-        cmd.add("--entrypoint=");
-        cmd.add("--user");
-        cmd.add("0:0");
-        cmd.add("-v");
-        cmd.add(volume + ":/cache");
-        cmd.add(image);
-        cmd.addAll(List.of(argv));
+    /** 完成标记探测：容器启动失败或读不到标记都按"未初始化"处理，交给初始化流程报错。 */
+    private boolean cacheReady(String volume, BooleanSupplier cancelled) {
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(
+                rootCommand(volume, "test", "-f", READY_MARKER), CACHE_INIT_TIMEOUT_MS,
+                cancelled == null ? () -> false : cancelled, null);
+        return outcome.exitCode() == 0;
+    }
+
+    /** 建目录 + 校正属主 + 写完成标记：任一步超时先自动重试，仍失败才抛给调用方。 */
+    private void initCacheVolume(String volume, BooleanSupplier cancelled, Consumer<String> live) {
+        for (int attempt = 1; attempt <= CACHE_INIT_ATTEMPTS; attempt++) {
+            try {
+                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live, "mkdir", "-p",
+                        "/cache/m2", "/cache/npm", "/cache/pnpm", "/cache/corepack");
+                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live,
+                        "chown", "-R", "1000:1000", "/cache");
+                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live, "touch", READY_MARKER);
+                return;
+            } catch (EnvironmentException e) {
+                boolean aborted = cancelled != null && cancelled.getAsBoolean();
+                if (attempt >= CACHE_INIT_ATTEMPTS || aborted) {
+                    throw e;
+                }
+                notify(live, "[sandbox] 缓存卷初始化失败，自动重试（"
+                        + (attempt + 1) + "/" + CACHE_INIT_ATTEMPTS + "）\n");
+            }
+        }
+    }
+
+    private void runAsRoot(String volume, long timeoutMs, BooleanSupplier cancelled,
+                           Consumer<String> live, String... argv) {
+        List<String> cmd = rootCommand(volume, argv);
         notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
-        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, PREPARE_TIMEOUT_MS,
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, timeoutMs,
                 cancelled == null ? () -> false : cancelled, live);
         if (outcome.errorCode() != null) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "缓存卷初始化失败（" + outcome.errorCode() + "）："
                     + outcome.summary() + "；命令：" + String.join(" ", cmd));
         }
+    }
+
+    /** 特权容器命令行：只用于缓存卷初始化（需要 root 才能建目录 / chown）。 */
+    private List<String> rootCommand(String volume, String... argv) {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(dockerBinary);
+        cmd.add("run");
+        cmd.add("--rm");
+        if (runtime != null && !runtime.isBlank()) {
+            cmd.add("--runtime");
+            cmd.add(runtime);
+        }
+        cmd.add("--entrypoint=");
+        // 初始化容器也一样「不可提权 + 无外联 + 资源受限」：root 只用于 chown 卷属主，
+        // 不能带着默认 capabilities / 网络去跑一个（可能是不可信的）构建镜像。
+        cmd.add("--network");
+        cmd.add("none");
+        cmd.add("--cap-drop");
+        cmd.add("ALL");
+        cmd.add("--security-opt");
+        cmd.add("no-new-privileges");
+        cmd.add("--pids-limit");
+        cmd.add("64");
+        cmd.add("--memory");
+        cmd.add(memory);
+        cmd.add("--user");
+        cmd.add("0:0");
+        cmd.add("-v");
+        cmd.add(volume + ":/cache");
+        // 用可信最小镜像初始化，绝不用构建镜像（构建镜像可能被投毒，root 下直接接管宿主 Docker）
+        cmd.add(initImage);
+        cmd.addAll(List.of(argv));
+        return cmd;
     }
 
     private static void notify(Consumer<String> live, String text) {
@@ -368,7 +481,8 @@ public class DockerSandbox {
     public DockerSandbox withImage(String newImage) {
         DockerSandbox copy = new DockerSandbox(dockerBinary, newImage, network, memory, cpus,
                 pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
-        return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs);
+        return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs)
+                .setNpmRegistry(npmRegistry).setRuntime(runtime).setInitImage(initImage);
     }
 
     public String describe() {

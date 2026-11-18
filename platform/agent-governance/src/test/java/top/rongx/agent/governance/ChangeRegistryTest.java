@@ -43,6 +43,25 @@ class ChangeRegistryTest {
     }
 
     @Test
+    @DisplayName("状态流转：PENDING → CONFIRMED → APPLIED/FAILED 持久化")
+    void statusTransitionsPersist(@TempDir Path dir) {
+        ChangeRegistry registry = new ChangeRegistry(dir.toString());
+        ChangePlan plan = registry.request("RY", "test", "stack_deploy", "发布 test",
+                null, null, false);
+        assertEquals(ChangePlan.Status.PENDING, plan.status(), "登记后默认待确认");
+
+        registry.updateStatus(plan.changeId(), ChangePlan.Status.CONFIRMED);
+        // 新实例重新读库，状态必须仍在（Agent 后续轮次靠它判断）
+        assertEquals(ChangePlan.Status.CONFIRMED,
+                new ChangeRegistry(dir.toString()).find(plan.changeId()).orElseThrow().status());
+
+        registry.updateStatus(plan.changeId(), ChangePlan.Status.FAILED);
+        assertEquals(ChangePlan.Status.FAILED, registry.find(plan.changeId()).orElseThrow().status());
+        // 未知单号不抛异常，保持幂等
+        registry.updateStatus("chg-missing", ChangePlan.Status.APPLIED);
+    }
+
+    @Test
     @DisplayName("按时间清理：早于保留期的变更单被删除，近期保留")
     void purgeBeforeRemovesOnlyStale(@TempDir Path dir) {
         ChangeRegistry registry = new ChangeRegistry(dir.toString());

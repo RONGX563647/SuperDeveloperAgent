@@ -33,7 +33,7 @@ public class ChangeRegistry implements ChangeStore {
 
     private static final String COLUMNS = """
             change_id, project_id, env, kind, plan_hash, summary,
-            image_digest, frontend_dist_hash, high_risk, created_at
+            image_digest, frontend_dist_hash, high_risk, created_at, status
             """;
 
     private final GovernanceDb db;
@@ -78,8 +78,8 @@ public class ChangeRegistry implements ChangeStore {
         String sql = """
                 INSERT INTO change_plans
                     (change_id, project_id, env, kind, plan_hash, summary,
-                     image_digest, frontend_dist_hash, high_risk, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                     image_digest, frontend_dist_hash, high_risk, created_at, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """;
         try {
             db.run(em -> GovernanceDb.update(em, sql,
@@ -92,7 +92,8 @@ public class ChangeRegistry implements ChangeStore {
                     plan.imageDigest(),
                     plan.frontendDistHash(),
                     plan.highRisk() ? 1 : 0,
-                    plan.createdAt().toEpochMilli()));
+                    plan.createdAt().toEpochMilli(),
+                    plan.status().name()));
             return plan;
         } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单登记失败：" + e.getMessage(), e);
@@ -110,6 +111,29 @@ public class ChangeRegistry implements ChangeStore {
                     .map(ChangeRegistry::map));
         } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void updateStatus(String changeId, ChangePlan.Status status) {
+        if (changeId == null || changeId.isBlank()) {
+            return;
+        }
+        try {
+            db.run(em -> GovernanceDb.update(em,
+                    "UPDATE change_plans SET status = ? WHERE change_id = ?",
+                    (status == null ? ChangePlan.Status.PENDING : status).name(), changeId));
+        } catch (RuntimeException e) {
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单状态更新失败：" + e.getMessage(), e);
+        }
+    }
+
+    /** 未知/空状态按 PENDING 处理（兼容老库与手工改库）。 */
+    private static ChangePlan.Status statusOf(String raw) {
+        try {
+            return ChangePlan.Status.valueOf(raw == null ? "PENDING" : raw.trim().toUpperCase());
+        } catch (IllegalArgumentException unknown) {
+            return ChangePlan.Status.PENDING;
         }
     }
 
@@ -134,6 +158,7 @@ public class ChangeRegistry implements ChangeStore {
                 (String) row[6],
                 (String) row[7],
                 ((Number) row[8]).intValue() == 1,
-                Instant.ofEpochMilli(((Number) row[9]).longValue()));
+                Instant.ofEpochMilli(((Number) row[9]).longValue()),
+                statusOf((String) row[10]));
     }
 }

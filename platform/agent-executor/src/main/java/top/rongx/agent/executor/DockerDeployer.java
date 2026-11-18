@@ -37,6 +37,15 @@ public class DockerDeployer implements Deployer {
     private static final long DOCKER_TIMEOUT_MS = 120_000;
 
     private final ProcessExecutor executor = new ProcessExecutor();
+    private final DockerCli docker;
+
+    public DockerDeployer() {
+        this(DockerCli.defaults());
+    }
+
+    public DockerDeployer(DockerCli docker) {
+        this.docker = docker == null ? DockerCli.defaults() : docker;
+    }
 
     @Override
     public boolean supports(DeployTarget target) {
@@ -117,13 +126,13 @@ public class DockerDeployer implements Deployer {
     public boolean ensureNetwork(Path dir, String network, StringBuilder log) {
         BooleanSupplier never = () -> false;
         ProcessExecutor.StepOutcome inspect =
-                executor.exec(dir, List.of("docker", "network", "inspect", network), 15_000,
+                executor.exec(dir, docker.cmd("network", "inspect", network), 15_000,
                         log, never);
         if (inspect.exitCode() == 0) {
             return true;
         }
         ProcessExecutor.StepOutcome created =
-                executor.exec(dir, List.of("docker", "network", "create", network), 30_000,
+                executor.exec(dir, docker.cmd("network", "create", network), 30_000,
                         log, never);
         if (created.exitCode() == 0) {
             log.append("[deploy] 已创建环境网络 ").append(network).append('\n');
@@ -147,7 +156,7 @@ public class DockerDeployer implements Deployer {
         for (String name : names) {
             StringBuilder rmLog = new StringBuilder();
             ProcessExecutor.StepOutcome rm =
-                    executor.exec(dir, List.of("docker", "rm", "-f", name), 30_000, rmLog, never);
+                    executor.exec(dir, docker.cmd("rm", "-f", name), 30_000, rmLog, never);
             if (rm.exitCode() == 0) {
                 removed.add(name);
                 log.append("[dev] 已清理遗留 dev 容器 ").append(name).append('\n');
@@ -169,7 +178,7 @@ public class DockerDeployer implements Deployer {
             return false;
         }
         BooleanSupplier never = () -> false;
-        return executor.exec(dir, List.of("docker", "image", "inspect", image), 15_000,
+        return executor.exec(dir, docker.cmd("image", "inspect", image), 15_000,
                 new StringBuilder(), never).exitCode() == 0;
     }
 
@@ -183,7 +192,7 @@ public class DockerDeployer implements Deployer {
         //    把"本机没这个镜像"伪装成容器启动失败。回滚场景更糟：下面会先删掉在跑的容器。
         StringBuilder inspectLog = new StringBuilder();
         ProcessExecutor.StepOutcome inspect = executor.exec(dir,
-                List.of("docker", "image", "inspect", image), 15_000, inspectLog, never);
+                docker.cmd("image", "inspect", image), 15_000, inspectLog, never);
         if (inspect.exitCode() != 0) {
             return DeployResult.failed(DeployTarget.DOCKER,
                     ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
@@ -197,7 +206,7 @@ public class DockerDeployer implements Deployer {
         //    曾把真实失败（应用配置校验不过、容器自行退出）掩盖成"部署报错"。
         StringBuilder rmLog = new StringBuilder();
         ProcessExecutor.StepOutcome rm =
-                executor.exec(dir, List.of("docker", "rm", "-f", name), 30_000, rmLog, never);
+                executor.exec(dir, docker.cmd("rm", "-f", name), 30_000, rmLog, never);
         if (rm.exitCode() != 0) {
             String rmText = rmLog.toString();
             if (rmText.contains("No such container")) {
@@ -208,8 +217,8 @@ public class DockerDeployer implements Deployer {
         }
 
         // 2. 起新（环境变量按 key 排序，保证同样输入产生同样的 docker 参数）
-        List<String> argv = new ArrayList<>(List.of(
-                "docker", "run", "-d",
+        List<String> argv = new ArrayList<>(docker.cmd(
+                "run", "-d",
                 "--name", name,
                 "--restart", "unless-stopped",
                 "--label", "com.docker.compose.project=" + composeProject(network, null),

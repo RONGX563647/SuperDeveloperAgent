@@ -31,13 +31,23 @@ public class AppRuntimeInspector implements RuntimeInspector {
     private static final Pattern HOST_PORT =
             Pattern.compile("\"HostIp\":\"([^\"]*)\",\"HostPort\":\"([^\"]*)\"");
 
+    private final DockerCli cli;
+
+    public AppRuntimeInspector() {
+        this(DockerCli.defaults());
+    }
+
+    public AppRuntimeInspector(DockerCli docker) {
+        this.cli = docker == null ? DockerCli.defaults() : docker;
+    }
+
     /**
      * 列出某项目某环境的应用容器（不含中间件：中间件没有 {@code agent.project} 标签）。
      *
      * @throws IllegalStateException docker 不可用（未安装 / 守护进程未启动）
      */
     public List<ContainerStatus> containers(String projectId, String env) {
-        Cmd list = docker(List.of("docker", "ps", "-a",
+        Cmd list = exec(cli.cmd("ps", "-a",
                 "--filter", "label=agent.project", "--format", "{{.Names}}"));
         if (list.exitCode() != 0 && list.output().isBlank()) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "docker 不可用：" + firstLine(list.output()));
@@ -68,7 +78,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
      * @throws IllegalStateException docker 不可用
      */
     public List<PortOwner> portOwners(int hostPort) {
-        Cmd list = docker(List.of("docker", "ps", "--format", "{{.Names}}|{{.Ports}}"));
+        Cmd list = exec(cli.cmd("ps", "--format", "{{.Names}}|{{.Ports}}"));
         if (list.exitCode() != 0 && list.output().isBlank()) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "docker 不可用：" + firstLine(list.output()));
         }
@@ -102,7 +112,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
      * @param sinceMinutes 时间窗（分钟）
      */
     public List<String> logs(String container, int sinceMinutes) {
-        Cmd cmd = docker(List.of("docker", "logs", "--since", sinceMinutes + "m",
+        Cmd cmd = exec(cli.cmd("logs", "--since", sinceMinutes + "m",
                 "--timestamps", "--tail", String.valueOf(MAX_LOG_LINES), container));
         List<String> lines = new ArrayList<>();
         for (String line : cmd.output().split("\\R")) {
@@ -132,7 +142,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
                 + "|{{index .Config.Labels `com.docker.compose.project`}}"
                 + "|{{index .Config.Labels `agent.project`}}"
                 + "|{{index .Config.Labels `agent.version`}}";
-        Cmd cmd = docker(List.of("docker", "inspect", "--format", template, container));
+        Cmd cmd = exec(cli.cmd("inspect", "--format", template, container));
         if (cmd.exitCode() != 0 || cmd.output().isBlank()) {
             return null;
         }
@@ -233,7 +243,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
         return value.isEmpty() ? "unknown" : value;
     }
 
-    private Cmd docker(List<String> argv) {
+    private Cmd exec(List<String> argv) {
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
                 new ProcessExecutor().exec(CWD, argv, TIMEOUT_MS, sink, () -> false);

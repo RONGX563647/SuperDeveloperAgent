@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.deploy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -38,5 +39,14 @@ class ChatRunRecoveryAdvisorFormatTest {
         String cut = ChatRunRecoveryAdvisor.oneLine(longText, 240);
         assertEquals(241, cut.length(), "应截断并追加省略号");
         assertTrue(cut.endsWith("…"));
+    }
+
+    @Test
+    @DisplayName("工具失败文本即使在 SUCCESS 事件里也按失败记录")
+    void errorTextOverridesSuccessState() {
+        assertTrue(ChatRunRecoveryAdvisor.isErrorText("Error: Tool execution failed: 路径不存在：platform/src/main/resources"));
+        assertTrue(ChatRunRecoveryAdvisor.isErrorText("err: 生产环境不生成 Agent 草案"));
+        assertFalse(ChatRunRecoveryAdvisor.isErrorText("runId: run-0d13a007"));
+        assertFalse(ChatRunRecoveryAdvisor.isErrorText(""));
     }
 }

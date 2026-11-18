@@ -23,6 +23,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SESSION_DIR = ROOT / "docs" / ".session"
 ACTIVE = SESSION_DIR / "active.json"
 EVIDENCE = SESSION_DIR / "test-evidence.json"
+# 证据复用 TTL：同一工作区内容在窗口内重复提交（重试、改提交信息）时不必重跑全量测试。
+EVIDENCE_TTL = int(os.environ.get("SESSION_ARCHIVE_EVIDENCE_TTL_MIN", "60")) * 60
+# 跨 worktree 测试锁：并行会话共享同一份 .git，锁也放在公共目录里。
+LOCK_TIMEOUT = 45 * 60
+LOCK_STALE = 90 * 60
 PROCESS = ROOT / "docs" / "process"
 SUMMARY = ROOT / "docs" / "summary"
 CATEGORIES = ("feat", "bug", "chore", "docs", "deploy")
@@ -227,6 +232,141 @@ def run_tests(command: str) -> dict:
     }
 
 
+def shared_state_dir() -> Path:
+    """跨 worktree 共享目录：主仓库公共 .git 下的 session-archive。
+
+    <p>gate 的 ROOT 是当前 worktree，测试锁与证据缓存必须放到公共 .git，
+    否则主树和 .agent/worktrees/* 会各跑一套全量测试。
+    """
+    proc = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=ROOT,
+                          capture_output=True, env=clean_env())
+    if proc.returncode != 0:
+        raise GateError("git rev-parse --git-common-dir 失败，无法定位共享目录")
+    common = Path(proc.stdout.decode("utf-8", "replace").strip())
+    if not common.is_absolute():
+        common = (ROOT / common).resolve()
+    return common / "session-archive"
+
+
+def java_home() -> str:
+    return os.environ.get("JAVA_HOME", "")
+
+
+class TestLock:
+    """跨 worktree 的测试互斥锁（O_CREAT|O_EXCL），拿不到就排队。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.fd: int | None = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.time() + LOCK_TIMEOUT
+        waiting = False
+        last_note = time.time()
+        while True:
+            try:
+                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self.fd, f"{os.getpid()} {now_iso()}\n".encode("utf-8"))
+                return self
+            except FileExistsError:
+                if self._stale():
+                    try:
+                        self.path.unlink()
+                    except OSError:
+                        pass
+                    continue
+                if time.time() > deadline:
+                    raise GateError(
+                        f"等待其它 worktree 的测试锁超时（{LOCK_TIMEOUT // 60} 分钟）：{self.path}"
+                    )
+                if not waiting:
+                    out("另一个 worktree 正在跑测试门禁，排队等待…")
+                    waiting = True
+                    last_note = time.time()
+                elif time.time() - last_note > 60:
+                    out(f"仍在等待测试锁（{self.path.name}）…")
+                    last_note = time.time()
+                time.sleep(1)
+
+    def _stale(self) -> bool:
+        try:
+            return time.time() - self.path.stat().st_mtime > LOCK_STALE
+        except OSError:
+            return False
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+
+
+def worktree_fingerprint() -> str:
+    """当前工作区指纹：索引树 + 未暂存改动 + 未跟踪文件元数据。
+
+    测试实际跑在工作区而不是索引上，只按 tree 复用会把“同样暂存、不同未提交改动”
+    误判成等价，所以要把未暂存 diff 和未跟踪文件也算进来。
+    """
+    tree = write_tree()
+    diff = subprocess.run(["git", "diff", "--no-ext-diff", "--no-color"], cwd=ROOT,
+                          capture_output=True, env=clean_env())
+    if diff.returncode != 0:
+        raise GateError("git diff 失败，无法计算工作区指纹")
+    digest = hashlib.sha256()
+    digest.update(tree.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(diff.stdout)
+    for name in sorted(line for line in git("ls-files", "--others", "--exclude-standard").splitlines() if line):
+        path = ROOT / name
+        try:
+            stat = path.stat()
+            digest.update(f"\0{name}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8"))
+        except OSError:
+            digest.update(f"\0{name}:missing".encode("utf-8"))
+    return digest.hexdigest()
+
+
+def evidence_cache_path(fingerprint: str) -> Path:
+    return shared_state_dir() / "evidence" / f"{fingerprint}.json"
+
+
+def cached_evidence(command: str, fingerprint: str) -> dict | None:
+    path = evidence_cache_path(fingerprint)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if data.get("result") != "PASSED" or data.get("command") != command:
+        return None
+    if data.get("javaHome", java_home()) != java_home():
+        return None
+    try:
+        ran_at = datetime.fromisoformat(str(data.get("ranAt"))).timestamp()
+    except ValueError:
+        return None
+    if not 0 <= time.time() - ran_at <= EVIDENCE_TTL:
+        return None
+    data["reused"] = True
+    return data
+
+
+def cache_evidence(evidence: dict, fingerprint: str) -> None:
+    if evidence.get("result") != "PASSED":
+        return
+    payload = dict(evidence)
+    payload["javaHome"] = java_home()
+    write_json(evidence_cache_path(fingerprint), payload)
+
+
 def cmd_gate_pre_commit(args) -> int:
     staged = [line for line in git("diff", "--cached", "--name-only").splitlines() if line]
     code = [p for p in staged if not is_exempt(p)]
@@ -240,9 +380,25 @@ def cmd_gate_pre_commit(args) -> int:
             "--category feat|bug|chore|deploy --slug <英文短名> --title <中文标题>\n"
             "（docs 类纯文档提交免此限制）"
         )
-    command = os.environ.get("SESSION_ARCHIVE_TEST_CMD", DEFAULT_TEST_CMD)
-    out(f"运行测试门禁：{command}")
-    evidence = run_tests(command)
+    command = (os.environ.get("SESSION_ARCHIVE_TEST_CMD") or DEFAULT_TEST_CMD).strip()
+    try:
+        with TestLock(shared_state_dir() / "test.lock"):
+            fingerprint = ""
+            try:
+                fingerprint = worktree_fingerprint()
+            except GateError as exc:
+                out(f"无法计算工作区指纹，跳过证据复用：{exc}")
+            evidence = cached_evidence(command, fingerprint) if fingerprint else None
+            if evidence:
+                out(f"复用同一工作区的绿色测试证据（{evidence['ranAt']}，"
+                    f"{evidence['testsRun']} 个用例）")
+            else:
+                out(f"运行测试门禁：{command}")
+                evidence = run_tests(command)
+                if fingerprint:
+                    cache_evidence(evidence, fingerprint)
+    except GateError as exc:
+        return fail(str(exc))
     write_json(EVIDENCE, evidence)
     if evidence["result"] != "PASSED":
         return fail(
@@ -296,6 +452,11 @@ def commit_files(sha: str) -> list[dict]:
 
 
 def cases_added(sha: str, tests: list[dict]) -> int:
+    """统计某次提交新增的用例行数。
+
+    必须按「引入测试的提交」逐次统计：会话内多次提交时，新增的测试文件往往不在
+    HEAD 这一次提交里，用 HEAD 去 show 该文件拿不到任何 diff，用例数会被误判成 0。
+    """
     count = 0
     for test in tests:
         if test["status"] == "D":
@@ -326,6 +487,7 @@ def cmd_finish(args) -> int:
     all_tests: list[dict] = []
     modules = set()
     code_trees: list[str] = []
+    added_cases = 0
     for sha in sha_list:
         subject = git("log", "-1", "--format=%s", sha)
         files = commit_files(sha)
@@ -333,6 +495,7 @@ def cmd_finish(args) -> int:
             code_trees.append(git("rev-parse", f"{sha}^{{tree}}"))
         tests = [f for f in files if TEST_PATH_RE.search(f["path"])]
         all_tests.extend(tests)
+        added_cases += cases_added(sha, tests)
         commits.append({
             "sha": sha, "subject": subject,
             "category": classify(subject), "files": files,
@@ -355,7 +518,7 @@ def cmd_finish(args) -> int:
     tests_section = {
         "required": category in TEST_CATEGORIES,
         "files": all_tests,
-        "casesAdded": cases_added(head, all_tests),
+        "casesAdded": added_cases,
         "command": evidence["command"],
         "result": evidence["result"],
         "evidence": (

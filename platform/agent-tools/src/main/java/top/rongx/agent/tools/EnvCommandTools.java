@@ -19,9 +19,10 @@ import top.rongx.agent.domain.project.ProjectContext;
  * <p>与 {@link EnvQueryTools} 拆开后，生产环境（只读 Toolkit）不会看到这些工具；
  * 非生产环境仍同时具备读与写。
  *
- * <p>注意：{@code env_mapping_draft} 只产生 DRAFT 记录，<b>不能自己确认</b>，
- * 必须由人在对话内的绑定确认卡确认后才能用于 {@code deploy_run}。变量写操作会改变有效环境哈希，
- * 因此旧绑定自动失效，需要重新生成草案并人工确认。
+ * <p>注意：{@code env_mapping_draft} 默认只产生 DRAFT 记录；但当变量齐全、没有缺失项时
+ * 平台会直接自动确认（自愈/续跑不再被一张无事可做的确认卡挡住）。存在缺失项时仍需人工补值，
+ * 并由人在对话内的绑定确认卡确认后才能用于 {@code deploy_run}。变量写操作会改变有效环境哈希，
+ * 因此旧绑定自动失效，需要重新生成草案。
  */
 @Component
 public class EnvCommandTools {
@@ -52,9 +53,18 @@ public class EnvCommandTools {
         List<?> keys = mapping.get("keys") instanceof List<?> list ? list : List.of();
         List<?> missing = mapping.get("missing") instanceof List<?> list ? list : List.of();
         List<?> warnings = mapping.get("warnings") instanceof List<?> list ? list : List.of();
+        // 变量齐全 = 人没有任何可补的：直接平台确认，避免"无事可做还要点一下"的确认卡。
+        // 自愈续跑依赖这个绑定，卡在人工确认上等于修复链断了。
+        EnvBinding confirmed = missing.isEmpty() ? confirm(binding) : null;
+        boolean autoConfirmed = confirmed != null;
+        if (autoConfirmed) {
+            binding = confirmed;
+        }
         StringBuilder sb = new StringBuilder();
         sb.append(EnvBindingWire.line(binding.id())).append('\n')
-                .append("status: ").append(binding.status()).append("（需人工确认后才可用于 deploy_run）\n")
+                .append("status: ").append(binding.status())
+                .append(autoConfirmed ? "（平台自动确认：变量齐全，无需人工补值）"
+                        : "（需人工确认后才可用于 deploy_run）").append('\n')
                 .append("keys: ").append(keys.size()).append('\n')
                 .append("missing: ").append(missing.isEmpty() ? "无" : String.join(", ", missing.stream()
                         .map(String::valueOf).toList())).append('\n');
@@ -66,8 +76,20 @@ public class EnvCommandTools {
                         .append(warning.get("message")).append('\n');
             }
         }
-        sb.append("next: 环境绑定确认卡已在对话中展开，请用户本人点击确认；确认后再用该 binding_id 触发 deploy_run");
+        sb.append("next: ").append(autoConfirmed
+                ? "已自动确认，直接用该 binding_id 触发 deploy_run"
+                : "环境绑定确认卡已在对话中展开，请用户本人点击确认；确认后再用该 binding_id 触发 deploy_run");
         return sb.toString();
+    }
+
+    /** 自动确认；实现不支持或确认后仍是 DRAFT 时返回 null，由人点确认卡。 */
+    private EnvBinding confirm(EnvBinding binding) {
+        try {
+            EnvBinding confirmed = bindings.confirm(binding.id(), "platform-autofix");
+            return "CONFIRMED".equals(confirmed.status()) ? confirmed : null;
+        } catch (RuntimeException unsupported) {
+            return null;
+        }
     }
 
     /**
