@@ -662,6 +662,32 @@ export function getEnvBinding(projectId: string, bindingId: string): Promise<Env
   )
 }
 
+/** 环境绑定历史：含草稿/已确认/过期/已解绑，卡片按这张表渲染。 */
+export interface EnvBindingHistory {
+  projectId: string
+  env: string
+  /** 为空 = 当前没有可用绑定（需要重新生成并确认）。 */
+  currentBindingId: string
+  bindings: EnvBindingView[]
+}
+
+export function listEnvBindings(
+  projectId: string,
+  env: string,
+  limit = 20,
+): Promise<EnvBindingHistory> {
+  const q = new URLSearchParams({ env, limit: String(limit) })
+  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/env-bindings?${q}`)
+}
+
+/** 解绑：标记 REVOKED 并保留记录（历史仍可查）。 */
+export function revokeEnvBinding(projectId: string, bindingId: string): Promise<EnvBindingView> {
+  return apiFetch(
+    `/api/v1/settings/projects/${encodeURIComponent(projectId)}/env-bindings/${encodeURIComponent(bindingId)}/revoke`,
+    { method: 'POST' }
+  )
+}
+
 export function listPortLeases(projectId: string, env: string): Promise<PortLeaseView[]> {
   const q = new URLSearchParams({ projectId, env })
   return apiFetch(`/api/v1/deploy/ports?${q}`)

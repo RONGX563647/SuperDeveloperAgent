@@ -26,11 +26,29 @@ public record EnvBinding(
         long expiresAt,
         String status) {
 
+    /** 已解绑：记录保留，只是不再可用于部署。 */
+    public static final String STATUS_REVOKED = "REVOKED";
+
     public boolean confirmed() {
         return "CONFIRMED".equals(status) && confirmedBy != null && !confirmedBy.isBlank();
     }
 
     public boolean expired() {
         return expiresAt > 0 && System.currentTimeMillis() > expiresAt;
+    }
+
+    /** 已解绑：不能再用它触发部署，但仍在历史列表里。 */
+    public boolean revoked() {
+        return STATUS_REVOKED.equals(status);
+    }
+
+    /**
+     * 运行时可用性：已确认 + 未过期 + 未解绑。
+     *
+     * <p>「可用」判断只留在领域对象里一处，卡片、部署门禁与工具层都调它，
+     * 避免三处各写一套导致「页面显示可用、部署却拒绝」。
+     */
+    public boolean usable() {
+        return confirmed() && !expired() && !revoked();
     }
 }

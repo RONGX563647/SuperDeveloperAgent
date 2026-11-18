@@ -93,7 +93,27 @@ public interface EnvironmentStore {
     /** 最近一次已确认且未过期的绑定（deploy_run 免重复索要 binding_id）。 */
     Optional<EnvBinding> latestConfirmedBinding(String projectId, String env);
 
+    /**
+     * 某项目某环境的<b>全部</b>绑定记录（含草稿、已确认、过期、已解绑），按时间倒序。
+     *
+     * <p>环境卡片必须能展示「历史绑定」：只回当前绑定的话，用户换过一次环境就再也
+     * 看不到上次绑的是谁、什么时候绑的、为什么失效。
+     *
+     * @param limit 最多返回多少条（<=0 表示用默认值）
+     */
+    List<EnvBinding> bindings(String projectId, String env, int limit);
+
     void confirmBinding(String id, String confirmedBy, long expiresAt);
+
+    /**
+     * 解绑：只把状态改成 {@code REVOKED} 并记录解绑时间，<b>不删除记录</b>。
+     *
+     * <p>删除会让审计链断掉（谁在什么时候解绑、解绑前绑的是什么，全都查不到）。
+     *
+     * @param actor 执行解绑的人
+     * @return 解绑后的记录；绑定不存在时返回空
+     */
+    Optional<EnvBinding> revokeBinding(String id, String actor);
 
     // ---------------------------------------------------------------- 端口租约
 

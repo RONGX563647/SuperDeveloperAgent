@@ -636,6 +636,51 @@ public class EnvironmentController {
                 new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境绑定不存在：" + bindingId));
     }
 
+    /**
+     * 环境绑定历史：全量返回（草稿 / 已确认 / 过期 / 已解绑）。
+     *
+     * <p>环境卡片按这张表渲染，不再读内存里的「当前绑定投影」——投影只能回当前那一条，
+     * 用户切换或解绑一次就再也看不到上次绑的是谁、绑了多久、为什么失效。
+     *
+     * @param env   环境名（必填：绑定是 per-env 的）
+     * @param limit 最多返回多少条，默认 20，上限 200
+     */
+    @GetMapping("/projects/{projectId}/env-bindings")
+    public Map<String, Object> bindingHistory(@PathVariable String projectId,
+                                              @RequestParam String env,
+                                              @RequestParam(defaultValue = "20") int limit) {
+        requireRead();
+        List<EnvBinding> rows = envStore.bindings(projectId, env, limit);
+        EnvBinding current = rows.stream().filter(EnvBinding::usable).findFirst().orElse(null);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("projectId", projectId);
+        out.put("env", env);
+        // currentBindingId 为空 = 当前该环境没有可用绑定，卡片据此提示「需要重新生成」
+        out.put("currentBindingId", current == null ? "" : current.id());
+        out.put("bindings", rows);
+        return out;
+    }
+
+    /**
+     * 解绑：标记为 REVOKED 并保留记录（不删除）。
+     *
+     * @param bindingId 绑定 id
+     */
+    @PostMapping("/projects/{projectId}/env-bindings/{bindingId}/revoke")
+    public EnvBinding revokeBinding(@PathVariable String projectId,
+                                    @PathVariable String bindingId) {
+        currentUser.checkAnyPermission("settings:write", "action:run", "change:confirm");
+        EnvBinding binding = envStore.binding(bindingId).orElseThrow(() ->
+                new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境绑定不存在：" + bindingId));
+        if (!binding.projectId().equals(projectId)) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT,
+                    "环境绑定不属于当前项目：" + bindingId);
+        }
+        return envStore.revokeBinding(bindingId, currentUser.requireUserId())
+                .orElseThrow(() -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
+                        "环境绑定解绑失败：" + bindingId));
+    }
+
     // ---------------------------------------------------------------- 健康检查
 
     private record Health(boolean running, String error) {

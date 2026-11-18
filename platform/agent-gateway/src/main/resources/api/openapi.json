@@ -1902,6 +1902,40 @@
         }
       }
     },
+    "/api/v1/settings/projects/{projectId}/env-bindings/{bindingId}/revoke" : {
+      "post" : {
+        "tags" : [ "environment-controller" ],
+        "summary" : "revoke binding",
+        "operationId" : "revokeBinding",
+        "parameters" : [ {
+          "name" : "projectId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "bindingId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/EnvBinding"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/projects/{projectId}/env-binding/{bindingId}/confirm" : {
       "post" : {
         "tags" : [ "environment-controller" ],
@@ -4923,6 +4957,50 @@
           "schema" : {
             "type" : "string",
             "default" : "test"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/projects/{projectId}/env-bindings" : {
+      "get" : {
+        "tags" : [ "environment-controller" ],
+        "summary" : "binding history",
+        "operationId" : "bindingHistory",
+        "parameters" : [ {
+          "name" : "projectId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "env",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "limit",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 20
           }
         } ],
         "responses" : {

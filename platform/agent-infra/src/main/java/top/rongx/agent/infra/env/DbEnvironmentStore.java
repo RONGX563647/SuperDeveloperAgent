@@ -60,6 +60,10 @@ public class DbEnvironmentStore implements EnvironmentStore {
             confirmed_by, confirmed_at, expires_at, status, created_at
             """;
 
+    /** 绑定历史默认/上限条数：卡片只展示最近的一批，避免长历史拖慢首屏。 */
+    private static final int DEFAULT_BINDING_HISTORY = 20;
+    private static final int MAX_BINDING_HISTORY = 200;
+
     private final PlatformDb db;
     private final SecretBox secretBox;
 
@@ -939,6 +943,41 @@ public class DbEnvironmentStore implements EnvironmentStore {
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定查询失败：" + e.getMessage(), e);
         }
+    }
+
+    @Override
+    public List<EnvBinding> bindings(String projectId, String env, int limit) {
+        int size = limit <= 0 ? DEFAULT_BINDING_HISTORY : Math.min(limit, MAX_BINDING_HISTORY);
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                    "SELECT " + BINDING_COLUMNS + " FROM env_bindings "
+                            + "WHERE project_id = ? AND env = ? "
+                            // 已解绑的记录也返回：卡片要展示「谁在什么时候解绑的」
+                            + "ORDER BY created_at DESC LIMIT ?",
+                    projectId, env, size).stream()
+                    .map(DbEnvironmentStore::mapBinding).toList());
+        } catch (RuntimeException e) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定历史查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public Optional<EnvBinding> revokeBinding(String id, String actor) {
+        if (id == null || id.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    UPDATE env_bindings
+                    SET status='REVOKED', confirmed_by=?, expires_at=?
+                    WHERE id=?
+                    """, actor == null || actor.isBlank() ? "user" : actor,
+                    System.currentTimeMillis(), id));
+        } catch (RuntimeException e) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定解绑失败：" + e.getMessage(), e);
+        }
+        // 不删除：解绑后记录留在历史里，卡片与审计都能看到
+        return binding(id);
     }
 
     @Override
