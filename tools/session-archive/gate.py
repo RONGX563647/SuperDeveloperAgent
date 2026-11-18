@@ -284,6 +284,16 @@ def all_active_sessions() -> list[tuple[Path, dict]]:
             continue
     return rows
 
+def folder_slug(slug: str, task_code: str) -> str:
+    """归档目录的 slug：给了任务编码就用「编码-slug」，否则退回纯 slug。
+
+    <p>「存档用任务编码作标题」要求归档名里带编号（bug/2026-11-19_0122_bug-12-xxx），
+    否则只能靠时间戳在几十份归档里翻。
+    """
+    code = (task_code or "").strip().lower()
+    return f"{code}-{slug}" if code else slug
+
+
 def cmd_start(args) -> int:
     if args.category not in CATEGORIES:
         return fail(f"category 必须是 {CATEGORIES}")
@@ -293,24 +303,32 @@ def cmd_start(args) -> int:
     if existing:
         return fail(f"本 worktree 已有进行中的会话：{existing.get('id')}；"
                     f"先执行 finish（文件：{active_path()}）")
+    # 任务编码（如 BUG-12 / FEAT-3）：给了就让它成为归档名与标题的标识，
+    # 「存档用任务编码作标题」依赖这条；没给则退回"时间_slug"（历史行为不变）。
+    code = (args.task_code or "").strip()
+    if code and not re.fullmatch(r"(?i)(bug|feat)-\d{1,4}", code):
+        return fail("task-code 必须形如 BUG-12 / FEAT-3")
+    code_slug = folder_slug(args.slug, code)
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M")
-    folder = f"{stamp}_{args.slug}"
+    folder = f"{stamp}_{code_slug}"
     seq = 2
     while (PROCESS / args.category / folder).exists():
-        folder = f"{stamp}_{args.slug}-{seq}"
+        folder = f"{stamp}_{code_slug}-{seq}"
         seq += 1
+    # 标题带上编码：任务页、归档列表、总结文档标题三处因此能对得上同一个编号
+    title = f"{code.upper()} {args.title}".strip() if code else args.title
     active = {
         "schema": "session-active/v1",
         "id": f"{args.category}/{folder}",
         "category": args.category,
-        "slug": args.slug,
+        "slug": code_slug,
+        "taskCode": code.upper(),
         "folder": folder,
-        "title": args.title,
-        "startedAt": now_iso(),
+        "title": title,        "startedAt": now_iso(),
         "baseHead": git("rev-parse", "HEAD"),
         "agentModel": args.model,
         "toolCallCount": args.tool_calls,
-        "promptSummary": args.prompt or args.title,
+        "promptSummary": args.prompt or title,
         "followUps": args.follow_up or [],
         "worktree": str(ROOT),
     }
@@ -1913,6 +1931,11 @@ def cmd_install_hooks(args) -> int:
 # ------------------------------------------------------------------ self-test
 
 def cmd_self_test(args) -> int:
+    # 归档命名契约：给了任务编码就必须进目录名（「存档用任务编码作标题」的落地点）
+    if folder_slug("patch-guard", "BUG-12") != "bug-12-patch-guard":
+        return fail("self-test: 任务编码应进入归档目录 slug")
+    if folder_slug("patch-guard", "  ") != "patch-guard":
+        return fail("self-test: 未给任务编码时应退回纯 slug")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         base = {
@@ -2074,6 +2097,8 @@ def main() -> int:
     p.add_argument("--category", required=True)
     p.add_argument("--slug", required=True)
     p.add_argument("--title", required=True)
+    # 任务编码（BUG-12 / FEAT-3）：给了就进归档目录名与标题，让存档与任务页对得上同一个编号
+    p.add_argument("--task-code", default="")
     p.add_argument("--model", default="unknown")
     p.add_argument("--prompt", default="")
     p.add_argument("--tool-calls", type=int, default=0)
