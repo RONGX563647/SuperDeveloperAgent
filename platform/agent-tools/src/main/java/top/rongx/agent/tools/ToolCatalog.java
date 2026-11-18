@@ -188,8 +188,8 @@ public class ToolCatalog {
      * <p>修复能力来自两处：
      * <ul>
      *   <li>{@code request_confirmation}：需要人工确认时登记变更（不再"只能诊断、发不出请求"）；</li>
-     *   <li>{@code propose_patch}：只允许改 ci/、构建配置与测试代码，产出补丁 + 变更单，
-     *       人工确认后由确认卡片提交到新分支——这是本类唯一能改仓库内容的入口。</li>
+     *   <li>{@code propose_patch}：允许改业务源码（src/main/**）、测试代码与构建/部署配置，
+     *       产出补丁 + 变更单，人工确认后由确认卡片提交到新分支——这是本类唯一能改仓库内容的入口。</li>
      * </ul>
      * 只读取证（read_file / grep / git_diff 等）是提出有效补丁的前提。
      */

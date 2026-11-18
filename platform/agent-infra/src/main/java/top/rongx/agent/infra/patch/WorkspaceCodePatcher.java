@@ -9,6 +9,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.patch.CodePatch;
@@ -16,6 +17,7 @@ import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PatchPathDeniedException;
 import top.rongx.agent.domain.error.RunException;
 
 /**
@@ -23,20 +25,30 @@ import top.rongx.agent.domain.error.RunException;
  *
  * <p>安全边界（实现层保证，调用方无法绕过）：
  * <ul>
- *   <li>路径白名单：{@code ci/}、{@code Jenkinsfile}、构建配置（pom.xml / build.gradle*）、
- *       {@code src/test/**}；业务代码、配置文件、凭证都不在范围内；</li>
+ *   <li>路径白名单：业务源码（{@code src/main/**}、{@code platform/<模块>/src/main/**}）、
+ *       测试代码（{@code src/test/**}）、{@code ci/}、{@code Jenkinsfile}、构建配置
+ *       （pom.xml / build.gradle*）、部署形态文件（Dockerfile / compose / nginx / 应用配置）；</li>
+ *   <li>路径黑名单（优先级高于白名单）：编译产物（{@code target/}、{@code build/}、{@code dist/}、
+ *       {@code node_modules/}）、{@code .git/}、密钥与凭证文件（{@code .env}、
+ *       {@code *.pem}、{@code *.key}、{@code id_rsa*}、{@code .npmrc} 等）；</li>
  *   <li>路径逃逸校验：拒绝绝对路径与 {@code ..}；</li>
  *   <li>不写用户当前分支：应用时从 baseSha 建临时 worktree，提交到独立分支后清理 worktree；</li>
  *   <li>单文件大小与文件数上限，避免把整个仓库塞进一次提交。</li>
  * </ul>
+ *
+ * <p>拒绝时不抛笼统错误：抛 {@link PatchPathDeniedException}，带上被拒路径、命中的规则与
+ * 完整允许清单，工具层转成结构化的 {@code PATH_DENIED} 返回给模型。
  */
 @Component
 public class WorkspaceCodePatcher implements CodePatcher {
 
-    /** 白名单说明（同时用于提示词与错误信息）。 */
+    /** 允许清单（同时用于提示词与错误信息）。 */
     private static final List<String> ALLOWED_PATTERNS = List.of(
-            "ci/**", "Jenkinsfile", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts",
-            "**/src/test/**",
+            // 业务源码与测试代码：Agent 要真正能改代码，这两条必须放行
+            "src/main/**", "**/src/main/**",
+            "src/test/**", "**/src/test/**",
+            "ci/**", "Jenkinsfile",
+            "**/pom.xml", "**/build.gradle", "**/build.gradle.kts",
             // 部署/运行形态相关：Dockerfile、compose、nginx、应用配置、前端构建脚本
             "Dockerfile", "**/Dockerfile", "**/*.Dockerfile", "**/.dockerignore",
             "deploy/**", "**/docker-compose*.yml", "**/docker-compose*.yaml",
@@ -45,8 +57,22 @@ public class WorkspaceCodePatcher implements CodePatcher {
             "**/package.json",
             "**/.env.example", "**/.env.sample", "**/.env.template");
 
+    /** 拒绝清单：命中即拒，即使同时命中允许规则。 */
+    private static final List<String> DENIED_PATTERNS = List.of(
+            ".git/**", "**/.git/**",
+            "**/target/**", "**/build/**", "**/dist/**", "**/node_modules/**",
+            "**/.idea/**", "**/.gradle/**", "**/.mvn/**",
+            "**/.env", "**/.env.*", "!**/.env.example", "!**/.env.sample", "!**/.env.template",
+            "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx", "**/*.jks", "**/*.keystore",
+            "**/id_rsa*", "**/id_ed25519*", "**/.npmrc", "**/.netrc", "**/.pgpass",
+            "**/credentials*", "**/secrets*");
+
     private static final int MAX_FILES = 10;
     private static final int MAX_CONTENT_CHARS = 400_000;
+
+    /** 目录名级别的硬拒绝：任何层级出现即拒（与 glob 双保险）。 */
+    private static final List<String> DENIED_SEGMENTS = List.of(
+            ".git", "target", "build", "dist", "node_modules", ".idea", ".gradle", ".mvn");
 
     private final GitWorktreeManager git;
     private final ProjectRepoLocator locator;
@@ -59,6 +85,11 @@ public class WorkspaceCodePatcher implements CodePatcher {
     @Override
     public List<String> allowedPatterns() {
         return ALLOWED_PATTERNS;
+    }
+
+    @Override
+    public List<String> deniedPatterns() {
+        return DENIED_PATTERNS;
     }
 
     @Override
@@ -83,10 +114,8 @@ public class WorkspaceCodePatcher implements CodePatcher {
         int removed = 0;
         for (CodePatch.FileEdit edit : edits) {
             String path = normalize(edit.path());
-            if (!allowed(path)) {
-                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "不允许修改该路径：" + path
-                        + "；允许范围：" + String.join(", ", ALLOWED_PATTERNS));
-            }
+            // 先过守卫：路径被拒时立刻抛结构化异常，不进入 diff 生成（省一次 git 子进程）
+            guard(path);
             if (edit.content().length() > MAX_CONTENT_CHARS) {
                 throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件内容过大：" + path
                         + "（上限 " + MAX_CONTENT_CHARS + " 字符）");
@@ -120,7 +149,10 @@ public class WorkspaceCodePatcher implements CodePatcher {
                 : git.addWorktree(patch.projectId(), name, patch.baseSha());
         try {
             for (CodePatch.FileEdit edit : patch.edits()) {
-                Path target = resolveInside(worktree, normalize(edit.path()));
+                String relative = normalize(edit.path());
+                // 应用阶段再校一次：补丁可能来自持久化存储，不能只信 stage 时的判断
+                guard(relative);
+                Path target = resolveInside(worktree, relative);
                 try {
                     Files.createDirectories(target.getParent());
                     Files.writeString(target, edit.content(), StandardCharsets.UTF_8);
@@ -139,6 +171,54 @@ public class WorkspaceCodePatcher implements CodePatcher {
                 git.removeWorktree(patch.projectId(), name);
             }
         }
+    }
+
+    /**
+     * 路径守卫：拒绝时抛 {@link PatchPathDeniedException}（带允许清单）。
+     *
+     * <p>顺序有意义：逃逸检查 → 目录段拒绝 → 密钥/产物拒绝 → 允许清单。
+     * 先拒后允，避免白名单里的宽泛规则把危险路径放进来。
+     */
+    private static void guard(String path) {
+        if (path.isBlank()) {
+            throw denied(path, "路径为空");
+        }
+        if (path.startsWith("/") || path.contains("..") || path.contains(":")) {
+            throw denied(path, "绝对路径或路径逃逸");
+        }
+        String lower = path.toLowerCase(Locale.ROOT);
+        for (String segment : DENIED_SEGMENTS) {
+            if (lower.equals(segment) || lower.startsWith(segment + "/") || lower.contains("/" + segment + "/")
+                    || lower.endsWith("/" + segment)) {
+                throw denied(path, "命中禁止目录 " + segment + "/");
+            }
+        }
+        if (isSecretFile(lower)) {
+            throw denied(path, "命中凭证/密钥文件规则");
+        }
+        if (!allowed(path)) {
+            throw denied(path, "不在允许清单内");
+        }
+    }
+
+    /** 凭证与密钥文件：任何层级出现即拒（.env.example 这种模板不算）。 */
+    private static boolean isSecretFile(String path) {
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        if (name.equals(".env.example") || name.equals(".env.sample") || name.equals(".env.template")) {
+            return false;
+        }
+        if (name.equals(".env") || name.startsWith(".env.")) {
+            return true;
+        }
+        return name.endsWith(".pem") || name.endsWith(".key") || name.endsWith(".p12")
+                || name.endsWith(".pfx") || name.endsWith(".jks") || name.endsWith(".keystore")
+                || name.startsWith("id_rsa") || name.startsWith("id_ed25519")
+                || name.equals(".npmrc") || name.equals(".netrc") || name.equals(".pgpass")
+                || name.startsWith("credentials") || name.startsWith("secret");
+    }
+
+    private static PatchPathDeniedException denied(String path, String rule) {
+        return new PatchPathDeniedException(path, rule, ALLOWED_PATTERNS, DENIED_PATTERNS);
     }
 
     private Path requireRepo(String projectId) {
@@ -166,12 +246,13 @@ public class WorkspaceCodePatcher implements CodePatcher {
         if (path.isBlank() || path.startsWith("/") || path.contains("..")) {
             return false;
         }
-        return path.startsWith("ci/")
+        return path.startsWith("src/main/") || path.contains("/src/main/")
+                || path.startsWith("src/test/") || path.contains("/src/test/")
+                || path.startsWith("ci/")
                 || path.equals("Jenkinsfile")
                 || path.equals("pom.xml") || path.endsWith("/pom.xml")
                 || path.equals("build.gradle") || path.endsWith("/build.gradle")
                 || path.equals("build.gradle.kts") || path.endsWith("/build.gradle.kts")
-                || path.startsWith("src/test/") || path.contains("/src/test/")
                 || path.equals("Dockerfile") || path.endsWith("/Dockerfile")
                 || path.endsWith(".Dockerfile")
                 || path.equals(".dockerignore") || path.endsWith("/.dockerignore")
