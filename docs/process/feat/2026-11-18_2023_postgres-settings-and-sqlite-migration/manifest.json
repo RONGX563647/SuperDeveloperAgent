@@ -1,0 +1,177 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_2023_postgres-settings-and-sqlite-migration",
+  "category": "feat",
+  "title": "设置页配置 PostgreSQL 并一键迁移 SQLite 数据",
+  "createdAt": "2026-11-18T20:23:08+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1-flash",
+    "promptSummary": "设置页可配置 PostgreSQL，并支持一键把 SQLite 数据迁移到 PG",
+    "toolCallCount": 0
+  },
+  "problem": "设置页无法配置 PostgreSQL，SQLite 数据也没有迁移通道：切库只能改环境变量重启，历史数据要靠手工导出导入。",
+  "solution": "新增 db-backend.yml 后端配置（密码 AES-256-GCM 密文落盘，启动时解密注入系统属性，环境变量优先）；SqliteToTargetCopier 按表结构交集幂等搬运、表级失败隔离；SqliteToPostgresMigrator 在目标库先跑 Flyway 再只读打开 SQLite 源；DatabaseSettingsController 提供状态/测试/迁移/保存/重置五个接口，前端新增数据库分区。",
+  "commits": [
+    {
+      "sha": "82a57085ad19ad8c126a5f81af7f835c8115d88d",
+      "subject": "feat(db): 设置页配置 PostgreSQL 并一键迁移 SQLite 数据",
+      "category": "feat",
+      "files": [
+        {
+          "path": "agent.md",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "6ab05fce10f88e72b28cebbda5c36b0c722b9ac5"
+        },
+        {
+          "path": "docs/handbook/l2/database-backend-switch.md",
+          "status": "A",
+          "additions": 82,
+          "deletions": 0,
+          "blobHash": "c3cca6166ef711a28b06e68e53285fea4a992b08"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 6,
+          "deletions": 2,
+          "blobHash": "0733094adb2c8bdf7de3139b380026b3913c1eb6"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/AgentApplication.java",
+          "status": "M",
+          "additions": 31,
+          "deletions": 0,
+          "blobHash": "15cb73570e03d01f646e92a693e3264ee782f6df"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/SqliteToPostgresMigrator.java",
+          "status": "A",
+          "additions": 135,
+          "deletions": 0,
+          "blobHash": "0e5e52e2eea96f8ef18af381746b5467357acd31"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/DatabaseSettingsController.java",
+          "status": "A",
+          "additions": 238,
+          "deletions": 0,
+          "blobHash": "03bb67faeb5fb9b0c4bac5bc5188717b03145475"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 130,
+          "deletions": 1,
+          "blobHash": "4d7298acf2d63ba363291a1d6d494b89a1bbe05f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "af89fa4f8a071440328ec63180b8780a6841f8ef"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/SqliteToTargetCopier.java",
+          "status": "A",
+          "additions": 215,
+          "deletions": 0,
+          "blobHash": "d5c9a2ad5be545519256a44c087a3b93a29a7e86"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DbBackendConfig.java",
+          "status": "A",
+          "additions": 154,
+          "deletions": 0,
+          "blobHash": "0f9ab152534fe24a5e7e6564e0802fd5dd9baa60"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/SqliteToTargetCopierTest.java",
+          "status": "A",
+          "additions": 139,
+          "deletions": 0,
+          "blobHash": "82f274fa5d52b65298581b1a488aac1b3aa29071"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/DbBackendConfigTest.java",
+          "status": "A",
+          "additions": 131,
+          "deletions": 0,
+          "blobHash": "e406f043fe5325982e84392357d56185e00f7fe2"
+        },
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 285,
+          "deletions": 2,
+          "blobHash": "5f47b9702e2c3c50dbf114d499f781c448212f69"
+        },
+        {
+          "path": "platform/web/src/api/settings.ts",
+          "status": "M",
+          "additions": 91,
+          "deletions": 0,
+          "blobHash": "b744c7a339196a697a520c7499f27aa53b0353cb"
+        },
+        {
+          "path": "platform/web/src/components/settings/DatabasePanel.vue",
+          "status": "A",
+          "additions": 313,
+          "deletions": 0,
+          "blobHash": "5028055e839c7e5f778c8a46d8f882967e6e7356"
+        },
+        {
+          "path": "platform/web/src/views/SettingsView.vue",
+          "status": "M",
+          "additions": 7,
+          "deletions": 2,
+          "blobHash": "4486ddcc6f7decb884be250a6282fbdf5bae17d8"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/SqliteToTargetCopierTest.java",
+        "status": "A",
+        "additions": 139,
+        "deletions": 0,
+        "blobHash": "82f274fa5d52b65298581b1a488aac1b3aa29071"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/DbBackendConfigTest.java",
+        "status": "A",
+        "additions": 131,
+        "deletions": 0,
+        "blobHash": "e406f043fe5325982e84392357d56185e00f7fe2"
+      }
+    ],
+    "casesAdded": 12,
+    "command": "mvn -B -nsu -pl agent-gateway,agent-infra,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway,agent-infra test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 246, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "agent-infra",
+      "web"
+    ],
+    "verification": "agent-infra 137 + agent-gateway 153（提交门禁实测 246 用例，失败 0、错误 0、跳过 2）；spec-checks 22；vue-tsc --noEmit 通过；gate.py validate 70 份归档全绿；handbook check 11 锚点 / 11 篇 L3 全绿。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_2023_postgres-settings-and-sqlite-migration"
+    ]
+  },
+  "chain": {
+    "prev": "a2d3ea8379a86ba531b9c60021f239f7f4bdb791019725279b832fe908e1aec8",
+    "self": "b4d4d2f2937b502c79ed56222294575d2f47e239883c5531c2ae020d3d292d27"
+  }
+}
