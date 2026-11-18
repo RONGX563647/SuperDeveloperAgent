@@ -49,6 +49,18 @@ public interface WorkspaceSupervisorPort {
     String summarize(String conversationId, String ownerUserId);
 
     /**
+     * 子会话结论汇总：一次拿到「派发出去的那些会话各做完了什么」。
+     *
+     * <p>为什么不让上层逐个 {@link #summarize}：调度 Agent 汇报一次要覆盖多个子会话，
+     * 逐个查既慢又容易漏；这里按最近更新时间倒序给一份带结论的列表。
+     *
+     * @param projectId 当前项目（只看本项目、当前 owner 的子会话）
+     * @param ownerUserId 当前操作人（实现必须按 owner 过滤）
+     * @param limit     最多返回几条（1-50）
+     */
+    List<ChildDigest> childDigests(String projectId, String ownerUserId, int limit);
+
+    /**
      * 跨会话记忆检索：在当前项目的历史运行里按关键词匹配目标 / 结论 / 错误，
      * 只返回该 owner 自己的运行，避免把别人的工作区内容带进上下文。
      */

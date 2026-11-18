@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import top.rongx.agent.domain.conversation.ChildDigest;
 import top.rongx.agent.domain.conversation.Conversation;
 import top.rongx.agent.domain.conversation.ConversationKind;
 import top.rongx.agent.domain.conversation.ConversationPatch;
@@ -525,6 +526,33 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                         || run.result().toLowerCase(Locale.ROOT).contains(needle)
                         || run.error().toLowerCase(Locale.ROOT).contains(needle))
                 .limit(cap)
+                .toList();
+    }
+
+    @Override
+    public List<ChildDigest> childDigests(String projectId, String ownerUserId, int limit) {
+        requireProject(projectId);
+        requireUser(ownerUserId);
+        int cap = Math.max(1, Math.min(limit, 50));
+        // 只看本项目 + 当前 owner 的会话：调度结果不能把别人的工作区内容带进上下文
+        return conversations.findByProject(projectId, ownerUserId, false).stream()
+                // 调度会话本身不算子会话：它就是要汇报的那一方
+                .filter(conversation -> conversation.kind() != ConversationKind.SUPERVISOR)
+                .sorted((a, b) -> Long.compare(b.lastActivityAt(), a.lastActivityAt()))
+                .limit(cap)
+                .map(conversation -> {
+                    List<ConversationRun> history =
+                            runs.findRunsByConversation(conversation.id(), 1);
+                    ConversationRun latest = history.isEmpty() ? null : history.get(0);
+                    return new ChildDigest(conversation.id(), conversation.title(),
+                            String.valueOf(conversation.status()),
+                            latest == null ? "" : latest.id(),
+                            latest == null ? "" : String.valueOf(latest.status()),
+                            latest == null ? "" : latest.result(),
+                            latest == null ? "" : latest.error(),
+                            latest == null ? "" : latest.goal(),
+                            conversation.lastActivityAt());
+                })
                 .toList();
     }
 

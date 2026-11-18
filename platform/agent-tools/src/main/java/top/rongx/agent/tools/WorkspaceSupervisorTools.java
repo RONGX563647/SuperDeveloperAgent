@@ -8,6 +8,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.conversation.ChildDigest;
 import top.rongx.agent.domain.conversation.Conversation;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.DispatchNode;
@@ -198,6 +199,17 @@ public class WorkspaceSupervisorTools {
                             @ToolParam(name = "conversation_id", description = "会话 id")
                             String conversationId) {
         return guard(() -> supervisor.summarize(conversationId, ctx.userId()));
+    }
+
+    @Tool(name = "workspace_children", description = "List child session conclusions.",
+            readOnly = true, concurrencySafe = true)
+    public String children(ProjectContext ctx,
+                           @ToolParam(name = "limit", required = false,
+                                   description = "返回条数 1-50，默认 10")
+                           Integer limit) {
+        return guard(() -> ChildDigest.render(
+                supervisor.childDigests(ctx.projectId(), ctx.userId(),
+                        limit == null ? 10 : limit)));
     }
 
     @Tool(name = "workspace_dispatch", description = "Dispatch sub-goals as a parallel DAG.",
