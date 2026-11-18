@@ -156,6 +156,17 @@ class DockerDeployerTest {
         assertEquals("E-501", result.errorCode());
     }
 
+    @Test
+    @DisplayName("注入型镜像名 → E-201：不能被 docker 当成命令行选项")
+    void rejectsInjectedImageRef() {
+        // image 来自流水线产物命名（外部可控），"--privileged" 会被 docker 当成自己的选项
+        DeployResult result = deployer.deploy(new DeployRequest(PROJECT, "run-x", "abcdef1234567",
+                "--privileged", null, null, buildDir.toString(), DeployTarget.DOCKER,
+                HOST_PORT, 3000, "/healthz", null, false, null));
+        assertEquals(false, result.success());
+        assertEquals("E-201", result.errorCode(), result.summary());
+    }
+
     private DeployRequest request(String runId, java.util.Map<String, String> env) {
         return new DeployRequest(PROJECT, runId, "abcdef1234567", image, null, null,
                 buildDir.toString(), DeployTarget.DOCKER, HOST_PORT, 3000, "/healthz", null, false, null, env);

@@ -115,6 +115,9 @@ public class PipelineController {
                             row.put("script", s.script() == null ? "" : s.script());
                             row.put("scriptSha", s.scriptSha() == null ? "" : s.scriptSha());
                             row.put("builtin", s.builtin());
+                            // 定义里的默认目标必须回传：前端要据此回填部署方式，并在
+                            // 用户切换后判断"与脚本记录不一致"（此前漏传，界面永远拿不到）
+                            row.put("deployTarget", s.deployTarget() == null ? "" : s.deployTarget());
                             return row;
                         })
                         .toList());

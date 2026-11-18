@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -88,6 +89,26 @@ class PipelineRunModeTest {
 
         assertSame(original, planned, "无需裁剪时必须返回原定义，避免无谓复制");
         assertTrue(actions(planned).contains("image_package"));
+    }
+
+    @Test
+    @DisplayName("stage.workdir 越出检出目录 → 拒绝（不能把宿主任意目录挂进容器）")
+    void workdirMustStayInsideCheckout() {
+        Path runDir = Path.of("E:/data/runs/run-1").toAbsolutePath().normalize();
+
+        assertEquals(runDir, BuiltInPipelineEngine.resolveWorkdir(runDir, null));
+        assertEquals(runDir, BuiltInPipelineEngine.resolveWorkdir(runDir, "  "));
+        assertEquals(runDir.resolve("backend"),
+                BuiltInPipelineEngine.resolveWorkdir(runDir, "backend"));
+        // a/../b 规范化后仍在内部，允许
+        assertEquals(runDir.resolve("b"),
+                BuiltInPipelineEngine.resolveWorkdir(runDir, "a/../b"));
+
+        // 上跳到检出目录之外：会把宿主任意目录挂成容器的 /ws
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, ".."));
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "../../../../Windows"));
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "backend/../../etc"));
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "E:/Windows"));
     }
 
     @Test

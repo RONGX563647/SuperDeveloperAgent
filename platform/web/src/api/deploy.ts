@@ -47,10 +47,13 @@ export function deployReplay(
   projectId: string,
   env: string,
   sha: string,
-  confirmToken?: string
-): Promise<{ runId: string, env: string, status: string }> {
+  confirmToken?: string,
+  deployTarget?: string
+): Promise<{ runId: string, env: string, status: string, deployTarget?: string }> {
   const q = new URLSearchParams({ env, sha })
   if (confirmToken) q.set('confirmToken', confirmToken)
+  // 目标必须显式下发：不带时后端按固化脚本里的 target 执行，面板上选的方式会被静默丢弃
+  if (deployTarget) q.set('deployTarget', deployTarget)
   return apiFetch(`/api/v1/deploy/${encodeURIComponent(projectId)}/replay?${q}`, {
     method: 'POST'
   })

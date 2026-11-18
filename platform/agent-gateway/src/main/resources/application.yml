@@ -124,7 +124,9 @@ agent:
   # 生成配方时写入的前端工具链镜像：本机已有对应镜像时直接换成它，
   # 否则 stage 启动前会做 docker image inspect 预检并给出明确失败。
   scaffold:
-    node-image: ${AGENT_SCAFFOLD_NODE_IMAGE:node:20-bookworm}
+    # 与 RecipeScaffolder.DEFAULT_NODE_IMAGE 保持一致：前端依赖已要求 Node >= 22，
+    # 默认值写成 20 会让生成的配方在 frontend 阶段报 Unsupported engine。
+    node-image: ${AGENT_SCAFFOLD_NODE_IMAGE:node:22-bookworm}
   # Gitee OAuth 网页授权（推荐）：gitee.com → 设置 → 第三方应用 创建应用，
   # 回调地址填 http://localhost:8090/api/v1/gitee/oauth/callback
   gitee:
