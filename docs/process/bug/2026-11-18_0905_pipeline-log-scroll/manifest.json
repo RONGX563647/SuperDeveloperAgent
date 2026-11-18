@@ -1,0 +1,70 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-18_0905_pipeline-log-scroll",
+  "category": "bug",
+  "title": "流水线右侧日志被裁掉，缺少滚动",
+  "createdAt": "2026-11-18T09:05:15+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "流水线右侧缺少滚动条，导致日志后面看不见",
+    "toolCallCount": 0
+  },
+  "problem": "流水线运行详情列用 overflow:hidden，产物/镜像面板一多就把日志区挤出可视区且无法滚动，日志尾部看不见",
+  "solution": "run-detail 改为 overflow-y:auto + overscroll-behavior:contain，日志区 flex:1 1 320px/min-height:320px 保底并保留自身滚动条，阶段时间线 flex:none；新增 pipelineLayout.test.ts 锁住这三条约束",
+  "commits": [
+    {
+      "sha": "8bb486bb783e580476163b6bd0d6fc9724b3fd4f",
+      "subject": "fix(pipeline): 运行详情列可纵向滚动，日志区不再被挤出可视区",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 12,
+          "deletions": 1,
+          "blobHash": "a42918b2a4db26015662c3538820199030a7bcad"
+        },
+        {
+          "path": "platform/web/src/views/pipelineLayout.test.ts",
+          "status": "A",
+          "additions": 75,
+          "deletions": 0,
+          "blobHash": "20f273173d3c9257d3edc7f53c0e6d405861f20d"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/web/src/views/pipelineLayout.test.ts",
+        "status": "A",
+        "additions": 75,
+        "deletions": 0,
+        "blobHash": "20f273173d3c9257d3edc7f53c0e6d405861f20d"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 619, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "node --experimental-strip-types platform/web/src/views/pipelineLayout.test.ts：3 项通过；npm run typecheck 通过；pre-commit 的 mvn -B -pl spec-checks -am test 全量通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_0905_pipeline-log-scroll"
+    ]
+  },
+  "chain": {
+    "prev": "5344cc73338ecab72fafed97f6f0969bff96a3a9c9f62c824a2416f25ef72215",
+    "self": "72dd63bf4e1035403bb2fa1310b04b5151f73777cf166fca45cb118514574814"
+  }
+}
