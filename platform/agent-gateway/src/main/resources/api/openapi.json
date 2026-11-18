@@ -2604,6 +2604,135 @@
         }
       }
     },
+    "/api/v1/settings/database" : {
+      "get" : {
+        "tags" : [ "database-settings-controller" ],
+        "summary" : "status",
+        "operationId" : "status",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "database-settings-controller" ],
+        "summary" : "save",
+        "operationId" : "save_5",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete" : {
+        "tags" : [ "database-settings-controller" ],
+        "summary" : "reset",
+        "operationId" : "reset",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/database/test" : {
+      "post" : {
+        "tags" : [ "database-settings-controller" ],
+        "summary" : "test",
+        "operationId" : "test_2",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/database/migrate" : {
+      "post" : {
+        "tags" : [ "database-settings-controller" ],
+        "summary" : "migrate",
+        "operationId" : "migrate",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/capabilities/market/install" : {
       "post" : {
         "tags" : [ "capability-market-controller" ],
@@ -6128,7 +6257,7 @@
       "get" : {
         "tags" : [ "pipeline-controller" ],
         "summary" : "status",
-        "operationId" : "status",
+        "operationId" : "status_1",
         "parameters" : [ {
           "name" : "runId",
           "in" : "path",

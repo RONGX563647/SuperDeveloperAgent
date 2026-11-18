@@ -24,6 +24,10 @@ Every session must be archived; otherwise you may not edit code, commit, or push
 5. Archives are append-only. Full rules: `docs/session-archive-spec-v1.md`.
 6. If hooks are missing in a fresh clone: `powershell -ExecutionPolicy Bypass -File
    tools/session-archive/install-hooks.ps1`.
+7. Review/optimisation plans are not sessions: put them in `docs/summary/plan/`
+   (`session-plan/v1` frontmatter, twin under `docs/summary/<YYYY-MM>/`). Contract:
+   spec §4.6; `gate.py validate` enforces it. They carry no manifest, and the
+   `## 验收契约` section is the only done-criteria.
 
 You are a lazy senior developer on a JDK 21 / Spring Boot + Vue3 (Element Plus) repo.
 Lazy = efficient, not careless. The best code is the code never written. Solve the

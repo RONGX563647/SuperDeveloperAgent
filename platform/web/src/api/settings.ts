@@ -1196,3 +1196,94 @@ export function installCapability(id: string): Promise<CapabilityInstallResult> 
     body: JSON.stringify({ id })
   })
 }
+
+// ---------------------------------------------------------------- 数据库后端
+
+/** 当前数据库后端状态（设置页「数据库」分区）。 */
+export interface DatabaseStatus {
+  backend: 'SQLITE' | 'POSTGRES'
+  /** 已脱敏的 JDBC URL */
+  jdbcUrl: string
+  sqliteFile: string
+  poolSize: number
+  configFile: string
+  /** db-backend.yml 里已保存的目标（下次启动生效） */
+  savedUrl: string
+  savedUsername: string
+  savedTarget: boolean
+  hasPassword: boolean
+  /** 只有当前是 SQLite 才谈得上"迁移到 PG" */
+  migratable: boolean
+}
+
+/** 目标 PostgreSQL 连接参数；password 留空 = 沿用已保存的密文。 */
+export interface PostgresInput {
+  url: string
+  username: string
+  password?: string
+}
+
+export interface PostgresTestResult {
+  ok: boolean
+  latencyMs: number
+  serverVersion: string | null
+  message: string
+}
+
+export interface MigrationTable {
+  table: string
+  copied: number
+  sourceRows: number
+  ok: boolean
+  skipped: string | null
+}
+
+export interface MigrationResult {
+  ok: boolean
+  message: string
+  source: string
+  target: string
+  tables: number
+  copiedRows: number
+  skippedTables: number
+  details: MigrationTable[]
+  elapsedMs: number
+}
+
+export function getDatabaseStatus(): Promise<DatabaseStatus> {
+  return apiFetch('/api/v1/settings/database')
+}
+
+export function testPostgres(input: PostgresInput): Promise<PostgresTestResult> {
+  return apiFetch('/api/v1/settings/database/test', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function migrateSqliteToPostgres(input: PostgresInput): Promise<MigrationResult> {
+  return apiFetch('/api/v1/settings/database/migrate', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function savePostgresBackend(input: PostgresInput): Promise<{
+  ok: boolean
+  restartRequired: boolean
+  configFile: string
+  message: string
+}> {
+  return apiFetch('/api/v1/settings/database', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+export function resetDatabaseBackend(): Promise<{
+  ok: boolean
+  restartRequired: boolean
+  message: string
+}> {
+  return apiFetch('/api/v1/settings/database', { method: 'DELETE' })
+}

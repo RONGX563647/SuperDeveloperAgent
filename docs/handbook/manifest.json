@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-18T16:44:46+08:00",
-  "sourceCommit": "5b334497d1d18a6ec994956127ddeb1c00de4da8",
+  "generatedAt": "2026-11-18T20:54:10+08:00",
+  "sourceCommit": "946b5c60601b36a8634f34fb82d3a9f417695359",
   "docs": [
     {
       "level": "L1",
@@ -14,6 +14,10 @@
     {
       "level": "L1",
       "path": "docs/handbook/l1/system-overview.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/database-backend-switch.md"
     },
     {
       "level": "L2",

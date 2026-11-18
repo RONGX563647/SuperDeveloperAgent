@@ -2,12 +2,13 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  Cpu, Connection, Files, Key, Lock, MagicStick, Monitor, Refresh, SetUp, Tools,
+  Coin, Cpu, Connection, Files, Key, Lock, MagicStick, Monitor, Refresh, SetUp, Tools,
   TrendCharts, User
 } from '@element-plus/icons-vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
 import ServerPanel from '../components/settings/ServerPanel.vue'
 import ModelPanel from '../components/settings/ModelPanel.vue'
+import DatabasePanel from '../components/settings/DatabasePanel.vue'
 import RepoPanel from '../components/settings/RepoPanel.vue'
 import McpPanel from '../components/settings/McpPanel.vue'
 import SkillPanel from '../components/settings/SkillPanel.vue'
@@ -31,7 +32,7 @@ import UsagePanel from '../components/settings/UsagePanel.vue'
  * 左侧是"分区导航"而不是 Tabs：设置项会越来越多（服务器/模型/仓库/通知），
  * 纵向分组可扩展、也能承载每个分区的说明文字。
  */
-type Section = 'servers' | 'models' | 'usage' | 'repos' | 'mcp' | 'skills'
+type Section = 'servers' | 'models' | 'database' | 'usage' | 'repos' | 'mcp' | 'skills'
   | 'envTemplates' | 'envs' | 'secrets' | 'gitOauth' | 'account'
 
 interface SectionMeta {
@@ -44,6 +45,7 @@ interface SectionMeta {
 const SECTIONS: SectionMeta[] = [
   { key: 'servers', label: '服务器', desc: '连接与运行环境', icon: Monitor },
   { key: 'models', label: '模型连接', desc: '推理服务与密钥', icon: Cpu },
+  { key: 'database', label: '数据库', desc: 'PostgreSQL 与数据迁移', icon: Coin },
   { key: 'usage', label: '用量统计', desc: 'token 消耗与模型分布', icon: TrendCharts },
   { key: 'repos', label: '代码仓库', desc: 'Gitee / GitHub / GitLab', icon: Connection },
   { key: 'mcp', label: 'MCP 接入', desc: 'stdio / http 服务', icon: SetUp },
@@ -73,6 +75,7 @@ function selectSection(key: Section): void {
 }
 const serverRef = ref<InstanceType<typeof ServerPanel> | null>(null)
 const modelRef = ref<InstanceType<typeof ModelPanel> | null>(null)
+const databaseRef = ref<InstanceType<typeof DatabasePanel> | null>(null)
 const usageRef = ref<InstanceType<typeof UsagePanel> | null>(null)
 const envRef = ref<InstanceType<typeof ProjectEnvPanel> | null>(null)
 const envTemplateRef = ref<InstanceType<typeof EnvTemplatePanel> | null>(null)
@@ -91,6 +94,7 @@ const current = computed(() => SECTIONS.find((s) => s.key === active.value) ?? S
 function reloadSection(value: Section): Promise<void> | undefined {
   if (value === 'servers') return serverRef.value?.load()
   if (value === 'models') return modelRef.value?.load()
+  if (value === 'database') return databaseRef.value?.load()
   if (value === 'usage') return usageRef.value?.load()
   if (value === 'repos') return repoRef.value?.load()
   if (value === 'mcp') return mcpRef.value?.load()
@@ -183,6 +187,7 @@ async function refresh(): Promise<void> {
         <section class="settings-card" :aria-label="current.label">
           <ServerPanel v-if="active === 'servers'" ref="serverRef" />
           <ModelPanel v-else-if="active === 'models'" ref="modelRef" />
+          <DatabasePanel v-else-if="active === 'database'" ref="databaseRef" />
           <UsagePanel v-else-if="active === 'usage'" ref="usageRef" />
           <RepoPanel v-else-if="active === 'repos'" ref="repoRef" />
           <McpPanel v-else-if="active === 'mcp'" ref="mcpRef" />
