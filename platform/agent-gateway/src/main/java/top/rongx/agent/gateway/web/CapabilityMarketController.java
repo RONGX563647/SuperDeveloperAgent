@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.web;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.settings.CapabilityInstaller;
 import top.rongx.agent.domain.settings.CapabilityMarket;
+import top.rongx.agent.domain.settings.CapabilityState;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
@@ -84,8 +86,54 @@ public class CapabilityMarketController {
             out.put("url", entry.url());
         }
         out.put("requiredEnv", entry.requiredEnv());
-        out.put("installed", installer.isInstalled(entry.kind().name(), entry.name()));
+        boolean installed = installer.isInstalled(entry.kind().name(), entry.name());
+        out.put("installed", installed);
+        // 名称之外必须回答「能不能用、为什么不能用」：只给名字时用户装完发现会话里
+        // 用不上，只能猜是没装好、缺变量、还是平台没挂上。
+        CapabilityState state = state(entry, installed);
+        out.put("enabled", state.enabled());
+        out.put("available", state.available());
+        out.put("reasonCode", state.reasonCode());
+        out.put("reason", state.reason());
+        out.put("missingEnv", state.missingEnv());
         return out;
+    }
+
+    /**
+     * 计算能力状态：已安装 + 必需环境变量齐全才算可用。
+     *
+     * <p>市场列表里的项默认视为「用户已开启」（要装就能装）；
+     * 未安装时给出 NOT_INSTALLED，缺变量时直接列出缺哪几个。
+     * 这样卡片可以一次说清「接入 / 已接入但缺变量 / 可用」三种状态。
+     */
+    private CapabilityState state(CapabilityMarket.Entry entry, boolean installed) {
+        if (!installed) {
+            return CapabilityState.notInstalled(entry.name(), entry.kind().name(), true);
+        }
+        List<String> missing = missingEnv(entry.requiredEnv());
+        if (!missing.isEmpty()) {
+            return CapabilityState.missingEnv(entry.name(), entry.kind().name(), missing);
+        }
+        if (entry.transport() != null
+                && (isBlank(entry.command()) && isBlank(entry.url()))) {
+            return CapabilityState.transportUnavailable(entry.name(), entry.kind().name(), "");
+        }
+        return CapabilityState.usable(entry.name(), entry.kind().name());
+    }
+
+    /** 必需变量里当前环境缺失的那些（同名变量视为已具备，平台不读取其明文值）。 */
+    private static List<String> missingEnv(List<String> required) {
+        if (required == null || required.isEmpty()) {
+            return List.of();
+        }
+        return required.stream()
+                .filter(name -> name != null && !name.isBlank())
+                .filter(name -> System.getenv(name) == null)
+                .toList();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private void requireRead() {

@@ -1184,6 +1184,16 @@ export interface CapabilityEntry {
   /** 首次调用前必须提供的环境变量（仅 MCP stdio 包会返回） */
   requiredEnv: string[]
   installed: boolean
+  /** 用户是否开启（未开启时不会进入会话工具面） */
+  enabled: boolean
+  /** 当前是否真的可用（= 已开启 + 已落地 + 依赖就绪） */
+  available: boolean
+  /** 不可用的稳定原因码：CAPABILITY_DISABLED / NOT_INSTALLED / MISSING_ENV / TRANSPORT_UNAVAILABLE */
+  reasonCode: string
+  /** 不可用的一句话原因（可直接展示） */
+  reason: string
+  /** 缺少的环境变量名（只有缺变量时非空） */
+  missingEnv: string[]
 }
 
 export interface CapabilityInstallResult {
