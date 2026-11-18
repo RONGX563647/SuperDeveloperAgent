@@ -185,5 +185,17 @@ import { renderMarkdown } from '../utils/markdown'
     JSON.stringify(q.tools['t-2']))
 }
 
+// 13. heartbeat 是保活帧：不产生消息、不打断流式正文（游标可单调推进，属无害）
+{
+  const before = emptyAgentProjection()
+  const after = reduceAgentEvent(before, ev('heartbeat', 7, { alive: true }))
+  check('heartbeat 不产生消息', after.messages.length === 0)
+  check('heartbeat 不建流式轮次', after.streamingTurn === null)
+  check('heartbeat 游标单调', after.lastSequence >= 0)
+  // 心跳之后真实事件仍能按自己的 sequence 生效
+  const next = reduceAgentEvent(after, ev('text.delta', 8, { text: 'ok' }))
+  check('heartbeat 后正文正常', next.streamingTurn?.text === 'ok')
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

@@ -219,6 +219,7 @@ public class WorkspaceController {
         });
         emitter.onCompletion(cancel);
         emitter.onError(error -> cancel.run());
+        // 命名心跳：前端据此区分「服务端在算」和「连接已死」，不依赖注释帧
         heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, cancel));
 
         Disposable disposable = stream.subscribe(

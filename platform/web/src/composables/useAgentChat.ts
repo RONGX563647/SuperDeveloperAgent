@@ -22,6 +22,12 @@ export type ConnectionState = 'IDLE' | 'CONNECTING' | 'OPEN' | 'RECONNECTING' | 
 /** 运行终态：收到即视为本轮结束，不再等服务端关连接。 */
 const terminalEventTypes = new Set(['run.completed', 'run.failed', 'run.cancelled'])
 
+/**
+ * 心跳静默上限：服务端默认 15 秒一次命名心跳，超过这个时限一次都没收到，
+ * 就判定连接已死并明确报错（服务端另有 90 秒静默看门狗兜住「上游挂住」）。
+ */
+export const HEARTBEAT_SILENCE_LIMIT_MS = 60_000
+
 interface UseAgentChatOptions {
   /** 构造 ChatRequest 请求体（projectId/env/sessionId 由调用方持有）。 */
   buildRequest: (message: string) => Record<string, unknown>
@@ -62,6 +68,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
   let runToken = 0
   /** 本次读流是否由用户主动停止（停止不应该报错，也不该显示「连接中断」）。 */
   let userStopped = false
+  /**
+   * 最近一次收到服务端心跳的时间。
+   *
+   * <p>用来把「服务端挂住」变成「明确报错」：连接建立后如果长时间连心跳都没有，
+   * 说明网关/代理已经把流掐了但 fetch 还没报错——真机上表现为按钮一直转圈。
+   * 服务端自己也有静默看门狗（agent.chat.stall-seconds），这里只兜住「连心跳都收不到」。
+   */
+  let lastHeartbeatAt = 0
 
   const pendingChangeId = computed(() => projection.value.pendingChangeId)
   const pendingBindingId = computed(() => projection.value.pendingBindingId)
@@ -200,6 +214,15 @@ export function useAgentChat(options: UseAgentChatOptions) {
     error.value = ''
     timer = setInterval(() => (elapsedMs.value += 100), 100)
     controller = new AbortController()
+    lastHeartbeatAt = Date.now()
+    // 心跳兜底：超过该时限一次心跳都没收到，就主动终止并明确报错，
+    // 而不是让界面永远转圈（真机上 8090 网关假死就是这个表现）。
+    const heartbeatWatchdog = setInterval(() => {
+      if (userStopped || token !== runToken) return
+      if (Date.now() - lastHeartbeatAt <= HEARTBEAT_SILENCE_LIMIT_MS) return
+      error.value = `服务端已 ${Math.round(HEARTBEAT_SILENCE_LIMIT_MS / 1000)} 秒无响应，连接可能已中断；请重新发送`
+      controller?.abort()
+    }, Math.max(1_000, Math.round(HEARTBEAT_SILENCE_LIMIT_MS / 3)))
     // 每次发送都是一个独立的 SSE 流（sequence 从 1 重新计数）：
     // 不重置去重游标的话，第二轮的全部事件会被 reducer 当成「迟到事件」丢弃，
     // 表现为第二问发出后完全收不到回复。
@@ -219,6 +242,11 @@ export function useAgentChat(options: UseAgentChatOptions) {
           body: JSON.stringify({ ...options.buildRequest(trimmed), message: trimmed }),
         },
         (event: AgentEvent) => {
+          // 心跳只说明服务端还活着：不更新游标、不进 reducer，否则会给界面刷出空消息
+          if (event.type === 'heartbeat') {
+            lastHeartbeatAt = Date.now()
+            return
+          }
           const before = projection.value
           const after = reduceAgentEvent(before, event)
           if (after !== before) {
@@ -247,6 +275,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
       if (userStopped || isAbortError(e)) error.value = ''
       else error.value = e instanceof Error ? e.message : String(e)
     } finally {
+      clearInterval(heartbeatWatchdog)
       if (token === runToken) {
         // 流结束后若有未落盘的流式轮次，落成一条 assistant 消息
         finalizeStreamingTurn(userStopped)

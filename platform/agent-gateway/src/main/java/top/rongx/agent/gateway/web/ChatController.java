@@ -80,6 +80,8 @@ public class ChatController {
     /** 单次会话的 SSE 生命周期上限（默认 3 分钟，可按部署调整）。 */
     private final long streamTimeoutMillis;
     private final long heartbeatMillis;
+    /** 业务事件静默多久判定为挂住（默认 90 秒，0 = 关闭看门狗）。 */
+    private final long stallMillis;
 
     public ChatController(ChatService chatService,
                           ProjectContextResolver contextResolver,
@@ -95,7 +97,8 @@ public class ChatController {
                           ModelConnectionRepository connections,
                           ModelCatalogRepository catalog,
                           @Value("${agent.chat.timeout-ms:180000}") long streamTimeoutMillis,
-                          @Value("${agent.chat.heartbeat-seconds:15}") long heartbeatSeconds) {
+                          @Value("${agent.chat.heartbeat-seconds:15}") long heartbeatSeconds,
+                          @Value("${agent.chat.stall-seconds:90}") long stallSeconds) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
@@ -111,6 +114,7 @@ public class ChatController {
         this.catalog = catalog;
         this.streamTimeoutMillis = Math.max(30_000L, streamTimeoutMillis);
         this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
+        this.stallMillis = Math.max(0L, stallSeconds) * 1000L;
     }
 
     /**
@@ -154,6 +158,8 @@ public class ChatController {
         AtomicBoolean closed = new AtomicBoolean();
         AtomicLong seq = new AtomicLong();
         AtomicBoolean failed = new AtomicBoolean();
+        // 业务事件最后活跃时间：心跳不更新它，所以「只有心跳在走」也会被判成挂住
+        AtomicLong lastEventNanos = new AtomicLong(System.nanoTime());
         long started = System.nanoTime();
         io.micrometer.core.instrument.Timer.Sample sample = metrics.start();
         Runnable cancel = () -> {
@@ -172,15 +178,26 @@ public class ChatController {
         };
         // 客户端断开 / 超时 / 派发错误都要取消上游，否则 Agent 与 MCP 会继续跑
         emitter.onTimeout(() -> {
+            failed.set(true);
             log.warn("对话流超时，已取消 project={} session={} timeout={}ms",
                     ctx.projectId(), request.sessionId(), streamTimeoutMillis);
+            // 超时同样要落终态：否则时间线里这一轮永远停在「进行中」
+            timeline.finish("对话流超时（" + streamTimeoutMillis + "ms）");
+            sendError(emitter, new RunException(ErrorCode.TIMEOUT,
+                    "对话流超时（" + streamTimeoutMillis / 1000 + " 秒），本轮已中止；请重新发送"),
+                    sendLock);
             cancel.run();
             emitter.complete();
         });
         emitter.onCompletion(cancel);
         emitter.onError(error -> cancel.run());
-        // 工具执行/模型思考期间没有事件时靠心跳保活，避免代理按空闲超时断流
-        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, cancel));
+        // 心跳保活 + 静默看门狗：挂住时由服务端主动发失败终态，而不是让连接无限挂着
+        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, stallMillis,
+                lastEventNanos, () -> {
+                    failed.set(true);
+                    timeline.finish("服务端长时间没有进展，本轮已中止");
+                    cancel.run();
+                }));
 
         try {
             Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
@@ -191,7 +208,7 @@ public class ChatController {
             Map<String, StringBuilder> toolResults = new HashMap<>();
             Disposable disposable = events.subscribe(
                     event -> onEvent(event, emitter, ctx, toolNames, toolResults, seq, cancel,
-                            sendLock, active.modelName(), timeline),
+                            sendLock, active.modelName(), timeline, lastEventNanos),
                     error -> {
                         failed.set(true);
                         log.error("对话流异常 project={} env={}", ctx.projectId(), ctx.env(), error);
@@ -243,8 +260,11 @@ public class ChatController {
     private void onEvent(AgentEvent event, SseEmitter emitter, ProjectContext ctx,
                          Map<String, String> toolNames, Map<String, StringBuilder> toolResults,
                          AtomicLong seq, Runnable cancel, Object sendLock, String modelName,
-                         ConversationTimelineRecorder.Recorder timeline) {
+                         ConversationTimelineRecorder.Recorder timeline,
+                         AtomicLong lastEventNanos) {
         timeline.onEvent(event);
+        // 有真实业务事件才算「活着」：看门狗只认这里更新的时间戳
+        lastEventNanos.set(System.nanoTime());
         try {
             if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
                 toolNames.put(call.getToolCallId(), call.getToolCallName());
