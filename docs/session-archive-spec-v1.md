@@ -142,6 +142,37 @@ docs/
 - **JDK 探测**：`JAVA_HOME` 已达标时直接返回，不扫描安装目录；否则按候选列表缓存到
   `.git/session-archive/jdk.json`。全量扫描要对每个候选起 `java -version`，实测 3.7s，
   是门禁里最贵的纯 Python 开销。
+
+### 3.3.2 多会话并行
+
+会话状态按 **worktree** 分片，不再是全局单例：
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| 会话注册表 | `.git/session-archive/sessions/<worktree-key>.json` | 共享 git 目录；主树与 `.agent/worktrees/*` 各自一份，互不阻塞 |
+| 测试证据 | `.git/session-archive/session-evidence/<worktree-key>.json` | 每会话一份，`finish` 只读自己那份 |
+| 兼容 | `docs/.session/active.json` | 旧单例在首次访问时自动迁移到分片文件 |
+
+- 放在共享 git 目录而不是 `docs/.session`：每个 worktree 是独立工作目录，
+  放工作区里会出现"主树看不到 worktree 的会话"。
+- `git push` 只拦**本 worktree** 未归档的会话；其它 worktree 的进行中会话不阻塞。
+  仓库级约束仍在：`unarchived_code_commits` 要求每个代码提交都被某份 manifest 覆盖。
+- 排查入口：`python tools/session-archive/gate.py status`。
+
+### 3.3.3 门禁自检与观测
+
+| 命令 | 作用 |
+|---|---|
+| `gate.py doctor` | 环境自检：python/git/JDK 实际使用版本、mvn/mvnd、`core.hooksPath`、钩子安装、进行中会话、证据缓存数量 |
+| `gate.py metrics [--limit N]` | 每层耗时（pre-commit / spec-checks / full-test）的最近值、p50、p95 与预算判定 |
+| `gate.py status` | 所有 worktree 进行中的会话 |
+| `gate.py install-hooks` | 设置 `core.hooksPath=.githooks`，并清掉旧版复制到 `.git/hooks` 的副本 |
+
+耗时预算：`pre-commit ≤ 60s`、`spec-checks ≤ 180s`、`full-test ≤ 600s`；超预算由
+`metrics` 标「超预算」。注意 `install-hooks` 清理旧副本时必须用
+`git rev-parse --absolute-git-dir` 拼 `hooks/`，不能用 `--git-path hooks`
+——设置 `core.hooksPath` 后后者返回 `.githooks` 本身，会把仓库里的钩子脚本删掉。
+
 - **慢测试分组**：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代这类集成型用例打
   `@Tag("slow")`，pre-commit 用 `-DexcludedGroups=slow` 排除，pre-push 全量兜底与 CI 全跑。
   实测 gateway：`forkCount=2` 时 40.3s→27.9s；`forkCount=4` 时只差 2.5s（并行已掩盖）。

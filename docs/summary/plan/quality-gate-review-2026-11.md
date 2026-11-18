@@ -263,6 +263,19 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 
 ---
 
+
+### 第三批落地（多会话并行 + 自检观测）
+
+| # | 能力 | 落点 | 验收 |
+|---|---|---|---|
+| O8 | 多会话并行 | 会话按 worktree 分片到 `.git/session-archive/sessions/`；`status` 汇总 | 主树与 `.agent/worktrees/*` 可同时各开一个会话，互不阻塞 |
+| O9 | 环境自检 | `gate.py doctor` | 打印 JDK 实际使用版本、mvn/mvnd、`core.hooksPath`、钩子安装、会话、缓存 |
+| O10 | 耗时观测 | `gate.py metrics` + `gate-metrics.json` | 每层最近值/p50/p95 + 预算判定（pre-commit 60s / spec-checks 180s / full-test 600s） |
+| O11 | 钩子随仓库走 | `install-hooks` 设 `core.hooksPath=.githooks` | 新克隆一条命令生效；旧 `.git/hooks` 副本自动清理 |
+
+踩坑记录：`install-hooks` 清理旧副本时必须用 `git rev-parse --absolute-git-dir` 拼 `hooks/`；
+用 `--git-path hooks` 在 `core.hooksPath` 生效后会返回 `.githooks` 本身，把仓库里的钩子脚本删掉。
+
 ## 验收契约
 
 ### 契约条款（此节是完成判定的唯一口径）
@@ -301,22 +314,23 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 |---|---|---|---|
 | C0 | 契约 | 已完成 | 本文件已按 §4.6 建档（frontmatter + 双索引），`gate.py validate` 通过 |
 | C1 | 阶段一 | 未开始 | 待新增 `.github/workflows/ci.yml` |
-| C2 | 阶段一 | 未开始 | 待改 `install-hooks.ps1` 为 `core.hooksPath` |
+| C2 | 阶段一 | 已完成 | `gate.py install-hooks` + `install-hooks.ps1` 设置 `core.hooksPath=.githooks`；`doctor` 显示钩子来源，旧 `.git/hooks` 副本自动清理 |
 | C3 | 阶段一 | 未开始 | 待补 `vitest` 依赖与 CI `frontend` job |
 | C4 | 阶段二 | 未开始 | 待加 jacoco `check` goal 与 patch 阈值 |
 | C5 | 阶段二 | 未开始 | 待重定义 pre-push 契约 |
 | C6 | 阶段二 | 未开始 | 待 CI 剖面置 `allowStoreCreation=false` |
 | C7 | 阶段二 | 未开始 | 待建 `spec-checks/fixtures/` |
-| C8 | 阶段二 | 未开始 | 待加 `gate.py doctor`（`detect_jdk` 已有，直接复用） |
+| C8 | 阶段二 | 已完成 | `gate.py doctor` 打印 python/git/JDK 实际版本、mvn、hooksPath、会话与缓存；JAVA_HOME=17 时仍能报出实际使用 jdk21 |
 | C9 | 阶段三 | 未开始 | 待加 gitleaks / osv-scanner job |
 | C10 | 阶段三 | 未开始 | 待引入 failsafe 与 integration tag |
-| C11 | 阶段三 | 未开始 | 待写 gate-metrics 采集 |
+| C11 | 阶段三 | 已完成 | `.git/session-archive/gate-metrics.json` 采集 pre-commit/spec-checks/full-test；`gate.py metrics` 输出 p50/p95 与预算判定 |
 | C12 | 阶段四 | 未开始 | 待建立门禁红队自审 |
 
 ---
 
 ## 变更记录
 
+- 2026-11-18T21:25 第三批落地：多会话并行（per-worktree 会话注册表）、`doctor`、`metrics`、`install-hooks` 走 `core.hooksPath`；C2/C8/C11 置为已完成。
 - 2026-11-18T20:40 第二批落地：慢测试 `@Tag("slow")`（gateway f=2 时 −12.4s）、模块级绿色证据（pre-push 兜底按闭包跳过）、`ApiDocsSnapshotTest` 并发敏感性说明；新增验收项 C14。
 - 2026-11-18T20:25 补「性能实测与已落地优化」：给出改前/改后实测（pre-commit 171s→13.3s、spec-checks 34.9s→20s 级、全 reactor 166.9s→90.1s），并新增验收项 C13（门禁耗时预算）。
 - 2026-11-18T20:04 初稿：四层门禁现状核查、缺口分级（P0×4 / P1×4 / P2×3）、分阶段优化方案与落地顺序。

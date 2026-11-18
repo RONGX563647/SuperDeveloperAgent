@@ -22,8 +22,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SESSION_DIR = ROOT / "docs" / ".session"
-ACTIVE = SESSION_DIR / "active.json"
-EVIDENCE = SESSION_DIR / "test-evidence.json"
+# 多会话：每个 worktree 一份进行中的会话（key = 该 worktree git dir 的哈希）。
+# 旧版是全局单例 docs/.session/active.json —— 两个 AI 会话并行时必然互相阻塞，
+# 读到时自动迁移成 per-worktree 文件。
+ACTIVE_LEGACY = SESSION_DIR / "active.json"
+EVIDENCE_LEGACY = SESSION_DIR / "test-evidence.json"
+# 会话注册表放在共享 git 目录（.git/session-archive），不能放在 docs/.session：
+# 每个 worktree 是独立的工作目录，放工作区里会导致"主树看不到 worktree 的会话"。
+
+
+def active_dir() -> Path:
+    return shared_state_dir() / "sessions"
+
+
+def evidence_dir() -> Path:
+    return shared_state_dir() / "session-evidence"
 # 跨 worktree 测试锁超时（per-worktree 隔离后，只在同 worktree 内排队）。
 LOCK_TIMEOUT = 45 * 60
 LOCK_STALE = 90 * 60
@@ -176,13 +189,110 @@ def classify(subject: str) -> str:
 
 # ------------------------------------------------------------------ start
 
+
+# ------------------------------------------------------------ 会话文件（per-worktree）
+
+def worktree_key() -> str:
+    """当前 worktree 的稳定标识：git dir 路径的短哈希。
+
+    <p>主树与 {@code .agent/worktrees/*} 各有自己的 git dir，因此各自能开一个
+    进行中的会话语义；同一个 worktree 内仍然只有一个（避免同一处并发写归档）。
+    """
+    digest = hashlib.sha256(str(worktree_git_dir()).encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def active_path() -> Path:
+    return active_dir() / f"{worktree_key()}.json"
+
+
+def evidence_path() -> Path:
+    return evidence_dir() / f"{worktree_key()}.json"
+
+
+def _migrate_legacy_active() -> None:
+    """旧单例 active.json → 本 worktree 的分片文件（仅当没有任何分片时）。"""
+    target_dir = active_dir()
+    legacy_shards = SESSION_DIR / "active"
+    # 中间版本把分片写在 docs/.session/active（工作区内），同样搬到共享目录。
+    if legacy_shards.is_dir():
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for shard in legacy_shards.glob("*.json"):
+            try:
+                shard.replace(target_dir / shard.name)
+            except OSError:
+                pass
+        try:
+            legacy_shards.rmdir()
+        except OSError:
+            pass
+    if not ACTIVE_LEGACY.is_file():
+        return
+    if any(target_dir.glob("*.json")):
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        ACTIVE_LEGACY.replace(active_path())
+        out("已把旧的单会话 docs/.session/active.json 迁移为 per-worktree 会话")
+    except OSError:
+        pass
+
+
+def active_session() -> dict | None:
+    """本 worktree 进行中的会话；没有返回 None。"""
+    _migrate_legacy_active()
+    path = active_path()
+    if not path.is_file():
+        return None
+    try:
+        return load_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def save_active(active: dict) -> None:
+    write_json(active_path(), active)
+
+
+def clear_active() -> None:
+    try:
+        active_path().unlink()
+    except OSError:
+        pass
+
+
+def clear_evidence() -> None:
+    try:
+        evidence_path().unlink()
+    except OSError:
+        pass
+    try:
+        EVIDENCE_LEGACY.unlink()
+    except OSError:
+        pass
+
+
+def all_active_sessions() -> list[tuple[Path, dict]]:
+    """所有 worktree 进行中的会话（含旧单例），供 status / doctor 展示。"""
+    _migrate_legacy_active()
+    rows: list[tuple[Path, dict]] = []
+    directory = active_dir()
+    for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+        try:
+            rows.append((path, load_json(path)))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return rows
+
 def cmd_start(args) -> int:
     if args.category not in CATEGORIES:
         return fail(f"category 必须是 {CATEGORIES}")
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.slug or ""):
         return fail("slug 必须是 kebab-case 英文（小写字母/数字/短横线）")
-    if ACTIVE.exists():
-        return fail("已有进行中的会话；先执行 finish 或删除 docs/.session/active.json")
+    existing = active_session()
+    if existing:
+        return fail(f"本 worktree 已有进行中的会话：{existing.get('id')}；"
+                    f"先执行 finish（文件：{active_path()}）")
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M")
     folder = f"{stamp}_{args.slug}"
     seq = 2
@@ -202,9 +312,10 @@ def cmd_start(args) -> int:
         "toolCallCount": args.tool_calls,
         "promptSummary": args.prompt or args.title,
         "followUps": args.follow_up or [],
+        "worktree": str(ROOT),
     }
-    write_json(ACTIVE, active)
-    out(f"会话已开始：{active['id']}")
+    save_active(active)
+    out(f"会话已开始：{active['id']}（worktree {worktree_key()}）")
     out("下一步：写实现 + 单元测试，然后 git commit（pre-commit 会自动跑测试并留存证据）")
     return 0
 
@@ -255,8 +366,11 @@ def surefire_stats(started: float) -> dict:
 def run_tests(command: str) -> dict:
     ensure_jdk()
     started = datetime.now().timestamp()
+    begun = time.time()
     proc = subprocess.run(command, cwd=ROOT / "platform", shell=True, env=build_env())
     stats = surefire_stats(started)
+    record_metric("pre-commit", time.time() - begun, command=command,
+                  testsRun=stats["tests"], result="PASSED" if proc.returncode == 0 else "FAILED")
     result = "PASSED" if proc.returncode == 0 and stats["failures"] == 0 and stats["errors"] == 0 else "FAILED"
     return {
         "schema": "test-evidence/v1",
@@ -639,7 +753,7 @@ def cmd_gate_pre_commit(args) -> int:
     if not code:
         out("仅文档/工具改动，跳过会话归档测试门禁")
         return 0
-    if not ACTIVE.exists():
+    if not active_session():
         return fail(
             "代码提交被拦截：没有进行中的会话归档。\n"
             "先执行：python tools/session-archive/gate.py start "
@@ -665,7 +779,7 @@ def cmd_gate_pre_commit(args) -> int:
                     cache_evidence(evidence, fingerprint)
     except GateError as exc:
         return fail(str(exc))
-    write_json(EVIDENCE, evidence)
+    write_json(evidence_path(), evidence)
     if evidence["result"] != "PASSED":
         return fail(
             f"测试未通过，禁止提交（tests={evidence['testsRun']} "
@@ -738,13 +852,13 @@ def cases_added(sha: str, tests: list[dict]) -> int:
 
 
 def cmd_finish(args) -> int:
-    if not ACTIVE.exists():
-        return fail("没有进行中的会话；先执行 start")
-    active = load_json(ACTIVE)
+    active = active_session()
+    if not active:
+        return fail("本 worktree 没有进行中的会话；先执行 start")
     category = active["category"]
     head = git("rev-parse", "HEAD")
     head_tree = git("rev-parse", "HEAD^{tree}")
-    evidence = load_json(EVIDENCE) if EVIDENCE.exists() else {
+    evidence = load_json(evidence_path()) if evidence_path().exists() else {
         "command": "未执行", "result": "SKIPPED", "testsRun": 0,
         "failures": 0, "errors": 0, "skipped": 0, "tree": "",
     }
@@ -840,8 +954,8 @@ def cmd_finish(args) -> int:
     resealed = reseal_chain(category)
 
     write_summary(manifest, active, period)
-    ACTIVE.unlink(missing_ok=True)
-    EVIDENCE.unlink(missing_ok=True)
+    clear_active()
+    clear_evidence()
     out(f"归档完成：docs/process/{category}/{active['folder']}/manifest.json")
     if resealed:
         out(f"归档链已重排（{len(resealed)} 份）：{', '.join(resealed)}")
@@ -1290,6 +1404,7 @@ def spec_checks() -> int:
             return 0
     mvn = maven_binary()
     ensure_jdk()
+    spec_begun = time.time()
     lock_dir = worktree_git_dir() / "session-archive"
     with TestLock(lock_dir / "test.lock", "规约检查"):
         # 只编译主代码：ArchUnit 读 target/classes，不需要任何模块的测试类。
@@ -1303,6 +1418,8 @@ def spec_checks() -> int:
             return proc.returncode
         proc = subprocess.run(f"{mvn} -B -nsu -pl spec-checks test {surefire_parallel_flag()}".strip(),
                               cwd=ROOT / "platform", shell=True, env=build_env())
+    record_metric("spec-checks", time.time() - spec_begun,
+                  result="PASSED" if proc.returncode == 0 else "FAILED")
     if proc.returncode == 0:
         write_json(cache, {"schema": "spec-checks-cache/v1", "tree": tree,
                            "result": "PASSED", "ranAt": now_iso()})
@@ -1452,6 +1569,7 @@ def full_test_backstop() -> int:
             return 0
     mvn = maven_binary()
     ensure_jdk()
+    full_begun = time.time()
     modules = module_dir_names()
     green = green_modules(modules)
     pending = [m for m in modules if m not in green]
@@ -1470,6 +1588,8 @@ def full_test_backstop() -> int:
         proc = subprocess.run(command, cwd=ROOT / "platform", shell=True, env=build_env())
     if proc.returncode != 0:
         return proc.returncode
+    record_metric("full-test", time.time() - full_begun,
+                  modules=",".join(pending), result="PASSED")
     if pending:
         record_module_green(pending)
     write_json(cache, {"schema": "full-test-cache/v1", "tree": tree,
@@ -1478,9 +1598,10 @@ def full_test_backstop() -> int:
 
 
 def cmd_gate_pre_push(args) -> int:
-    if ACTIVE.exists():
-        active = load_json(ACTIVE)
-        return fail(f"会话未归档：{active.get('id')}。先执行 python tools/session-archive/gate.py finish")
+    session = active_session()
+    if session:
+        return fail(f"本 worktree 的会话未归档：{session.get('id')}。"
+                    f"先执行 python tools/session-archive/gate.py finish")
     dirty = git("status", "--porcelain", "docs/process", "docs/summary")
     if dirty:
         return fail("存在未提交的归档/总结文件，请先提交 docs/ 后再推送")
@@ -1502,6 +1623,177 @@ def cmd_gate_pre_push(args) -> int:
         return fail("全量测试兜底未通过（SESSION_ARCHIVE_FULL_TEST=1）；禁止推送")
     return 0
 
+
+
+# ------------------------------------------------------------------ 门禁耗时度量
+# 每层耗时落到公共 .git/session-archive/gate-metrics.json，供 `gate.py metrics`
+# 出趋势与分位数。预算（spec §3.3.1）：pre-commit ≤ 60s、pre-push ≤ 180s、CI ≤ 600s。
+
+GATE_METRICS = "gate-metrics.json"
+METRICS_MAX_ENTRIES = 200
+LAYER_BUDGET_SECONDS = {"pre-commit": 60, "spec-checks": 180, "full-test": 600}
+
+
+def record_metric(layer: str, seconds: float, **extra) -> None:
+    """追加一条耗时记录；失败只告警，绝不影响门禁结论。"""
+    try:
+        path = shared_state_dir() / GATE_METRICS
+        entries: list[dict] = []
+        if path.is_file():
+            try:
+                entries = json.loads(path.read_text(encoding="utf-8")).get("entries", [])
+            except (OSError, json.JSONDecodeError):
+                entries = []
+        entry = {"layer": layer, "seconds": round(seconds, 1), "at": now_iso()}
+        entry.update({k: v for k, v in extra.items() if v is not None})
+        entries.append(entry)
+        write_json(path, {"schema": "gate-metrics/v1",
+                          "entries": entries[-METRICS_MAX_ENTRIES:]})
+    except (GateError, OSError):
+        pass
+
+
+def read_metrics() -> list[dict]:
+    try:
+        path = shared_state_dir() / GATE_METRICS
+        if not path.is_file():
+            return []
+        return json.loads(path.read_text(encoding="utf-8")).get("entries", [])
+    except (GateError, OSError, json.JSONDecodeError):
+        return []
+
+
+def cmd_metrics(args) -> int:
+    """打印各层耗时（最近 N 条 + 分位数 + 预算判定）。"""
+    entries = read_metrics()
+    if not entries:
+        out("暂无耗时记录：跑一次 pre-commit / pre-push 后就有了")
+        return 0
+    limit = max(1, args.limit)
+    layers = sorted({e.get("layer", "?") for e in entries})
+    out(f"门禁耗时（最近 {limit} 条/层，共 {len(entries)} 条记录）")
+    out("")
+    out(f"{'层':<14}{'次数':>5}{'最近':>8}{'p50':>8}{'p95':>8}{'预算':>8}  判定")
+    for layer in layers:
+        rows = [e for e in entries if e.get("layer") == layer][-limit:]
+        values = sorted(float(e.get("seconds", 0)) for e in rows)
+        if not values:
+            continue
+        latest = float(rows[-1].get("seconds", 0))
+        p50 = values[len(values) // 2]
+        p95 = values[min(len(values) - 1, int(len(values) * 0.95))]
+        budget = LAYER_BUDGET_SECONDS.get(layer)
+        verdict = "-" if budget is None else ("OK" if p95 <= budget else "超预算")
+        out(f"{layer:<14}{len(rows):>5}{latest:>7.1f}s{p50:>7.1f}s{p95:>7.1f}s"
+            f"{(str(budget) + 's') if budget else '-':>8}  {verdict}")
+    out("")
+    out("最近 5 条明细：")
+    for entry in entries[-5:]:
+        extra = " ".join(f"{k}={v}" for k, v in entry.items()
+                         if k not in ("layer", "seconds", "at"))
+        out(f"  {entry.get('at', '?')}  {entry.get('layer'):<12}"
+            f"{float(entry.get('seconds', 0)):>7.1f}s  {extra}")
+    return 0
+
+
+# ------------------------------------------------------------------ status / doctor
+
+def cmd_status(args) -> int:
+    """列出所有 worktree 进行中的会话（多会话并行时用）。"""
+    rows = all_active_sessions()
+    if not rows:
+        out("没有进行中的会话（本 worktree 可直接 start）")
+        return 0
+    current = worktree_key()
+    out(f"进行中的会话 {len(rows)} 个（当前 worktree key={current}）")
+    for path, active in rows:
+        marker = "*" if path.stem == current else " "
+        out(f" {marker} {active.get('id')}")
+        out(f"   worktree: {active.get('worktree') or '（旧版未记录）'}")
+        out(f"   started : {active.get('startedAt')}  base={str(active.get('baseHead'))[:7]}")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    """环境自检：门禁跑不起来时先看这个。"""
+    out("== 会话归档门禁 doctor ==")
+    out(f"python      : {sys.version.split()[0]} ({sys.executable})")
+    out(f"git         : {git('--version')}")
+
+    env_home = os.environ.get("JAVA_HOME", "")
+    detected = java_home()
+    out(f"JAVA_HOME   : {env_home or '（未设置）'}")
+    out(f"JDK 实际使用: {detected or '（未找到 JDK21+）'}"
+        f"{'' if not detected else '  major=' + str(_java_major(detected))}")
+    if not detected:
+        out("  ↑ 门禁会因此拒绝运行；装 JDK21+ 或把 JAVA_HOME 指过去")
+
+    mvn = shutil.which(maven_binary())
+    out(f"maven       : {mvn or '（未找到）'}{'  [mvnd]' if maven_binary() == 'mvnd' else ''}")
+    out(f"surefire 并行: {surefire_parallel_flag() or '（pom 默认）'}  cores={os.cpu_count()}")
+
+    hooks = ""
+    try:
+        hooks = git("config", "--get", "core.hooksPath", check=False).strip()
+    except GateError:
+        hooks = ""
+    legacy_hook = (Path(git("rev-parse", "--git-path", "hooks").strip()) / "pre-commit")
+    out(f"core.hooksPath: {hooks or '（未设置）'}")
+    out(f"pre-commit 钩子: {'已安装 ' + str(legacy_hook) if legacy_hook.is_file() else '未安装'}")
+    if hooks != ".githooks":
+        out("  ↑ 建议执行 python tools/session-archive/gate.py install-hooks（钩子随仓库走）")
+
+    out("")
+    rows = all_active_sessions()
+    out(f"进行中会话  : {len(rows)} 个" + ("" if not rows else "（" + ", ".join(
+        a.get("id", "?") for _, a in rows) + "）"))
+    out(f"本 worktree : {ROOT}  key={worktree_key()}")
+    try:
+        out(f"分支/HEAD   : {git('rev-parse', '--abbrev-ref', 'HEAD')} "
+            f"{git('rev-parse', '--short', 'HEAD')}")
+    except GateError:
+        pass
+
+    evidence_dir = shared_state_dir() / "evidence"
+    module_dir = shared_state_dir() / MODULE_EVIDENCE_DIR
+    out(f"证据缓存    : {len(list(evidence_dir.glob('*.json'))) if evidence_dir.is_dir() else 0} 份"
+        f"（{evidence_dir}）")
+    out(f"模块证据    : {len(list(module_dir.glob('*.json'))) if module_dir.is_dir() else 0} 个"
+        f"（{module_dir}）")
+    entries = read_metrics()
+    if entries:
+        out(f"耗时记录    : {len(entries)} 条（python tools/session-archive/gate.py metrics）")
+    return 0
+
+
+def cmd_install_hooks(args) -> int:
+    """把仓库内的 .githooks 设为唯一钩子来源（取代复制到 .git/hooks）。"""
+    source = ROOT / ".githooks"
+    if not source.is_dir():
+        return fail("仓库内缺少 .githooks 目录")
+    git("config", "core.hooksPath", ".githooks")
+    if os.name != "nt":
+        for hook in source.iterdir():
+            if hook.is_file():
+                try:
+                    hook.chmod(0o755)
+                except OSError:
+                    pass
+    # 升级路径：旧版把钩子复制到 <git-dir>/hooks，留着会与 .githooks 双份生效/漂移。
+    # 注意不能用 `git rev-parse --git-path hooks`：设置 core.hooksPath 之后它返回
+    # .githooks 本身，会把仓库里的钩子脚本删掉（本实现踩过这个坑）。
+    legacy_dir = Path(git("rev-parse", "--absolute-git-dir")) / "hooks"
+    for name in ("pre-commit", "pre-push"):
+        stale = legacy_dir / name
+        if stale.is_file():
+            try:
+                stale.unlink()
+                out(f"已移除旧副本：{stale}")
+            except OSError:
+                pass
+    out("已设置 core.hooksPath=.githooks（钩子随仓库走，新克隆执行同一条命令即可）")
+    out("自检：python tools/session-archive/gate.py doctor")
+    return 0
 
 # ------------------------------------------------------------------ self-test
 
@@ -1683,6 +1975,12 @@ def main() -> int:
     sub.add_parser("self-test").set_defaults(func=cmd_self_test)
     sub.add_parser("gate-pre-commit").set_defaults(func=cmd_gate_pre_commit)
     sub.add_parser("gate-pre-push").set_defaults(func=cmd_gate_pre_push)
+    sub.add_parser("status").set_defaults(func=cmd_status)
+    sub.add_parser("doctor").set_defaults(func=cmd_doctor)
+    sub.add_parser("install-hooks").set_defaults(func=cmd_install_hooks)
+    p = sub.add_parser("metrics")
+    p.add_argument("--limit", type=int, default=20, help="每层取最近多少条（默认 20）")
+    p.set_defaults(func=cmd_metrics)
 
     args = parser.parse_args()
     try:
