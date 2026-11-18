@@ -1,0 +1,99 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_0057_trace-tool-args-snapshot",
+  "category": "feat",
+  "title": "轨迹工具详情补齐入参快照与不可用标记",
+  "createdAt": "2026-11-19T00:57:51+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "task-da2bbce041: 轨迹里插件类/MCP 工具走另一条映射路径没覆盖，参数仍空白；补 args 快照、argsUnavailable 标记与 tool.started/completed 一致口径",
+    "toolCallCount": 0
+  },
+  "problem": "task-da2bbce041（轨迹工具详情参数缺失）：上一轮只在 TOOL_CALL_DELTA 上把入参归一化成 args，插件类工具与 MCP 工具（workspace_*、mcp_*）走的是 tool.started / tool.completed 两条路，因此它们在轨迹里永远空白；「无参工具」与「参数丢失」在界面上长得一样，无法判断是映射漏了还是本来就没参数。",
+  "solution": "AgentEventMapper 把入参归一化扩展到 tool.started 与 tool.completed，按 args/arguments/input/toolArguments/delta 多字段取第一个非空；稳定契约：有入参给 args、无参 args=null 且 argsUnavailable=false、拿不到入参 args=null 且 argsUnavailable=true；前端 reducer 透传 argsUnavailable，并在已有真实参数时不误标；ToolActivity 类型补注释说明两者区别。",
+  "commits": [
+    {
+      "sha": "7bd89006869b822974f6a22c6a70c37928ecae39",
+      "subject": "feat(trace): 工具轨迹统一 args 快照并标记 argsUnavailable",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/AgentEventMapper.java",
+          "status": "M",
+          "additions": 44,
+          "deletions": 7,
+          "blobHash": "d138dcdf0e6f8d3e4d3e216168851448046b1e35"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/AgentEventMapperTest.java",
+          "status": "M",
+          "additions": 27,
+          "deletions": 0,
+          "blobHash": "9587c5d3dfce7f6cfa17737618a353805daa2fd0"
+        },
+        {
+          "path": "platform/web/src/state/agentEventReducer.test.ts",
+          "status": "M",
+          "additions": 22,
+          "deletions": 0,
+          "blobHash": "3fec3dd6c456946a4ac928c6eb64df6ef65375e9"
+        },
+        {
+          "path": "platform/web/src/state/agentEventReducer.ts",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "988321c2a273425390940af476cb2f7b4f193caa"
+        },
+        {
+          "path": "platform/web/src/types.ts",
+          "status": "M",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "58ec45cd139db41d58c13b7a8a3a3d9e0c4a8b6c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/AgentEventMapperTest.java",
+        "status": "M",
+        "additions": 27,
+        "deletions": 0,
+        "blobHash": "9587c5d3dfce7f6cfa17737618a353805daa2fd0"
+      },
+      {
+        "path": "platform/web/src/state/agentEventReducer.test.ts",
+        "status": "M",
+        "additions": 22,
+        "deletions": 0,
+        "blobHash": "3fec3dd6c456946a4ac928c6eb64df6ef65375e9"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 142, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "web"
+    ],
+    "verification": "Tests run: 142, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_0057_trace-tool-args-snapshot"
+    ]
+  },
+  "chain": {
+    "prev": "2f62ed78afe39ee363937499e40c9d84fc4b3dd3a54a0192264ec644b30a4427",
+    "self": "07b5af2cbf56ff02054fb192aa154789fa38cef79c34c340cb98859b74d8ac08"
+  }
+}
