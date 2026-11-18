@@ -1,0 +1,86 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-18_0840_transcript-terminal-order",
+  "category": "bug",
+  "title": "修复会话时间线被下一轮覆盖的竞态",
+  "createdAt": "2026-11-18T08:40:31+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "继续",
+    "toolCallCount": 0
+  },
+  "problem": "ConversationManagerTest 偶发失败：waitForRun 返回时时间线可能还没写完，同一会话紧接着的下一轮会读到旧时间线并覆盖上一轮。",
+  "solution": "WorkspaceRunExecutor.finish 调整为 saveTranscript 先于 runs.updateRun 落终态，保证外部看到 terminal 时本轮时间线已可读；新增 BlockingStore 回归测试锁定该顺序。",
+  "commits": [
+    {
+      "sha": "92ad561b8413d9f86597365420fe107b6a7800b5",
+      "subject": "fix(runtime): 先落会话时间线再暴露运行终态",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/handbook/l2/project-intake.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "7524864e6360b4ee00627d22d5dd2ae058a034cb"
+        },
+        {
+          "path": "platform/README.md",
+          "status": "M",
+          "additions": 3,
+          "deletions": 5,
+          "blobHash": "a1ff18d3c23bc8e2d3a2792bdf0551ed44baecb7"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceRunExecutor.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 3,
+          "blobHash": "12c07591b2a4381300100fef9b98366949b32690"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+          "status": "M",
+          "additions": 42,
+          "deletions": 1,
+          "blobHash": "a983cd430cdbe28f56ccd88405ee28aefe8bbd15"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+        "status": "M",
+        "additions": 42,
+        "deletions": 1,
+        "blobHash": "a983cd430cdbe28f56ccd88405ee28aefe8bbd15"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B test -Djacoco.skip=true -Dtest='!ProcessArchiveTest,!DeployEnvPrecheckTest,!DeployRecipeFlowTest,!DockerDaemonRepairTest' -Dsurefire.failIfNoSpecifiedTests=false",
+    "result": "PASSED",
+    "evidence": "Tests run: 571, Failures: 0, Errors: 0, Skipped: 4"
+  },
+  "impact": {
+    "modules": [
+      "agent-runtime"
+    ],
+    "verification": "mvn -B test -Djacoco.skip=true（排除 4 个环境用例）：571 用例，0 失败 0 错误 4 跳过；ConversationManagerTest 9 例全绿。"
+  },
+  "followUps": [
+    "继续"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_0840_transcript-terminal-order"
+    ]
+  },
+  "chain": {
+    "prev": "e26e65db46b0c314113ec4e950a3b82427b2882879fbf23f4262978aea607c06",
+    "self": "33765b75fdd013c26ea618ef7d1af70863823024071083806f5aa8a430c4b7d9"
+  }
+}
