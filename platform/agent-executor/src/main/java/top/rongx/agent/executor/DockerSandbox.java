@@ -78,6 +78,14 @@ public class DockerSandbox {
     private final String cacheVolumePrefix;
     /** 已初始化的卷（避免每次 docker run 都做一次 chown）。withImage 派生的沙箱共享同一份。 */
     private final Set<String> initializedVolumes;
+    /**
+     * 缓存卷初始化锁：按卷粒度而不是整个集合。
+     *
+     * <p>原先 {@code synchronized (initializedVolumes)} 把所有项目串成一条队列：
+     * 一次冷启动建卷（mkdir + chown -R + 重试，最长约数分钟）会让其他项目已经初始化好的
+     * 构建白等。按卷加锁后，不同项目并行，同卷（含 withImage 派生的沙箱）仍然串行。
+     */
+    private static final ConcurrentHashMap<String, Object> VOLUME_LOCKS = new ConcurrentHashMap<>();
     /** 当前线程正在运行的容器名（用于超时/取消后清理，避免 docker run 客户端被杀而容器残留）。 */
     private static final ThreadLocal<String> ACTIVE_CONTAINER = new ThreadLocal<>();
     private final CommandExecutor commandExecutor;
@@ -344,7 +352,9 @@ public class DockerSandbox {
         if (volume == null || initializedVolumes.contains(volume)) {
             return;
         }
-        synchronized (initializedVolumes) {
+        // 按卷加锁：不同项目互不阻塞，同卷（含 withImage 派生的沙箱）仍需串行初始化
+        Object lock = VOLUME_LOCKS.computeIfAbsent(volume, key -> new Object());
+        synchronized (lock) {
             if (initializedVolumes.contains(volume)) {
                 return;
             }

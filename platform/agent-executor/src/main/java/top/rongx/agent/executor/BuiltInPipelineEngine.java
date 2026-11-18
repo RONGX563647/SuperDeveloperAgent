@@ -90,6 +90,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private static final long HEARTBEAT_LOG_MS = 120_000L;
     private static final long WATCHDOG_GRACE_MS = 5 * 60_000L;
     private static final long FORCE_TERMINATE_AFTER_MS = 60_000L;
+    /** 单次健康探测（HTTP / docker inspect）的超时：窗口收敛计算也要把它算进去。 */
+    private static final long HEALTH_PROBE_TIMEOUT_MS = 2_000L;
+    /** 健康检查里的 docker 探测（inspect/logs/rm）预算：不能让守护进程挂起吃掉整个阶段。 */
+    private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(5);
+    /** 失败清理（docker rm -f / docker logs）预算：收尾必须收敛，否则失败运行也拖满阶段预算。 */
+    private static final Duration CLEANUP_TIMEOUT = Duration.ofSeconds(10);
+    /** 健康检查等待窗口下限：再紧也要给应用一次启动探测的机会。 */
+    private static final long MIN_HEALTH_WINDOW_MS = 30_000L;
     /** 命令里的 ${var} 占位符（预览展示模板，运行时替换）。 */
     private static final java.util.regex.Pattern PLACEHOLDER =
             java.util.regex.Pattern.compile("\\$\\{([A-Za-z0-9_]+)}");
@@ -4316,6 +4324,24 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return missing;
     }
 
+    /**
+     * 健康检查等待窗口：默认按「次数 × 间隔」给足（docker 3 分钟 / host 1 分钟），
+     * 但不超过运行剩余预算。看护线程在总预算耗尽时会直接请求取消并强制终态，
+     * 健康检查若还继续等到窗口结束，用户看到的是一条 E-302「超时且无法中断」，
+     * 而真正的失败原因（容器反复重启、端口不对）被完全盖住。
+     *
+     * <p>下限 {@value #MIN_HEALTH_WINDOW_MS}ms：剩余预算已耗尽时也至少探一轮，
+     * 让失败摘要里带上真实证据（HTTP body / 容器退出码 / 容器日志）。
+     */
+    static long healthWindowMillis(int attempts, long sleepMs, long remainingMs) {
+        long planned = Math.max(0, attempts * (sleepMs + HEALTH_PROBE_TIMEOUT_MS));
+        long available = remainingMs - HEALTH_PROBE_TIMEOUT_MS * 2L;
+        if (available >= planned) {
+            return planned;
+        }
+        return Math.min(planned, Math.max(MIN_HEALTH_WINDOW_MS, available));
+    }
+
     private boolean health(RunState state, PipelineDefinition.StageDef stage, long start) {
         String url = stage.url();
         if (url == null || url.isBlank()) {
@@ -4349,15 +4375,25 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // HOST 目标同样要给 Spring Boot 启动留时间：之前只等 6s，后端其实已起来却被判失败。
         int attempts = dockerTarget && resource != null ? 90 : 60;
         long sleepMs = dockerTarget && resource != null ? 2000L : 1000L;
+        // 等待窗口不能超过运行剩余预算：看护线程在总预算耗尽时直接请求取消，
+        // 再把运行强制判成 E-302「超时且无法中断」，真正的原因（端口不通、容器反复重启）
+        // 就被这条看护失败盖住，日志里看不到健康检查的任何诊断。
+        long remainingMs = state.maxRunMillis - (System.currentTimeMillis() - state.createdAt);
+        long windowMs = healthWindowMillis(attempts, sleepMs, remainingMs);
+        if (windowMs < attempts * sleepMs) {
+            state.log.append("[health] 等待窗口按运行剩余预算收敛为 ")
+                    .append(windowMs / 1000).append("s\n");
+        }
+        long deadlineNanos = System.nanoTime() + windowMs * 1_000_000L;
         boolean waitingHealth = false;
         String homeIssue = null;
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         String body = "";
         String exitInfo = null;
-        for (int i = 0; i < attempts; i++) {
+        for (int i = 0; i < attempts && (i == 0 || System.nanoTime() < deadlineNanos); i++) {
             try {
                 HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                        .timeout(Duration.ofSeconds(2)).GET().build();
+                        .timeout(Duration.ofMillis(HEALTH_PROBE_TIMEOUT_MS)).GET().build();
                 HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
                 body = response.body();
                 boolean statusOk = stage.expected() == 0
@@ -4464,7 +4500,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         ActionResult probe = host.run(Path.of("."), spec("health-probe", List.of(
                 dockerCli.cmd("inspect", "-f",
-                        "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", resource))), () -> false);
+                        "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", resource)),
+                PROBE_TIMEOUT), () -> false);
         if (probe.result().status() != StageStatus.SUCCEEDED) {
             return true; // 探测失败不阻塞：HTTP 已通即认为服务可用
         }
@@ -4476,7 +4513,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private String containerExitInfo(RunState state, String resource) {
         ActionResult probe = host.run(Path.of("."), spec("health-probe", List.of(
                 dockerCli.cmd("inspect", "-f",
-                        "{{.State.Status}} {{.State.ExitCode}}", resource))), () -> false);
+                        "{{.State.Status}} {{.State.ExitCode}}", resource)), PROBE_TIMEOUT), () -> false);
         if (probe.result().status() != StageStatus.SUCCEEDED) {
             return null;
         }
@@ -4513,7 +4550,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return;
         }
         host.run(Path.of("."), spec("health-cleanup", List.of(
-                dockerCli.cmd("rm", "-f", resource))), () -> false);
+                dockerCli.cmd("rm", "-f", resource)), CLEANUP_TIMEOUT), () -> false);
         state.log.append('[').append(stageId).append("] 已移除健康检查失败的容器 ")
                 .append(resource).append('\n');
     }
@@ -4531,7 +4568,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return null;
         }
         ActionResult logs = host.run(Path.of("."), spec("health-diag", List.of(
-                dockerCli.cmd("logs", "--tail", "20", resource))), () -> false);
+                dockerCli.cmd("logs", "--tail", "20", resource)), CLEANUP_TIMEOUT), () -> false);
         String tail = logs.logTail() == null ? "" : logs.logTail().trim();
         if (tail.isEmpty()) {
             return null;
@@ -4632,7 +4669,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     private ActionSpec spec(String id, List<List<String>> steps) {
-        return new ActionSpec(ActionId.BACKEND_BUILD, steps, List.of(), STAGE_TIMEOUT,
+        return spec(id, steps, STAGE_TIMEOUT);
+    }
+
+    /**
+     * 带显式预算的引擎内部命令。
+     *
+     * <p>健康检查 / 清理这类"辅助探测"不能沿用 5 分钟的阶段预算：docker 守护进程
+     * 一旦挂起，一次 inspect 就能把健康检查窗口（3 分钟）整个吃掉，看护线程再按总预算
+     * 强制终态，真正的失败原因（HTTP 5xx、容器反复重启）全都看不到。
+     */
+    private ActionSpec spec(String id, List<List<String>> steps, Duration timeout) {
+        return new ActionSpec(ActionId.BACKEND_BUILD, steps, List.of(), timeout,
                 ActionSource.builtin("engine#" + id));
     }
 

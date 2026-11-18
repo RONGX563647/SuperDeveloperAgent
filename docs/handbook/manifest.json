@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-18T06:48:15+08:00",
-  "sourceCommit": "f816a5d922329cbeda21e0b4ed4d48c2c0c16848",
+  "generatedAt": "2026-11-18T07:58:15+08:00",
+  "sourceCommit": "854f4ccd94b567d827a66882deca2e624155507f",
   "docs": [
     {
       "level": "L1",
@@ -96,8 +96,8 @@
       "symbol": "BuiltInPipelineEngine#trigger",
       "source": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
       "module": "agent-executor",
-      "start": 1162,
-      "end": 1257
+      "start": 1170,
+      "end": 1265
     },
     {
       "id": "gateway-chat-controller/chat-stream",
