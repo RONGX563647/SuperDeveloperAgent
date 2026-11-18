@@ -12,3 +12,4 @@ agent-infra/src/main/resources/db/migration/common/V1__platform_schema.sql 79beb
 agent-infra/src/main/resources/db/migration/common/V3__platform_indexes.sql f3eff7998fba2fdd7a0c6cd12287d7c4fee1c9f855af26c5c35988b83f278dbc
 agent-infra/src/main/resources/db/migration/postgresql/V2__identity_tables.sql e74cc85c1f5333d391c86e8178d247b13f86b8ba0406e295e34167d119d8a0df
 agent-infra/src/main/resources/db/migration/sqlite/V2__identity_tables.sql cd506205469d9a97b2e3f78c081dc4cbc03280795525e50478ff3f5f4f37e200
+agent-infra/src/main/resources/db/migration/postgresql/V4__identity_sequence_resync.sql e145c358501f2045f673b99f46edd904fa62441efa75eaa1ff05f3f404305824
