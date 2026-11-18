@@ -23,20 +23,18 @@ ROOT = Path(__file__).resolve().parents[2]
 SESSION_DIR = ROOT / "docs" / ".session"
 ACTIVE = SESSION_DIR / "active.json"
 EVIDENCE = SESSION_DIR / "test-evidence.json"
-# 证据复用 TTL：同一工作区内容在窗口内重复提交（重试、改提交信息）时不必重跑全量测试。
-EVIDENCE_TTL = int(os.environ.get("SESSION_ARCHIVE_EVIDENCE_TTL_MIN", "60")) * 60
-# 跨 worktree 测试锁：并行会话共享同一份 .git，锁也放在公共目录里。
+# 跨 worktree 测试锁超时（per-worktree 隔离后，只在同 worktree 内排队）。
 LOCK_TIMEOUT = 45 * 60
 LOCK_STALE = 90 * 60
 PROCESS = ROOT / "docs" / "process"
 SUMMARY = ROOT / "docs" / "summary"
 CATEGORIES = ("feat", "bug", "chore", "docs", "deploy")
 TEST_CATEGORIES = ("feat", "bug")
-DEFAULT_TEST_CMD = "mvn -B -pl spec-checks -am test"
 FOLDER_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{4})_([a-z0-9]+(?:-[a-z0-9]+)*)$")
 TEST_PATH_RE = re.compile(r"(/src/test/|Test\.java$|Tests\.java$|\.test\.tsx?$|\.spec\.tsx?$)")
 CASE_LINE_RE = re.compile(r"^\+\s*(@Test\b|@ParameterizedTest\b|it\(|test\()")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+MODULE_RE = re.compile(r"^platform/([^/]+)/")
 # hook 会把这些变量注入子进程（GIT_INDEX_FILE=.git/index 是相对路径），
 # 测试里再跑 git 时会按错误的目录解析，导致 worktree/index 建到别处。
 GIT_ENV_KEYS = (
@@ -270,11 +268,56 @@ def java_home() -> str:
     return os.environ.get("JAVA_HOME", "")
 
 
-class TestLock:
-    """跨 worktree 的互斥锁（O_CREAT|O_EXCL），拿不到就排队。
+def maven_binary() -> str:
+    """优先 mvnd（daemon 常驻，重复构建快），没有则回退 mvn。"""
+    for exe in ("mvnd", "mvn"):
+        if shutil.which(exe):
+            return exe
+    return "mvn"
 
-    <p>测试门禁与归档落盘共用这套实现：都用公共 .git 下的锁文件，
-    这样主树和 .agent/worktrees/* 之间不会各跑一套、也不会同时写同一份归档链。
+
+def changed_modules(staged_files: list[str]) -> list[str]:
+    """本次提交涉及的 Maven 模块（platform/<模块>/ 前缀，排除前端 web）。"""
+    mods = set()
+    for path in staged_files:
+        match = MODULE_RE.match(path)
+        if match and match.group(1) != "web":
+            mods.add(match.group(1))
+    return sorted(mods)
+
+
+def incremental_test_command(staged_files: list[str]) -> str:
+    """pre-commit 增量测试命令：只跑受影响模块及其下游（-amd），排除 spec-checks。
+
+    <p>spec-checks（ArchUnit 架构 + 契约检查）是全量扫描，改动业务模块时排除它、
+    移到 pre-push/CI；只有改动 spec-checks 本身时才跑它验证检查规则。
+    无 Maven 业务模块改动（如根 pom、tools/handbook）时跑全部业务模块、排除 spec-checks。
+    """
+    mvn = maven_binary()
+    mods = changed_modules(staged_files)
+    if not mods:
+        return f"{mvn} -B -pl !spec-checks test"
+    if "spec-checks" in mods:
+        return f"{mvn} -B -pl spec-checks test"
+    pl = ",".join(mods)
+    return f"{mvn} -B -pl {pl},!spec-checks -amd test"
+
+
+def worktree_git_dir() -> Path:
+    """当前 worktree 自己的 git dir（per-worktree 测试锁就放这里）。"""
+    proc = subprocess.run(["git", "rev-parse", "--absolute-git-dir"], cwd=ROOT,
+                          capture_output=True, env=clean_env())
+    if proc.returncode != 0:
+        raise GateError("git rev-parse --absolute-git-dir 失败，无法定位 worktree 锁目录")
+    return Path(proc.stdout.decode("utf-8", "replace").strip())
+
+
+class TestLock:
+    """同 worktree 内的互斥锁（O_CREAT|O_EXCL），拿不到就排队。
+
+    <p>锁文件放在当前 worktree 自己的 git dir 下（per-worktree 隔离），
+    不同 worktree 可并行跑各自的测试、互不阻塞；同一 worktree 内
+    （IDE 与 CLI 同时提交）仍串行，避免并发写 surefire 报告互相覆盖。
     """
 
     def __init__(self, path: Path, label: str = "测试"):
@@ -373,12 +416,6 @@ def cached_evidence(command: str, fingerprint: str) -> dict | None:
         return None
     if data.get("javaHome", java_home()) != java_home():
         return None
-    try:
-        ran_at = datetime.fromisoformat(str(data.get("ranAt"))).timestamp()
-    except ValueError:
-        return None
-    if not 0 <= time.time() - ran_at <= EVIDENCE_TTL:
-        return None
     data["reused"] = True
     return data
 
@@ -404,9 +441,9 @@ def cmd_gate_pre_commit(args) -> int:
             "--category feat|bug|chore|deploy --slug <英文短名> --title <中文标题>\n"
             "（docs 类纯文档提交免此限制）"
         )
-    command = (os.environ.get("SESSION_ARCHIVE_TEST_CMD") or DEFAULT_TEST_CMD).strip()
+    command = (os.environ.get("SESSION_ARCHIVE_TEST_CMD") or incremental_test_command(staged)).strip()
     try:
-        with TestLock(shared_state_dir() / "test.lock"):
+        with TestLock(worktree_git_dir() / "session-archive" / "test.lock"):
             fingerprint = ""
             try:
                 fingerprint = worktree_fingerprint()
@@ -585,16 +622,12 @@ def cmd_finish(args) -> int:
         "chain": {"prev": "GENESIS", "self": ""},
     }
 
-    # 取链尾 → 落盘 → 重排整条链必须原子完成，否则两个并行会话会各自接在同一个
-    # 旧链尾上，合并后就是断链（历史上已经踩过）。锁放在公共 .git 下，跨 worktree 生效。
-    try:
-        with TestLock(shared_state_dir() / "archive.lock", label="写归档"):
-            manifest["chain"]["self"] = manifest_self(manifest)
-            folder_dir = PROCESS / category / active["folder"]
-            write_json(folder_dir / "manifest.json", manifest)
-            resealed = reseal_chain(category)
-    except GateError as exc:
-        return fail(str(exc))
+    # 落盘 + 重排整条链：不再用全局互斥锁，改为乐观并发——链由 createdAt 完全决定，
+    # 并行 finish 各自接在旧链尾后，reseal_chain 会整体重排收敛，不产生断链。
+    manifest["chain"]["self"] = manifest_self(manifest)
+    folder_dir = PROCESS / category / active["folder"]
+    write_json(folder_dir / "manifest.json", manifest)
+    resealed = reseal_chain(category)
 
     write_summary(manifest, active, period)
     ACTIVE.unlink(missing_ok=True)
@@ -910,6 +943,17 @@ def handbook_check() -> int:
     return proc.returncode
 
 
+def spec_checks() -> int:
+    """spec-checks 全量（ArchUnit 架构 + 契约检查），pre-push 兜底。
+
+    <p>pre-commit 为秒级反馈只跑受影响模块单测、排除架构规则；这里补跑全量
+    spec-checks（含 ArchitectureRulesTest 的 ArchUnit 规则），推送前兜底。
+    """
+    command = f"{maven_binary()} -B -pl spec-checks -am test"
+    proc = subprocess.run(command, cwd=ROOT / "platform", shell=True, env=clean_env())
+    return proc.returncode
+
+
 def cmd_gate_pre_push(args) -> int:
     if ACTIVE.exists():
         active = load_json(ACTIVE)
@@ -929,6 +973,8 @@ def cmd_gate_pre_push(args) -> int:
         return result
     if handbook_check() != 0:
         return fail("Harness Handbook 已漂移：运行 python tools/handbook/build.py sync 并提交 docs/handbook")
+    if spec_checks() != 0:
+        return fail("spec-checks 规约检查未通过（架构 + 契约）；禁止推送")
     return 0
 
 
