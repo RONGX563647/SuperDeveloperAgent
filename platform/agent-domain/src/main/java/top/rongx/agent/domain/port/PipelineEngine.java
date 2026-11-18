@@ -160,6 +160,39 @@ public interface PipelineEngine {
         public static final int MAX_LINES = 5_000;
     }
 
+    /**
+     * 某次运行可用于「复用构建」的产物（默认无）。
+     *
+     * <p>为什么需要：部署链路原来是「每次都重建」。一次 8 分钟的构建只为了改一次部署参数，
+     * 或者验证阶段想部署刚构建好的同一份产物，都得重新跑一遍构建。有了这条查询，
+     * 部署可以直接复用已有镜像，但必须先自证「同一份代码、同一个版本」。
+     */
+    default ReusableBuild reusableBuild(String runId) {
+        return ReusableBuild.unavailable("当前引擎不支持复用构建产物");
+    }
+
+    /**
+     * 可复用的构建产物。
+     *
+     * @param available 是否可复用（运行成功 + 存在镜像产物）
+     * @param image     镜像引用
+     * @param version   该次运行的版本号
+     * @param gitSha    该次运行的提交
+     * @param reason    不可复用的原因（可复用时为空）
+     */
+    record ReusableBuild(boolean available, String image, String version, String gitSha,
+                         String reason) {
+
+        public static ReusableBuild unavailable(String reason) {
+            return new ReusableBuild(false, "", "", "", reason);
+        }
+
+        public static ReusableBuild of(String image, String version, String gitSha) {
+            return new ReusableBuild(true, image, version == null ? "" : version,
+                    gitSha == null ? "" : gitSha, "");
+        }
+    }
+
     /** 最近构建历史（含重启前落盘的运行）；默认无。 */
     default List<RunSummary> history() {
         return List.of();

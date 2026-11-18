@@ -54,6 +54,7 @@ import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.LogLinePage;
 import top.rongx.agent.domain.port.PipelineEngine.ReleaseFacts;
+import top.rongx.agent.domain.port.PipelineEngine.ReusableBuild;
 import top.rongx.agent.domain.pipeline.ReleaseMode;
 import top.rongx.agent.domain.pipeline.TagState;
 import top.rongx.agent.domain.port.PipelineEngine.ImageVersion;
@@ -1548,6 +1549,53 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .toList();
         return new LogLinePage(page.offset(), page.limit(), page.total(), redacted,
                 page.truncated());
+    }
+
+    /**
+     * 可复用的构建产物：只有成功运行且真的产出了镜像才算。
+     *
+     * <p>复用是「同一份代码 + 同一个版本」的优化，不是省掉校验的理由：
+     * 调用方（{@code deploy_run} 的 {@code build_run_id}）必须再比对 gitSha 与版本，
+     * 不一致就明确拒绝并说明差异，而不是悄悄部署了另一份产物。
+     */
+    @Override
+    public ReusableBuild reusableBuild(String runId) {
+        if (runId == null || runId.isBlank() || !hasRun(runId)) {
+            return ReusableBuild.unavailable("运行不存在：" + runId);
+        }
+        RunState live = runs.get(runId);
+        StageStatus status = live == null ? null : live.status;
+        List<ArtifactRef> artifacts;
+        String version;
+        String sha;
+        if (live != null) {
+            artifacts = List.copyOf(live.artifacts);
+            version = live.deployVersion == null ? "" : live.deployVersion;
+            sha = live.gitSha;
+        } else {
+            RunSnapshot snapshot = history.list().stream()
+                    .filter(h -> h.runId().equals(runId))
+                    .findFirst().orElse(null);
+            if (snapshot == null) {
+                return ReusableBuild.unavailable("运行不存在：" + runId);
+            }
+            artifacts = snapshot.artifacts();
+            version = snapshot.version() == null ? "" : snapshot.version();
+            sha = snapshot.gitSha();
+            status = snapshot.status();
+        }
+        if (status != StageStatus.SUCCEEDED) {
+            return ReusableBuild.unavailable("该运行未成功（" + status + "），不能复用其产物");
+        }
+        String image = artifacts.stream()
+                .filter(a -> "image".equals(a.kind()))
+                .reduce((first, second) -> second)
+                .map(ArtifactRef::ref)
+                .orElse("");
+        if (image.isBlank()) {
+            return ReusableBuild.unavailable("该运行没有产出镜像产物（可能只跑了检查构建）");
+        }
+        return ReusableBuild.of(image, version, sha);
     }
 
     /**
