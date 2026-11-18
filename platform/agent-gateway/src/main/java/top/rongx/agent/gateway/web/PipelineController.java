@@ -523,6 +523,15 @@ public class PipelineController {
         }
         // 增量日志模式下（withLog=false）不重复传输整段日志
         view.put("log", withLog ? engine.logTail(runId) : "");
+        // 发布形态事实：首次发布 / tag 是否真的在远端可见 / 为什么没生效。
+        // 只给版本号时页面只能显示"看起来成功"，用户到远端才发现没有标签。
+        PipelineEngine.ReleaseFacts release = engine.releaseFacts(runId);
+        view.put("release", Map.of(
+                "firstRelease", release.firstRelease(),
+                "tagState", release.tagState() == null ? "" : release.tagState(),
+                "tagReason", release.tagReason() == null ? "" : release.tagReason(),
+                "hint", release.hint() == null ? "" : release.hint(),
+                "remoteVisible", "PUSHED".equalsIgnoreCase(release.tagState())));
         // 运行元信息：触发者 / 环境绑定 / 定义来源（Agent 固化脚本时可直接看出）
         RunMeta meta = engine.runMeta(runId);
         if (meta != null) {

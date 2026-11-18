@@ -53,6 +53,9 @@ import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.PipelineEngine.LogLinePage;
+import top.rongx.agent.domain.port.PipelineEngine.ReleaseFacts;
+import top.rongx.agent.domain.pipeline.ReleaseMode;
+import top.rongx.agent.domain.pipeline.TagState;
 import top.rongx.agent.domain.port.PipelineEngine.ImageVersion;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.StagePreview;
@@ -1547,6 +1550,31 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 page.truncated());
     }
 
+    /**
+     * 发布形态事实：首次发布 / 标签是否远端可见 / 为什么没生效。
+     *
+     * <p>数据同时在内存态（刚跑完的运行）与历史快照（重启前）里，
+     * 两处都读，页面刷新后看到的结论与运行结束时一致。
+     */
+    @Override
+    public ReleaseFacts releaseFacts(String runId) {
+        RunState live = runs.get(runId);
+        if (live != null) {
+            TagState tag = TagState.fromWire(live.tagStatus);
+            return new ReleaseFacts(live.firstRelease, live.tagStatus == null ? "" : live.tagStatus,
+                    live.tagReason == null ? tag.reasonCode() : live.tagReason, tag.hint());
+        }
+        RunSnapshot snapshot = history.list().stream()
+                .filter(h -> h.runId().equals(runId))
+                .findFirst().orElse(null);
+        if (snapshot == null) {
+            return new ReleaseFacts(false, "", "", "");
+        }
+        TagState tag = TagState.fromWire(snapshot.tagStatus());
+        return new ReleaseFacts(false, snapshot.tagStatus() == null ? "" : snapshot.tagStatus(),
+                tag.reasonCode(), tag.hint());
+    }
+
     /** 构建历史列表（含重启前落盘的运行），转为 domain 视图。 */
     @Override
     public List<RunSummary> history() {
@@ -1881,22 +1909,35 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (!state.deployTagged || state.deployVersion == null
                 || state.deployVersion.isBlank() || repoLocator == null) {
             // 未打 tag 的构建是快照版：历史里要能和正式版本区分开
-            state.tagStatus = state.deployVersion == null ? null : "SNAPSHOT";
+            state.tagStatus = state.deployVersion == null ? null : TagState.SNAPSHOT.wireName();
+            return;
+        }
+        // 版本线与目标分支不一致：前置拒绝，绝不打出一个错位的标签
+        String conflict = ReleaseMode.versionBranchConflict(state.deployVersion, state.branch);
+        if (!conflict.isBlank()) {
+            state.tagStatus = TagState.REJECTED.wireName();
+            state.tagReason = TagState.REJECTED.reasonCode();
+            state.log.append("[tag] 拒绝打标签：").append(conflict).append('\n');
             return;
         }
         try {
             top.rongx.agent.domain.port.ProjectRepoLocator.TagOutcome outcome =
                     repoLocator.createTag(state.projectId, state.deployVersion, state.gitSha,
                             userIdOf(state.actor));
-            // PUSHED=远端可见；LOCAL=只存在本机（无 origin/推送失败）；FAILED=创建失败
-            state.tagStatus = outcome.pushed() ? "PUSHED" : outcome.created() ? "LOCAL" : "FAILED";
+            // 只有 pushed 才算远端可见；created-only 是「只在本机」，
+            // 不能当成成功——这正是「打 tag 未生效」的根因。
+            TagState tagState = outcome.pushed() ? TagState.PUSHED
+                    : outcome.created() ? TagState.LOCAL_ONLY : TagState.FAILED;
+            state.tagStatus = tagState.wireName();
+            state.tagReason = tagState.reasonCode();
             state.log.append("[tag] ").append(outcome.message()).append('\n');
-            if (!outcome.pushed()) {
-                state.log.append("[tag] 标签未同步到远端：检查代码托管账号的凭据后，"
-                        + "可在构建历史里点「重推标签」。\n");
+            if (tagState == TagState.LOCAL_ONLY) {
+                // 明确写出「未生效」与下一步，而不是让用户在远端自己发现没有标签
+                state.log.append("[tag] ").append(tagState.hint()).append('\n');
             }
         } catch (Exception e) {
-            state.tagStatus = "FAILED";
+            state.tagStatus = TagState.FAILED.wireName();
+            state.tagReason = TagState.FAILED.reasonCode();
             state.log.append("[tag] 同步 git 标签失败：").append(e.getMessage()).append('\n');
         }
     }
@@ -3837,8 +3878,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (rollback && (image == null || image.isBlank())) {
             // 首次发布失败时会走到回滚：没有上一版不是错误，跳过即可，
             // 否则一次失败会多出一条 E-507，误导成"第二个故障"。
-            state.log.append('[').append(stageId)
-                    .append("] 本项目尚无成功发布记录，无可回滚版本，跳过回滚\n");
+            // 这里不只看日志，还要把「首次发布」这个事实显式说出来：
+            // 用户看到的应当是「没有可回滚版本（首次发布）」而不是一条失败。
+            ReleaseMode mode = ReleaseMode.of(previous);
+            state.firstRelease = mode.firstRelease();
+            state.log.append('[').append(stageId).append("] ")
+                    .append(mode.reason()).append("，跳过回滚\n");
             state.stages.add(StageResult.success(stageId, 0, List.of(), elapsed(start)));
             return true;
         }
@@ -4980,8 +5025,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile boolean deployTagged;
         /** 发布分支（版本线分支 x.y.0-snapshot）：一个版本线一个分支。 */
         volatile String branch;
-        /** 打 tag 结果：PUSHED=远端可见 / LOCAL=仅本地 / FAILED=失败；null=未打标签。 */
+        /** 打 tag 结果：PUSHED=远端可见 / LOCAL=仅本地 / FAILED=失败 / REJECTED=前置拒绝；null=未打标签。 */
         volatile String tagStatus;
+        /** tag 状态的稳定原因码（LOCAL 时为 TAG_PUSH_CREDENTIAL_MISSING），供页面与自愈分类。 */
+        volatile String tagReason;
+        /** 本次是否首次发布（该环境没有上一版镜像）：回滚预检据此跳过而不是报错。 */
+        volatile boolean firstRelease;
         /** 端口租约分配出的宿主端口（0 = 尚未分配，health 用 pipeline 里的端口）。 */
         volatile int deployHostPort;
         /** 本次运行加载的流水线定义（deploy 段从这里读）。 */

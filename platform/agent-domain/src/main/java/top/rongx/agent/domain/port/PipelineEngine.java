@@ -166,6 +166,30 @@ public interface PipelineEngine {
     }
 
     /**
+     * 一次发布的形态事实：是否首次发布、标签是否真的在远端可见、为什么没生效。
+     *
+     * <p>为什么单独拿出来：这三件事散在日志里时，页面只能显示「版本号」这一个
+     * 看起来成功的字段，用户到远端才发现没有标签。把它们做成结构化事实，
+     * 历史行、详情页与自愈 Agent 才有一致的判定依据。
+     *
+     * @param runId 运行 id
+     */
+    default ReleaseFacts releaseFacts(String runId) {
+        return new ReleaseFacts(false, "", "", "");
+    }
+
+    /**
+     * 发布形态事实。
+     *
+     * @param firstRelease 本次是否首次发布（该环境没有上一版）
+     * @param tagState     标签状态线值（PUSHED / LOCAL / FAILED / REJECTED / SNAPSHOT）
+     * @param tagReason    稳定原因码（LOCAL → TAG_PUSH_CREDENTIAL_MISSING）
+     * @param hint         面向用户的处理建议
+     */
+    record ReleaseFacts(boolean firstRelease, String tagState, String tagReason, String hint) {
+    }
+
+    /**
      * 构建历史分页（项目可选，按时间倒序）。
      *
      * <p>默认实现基于 {@link #history()} 过滤，引擎可实现为索引分页，
