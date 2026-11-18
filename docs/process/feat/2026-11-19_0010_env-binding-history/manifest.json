@@ -1,0 +1,108 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_0010_env-binding-history",
+  "category": "feat",
+  "title": "环境绑定历史可查询，解绑保留记录",
+  "createdAt": "2026-11-19T00:10:39+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "task-2ee7375068: 环境卡片只回当前绑定，历史绑定记录看不到；补 bindings 全量查询接口与 revoked 状态",
+    "toolCallCount": 0
+  },
+  "problem": "task-2ee7375068：环境卡片只回当前绑定，历史绑定记录既没持久化查询接口、也没有解绑留痕——用户切换或解绑一次后，就再也看不到上次绑的是谁、什么时候绑的、为什么失效。",
+  "solution": "EnvironmentStore 增加 bindings(projectId, env, limit) 全量查询（含草稿/已确认/过期/已解绑，按创建时间倒序）与 revokeBinding(id, actor)；EnvBinding 增加 REVOKED 状态与统一的 usable() 口径；网关新增 GET /settings/projects/{id}/env-bindings（返回 currentBindingId 与 bindings[]）与 POST /env-bindings/{id}/revoke（只标记不删除）；前端补 listEnvBindings / revokeEnvBinding。",
+  "commits": [
+    {
+      "sha": "e7a886e0f3e9b4928badeba7edccc5d803fe97c2",
+      "subject": "feat(env): 环境绑定历史可查，解绑标记 REVOKED 而不删记录",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/env/EnvBinding.java",
+          "status": "M",
+          "additions": 18,
+          "deletions": 0,
+          "blobHash": "6b98d7ed8416f991a2a0bc2e9ff8f4f094a433f5"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/env/EnvironmentStore.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "e113b35d3b6ea9624bea8078e320ac2c30dea7aa"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/EnvironmentController.java",
+          "status": "M",
+          "additions": 45,
+          "deletions": 0,
+          "blobHash": "3712829e67b948a10a0d4b08c2ef973cb0d318d6"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 78,
+          "deletions": 0,
+          "blobHash": "87c4bbb642b0755d0bf4f3d47ededab323cfb228"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/env/DbEnvironmentStore.java",
+          "status": "M",
+          "additions": 39,
+          "deletions": 0,
+          "blobHash": "ab873e4a1b5426e804c973def4e0eeb64c55382b"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/env/EnvBindingHistoryTest.java",
+          "status": "A",
+          "additions": 105,
+          "deletions": 0,
+          "blobHash": "b31fbf1fdfa40101a5795fa8c7f992f3eeac519b"
+        },
+        {
+          "path": "platform/web/src/api/settings.ts",
+          "status": "M",
+          "additions": 26,
+          "deletions": 0,
+          "blobHash": "482b69442a1d5af47fd4d22be8feb3502a0c2a53"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/env/EnvBindingHistoryTest.java",
+        "status": "A",
+        "additions": 105,
+        "deletions": 0,
+        "blobHash": "b31fbf1fdfa40101a5795fa8c7f992f3eeac519b"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "mvn -B -nsu -pl agent-domain,agent-gateway,agent-infra,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-gateway,agent-infra test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 327, Failures: 0, Errors: 0, Skipped: 3"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "agent-infra",
+      "web"
+    ],
+    "verification": "Tests run: 327, Failures: 0, Errors: 0, Skipped: 3"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_0010_env-binding-history"
+    ]
+  },
+  "chain": {
+    "prev": "c88b47682fd955bc2ffe6221ededdf0d744cee969065cb9083f93aed80301876",
+    "self": "d212060751b2bac5bf9507ef94df948a208f8e773ebb8b7277e3f4b5edef17d5"
+  }
+}
