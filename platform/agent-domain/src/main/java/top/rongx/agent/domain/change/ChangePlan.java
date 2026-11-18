@@ -61,11 +61,14 @@ public record ChangePlan(
     /**
      * 是否是「确认卡片可执行」的变更。
      *
-     * <p>只有补丁类（{@code patch:*}）与 {@link ActionId} 里的动作能被
-     * {@code /apply} 执行；{@code env_ensure / deploy_save_recipe / env_mapping_draft}
-     * 这类留痕单没有执行闭环，不应推送成「变更待确认」卡片。
+     * <p>只有补丁类（{@code patch:*}）、编辑器授权（{@code editor_branch:*}）与
+     * {@link ActionId} 里的动作能被 {@code /apply} 执行；{@code env_ensure /
+     * deploy_save_recipe / env_mapping_draft} 这类留痕单没有执行闭环，
+     * 不应推送成「变更待确认」卡片。
      */
     public boolean executable() {
-        return kind.startsWith("patch:") || ActionId.fromWire(kind).isPresent();
+        return kind.startsWith("patch:")
+                || kind.startsWith("editor_branch:")
+                || ActionId.fromWire(kind).isPresent();
     }
 }

@@ -1,0 +1,31 @@
+# 批次 4 任务清单：Agent 写权限
+
+- [x] T1 domain 端口与变更单查询
+  - 新增 `agent-domain/.../domain/port/SessionWorkspaceEditor.java`（Session/Diff/Commit + 7 方法）
+  - `ChangeStore` 增加 `findLatest(projectId, kindPrefix)`
+  - `ChangePlan.executable()` 支持 `editor_branch:` 前缀
+- [x] T2 infra 会话工作树编辑
+  - `GitWorktreeManager` 增加 `diffStatWorking`、`commitAllChecked`
+  - 新增 `agent-infra/.../workspace/SessionWorktreeEditor.java`
+    - worktree 名 `wt-session-*` / 分支 `agent/session-*`，已存在则复用与 checkout
+    - 路径校验（绝对路径、`..`、`.git`）与敏感文件拒绝
+    - read/write/delete/list/diff/commit，写上限 200_000 字符
+- [x] T3 governance 与 gateway 闭环
+  - `ChangeRegistry.findLatest`（LIKE 前缀 + created_at desc limit 1）
+  - `ChangeController.apply` 对 `editor_branch:` 直接置 APPLIED 并返回成功
+  - `ChatController.CHANGE_TOOLS` 增加 3 个写工具
+- [x] T4 tools 工具面
+  - 新增 `EditorTools`（7 个工具，英文 description ≤40 字符）
+  - 授权：`editor_branch:<branch>`，CONFIRMED/APPLIED 放行，PENDING 复用单号
+  - `ToolCatalog.agentToolkit` / `deployToolkit` 注册；`ToolPlugins.change` 收录
+- [x] T5 测试
+  - `EditorToolsTest`（生产/无工作树/未授权/已授权/超限/路径逃逸）
+  - `SessionWorktreeEditorTest`（临时 git 仓库：open→write→diff→commit，复用与拒绝）
+  - `ChangePlanTest` 增 `editor_branch` 断言；`ToolChainTest` 增装配断言
+- [ ] T6 验收
+  - `mvn -B -pl agent-tools,agent-infra -am test`
+  - `mvn -B -pl spec-checks -am test`（含 ToolSchemaBudget / Handbook / ArchUnit）
+  - `python tools/handbook/build.py sync`
+  - 不重启后端/前端
+- [ ] T7 归档与提交
+  - `gate.py start` → `git commit -F` → `gate.py finish` → 提交 docs

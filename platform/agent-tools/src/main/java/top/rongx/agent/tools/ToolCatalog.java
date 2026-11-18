@@ -39,6 +39,7 @@ public class ToolCatalog {
                                    ConfigTools configTools,
                                    EnvQueryTools envQueryTools,
                                    GitIssueQueryTools gitIssueQueryTools,
+                                   ChangeQueryTools changeQueryTools,
                                    ApiDocTools apiDocTools,
                                    ToolCatalogTools toolCatalogTools,
                                    AskUserTools askUserTools,
@@ -46,7 +47,7 @@ public class ToolCatalog {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
-                apiDocTools, toolCatalogTools, askUserTools);
+                changeQueryTools, apiDocTools, toolCatalogTools, askUserTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
@@ -61,6 +62,7 @@ public class ToolCatalog {
                                               ConfigTools configTools,
                                               EnvQueryTools envQueryTools,
                                               GitIssueQueryTools gitIssueQueryTools,
+                                              ChangeQueryTools changeQueryTools,
                                               ApiDocTools apiDocTools,
                                               ToolCatalogTools toolCatalogTools,
                                               AskUserTools askUserTools) {
@@ -74,6 +76,8 @@ public class ToolCatalog {
         toolkit.registerTool(envQueryTools);
         // 任务页只读：生产会话也能看到 Issue 任务
         toolkit.registerTool(gitIssueQueryTools);
+        // 变更单只读：确认卡异步广播，模型必须能事后查"确认了没/执行了没"
+        toolkit.registerTool(changeQueryTools);
         // API 文档与工具目录：只读规范，不调用任何业务接口
         toolkit.registerTool(apiDocTools);
         toolkit.registerTool(toolCatalogTools);
@@ -87,6 +91,7 @@ public class ToolCatalog {
                                 CiQueryTools ciQueryTools,
                                 CiCommandTools ciCommandTools,
                                 ChangeTools changeTools,
+                                ChangeQueryTools changeQueryTools,
                                 ActionQueryTools actionQueryTools,
                                 ActionCommandTools actionCommandTools,
                                 DeployTools deployTools,
@@ -97,6 +102,7 @@ public class ToolCatalog {
                                 RuntimeTools runtimeTools,
                                 ConfigTools configTools,
                                 PatchTools patchTools,
+                                EditorTools editorTools,
                                 OpsAgentTools opsAgentTools,
                                 CapabilityMarketTools capabilityMarketTools,
                                 GitIssueQueryTools gitIssueQueryTools,
@@ -125,9 +131,12 @@ public class ToolCatalog {
         // 写操作工具：直接注册，保证非生产会话始终可见（确认交给变更单 / 确认卡）
         toolkit.registerTool(ciCommandTools);
         toolkit.registerTool(changeTools);
+        toolkit.registerTool(changeQueryTools);
         toolkit.registerTool(actionCommandTools);
         // 受限写：只能改 ci/、构建配置与测试代码，仍需人工确认后应用
         toolkit.registerTool(patchTools);
+        // 会话工作树编辑：写/删/提交需要分支级一次确认
+        toolkit.registerTool(editorTools);
         // 多 Agent 协作：对话 Agent 可把"把某环境真正跑通/固化"委派给发布 Agent。
         // 只进对话工具面；发布 Agent 的工具面没有它（防递归），生产会话的只读面也没有它。
         toolkit.registerTool(opsAgentTools);
@@ -159,6 +168,7 @@ public class ToolCatalog {
                                      ConfigTools configTools,
                                      EnvQueryTools envQueryTools,
                                      GitIssueQueryTools gitIssueQueryTools,
+                                     ChangeQueryTools changeQueryTools,
                                      ApiDocTools apiDocTools,
                                      ToolCatalogTools toolCatalogTools,
                                      AskUserTools askUserTools,
@@ -166,7 +176,7 @@ public class ToolCatalog {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
-                apiDocTools, toolCatalogTools, askUserTools);
+                changeQueryTools, apiDocTools, toolCatalogTools, askUserTools);
         toolkit.registerTool(supervisorTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
@@ -196,8 +206,10 @@ public class ToolCatalog {
                                  RuntimeTools runtimeTools,
                                  ConfigTools configTools,
                                  ChangeTools changeTools,
+                                 ChangeQueryTools changeQueryTools,
                                  ActionCommandTools actionCommandTools,
                                  PatchTools patchTools,
+                                 EditorTools editorTools,
                                  ApiDocTools apiDocTools,
                                  ToolCatalogTools toolCatalogTools,
                                  ToolResultCache cache) {
@@ -216,8 +228,11 @@ public class ToolCatalog {
         toolkit.registerTool(apiDocTools);
         toolkit.registerTool(toolCatalogTools);
         toolkit.registerTool(changeTools);
+        toolkit.registerTool(changeQueryTools);
         toolkit.registerTool(actionCommandTools);
         toolkit.registerTool(patchTools);
+        // 会话工作树编辑：写/删/提交需要分支级一次确认
+        toolkit.registerTool(editorTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }

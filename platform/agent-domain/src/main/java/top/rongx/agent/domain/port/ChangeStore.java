@@ -38,6 +38,13 @@ public interface ChangeStore {
     /** 按 id 查。 */
     Optional<ChangePlan> find(String changeId);
 
+    /**
+     * 最近一条 kind 以 {@code kindPrefix} 开头的变更（按创建时间倒序取 1）。
+     *
+     * <p>会话级授权用它判断"该分支是否已被人工确认过"：前缀不匹配、或没有记录时返回空。
+     */
+    Optional<ChangePlan> findLatest(String projectId, String kindPrefix);
+
     /** 更新流转状态（人工确认 / 执行结果）；planHash 不变。 */
     void updateStatus(String changeId, ChangePlan.Status status);
 }

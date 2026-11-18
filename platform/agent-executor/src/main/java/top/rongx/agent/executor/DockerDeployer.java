@@ -11,6 +11,7 @@ import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 import top.rongx.agent.domain.port.Deployer;
 
 /**
@@ -187,7 +188,18 @@ public class DockerDeployer implements Deployer {
                              List<String> extraArgs, StringBuilder log, String endpointHost) {
         BooleanSupplier never = () -> false;
 
-        // 0. 镜像必须在本地：docker run 找不到镜像时会先去 registry 拉，
+        // 0. 镜像名是 docker run 的位置参数，以 - 开头会被当成选项（参数注入）：
+        //    镜像 tag 来自流水线 image_package 的产物命名，属于外部可控输入，必须校验。
+        String imageRef;
+        try {
+            imageRef = ImageRef.require(image, "deploy.image");
+        } catch (RecipeException e) {
+            return DeployResult.failed(DeployTarget.DOCKER, e.code(),
+                    e.getMessage(), ProcessExecutor.redact(log.toString()));
+        }
+        image = imageRef;
+
+        // 1. 镜像必须在本地：docker run 找不到镜像时会先去 registry 拉，
         //    被镜像源白名单拦下后只留下 "exit 125 … not in the allowlist"，
         //    把"本机没这个镜像"伪装成容器启动失败。回滚场景更糟：下面会先删掉在跑的容器。
         StringBuilder inspectLog = new StringBuilder();
@@ -217,13 +229,29 @@ public class DockerDeployer implements Deployer {
         }
 
         // 2. 起新（环境变量按 key 排序，保证同样输入产生同样的 docker 参数）
+        //
+        // 默认加固：应用容器不需要额外 Linux capabilities（nginx 绑 80 除外，见下），
+        // 也不需要 setuid 提权。这两项对正常应用无感，但能挡住"容器内提权后横向移动"。
+        // 不设 --read-only：应用要写临时文件、上传目录、日志，只读会直接打断业务。
         List<String> argv = new ArrayList<>(docker.cmd(
                 "run", "-d",
                 "--name", name,
                 "--restart", "unless-stopped",
+                "--security-opt", "no-new-privileges",
                 "--label", "com.docker.compose.project=" + composeProject(network, null),
                 "--label", "com.docker.compose.service=" + name,
                 "-p", hostPort + ":" + containerPort));
+        if (containerPort <= 1024) {
+            // 绑 <1024 需要 CAP_NET_BIND_SERVICE（镜像以非 root 运行时丢了就起不来）；
+            // 只补回这一项，不给 NET_RAW / SETUID 等其它能力
+            argv.add("--cap-drop");
+            argv.add("ALL");
+            argv.add("--cap-add");
+            argv.add("NET_BIND_SERVICE");
+        } else {
+            argv.add("--cap-drop");
+            argv.add("ALL");
+        }
         argv.addAll(extraArgs);
         if (network != null && !network.isBlank()) {
             argv.add("--network");

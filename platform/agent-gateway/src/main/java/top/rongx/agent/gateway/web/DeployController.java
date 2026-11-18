@@ -130,13 +130,20 @@ public class DeployController {
         return out;
     }
 
-    /** 重放：用该环境已固化的脚本确定性跑一次（不调用模型）。 */
+    /**
+     * 重放：用该环境已固化的脚本确定性跑一次（不调用模型）。
+     *
+     * <p>{@code deployTarget} 必须跟着重放一起进来：固化脚本里记的是"当初跑通时的目标"，
+     * 用户在面板上选了「打包成镜像」，若这里不接收就会被静默丢弃、按脚本里的 host 执行。
+     */
     @PostMapping("/{projectId}/replay")
     public Map<String, Object> replay(@PathVariable String projectId,
                                       @RequestParam String env,
                                       @RequestParam String sha,
-                                      @RequestParam(required = false) String confirmToken) {
+                                      @RequestParam(required = false) String confirmToken,
+                                      @RequestParam(required = false) String deployTarget) {
         currentUser.requireUserId();
+        String target = normalizeTarget(deployTarget);
         // prod 允许用"测试环境固化脚本"晋升（证据由 DeployGate 校验）；其他环境必须自己有脚本
         boolean hasScript = recipes.current(projectId, env).isPresent()
                 || ("prod".equals(env) && recipes.current(projectId, "test").isPresent());
@@ -147,8 +154,26 @@ public class DeployController {
         Map<String, String> params = new LinkedHashMap<>();
         params.put("gitSha", sha);
         params.put("env", env);
+        // 目标随重放下发：不传时引擎按固化脚本里的 target 走
+        if (target != null) {
+            params.put("deployTarget", target);
+        }
         String runId = engine.trigger(projectId, releasePipeline(projectId), params);
-        return Map.of("runId", runId, "env", env, "status", engine.status(runId).name());
+        return Map.of("runId", runId, "env", env, "status", engine.status(runId).name(),
+                "deployTarget", target == null ? "" : target);
+    }
+
+    /** 部署目标只接受 docker / host / server；非法值直接拒绝，避免静默回落成脚本里的旧目标。 */
+    private static String normalizeTarget(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String value = raw.trim().toLowerCase();
+        if (!value.equals("docker") && !value.equals("host") && !value.equals("server")) {
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT,
+                    "deployTarget 只能是 docker / host / server：" + raw);
+        }
+        return value;
     }
 
     /**

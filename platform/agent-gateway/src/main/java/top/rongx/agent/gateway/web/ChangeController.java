@@ -39,6 +39,9 @@ public class ChangeController {
     /** 补丁类变更的 kind 前缀：{@code patch:<patchId>}。 */
     private static final String PATCH_PREFIX = "patch:";
 
+    /** 编辑器授权类变更的 kind 前缀：{@code editor_branch:<branch>}。 */
+    private static final String EDITOR_PREFIX = "editor_branch:";
+
     private final ChangeStore registry;
     private final ConfirmTokenService tokens;
     private final PasswordVerifier passwordVerifier;
@@ -92,11 +95,17 @@ public class ChangeController {
         // 4. 执行：成功 → APPLIED，失败 → FAILED（Agent 可据此查状态，不再只能靠回执猜）
         try {
             ActionController.RunView view;
-            // 4.1 补丁类变更：把补丁提交到新分支（不碰用户当前分支）
-            if (plan.kind().startsWith(PATCH_PREFIX)) {
+            // 4.1 编辑器授权类变更：确认卡点「应用」即视为授权完成，不执行动作；
+            //     真正的写文件由 Agent 下一次工具调用在该分支上完成
+            if (plan.kind().startsWith(EDITOR_PREFIX)) {
+                view = ActionController.RunView.of(new ActionResult(
+                        StageResult.success("editor", 0, List.of(), 0),
+                        "editor authorization applied: " + plan.kind()));
+            } else if (plan.kind().startsWith(PATCH_PREFIX)) {
+                // 4.2 补丁类变更：把补丁提交到新分支（不碰用户当前分支）
                 view = applyPatch(plan);
             } else {
-                // 4.2 解析动作并解析项目上下文
+                // 4.3 解析动作并解析项目上下文
                 ActionId action = ActionId.fromWire(plan.kind())
                         .orElseThrow(() -> new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "该变更不是可执行动作（kind=" + plan.kind() + "）"));
                 ProjectContext ctx = contextResolver.resolve(plan.projectId(), plan.env(), userId);

@@ -56,7 +56,7 @@ public class ChatController {
     /** 变更相关工具：只有它们的返回会被翻译成确认卡事件（委派结果里也可能带 changeId）。 */
     private static final java.util.Set<String> CHANGE_TOOLS =
             java.util.Set.of("request_confirmation", "confirm", "propose_patch", "run_action",
-                    "run_ops_agent");
+                    "run_ops_agent", "workspace_write", "workspace_delete", "workspace_commit");
 
     /** 生成环境绑定草案的工具：返回里带 bindingId，前端据此在对话中展开绑定确认卡。 */
     private static final java.util.Set<String> ENV_BINDING_TOOLS =

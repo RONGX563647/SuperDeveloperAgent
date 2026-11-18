@@ -361,6 +361,9 @@ public class DeployTools {
                       @ToolParam(name = "tag", required = false,
                               description = "是否打 tag：true = 新版本独立部署，不覆盖旧版本；false/空 = 覆盖该环境默认部署")
                       String tag,
+                      @ToolParam(name = "deploy_target", required = false,
+                              description = "部署方式：docker = 打包镜像运行，host = 直接跑本机 jar；空 = 按流水线定义")
+                      String deployTarget,
                       ProjectContext ctx) {
         String target = normalize(env);
         if ("prod".equals(target)) {
@@ -413,6 +416,15 @@ public class DeployTools {
         params.put("confirmedBy", binding.confirmedBy() == null ? "" : binding.confirmedBy());
         params.put("dryRunHash", dryRun.reportHash());
         params.put("dryRunFingerprint", dryRun.fingerprint());
+        // 目标随触发下发：不带时引擎按流水线定义走，agent 说的 docker 会被静默忽略
+        String wireTarget = null;
+        if (deployTarget != null && !deployTarget.isBlank()) {
+            wireTarget = deployTarget.trim().toLowerCase();
+            if (!"docker".equals(wireTarget) && !"host".equals(wireTarget)) {
+                return "err: deploy_target 只能是 docker / host（prod 走部署面板）";
+            }
+            params.put("deployTarget", wireTarget);
+        }
         if (version != null && !version.isBlank()) {
             params.put("version", version.trim());
         }
@@ -430,6 +442,7 @@ public class DeployTools {
         return "runId: " + runId + "\nenv: " + target
                 + "\nversion: " + (version == null || version.isBlank() ? "latest" : version.trim())
                 + "\ntagged: " + params.getOrDefault("tag", "false")
+                + "\ntarget: " + (wireTarget == null ? "按流水线定义" : wireTarget)
                 + "\nstatus: " + engine.status(runId);
     }
 

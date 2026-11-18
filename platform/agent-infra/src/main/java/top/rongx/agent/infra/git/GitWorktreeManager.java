@@ -801,6 +801,40 @@ public class GitWorktreeManager {
         return revParse(repoDir, "HEAD");
     }
 
+    /**
+     * 暂存全部改动并提交，<b>保留仓库自身的 hook</b>（不加 --no-verify）。
+     *
+     * <p>会话编辑分支由 Agent 写入、人工确认，属于"开发者流程"的一部分：
+     * hook 拒绝提交时原样报错，交给模型修复，而不是绕过仓库规则。
+     */
+    public String commitAllChecked(Path repoDir, String message) {
+        String text = message == null || message.isBlank()
+                ? "agent: session workspace update" : message.trim();
+        run(repoDir, List.of("git", "add", "-A"), "git add -A");
+        run(repoDir, List.of("git", "-c", "user.name=agent", "-c", "user.email=agent@local",
+                "commit", "--quiet", "-m", text), "git commit");
+        return revParse(repoDir, "HEAD");
+    }
+
+    /**
+     * 工作区未提交改动的 {@code --stat} 摘要（相对 HEAD）。
+     *
+     * <p>仓库还没有任何提交时 git 会报 unknown revision，这是正常状态，返回空列表。
+     */
+    public List<String> diffStatWorking(Path repoDir) {
+        Raw raw = exec(repoDir, List.of("git", "diff", "--stat", "HEAD"),
+                "git diff --stat HEAD", GIT_TIMEOUT_SECONDS, null);
+        if (raw.exit() != 0) {
+            String detail = raw.output();
+            if (detail.contains("unknown revision") || detail.contains("ambiguous argument")
+                    || detail.contains("does not have any commits")) {
+                return List.of();
+            }
+            throw new GitIntakeException("git diff --stat HEAD 失败：\n" + detail);
+        }
+        return raw.output().lines().filter(l -> !l.isBlank()).map(String::trim).toList();
+    }
+
     /** 把 --no-index 产出的 a/a/x、b/b/x 头改写为 a/x、b/x（供人工阅读）。 */
     private static String rewriteDiffHeaders(String diff, String relPath) {
         StringBuilder out = new StringBuilder();

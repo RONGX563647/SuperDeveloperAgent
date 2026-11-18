@@ -22,6 +22,7 @@ class ChangePlanTest {
         assertTrue(plan("stack_deploy").executable());
         assertTrue(plan("stack_rollback").executable());
         assertTrue(plan("patch:patch-123").executable());
+        assertTrue(plan("editor_branch:agent/session-wt-1").executable());
 
         // 留痕单没有 /apply 闭环，推卡必然 400
         assertFalse(plan("env_ensure").executable());

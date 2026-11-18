@@ -55,6 +55,14 @@ public class DockerActionRunner extends AbstractActionRunner {
             long prepareStart = System.nanoTime();
             // 先确认工具链镜像在本机，再动缓存卷：缺镜像是配置问题，应在数秒内明确报出
             sandbox.ensureImageReady(cancelled, live);
+            // tag 会被重新 pull 覆盖，同名 tag 在不同时间可能对应不同镜像；
+            // 把 digest 写进运行日志，事后才能确定这次构建到底用了哪份工具链。
+            if (live != null) {
+                String digest = sandbox.imageId(cancelled);
+                if (!digest.isBlank()) {
+                    live.accept("[sandbox] 镜像 " + sandbox.image() + " " + digest + "\n");
+                }
+            }
             sandbox.prepareCacheVolume(workspace, cancelled, live);
             long spentMs = (System.nanoTime() - prepareStart) / 1_000_000L;
             long budgetMs = spec.timeout().toMillis();

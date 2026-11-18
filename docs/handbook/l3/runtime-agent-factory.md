@@ -18,7 +18,8 @@ summary: 按环境与角色裁剪工具面、权限模式与迭代上限，构�
 
 1. `PolicyPort#decide(env, L2_EXECUTE_ISOLATED)` 取环境裁决；`DENY` 或 `ctx.readOnly()` 判为只读会话。
 2. 只读会话用 `DEFAULT` 权限 + 只读工具面；非只读会话用 `BYPASS`。
-   非生产不用 `ACCEPT_EDITS`：对话链路没有"用户已确认"的回传通道，会卡在 ASK。
+   非生产不用 `ACCEPT_EDITS`：工具审批没有"用户已确认"的回传通道，会卡在 ASK
+   （变更卡/绑定卡例外，前端会回灌确认、执行、失败三种结果）。
 3. 工具面先 `copy()` 再挂载，避免本会话的 MCP 工具污染共享单例。
 4. 非只读会话才挂 MCP；只读会话一律不挂（MCP 工具没有 readOnly 元数据）。
 5. 按设置页已启用集合取交集挂载 Skill；最后设置系统提示、模型、`maxIters` 与状态存储。

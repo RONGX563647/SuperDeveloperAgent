@@ -324,9 +324,9 @@ function onApprovalApplied(result: {
 /** 变更单执行失败：把原因回灌给 Agent，避免"卡片点了没反应"的静默失败。 */
 function onApprovalFailed(result: { changeId: string; reason: string }): void {
   continueAfterUserAction(
-    `用户在对话里确认并执行变更 ${result.changeId} 失败：${result.reason}。`
-    + '请不要假设变更已生效；判断是重新登记（核对 kind / 参数）还是停止，并向用户说明。',
-    '变更执行失败，已回传给 Agent',
+    `用户在该变更卡（${result.changeId}）上的操作失败了：${result.reason}。`
+    + '请不要假设变更已生效或已确认；判断是重新登记（核对 kind / 参数）还是停止，并向用户说明。',
+    '变更卡操作失败，已回传给 Agent',
     'warning',
   )
 }

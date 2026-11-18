@@ -115,6 +115,23 @@ public class ChangeRegistry implements ChangeStore {
     }
 
     @Override
+    public Optional<ChangePlan> findLatest(String projectId, String kindPrefix) {
+        if (projectId == null || projectId.isBlank()
+                || kindPrefix == null || kindPrefix.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return db.read(em -> GovernanceDb.row(em,
+                    "SELECT " + COLUMNS + " FROM change_plans"
+                            + " WHERE project_id = ? AND kind LIKE ?"
+                            + " ORDER BY created_at DESC LIMIT 1",
+                    projectId, kindPrefix + "%").map(ChangeRegistry::map));
+        } catch (RuntimeException e) {
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public void updateStatus(String changeId, ChangePlan.Status status) {
         if (changeId == null || changeId.isBlank()) {
             return;

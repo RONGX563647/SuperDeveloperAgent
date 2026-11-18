@@ -7,6 +7,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.LongPredicate;
 import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
@@ -61,6 +62,33 @@ public class DockerSandbox {
 
     /** 缓存卷初始化的可信最小镜像：只做 mkdir/chown/touch，绝不用构建镜像（可能是不可信代码）。 */
     private static final String DEFAULT_INIT_IMAGE = "busybox:1.36";
+
+    /**
+     * 根文件系统只读后唯一可写的位置：{@code /tmp}。
+     *
+     * <p>必须显式带 {@code exec}：tmpfs 默认 {@code noexec}，而 JVM 会把 jansi 原生库释放到
+     * {@code /tmp} 再 dlopen——noexec 下 Maven 构建会直接失败（开发机已实测）。
+     * 也不能省掉 {@code /tmp}：Gradle、corepack、各类安装脚本都会往临时目录写。
+     */
+    private static final String TMPFS_TMP = "/tmp:rw,exec,mode=1777";
+
+    /** 生命周期标签：启动时据此清扫上个进程遗留的容器，不误伤别人的容器。 */
+    private static final String MANAGED_LABEL = "agent.sandbox.managed=true";
+
+    /**
+     * 归属标签：{@code <主机名>:<pid>}。
+     *
+     * <p>只有 {@link #MANAGED_LABEL} 无法回答"这个容器是不是孤儿"——多个平台实例
+     * 共用同一个 Docker 守护进程时，启动即清扫会误杀别人正在跑的构建。
+     * 记下 pid 后，启动清扫只在「同主机且该 pid 已不存在」时动手。
+     */
+    private static final String OWNER_LABEL = "agent.sandbox.owner";
+
+    /** 本进程的归属标记：主机名:pid。进程重启后 pid 变化，旧容器就成了可回收的孤儿。 */
+    private static final String OWNER_TAG = hostName() + ":" + ProcessHandle.current().pid();
+
+    /** 清扫遗留容器时识别"本平台起的容器"的容器名前缀（与 {@link #beginContainer} 一致）。 */
+    private static final String CONTAINER_PREFIX = "agent-act-";
 
     /** 外部命令执行器：抽出以便超时逻辑复用、也便于在不依赖 Docker 的情况下单测。 */
     @FunctionalInterface
@@ -127,7 +155,9 @@ public class DockerSandbox {
                           String cacheVolumePrefix, Set<String> initializedVolumes,
                           CommandExecutor commandExecutor) {
         this.dockerBinary = dockerBinary == null ? "docker" : dockerBinary;
-        this.image = image;
+        // 镜像名最终是 docker run 的位置参数：以 - 开头会被当成选项（参数注入）。
+        // 在装配处就校验，配置错了启动即失败，而不是等到某次构建才炸。
+        this.image = ImageRef.require(image, "agent.sandbox.image");
         this.network = network == null ? "bridge" : network;
         this.memory = memory == null ? "2g" : memory;
         this.cpus = cpus == null ? "2" : cpus;
@@ -161,12 +191,17 @@ public class DockerSandbox {
         cmd.add(dockerBinary);
         cmd.add("run");
         cmd.add("--rm");
-        // 1a. 可选运行时（gVisor runsc 等）：空则用默认 runc
+        // 1a. 生命周期标签 + 固定容器名：标签供启动清扫遗留容器，名字供超时后精确 rm -f
+        cmd.add("--label");
+        cmd.add(MANAGED_LABEL);
+        cmd.add("--label");
+        cmd.add(OWNER_LABEL + "=" + OWNER_TAG);
+        // 1b. 可选运行时（gVisor runsc 等）：空则用默认 runc
         if (runtime != null && !runtime.isBlank()) {
             cmd.add("--runtime");
             cmd.add(runtime);
         }
-        // 1b. 固定容器名：超时/取消时据此 docker rm -f，防止 CLI 被杀后容器成孤儿
+        // 1c. 固定容器名：超时/取消时据此 docker rm -f，防止 CLI 被杀后容器成孤儿
         String containerName = ACTIVE_CONTAINER.get();
         if (containerName != null) {
             cmd.add("--name");
@@ -190,6 +225,12 @@ public class DockerSandbox {
         cmd.add("no-new-privileges");
         cmd.add("--cap-drop");
         cmd.add("ALL");
+        // 4b. 根文件系统只读：构建只需要写工作区与缓存卷（都已挂载），
+        //     镜像层不落盘 → 投毒脚本改不了 /usr/local/bin 等位置，容器也不会被写胖。
+        //     /tmp 必须可写且可执行，否则 JVM/pnpm 一启动就失败（见 TMPFS_TMP）。
+        cmd.add("--read-only");
+        cmd.add("--tmpfs");
+        cmd.add(TMPFS_TMP);
         // 5. 挂载工作区到 /ws 并设为工作目录
         cmd.add("--workdir");
         cmd.add(CONTAINER_WORKDIR);
@@ -225,6 +266,10 @@ public class DockerSandbox {
         cmd.add("COREPACK_HOME=" + (name != null ? "/cache/corepack" : "/tmp/corepack"));
         cmd.add("-e");
         cmd.add("COREPACK_ENABLE_DOWNLOAD_PROMPT=0");
+        // 5d. 根文件系统只读后 /home/<user> 不可写，但很多工具（git、npm、ssh、Gradle）
+        //     会在 $HOME 下建目录：显式指到可写的 /tmp，否则报一堆莫名其妙的 EACCES。
+        cmd.add("-e");
+        cmd.add("HOME=/tmp");
         // 6. 镜像 + 业务 argv
         cmd.add(image);
         cmd.addAll(argv);
@@ -510,6 +555,131 @@ public class DockerSandbox {
                 () -> false, null);
     }
 
+    /**
+     * 启动清扫：删掉上一个平台进程遗留的构建容器。
+     *
+     * <p>只靠 {@code --rm} 不够：动作超时或进程被 kill 时 docker CLI 先死，
+     * 容器会带着固定名字继续跑并占住内存/CPU，下次启动还可能因重名而失败。
+     *
+     * <p>清扫范围严格受限，绝不误杀其他实例正在跑的构建：
+     * <ul>
+     *   <li>必须带 {@link #MANAGED_LABEL}（平台自己起的）；</li>
+     *   <li>{@link #OWNER_LABEL} 记录的主机名与本机一致；</li>
+     *   <li>该 pid 已不存在（旧进程确实死了）。</li>
+     * </ul>
+     * 归属信息缺失的容器（旧版本留下的）只记日志不删除——无法判断是否仍有人在使用。
+     *
+     * @return 实际删除的容器名（空 = 没有需要清扫的）
+     */
+    public List<String> sweepStaleContainers(Consumer<String> log) {
+        BoundedCommand.Outcome listed = BoundedCommand.run(
+                List.of(dockerBinary, "ps", "-a", "--filter", "label=" + MANAGED_LABEL,
+                        "--format", "{{.Names}}|{{.Label \"" + OWNER_LABEL + "\"}}"),
+                15_000L);
+        if (!listed.ok()) {
+            notify(log, "[sandbox] 遗留容器清扫跳过：docker ps 失败（"
+                    + listed.detail() + "）\n");
+            return List.of();
+        }
+        List<String> removed = new ArrayList<>();
+        for (String name : staleCandidates(listed.output(), hostName(), DockerSandbox::processAlive)) {
+            commandExecutor.run(List.of(dockerBinary, "rm", "-f", name), PREPARE_TIMEOUT_MS,
+                    () -> false, null);
+            removed.add(name);
+            notify(log, "[sandbox] 已清理遗留容器 " + name + "（原进程已退出）\n");
+        }
+        return List.copyOf(removed);
+    }
+
+    /**
+     * 从 {@code docker ps} 的输出里挑出可以安全删除的遗留容器（纯函数，便于单测）。
+     *
+     * <p>每条记录形如 {@code agent-act-xxx|host:pid}。只有同时满足「平台前缀 + 本机 + pid 已退出」
+     * 才返回；归属信息缺失的（旧版本容器）不删，因为无法判断是否仍有人在使用。
+     *
+     * @param alive pid 是否存活（注入以便测试）
+     */
+    static List<String> staleCandidates(String dockerPsOutput, String host, LongPredicate alive) {
+        if (dockerPsOutput == null || dockerPsOutput.isBlank()) {
+            return List.of();
+        }
+        List<String> candidates = new ArrayList<>();
+        for (String raw : dockerPsOutput.split("\\R")) {
+            String line = raw.trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            int sep = line.indexOf('|');
+            String name = sep < 0 ? line : line.substring(0, sep).trim();
+            String owner = sep < 0 ? "" : line.substring(sep + 1).trim();
+            if (!name.startsWith(CONTAINER_PREFIX) || owner.isBlank()) {
+                continue;
+            }
+            if (!owner.startsWith(host + ":")) {
+                continue;
+            }
+            String pid = owner.substring(host.length() + 1);
+            try {
+                if (alive.test(Long.parseLong(pid.trim()))) {
+                    continue;
+                }
+            } catch (NumberFormatException e) {
+                continue; // 归属信息损坏时不冒险删除
+            }
+            candidates.add(name);
+        }
+        return List.copyOf(candidates);
+    }
+
+    /** 镜像指纹缓存：同一镜像在同一进程内不会变，只有 withImage 派生的沙箱需要重新取。 */
+    private volatile String resolvedImageId;
+
+    /**
+     * 镜像指纹：{@code docker image inspect --format {{.Id}}} 的 sha256。
+     *
+     * <p>只记 tag 无法回答"这次构建到底用了哪份镜像"——同名 tag 被重新 pull 后
+     * 两次构建的行为可以完全不同，排障时必须有可对照的指纹。
+     *
+     * @return 形如 {@code sha256:…}；取不到时返回空串（日志缺一项，不影响构建）
+     */
+    public String imageId(BooleanSupplier cancelled) {
+        String cached = resolvedImageId;
+        if (cached != null) {
+            return cached;
+        }
+        StringBuilder out = new StringBuilder();
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(
+                List.of(dockerBinary, "image", "inspect", "--format", "{{.Id}}", image),
+                IMAGE_INSPECT_TIMEOUT_MS, cancelled == null ? () -> false : cancelled,
+                out::append);
+        if (outcome.exitCode() != 0) {
+            return "";
+        }
+        String id = out.toString().trim();
+        resolvedImageId = id;
+        return id;
+    }
+
+    private static String hostName() {
+        String name = System.getenv("COMPUTERNAME");
+        if (name == null || name.isBlank()) {
+            name = System.getenv("HOSTNAME");
+        }
+        if (name == null || name.isBlank()) {
+            try {
+                name = java.net.InetAddress.getLocalHost().getHostName();
+            } catch (java.net.UnknownHostException e) {
+                name = "unknown";
+            }
+        }
+        return name.trim();
+    }
+
+    /** pid 是否仍存活；解析失败在 {@link #staleCandidates} 里按"已退出"处理。 */
+    private static boolean processAlive(long pid) {
+        return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
+    }
+
     /** 卷名只允许小写字母/数字/_-，避免非法项目名注入 docker 参数。 */
     static String safeVolumeName(String raw) {
         String normalized = raw.toLowerCase(java.util.Locale.ROOT)
@@ -539,7 +709,9 @@ public class DockerSandbox {
 
     /** 复制一份沙箱，只替换镜像（其余隔离参数与缓存卷不变）。 */
     public DockerSandbox withImage(String newImage) {
-        DockerSandbox copy = new DockerSandbox(dockerBinary, newImage, network, memory, cpus,
+        // stage.image 来自仓库里的流水线定义，是外部输入：校验与基础镜像完全一致
+        DockerSandbox copy = new DockerSandbox(dockerBinary,
+                ImageRef.require(newImage, "stage.image"), network, memory, cpus,
                 pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
         return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs)
                 .setNpmRegistry(npmRegistry).setRuntime(runtime).setInitImage(initImage);

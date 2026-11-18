@@ -1080,6 +1080,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 return;
             }
             String yaml = Files.readString(pipelineFile);
+            // 本次实际生效的目标写回脚本：否则用户切到 docker 跑通后，脚本里仍是 host，
+            // 下次预览会把部署方式填回 host、重放也按 host 部署，选择被静默吞掉。
+            String effective = state.deployTargetUsed == null || state.deployTargetUsed.isBlank()
+                    ? state.deployTargetOverride : state.deployTargetUsed;
+            String frozen = withDeployTarget(yaml, effective);
+            if (frozen != null && !frozen.equals(yaml)) {
+                state.log.append("[recipe] 已把本次实际生效的部署目标 ").append(effective)
+                        .append(" 写入固化脚本\n");
+                yaml = frozen;
+            }
             Path actionsFile = source.resolve("ci/actions.yml");
             String actions = Files.isRegularFile(actionsFile) ? Files.readString(actionsFile) : null;
 
@@ -1098,6 +1108,70 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             // 固化失败不能把已成功的运行判成失败：只记录，供人补
             state.log.append("[recipe] 固化失败（运行仍算成功）：").append(e.getMessage()).append('\n');
         }
+    }
+
+    /**
+     * 把 {@code deploy.target} 改写成指定值（其余字段与注释原样保留）。
+     *
+     * <p>只做文本替换不做反序列化再序列化：配方里的人工注释和字段顺序必须保住，
+     * 否则每次固化都会产生一份"看起来完全不同"的脚本。
+     *
+     * @return 改写后的 YAML；目标非法或脚本里没有 deploy 段时返回 null（不固化成错误的目标）
+     */
+    static String withDeployTarget(String yaml, String target) {
+        if (yaml == null || target == null || DeployTarget.fromWire(target).isEmpty()) {
+            return null;
+        }
+        String wire = DeployTarget.fromWire(target).orElseThrow().wireName();
+        String[] lines = yaml.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (!line.matches("^\\s*deploy:\\s*\\{.*}\\s*$")) {
+                continue;
+            }
+            // 流式写法：deploy: {target: host, port: 8182}
+            int open = line.indexOf('{');
+            int close = line.lastIndexOf('}');
+            String body = line.substring(open + 1, close);
+            String rewritten = body.matches("(?s).*\\btarget\\s*:.*")
+                    ? body.replaceFirst("(\\btarget\\s*:\\s*)[^,}]+", "$1" + wire)
+                    : (body.isBlank() ? "target: " + wire : "target: " + wire + ", " + body);
+            lines[i] = line.substring(0, open + 1) + rewritten + line.substring(close);
+            return String.join("\n", lines);
+        }
+        for (int i = 0; i < lines.length; i++) {
+            if (!lines[i].matches("^\\s*deploy:\\s*$")) {
+                continue;
+            }
+            int deployIndent = indentOf(lines[i]);
+            for (int j = i + 1; j < lines.length; j++) {
+                String line = lines[j];
+                if (line.isBlank()) {
+                    continue;
+                }
+                int childIndent = indentOf(line);
+                if (childIndent <= deployIndent) {
+                    break; // deploy 段结束，且里面没有 target
+                }
+                if (line.matches("^\\s+target\\s*:.*")) {
+                    lines[j] = line.replaceFirst("(:\\s*).*$", "$1" + wire);
+                    return String.join("\n", lines);
+                }
+            }
+            // 块式写法但没有 target：插在 deploy 行之后（同级缩进）
+            List<String> out = new ArrayList<>(List.of(lines));
+            out.add(i + 1, " ".repeat(deployIndent + 2) + "target: " + wire);
+            return String.join("\n", out);
+        }
+        return null;
+    }
+
+    private static int indentOf(String line) {
+        int i = 0;
+        while (i < line.length() && line.charAt(i) == ' ') {
+            i++;
+        }
+        return i;
     }
 
     /**
@@ -3348,8 +3422,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             ActionRunner runner = selectRunner(state, stage, substituted);
             // monorepo：stage 可在子目录执行（如 backend / frontend），
             // 但产物与镜像仍按仓库根记账，避免各模块配方各写一套路径。
-            Path stageDir = (stage.workdir() == null || stage.workdir().isBlank())
-                    ? runDir : runDir.resolve(stage.workdir()).normalize();
+            // stage.workdir 来自仓库里的流水线定义（模型/补丁可写）：`../../..` 会把宿主任意目录
+            // 挂进容器当工作目录，等于把沙箱隔离让给配置文件。越界一律拒绝。
+            Path stageDir = resolveWorkdir(runDir, stage.workdir());
+            if (stageDir == null) {
+                state.stages.add(StageResult.failed(stage.id(), 1, ErrorCode.ARGV_INVALID.code(),
+                        "stage " + stage.id() + " 的 workdir 越出仓库目录：" + stage.workdir(),
+                        elapsed(start)));
+                state.log.append('[').append(stage.id()).append("] ❌ ")
+                        .append(ErrorCode.ARGV_INVALID.code()).append(" workdir 越出仓库目录：")
+                        .append(stage.workdir()).append('\n');
+                return false;
+            }
             // 与预览同一套渲染：日志里的命令就是触发前看到的命令（所见即所跑）
             String shell = shellFor(stage);
             state.log.append('[').append(stage.id()).append("] $ ")
@@ -3703,6 +3787,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     "未知部署目标：" + desired + "（可选 docker / host / server）", elapsed(start)));
             return false;
         }
+        // 目标来源必须写进日志：以前界面上选了 docker、日志里却是 host，
+        // 只能靠猜是"触发参数没传"还是"脚本里写死"，排障成本极高。
+        state.log.append("[deploy] 部署目标 ").append(target.wireName())
+                .append(state.deployTargetOverride != null && !state.deployTargetOverride.isBlank()
+                        ? "（来自触发参数）" : "（来自流水线定义）")
+                .append('\n');
 
         String currentImage = state.artifacts.stream()
                 .filter(a -> "image".equals(a.kind()))
@@ -4475,6 +4565,26 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             // 首页取不到但健康接口已通过：不据此判失败（部分工程只暴露接口）
             return null;
         }
+    }
+
+    /**
+     * 解析 stage 的工作目录，并保证它没有越出本次运行的检出目录。
+     *
+     * <p>{@code stage.workdir} 来自仓库里的 {@code .agent/pipeline.yml}，可以被模型或补丁改动。
+     * 它最终会被当作 {@code docker run -v <stageDir>:/ws --workdir /ws} 的宿主机路径：
+     * {@code workdir: ../../..} 会把宿主任意目录暴露给容器内的构建脚本，
+     * 沙箱隔离就被一个配置文件绕过了。因此越界（含符号链接解析前的上跳）一律拒绝。
+     *
+     * @return 合法的工作目录；越界返回 {@code null}（由调用方记 E-201 并终止该阶段）
+     */
+    static Path resolveWorkdir(Path runDir, String workdir) {
+        if (workdir == null || workdir.isBlank()) {
+            return runDir;
+        }
+        Path base = runDir.toAbsolutePath().normalize();
+        Path resolved = base.resolve(workdir).normalize();
+        // startsWith 比较的是规范化后的路径段，`a/../..` 这类上跳已在此前被 normalize 消掉
+        return resolved.startsWith(base) ? resolved : null;
     }
 
     /**

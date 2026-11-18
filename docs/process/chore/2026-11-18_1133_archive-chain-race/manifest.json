@@ -1,0 +1,53 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-18_1133_archive-chain-race",
+  "category": "chore",
+  "title": "归档落盘互斥与链重排",
+  "createdAt": "2026-11-18T11:33:43+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "给归档门禁加跨 worktree 互斥并在写链时重算链尾",
+    "toolCallCount": 0
+  },
+  "problem": "并行会话各自 finish 时读到同一旧链尾，合并后出现多处 chain.prev 断链，pre-push 直接拦下推送；此前只能手工重算",
+  "solution": "归档落盘走公共 .git 下的 archive.lock 互斥（复用 TestLock，支持自定义标签），并在同一临界区内按 createdAt 重排整条链、重算 self（新增 reseal_chain）；self-test 增加并联接链→重排恢复的用例",
+  "commits": [
+    {
+      "sha": "115e5c5f1d0efeb4388eb277280d8e04329969fa",
+      "subject": "chore(session-archive): 归档落盘加跨 worktree 互斥并按 createdAt 重排链",
+      "category": "chore",
+      "files": [
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 67,
+          "deletions": 15,
+          "blobHash": "13e7ecf5c417cab397d30ddcba387362930f9f7c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "gate.py self-test OK；gate.py validate 通过（57 份）；ProcessArchiveTest 两项覆盖 validate/self-test"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_1133_archive-chain-race"
+    ]
+  },
+  "chain": {
+    "prev": "956a2c76ad32cb8169db84efa093d8f6aa58ff4b124ab07d35a780feed205e3d",
+    "self": "11916824238c85ce7109bca876c9af8bd26d894b50caa1f5ec8fa2e39a9f7e04"
+  }
+}
