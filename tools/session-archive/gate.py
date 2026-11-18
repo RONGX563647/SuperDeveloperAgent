@@ -117,10 +117,28 @@ def manifests(root: Path = PROCESS) -> list[tuple[Path, dict]]:
     return rows
 
 
-def category_chain(category: str) -> list[dict]:
-    rows = [m for _, m in manifests() if m.get("category") == category]
-    rows.sort(key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
-    return rows
+def reseal_chain(category: str, root: Path = PROCESS) -> list[str]:
+    """按 createdAt 重排某个分类的归档链，重算每份的 prev/self。
+
+    <p>并行会话各自 finish 时看到的链尾是同一个（旧的）末端，合并后必然出现
+    多条记录指向同一 prev 的断链。链本身由 createdAt 完全决定，所以落盘后
+    整体重算一遍即可恢复：prev 依次串起来，self 随内容重算。只改真正变化的文件。
+    """
+    rows = [(path, manifest) for path, manifest in manifests(root)
+            if manifest.get("category") == category]
+    rows.sort(key=lambda row: (row[1].get("createdAt", ""), row[1].get("id", "")))
+    changed: list[str] = []
+    prev = "GENESIS"
+    for path, manifest in rows:
+        chain = manifest.setdefault("chain", {})
+        before = (chain.get("prev"), chain.get("self"))
+        chain["prev"] = prev
+        chain["self"] = manifest_self(manifest)
+        if before != (chain["prev"], chain["self"]):
+            write_json(path, manifest)
+            changed.append(str(manifest.get("id")))
+        prev = chain["self"]
+    return changed
 
 
 def classify(subject: str) -> str:
@@ -253,10 +271,15 @@ def java_home() -> str:
 
 
 class TestLock:
-    """跨 worktree 的测试互斥锁（O_CREAT|O_EXCL），拿不到就排队。"""
+    """跨 worktree 的互斥锁（O_CREAT|O_EXCL），拿不到就排队。
 
-    def __init__(self, path: Path):
+    <p>测试门禁与归档落盘共用这套实现：都用公共 .git 下的锁文件，
+    这样主树和 .agent/worktrees/* 之间不会各跑一套、也不会同时写同一份归档链。
+    """
+
+    def __init__(self, path: Path, label: str = "测试"):
         self.path = path
+        self.label = label
         self.fd: int | None = None
 
     def __enter__(self):
@@ -278,14 +301,15 @@ class TestLock:
                     continue
                 if time.time() > deadline:
                     raise GateError(
-                        f"等待其它 worktree 的测试锁超时（{LOCK_TIMEOUT // 60} 分钟）：{self.path}"
+                        f"等待其它 worktree 的{self.label}锁超时"
+                        f"（{LOCK_TIMEOUT // 60} 分钟）：{self.path}"
                     )
                 if not waiting:
-                    out("另一个 worktree 正在跑测试门禁，排队等待…")
+                    out(f"另一个 worktree 正在{self.label}，排队等待…")
                     waiting = True
                     last_note = time.time()
                 elif time.time() - last_note > 60:
-                    out(f"仍在等待测试锁（{self.path.name}）…")
+                    out(f"仍在等待{self.label}锁（{self.path.name}）…")
                     last_note = time.time()
                 time.sleep(1)
 
@@ -535,8 +559,6 @@ def cmd_finish(args) -> int:
     if category in TEST_CATEGORIES and tests_section["casesAdded"] < 1:
         return fail("feat/bug 归档至少要有 1 个新增测试用例")
 
-    chain_rows = category_chain(category)
-    prev = chain_rows[-1]["chain"]["self"] if chain_rows else "GENESIS"
     period = active["folder"][:7]
     summary_ref = f"{period}/{active['folder']}"
     manifest = {
@@ -560,16 +582,26 @@ def cmd_finish(args) -> int:
         },
         "followUps": active.get("followUps") or [],
         "links": {"relatedIds": [], "summaryRefs": [summary_ref]},
-        "chain": {"prev": prev, "self": ""},
+        "chain": {"prev": "GENESIS", "self": ""},
     }
-    manifest["chain"]["self"] = manifest_self(manifest)
 
-    folder_dir = PROCESS / category / active["folder"]
-    write_json(folder_dir / "manifest.json", manifest)
+    # 取链尾 → 落盘 → 重排整条链必须原子完成，否则两个并行会话会各自接在同一个
+    # 旧链尾上，合并后就是断链（历史上已经踩过）。锁放在公共 .git 下，跨 worktree 生效。
+    try:
+        with TestLock(shared_state_dir() / "archive.lock", label="写归档"):
+            manifest["chain"]["self"] = manifest_self(manifest)
+            folder_dir = PROCESS / category / active["folder"]
+            write_json(folder_dir / "manifest.json", manifest)
+            resealed = reseal_chain(category)
+    except GateError as exc:
+        return fail(str(exc))
+
     write_summary(manifest, active, period)
     ACTIVE.unlink(missing_ok=True)
     EVIDENCE.unlink(missing_ok=True)
     out(f"归档完成：docs/process/{category}/{active['folder']}/manifest.json")
+    if resealed:
+        out(f"归档链已重排（{len(resealed)} 份）：{', '.join(resealed)}")
     out(f"总结：docs/summary/{period}/{active['folder']}.md")
     out("请提交 docs/ 归档后再推送")
     return 0
@@ -975,6 +1007,26 @@ def cmd_self_test(args) -> int:
         write_json(target, dup)
         if not validate_root(root, skip_git=True):
             return fail("self-test: ideSessionId 重复应报错")
+
+        # 并行会话各接旧链尾 → 合并后断链；reseal_chain 应把链重排回一致
+        write_json(target, base)
+        later = json.loads(json.dumps(base))
+        later["id"] = "feat/2026-11-17_1100_sample-later"
+        later["createdAt"] = "2026-11-17T11:00:00+08:00"
+        later["chain"] = {"prev": "GENESIS", "self": ""}
+        later["chain"]["self"] = manifest_self(later)
+        later_path = (root / "docs" / "process" / "feat"
+                      / "2026-11-17_1100_sample-later" / "manifest.json")
+        write_json(later_path, later)
+        if not any("chain.prev 断链" in e for e in validate_root(root, skip_git=True)):
+            return fail("self-test: 并联接链应被判为断链")
+        resealed = reseal_chain("feat", root / "docs" / "process")
+        if resealed != ["feat/2026-11-17_1100_sample-later"]:
+            return fail(f"self-test: 只应重排后一份归档，实际 {resealed}")
+        if validate_root(root, skip_git=True):
+            return fail("self-test: 重排后链应恢复一致")
+        if reseal_chain("feat", root / "docs" / "process"):
+            return fail("self-test: 链已一致时重排不应再改文件")
     out("self-test OK")
     return 0
 
