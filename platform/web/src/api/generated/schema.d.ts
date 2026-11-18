@@ -976,8 +976,8 @@ export interface paths {
         put?: never;
         /** save */
         post: operations["save_5"];
-        /** reset */
-        delete: operations["reset"];
+        /** switch to sqlite */
+        delete: operations["switchToSqlite"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1000,6 +1000,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/database/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** switch to postgres */
+        post: operations["switchToPostgres"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/database/migrate": {
         parameters: {
             query?: never;
@@ -1011,23 +1028,6 @@ export interface paths {
         put?: never;
         /** migrate */
         post: operations["migrate"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/settings/database/legacy/import": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** legacy import */
-        post: operations["legacyImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2165,23 +2165,6 @@ export interface paths {
         };
         /** reveal var */
         get: operations["revealVar"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/settings/database/legacy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** legacy status */
-        get: operations["legacyStatus"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5810,7 +5793,7 @@ export interface operations {
             };
         };
     };
-    reset: {
+    switchToSqlite: {
         parameters: {
             query?: never;
             header?: never;
@@ -5860,7 +5843,7 @@ export interface operations {
             };
         };
     };
-    migrate: {
+    switchToPostgres: {
         parameters: {
             query?: never;
             header?: never;
@@ -5888,14 +5871,14 @@ export interface operations {
             };
         };
     };
-    legacyImport: {
+    migrate: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
                     [key: string]: unknown;
@@ -7756,28 +7739,6 @@ export interface operations {
                 env: string;
                 key: string;
             };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-        };
-    };
-    legacyStatus: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
             cookie?: never;
         };
         requestBody?: never;

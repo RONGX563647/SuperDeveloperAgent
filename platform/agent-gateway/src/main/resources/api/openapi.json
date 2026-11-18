@@ -2654,8 +2654,8 @@
       },
       "delete" : {
         "tags" : [ "database-settings-controller" ],
-        "summary" : "reset",
-        "operationId" : "reset",
+        "summary" : "switch to sqlite",
+        "operationId" : "switchToSqlite",
         "responses" : {
           "200" : {
             "description" : "OK",
@@ -2702,11 +2702,11 @@
         }
       }
     },
-    "/api/v1/settings/database/migrate" : {
+    "/api/v1/settings/database/switch" : {
       "post" : {
         "tags" : [ "database-settings-controller" ],
-        "summary" : "migrate",
-        "operationId" : "migrate",
+        "summary" : "switch to postgres",
+        "operationId" : "switchToPostgres",
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -2733,11 +2733,11 @@
         }
       }
     },
-    "/api/v1/settings/database/legacy/import" : {
+    "/api/v1/settings/database/migrate" : {
       "post" : {
         "tags" : [ "database-settings-controller" ],
-        "summary" : "legacy import",
-        "operationId" : "legacyImport",
+        "summary" : "migrate",
+        "operationId" : "migrate",
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -2746,7 +2746,8 @@
                 "additionalProperties" : { }
               }
             }
-          }
+          },
+          "required" : true
         },
         "responses" : {
           "200" : {
@@ -5238,26 +5239,6 @@
             "type" : "string"
           }
         } ],
-        "responses" : {
-          "200" : {
-            "description" : "OK",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "object",
-                  "additionalProperties" : { }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/settings/database/legacy" : {
-      "get" : {
-        "tags" : [ "database-settings-controller" ],
-        "summary" : "legacy status",
-        "operationId" : "legacyStatus",
         "responses" : {
           "200" : {
             "description" : "OK",

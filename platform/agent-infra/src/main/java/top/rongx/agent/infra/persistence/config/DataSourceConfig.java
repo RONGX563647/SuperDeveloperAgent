@@ -13,7 +13,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
-import top.rongx.agent.infra.persistence.LegacySqliteImporter;
 import top.rongx.agent.infra.persistence.PlatformDb;
 import top.rongx.agent.infra.persistence.SqliteWalCheckpointer;
 
@@ -23,6 +22,9 @@ import top.rongx.agent.infra.persistence.SqliteWalCheckpointer;
  * <p>两库使用同一套 JPA 实体，schema 由 Flyway 统一迁移（V1 建表 / V2 自增表 / V3 索引，
  * 见 {@code agent-infra/src/main/resources/db/migration}），Hibernate
  * {@code hbm2ddl.auto=update} 仅作为安全网补缺列。
+ *
+ * <p>这里装配的是<b>启动时</b>的后端。运行中换库不重建这些 Bean，而是替换
+ * {@link PlatformDb} 内部的资源持有者（见 {@code DatabaseHotSwapper}）。
  */
 @Configuration
 public class DataSourceConfig {
@@ -68,21 +70,18 @@ public class DataSourceConfig {
     }
 
     /**
-     * 旧库导入器：只装配，<b>启动时不执行</b>。
+     * 旧库导入器已删除：
      *
-     * <p>启动期静默改数据没有可观测性与可选择性（用户看不到导入了哪些表、也无法在导入前
-     * 核对源库），因此这里没有 {@code initMethod}：Bean 只提供给设置页「旧库导入」使用，
-     * 由用户在页面上显式点「开始导入」。启动链路仅保留 {@link SqliteWalCheckpointer}
-     * 这类不改数据的收尾动作。
+     * <p>改造前的 8 个分域 {@code .db} 曾在这里自动导入（更早是 {@code initMethod}），
+     * 但这条需求已经取消——统一库的 schema 与历史数据由运维一次性处理，
+     * 平台不再承担旧库搬运职责。相关导入口（设置页卡片、REST 接口、巡检逻辑）一并移除。
      */
-    @Bean
-    public LegacySqliteImporter legacySqliteImporter(PlatformDb platformDb, AgentDbProperties props) {
-        return new LegacySqliteImporter(platformDb, props);
-    }
 
     /**
-     * 应用就绪后把统一库的 WAL 合并回主文件。作为 {@link org.springframework.boot.ApplicationRunner}
-     * 会在所有 {@code initMethod}（含旧库导入）之后执行，确保导入数据一并落盘。
+     * 应用就绪后把统一库的 WAL 合并回主文件。
+     *
+     * <p>这是启动链路上唯一会碰数据库的收尾动作，且它<b>不改数据行</b>：只把
+     * {@code .db-wal} 里的页合并回主文件，保证主文件自包含、备份时不丢数据。
      */
     @Bean
     public SqliteWalCheckpointer sqliteWalCheckpointer(PlatformDb platformDb, AgentDbProperties props) {

@@ -65,6 +65,7 @@ sa-token:
 agent:
   # 数据库：留空走 SQLite（单文件、零运维）；配置 PG URL 后所有持久化切换过去。
   # 只认“未配置”时回落 SQLite；配置了 PG 但连不上会启动失败，避免数据分裂。
+  # 运行中换后端不必改这里：设置页的「热切换」会替换连接池并写回 db-backend.yml。
   db:
     url: ${AGENT_DB_URL:}
     username: ${AGENT_DB_USERNAME:}
@@ -72,10 +73,6 @@ agent:
     password: ${AGENT_DB_PASSWORD:}
     sqlite-file: ${AGENT_SQLITE_FILE:./data/workspaces/_platform/platform.db}
     pool-size: ${AGENT_DB_POOL_SIZE:8}
-    # 旧库导入：改造前的 8 个分域 .db 是否允许在设置页「旧库导入」执行。
-    # 导入<b>不在启动时自动跑</b>（启动静默改数据不可观测），只由用户显式触发；
-    # 这里设为 false 会关掉设置页的导入入口。
-    import-legacy: ${AGENT_DB_IMPORT_LEGACY:true}
   # OpenAPI 快照与访问控制：
   # - snapshot：启动时刷新，供 api_search / api_get 与外部 MCP 读取；
   # - public：默认 false（需登录 + settings:read），仅本地联调可放开。

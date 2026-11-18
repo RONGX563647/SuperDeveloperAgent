@@ -9,6 +9,9 @@ import top.rongx.agent.domain.error.ErrorCode;
  *
  * <p>只认“未配置”时回落 SQLite；配置了 PG 但连不上必须启动失败，
  * 否则会出现部分数据落 PG、部分落本地文件的不可合并状态。
+ *
+ * <p>这里只描述<b>启动时</b>装配的连接池参数。运行中换后端由设置页的热切换完成
+ * （见 {@code DatabaseHotSwapper}），不通过修改这个 record 实现——它是不可变的。
  */
 @ConfigurationProperties(prefix = "agent.db")
 public record AgentDbProperties(
@@ -16,8 +19,7 @@ public record AgentDbProperties(
         String username,
         String password,
         String sqliteFile,
-        Integer poolSize,
-        Boolean importLegacy) {
+        Integer poolSize) {
 
     private static final String SQLITE_PREFIX = "jdbc:sqlite:";
     private static final String POSTGRES_PREFIX = "jdbc:postgresql:";
@@ -30,9 +32,6 @@ public record AgentDbProperties(
         sqliteFile = sqliteFile == null || sqliteFile.isBlank()
                 ? DEFAULT_SQLITE_FILE : sqliteFile.trim();
         poolSize = poolSize == null || poolSize < 1 ? 8 : poolSize;
-        // 旧库导入在<b>设置页显式触发</b>，启动不再自动跑；这个开关只决定设置页
-        // 是否允许执行导入，以及页面上「开始导入」按钮的可用性。
-        importLegacy = importLegacy == null || importLegacy;
         if (!url.isEmpty()
                 && !url.startsWith(SQLITE_PREFIX)
                 && !url.startsWith(POSTGRES_PREFIX)) {

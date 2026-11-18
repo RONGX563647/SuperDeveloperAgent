@@ -1,29 +1,25 @@
 package top.rongx.agent.infra.persistence.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.context.annotation.Bean;
-import top.rongx.agent.infra.persistence.LegacySqliteImporter;
 import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
- * 装配层回归：旧库导入<b>不得</b>挂在启动链路上。
+ * 装配层契约：数据源可建可用，且<b>启动链路不再夹带旧库导入</b>。
  *
- * <p>历史事故：{@code @Bean(initMethod = "run")} 让每次启动都静默导入旧库并在日志里
- * 打印"新增 N 行"，用户既没点过也没预期。这里把"启动不写数据"钉成断言：
- * 一是 Bean 上没有 initMethod；二是把旧库文件放在目录里、只创建 Bean 不调用方法，
- * 统一库必须一行不多、一个完成标记都不写。
+ * <p>历史事故：旧库导入曾用 {@code @Bean(initMethod = "run")} 挂在启动装配上，
+ * 每次启动静默导入并打日志。那条需求已取消，{@code LegacySqliteImporter} 整体删除；
+ * 这里断言装配面只剩数据源与不改数据的 WAL checkpoint。
  */
 class DataSourceConfigTest {
 
@@ -39,14 +35,14 @@ class DataSourceConfigTest {
     @DisplayName("SQLite 模式自动创建目录并返回可用连接")
     void sqliteCreatesDatabaseFile() throws Exception {
         Path db = tempDir.resolve("nested/platform.db");
-        AgentDbProperties props = new AgentDbProperties("", "", "", db.toString(), 2, false);
+        AgentDbProperties props = new AgentDbProperties("", "", "", db.toString(), 2);
 
         javax.sql.DataSource dataSource = new DataSourceConfig().dataSource(props);
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             statement.execute("CREATE TABLE smoke (id TEXT PRIMARY KEY)");
             statement.execute("INSERT INTO smoke (id) VALUES ('ok')");
-            try (java.sql.ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM smoke")) {
+            try (ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM smoke")) {
                 assertTrue(rs.next());
                 assertTrue(rs.getInt(1) == 1);
             }
@@ -54,62 +50,57 @@ class DataSourceConfigTest {
             ((com.zaxxer.hikari.HikariDataSource) dataSource).close();
         }
 
-        assertTrue(java.nio.file.Files.isRegularFile(db));
+        assertTrue(Files.isRegularFile(db));
     }
 
     @Test
-    @DisplayName("旧库导入 Bean 没有 initMethod：启动不会自动导入")
-    void legacyImporterHasNoInitMethod() throws Exception {
-        Method factory = DataSourceConfig.class.getMethod("legacySqliteImporter",
-                PlatformDb.class, AgentDbProperties.class);
-        Bean bean = factory.getAnnotation(Bean.class);
-
-        assertTrue(bean != null, "legacySqliteImporter 必须仍是 Bean（供设置页注入）");
-        assertEquals("", bean.initMethod(),
-                "不得声明 initMethod：旧库导入只能由设置页显式触发，不能在启动时执行");
+    @DisplayName("装配面不含旧库导入：相关方法已从 DataSourceConfig 删除")
+    void noLegacyImporterOnConfig() {
+        boolean present = java.util.Arrays.stream(DataSourceConfig.class.getDeclaredMethods())
+                .anyMatch(m -> m.getName().toLowerCase(java.util.Locale.ROOT).contains("legacy"));
+        org.junit.jupiter.api.Assertions.assertFalse(present,
+                "旧库导入需求已取消，DataSourceConfig 不得再装配 LegacySqliteImporter");
     }
 
     @Test
-    @DisplayName("只装配 Bean 不调用方法：统一库不新增任何行与标记")
-    void wiringAloneImportsNothing() throws Exception {
-        // 目录里放一个真实旧库，模拟"用户机器上历史库还在"的现场。
-        // 用 run_ledger：它是已映射的实体表，统一库里必然存在，断言才有意义。
-        try (Connection connection = DriverManager.getConnection(
-                "jdbc:sqlite:" + tempDir.resolve("governance.db"));
-             Statement statement = connection.createStatement()) {
-            statement.execute("""
-                    CREATE TABLE run_ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL,
-                        project_id TEXT NOT NULL, subject_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
-                        state TEXT NOT NULL, summary TEXT NOT NULL, error TEXT NOT NULL,
-                        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)
-                    """);
-            statement.execute("""
-                    INSERT INTO run_ledger VALUES ('legacy-1','CHAT','p1','','u1','SUCCEEDED','旧库记录','',1,2)
-                    """);
+    @DisplayName("PlatformDb 支持热切换：换后端后同一引用读到新库")
+    void platformDbSupportsHotSwap() throws Exception {
+        Path first = tempDir.resolve("first.db");
+        Path second = tempDir.resolve("second.db");
+
+        // 用 create 而非 sqlite：后者会进全局 STANDALONE 注册表，closeAll 会二次关闭
+        PlatformDb shared = PlatformDb.create("jdbc:sqlite:" + first, "", "");
+        try {
+            shared.run(em -> PlatformDb.update(em,
+                    "CREATE TABLE swap_probe (id TEXT PRIMARY KEY)"));
+            shared.run(em -> PlatformDb.update(em,
+                    "INSERT INTO swap_probe (id) VALUES ('first')"));
+
+            PlatformDb next = PlatformDb.create("jdbc:sqlite:" + second, "", "");
+            next.run(em -> PlatformDb.update(em,
+                    "CREATE TABLE swap_probe (id TEXT PRIMARY KEY)"));
+
+            PlatformDb previous = shared.swapTo(next);
+
+            // 同一引用现在读的是第二个库：表在但没数据
+            long rows = shared.read(em -> PlatformDb.count(em, "SELECT COUNT(*) FROM swap_probe"));
+            assertEquals(0L, rows, "切换后同一 PlatformDb 引用必须读新后端");
+
+            // swapTo 必须把"被换下的第一套"以独立对象交回来：
+            // 若返回 this，调用方 close 会把刚切上去的新后端关掉（经典自噬 bug）。
+            org.junit.jupiter.api.Assertions.assertNotNull(previous,
+                    "首次切换要把换下的自持后端交回，供调用方关闭");
+            // 旧后端此刻仍可用（在途请求不会炸），关掉后才会释放文件句柄
+            long oldRows = previous.read(em ->
+                    PlatformDb.count(em, "SELECT COUNT(*) FROM swap_probe"));
+            assertEquals(1L, oldRows, "换下的旧后端应仍可读，直到显式关闭");
+            previous.close();
+
+            // 关的是旧库：新后端必须还活着
+            long stillNew = shared.read(em -> PlatformDb.count(em, "SELECT COUNT(*) FROM swap_probe"));
+            assertEquals(0L, stillNew, "关闭旧后端不得影响当前生效的新后端");
+        } finally {
+            shared.close();
         }
-        Path platformFile = tempDir.resolve("platform.db");
-        AgentDbProperties props = new AgentDbProperties("", "", "",
-                platformFile.toString(), 2, true);
-
-        PlatformDb db = PlatformDb.sqlite(platformFile);
-        DataSourceConfig config = new DataSourceConfig();
-        // 装配 = Spring 创建 Bean 的全部动作；只要没有 initMethod，就不会调 importAll
-        LegacySqliteImporter importer = config.legacySqliteImporter(db, props);
-        assertTrue(importer != null);
-
-        long legacyRows = db.read(em -> PlatformDb.count(em,
-                "SELECT COUNT(*) FROM run_ledger WHERE id = 'legacy-1'"));
-        assertEquals(0L, legacyRows, "仅装配 Bean 不得导入旧库数据");
-        long markers = db.read(em -> PlatformDb.count(em,
-                "SELECT COUNT(*) FROM platform_meta WHERE meta_key LIKE 'legacy-import:%'"));
-        assertEquals(0L, markers, "仅装配 Bean 不得写完成标记");
-
-        // 巡检同样是只读的：页面上先看状态不该产生副作用
-        LegacySqliteImporter.Inspection inspection = importer.inspect();
-        assertTrue(inspection.pending(), "旧库存在且未导入时应提示可导入");
-        assertFalse(inspection.files().isEmpty());
-        long stillEmpty = db.read(em -> PlatformDb.count(em,
-                "SELECT COUNT(*) FROM run_ledger WHERE id = 'legacy-1'"));
-        assertEquals(0L, stillEmpty, "巡检后仍不得有数据");
     }
 }

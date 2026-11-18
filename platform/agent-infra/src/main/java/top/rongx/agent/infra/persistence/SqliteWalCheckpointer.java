@@ -18,8 +18,11 @@ import top.rongx.agent.infra.persistence.config.AgentDbProperties;
  * 因此数据会长期停留在 {@code .db-wal} 里，主 {@code .db} 文件仍是旧的甚至只有一页。
  * 此时若备份只拷 {@code .db}、或有人清理 {@code -wal/-shm}，未合并的数据就永久丢失。
  *
- * <p>本组件在应用启动、{@code LegacySqliteImporter} 导入完成之后执行 TRUNCATE checkpoint，
- * 让主文件自包含；PostgreSQL 模式直接跳过。checkpoint 失败只告警不阻断启动。
+ * <p>本组件每次启动执行 TRUNCATE checkpoint，让主文件自包含；PostgreSQL 模式直接跳过。
+ * checkpoint 失败只告警不阻断启动。
+ *
+ * <p>它是启动链路上唯一碰数据库的收尾动作，且<b>不改数据行</b>——只把 WAL 里的页
+ * 并回主文件。旧库导入已于需求变更后整体移除，启动不再有任何写数据的行为。
  */
 public final class SqliteWalCheckpointer implements ApplicationRunner {
 

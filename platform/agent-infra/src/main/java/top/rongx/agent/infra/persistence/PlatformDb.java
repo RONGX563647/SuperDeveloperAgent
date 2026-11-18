@@ -7,9 +7,11 @@ import jakarta.persistence.EntityManagerFactory;
 import jakarta.persistence.EntityTransaction;
 import jakarta.persistence.Query;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,19 +40,58 @@ public final class PlatformDb implements AutoCloseable {
 
     private static final Map<String, PlatformDb> STANDALONE = new ConcurrentHashMap<>();
 
-    private final DataSource dataSource;
-    private final EntityManagerFactory entityManagerFactory;
+    /**
+     * 当前后端（连接池 + EMF）。
+     *
+     * <p>之所以放进一个可整体替换的持有者，是为了支持<b>热重载</b>：数据库后端从
+     * SQLite 切到 PostgreSQL 时不可能只换 JDBC URL——方言、DDL、连接池参数全都不同，
+     * 必须重建 EMF。而 25 个 Store 都在构造期注入同一个 {@link PlatformDb}，
+     * 让它们感知后端切换既不现实也不安全。折中做法是：<b>引用不变，内容可换</b>，
+     * 每次 {@code read/inTx} 都从 volatile 引用取当前后端，切换时原子替换。
+     *
+     * <p>用不可变 record + volatile 引用，而不是可变字段：读到旧后端的请求最多
+     * 把一次查询跑在旧库上（切换瞬间的既有语义），不会读到"EMF 已关但连接池还在"的中间态。
+     */
+    private volatile Holder holder;
     private final boolean owned;
 
-    private PlatformDb(DataSource dataSource, EntityManagerFactory entityManagerFactory, boolean owned) {
-        this.dataSource = dataSource;
-        this.entityManagerFactory = entityManagerFactory;
+    /** 当前生效的"自持"后端；只有它需要被关闭，managed 实例为 false。 */
+    private final boolean selfManaged;
+
+    /**
+     * 上一次通过 {@link #swapTo} 换入的自持实例（初始为 null）。
+     *
+     * <p>用于在下一次切换时把"上一套换进来的资源"关掉。容器最初给的 managed 后端
+     * 不在这里——它由 Spring 管理，进程活多久它活多久，不归热切换器处置。
+     */
+    private volatile PlatformDb installed;
+
+    /** 一套后端资源：连接池与它对应的 EMF，要么整体生效要么整体替换。 */
+    private record Holder(DataSource dataSource, EntityManagerFactory entityManagerFactory) {
+    }
+
+    private PlatformDb(Holder holder, boolean owned) {
+        this.holder = holder;
         this.owned = owned;
+        this.selfManaged = owned;
     }
 
     /** 应用内：包装 Spring 容器里的连接池与 EMF，不负责关闭。 */
     public static PlatformDb managed(DataSource dataSource, EntityManagerFactory entityManagerFactory) {
-        return new PlatformDb(dataSource, entityManagerFactory, false);
+        return new PlatformDb(new Holder(dataSource, entityManagerFactory), false);
+    }
+
+    /**
+     * 创建一套<b>自持</b>的后端资源（热重载用；用完由调用方 {@link #close()}）。
+     *
+     * @param jdbcUrl  目标 JDBC URL（{@code jdbc:sqlite:} 或 {@code jdbc:postgresql:}）
+     * @param username PG 用户名（SQLite 忽略）
+     * @param password PG 密码（SQLite 忽略）
+     */
+    public static PlatformDb create(String jdbcUrl, String username, String password) {
+        return jdbcUrl.startsWith("jdbc:postgresql:")
+                ? createPostgres(jdbcUrl, username, password)
+                : createSqlite(jdbcUrl);
     }
 
     /** 测试/独立进程：按 SQLite 文件复用一套 EMF。 */
@@ -61,23 +102,74 @@ public final class PlatformDb implements AutoCloseable {
     }
 
     public DataSource dataSource() {
-        return dataSource;
+        return holder.dataSource();
     }
 
     public EntityManagerFactory entityManagerFactory() {
-        return entityManagerFactory;
+        return holder.entityManagerFactory();
+    }
+
+    /** 当前后端是否 PostgreSQL（热重载与状态接口要用）。 */
+    public boolean isPostgres() {
+        try {
+            String product = holder.dataSource().getConnection().getMetaData()
+                    .getDatabaseProductName();
+            return product != null && product.toLowerCase(Locale.ROOT).contains("postgres");
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 原子换到另一套自持后端资源，返回被替换下来、需要由调用方关闭的旧资源。
+     *
+     * <p>前提：新后端的 schema 必须已经建好（热切换器先跑 Flyway 再调用这里），
+     * 否则换上去的瞬间会有请求撞到"表不存在"。
+     *
+     * <p>为什么引用不变、只换内容：25 个 Store 都在构造期注入同一个 {@code PlatformDb}，
+     * 让它们感知后端切换既不现实也不安全；而 {@code read/inTx} 每次都从 volatile 引用
+     * 取当前后端，切换只是一次引用赋值。落在旧后端上的请求最多把一次查询跑在旧库上
+     * （切换瞬间的既有语义），不会看到"EMF 已关但连接池还在"的中间态。
+     *
+     * <p>归属规则：容器最初给的 managed 后端由 Spring 管，永远不在这里被关；
+     * 只有"上一次换进来的自持实例"会在本次切换后由调用方关闭——否则每切一次库就泄漏一个连接池。
+     *
+     * @return 需要关闭的旧自持实例；没有（首次切换、原来跑的是 Spring 管的库）返回 {@code null}
+     */
+    public synchronized PlatformDb swapTo(PlatformDb next) {
+        if (!next.selfManaged) {
+            // spec-ignore: R15 内部装配契约：非自持实例调 swapTo 属编程错误，不是用户可预期的业务失败
+            throw new IllegalStateException("只能用自持实例（PlatformDb.create）切换后端");
+        }
+        Holder old = this.holder;
+        // 归还给调用方的必须是"独立包装旧资源"的新对象，不能是 this：
+        // this 的 holder 马上就要指向新后端，返回 this 会让调用方 close 到新库上。
+        PlatformDb previous = null;
+        if (this.installed != null) {
+            previous = this.installed;
+        } else if (this.selfManaged) {
+            previous = new PlatformDb(old, true);
+        }
+        this.holder = next.holder;
+        this.installed = next;
+        return previous;
+    }
+
+    /** 当前是否仍挂着容器最初装配的后端（没被热切换过）。 */
+    public boolean isOriginalBackend() {
+        return installed == null;
     }
 
     /** 只读查询：不开启事务，查询结束立即归还连接。 */
     public <T> T read(Function<EntityManager, T> work) {
-        try (EntityManager em = entityManagerFactory.createEntityManager()) {
+        try (EntityManager em = holder.entityManagerFactory().createEntityManager()) {
             return work.apply(em);
         }
     }
 
     /** 写事务：异常回滚，正常提交。 */
     public <T> T inTx(Function<EntityManager, T> work) {
-        EntityManager em = entityManagerFactory.createEntityManager();
+        EntityManager em = holder.entityManagerFactory().createEntityManager();
         EntityTransaction tx = em.getTransaction();
         try {
             tx.begin();
@@ -195,29 +287,50 @@ public final class PlatformDb implements AutoCloseable {
         if (!owned) {
             return;
         }
+        Holder current = holder;
         try {
-            entityManagerFactory.close();
+            current.entityManagerFactory().close();
         } catch (RuntimeException e) {
             log.warn("关闭 EMF 失败: {}", e.getMessage());
         }
-        if (dataSource instanceof HikariDataSource hikari) {
+        if (current.dataSource() instanceof HikariDataSource hikari) {
             hikari.close();
         }
     }
 
     private static PlatformDb createSqlite(String jdbcUrl) {
         HikariConfig config = new HikariConfig();
-        config.setPoolName("agent-standalone-sqlite");
+        config.setPoolName("agent-sqlite");
         config.setJdbcUrl(jdbcUrl);
-        config.setMaximumPoolSize(2);
+        config.setMaximumPoolSize(4);
         config.setConnectionTimeout(10_000);
         config.addDataSourceProperty("journal_mode", "WAL");
         config.addDataSourceProperty("busy_timeout", "5000");
         config.addDataSourceProperty("foreign_keys", "on");
         HikariDataSource dataSource = new HikariDataSource(config);
         try {
-            return new PlatformDb(dataSource, buildEntityManagerFactory(dataSource,
-                    "org.hibernate.community.dialect.SQLiteDialect", "top.rongx.agent"), true);
+            return new PlatformDb(new Holder(dataSource, buildEntityManagerFactory(dataSource,
+                    "org.hibernate.community.dialect.SQLiteDialect", "top.rongx.agent")), true);
+        } catch (RuntimeException e) {
+            dataSource.close();
+            throw e;
+        }
+    }
+
+    private static PlatformDb createPostgres(String jdbcUrl, String username, String password) {
+        HikariConfig config = new HikariConfig();
+        config.setPoolName("agent-postgres");
+        config.setJdbcUrl(jdbcUrl);
+        config.setUsername(username == null ? "" : username);
+        config.setPassword(password == null ? "" : password);
+        config.setMaximumPoolSize(8);
+        config.setConnectionTimeout(10_000);
+        config.addDataSourceProperty("reWriteBatchedInserts", "true");
+        config.addDataSourceProperty("ApplicationName", "agent-platform");
+        HikariDataSource dataSource = new HikariDataSource(config);
+        try {
+            return new PlatformDb(new Holder(dataSource, buildEntityManagerFactory(dataSource,
+                    "org.hibernate.dialect.PostgreSQLDialect", "top.rongx.agent")), true);
         } catch (RuntimeException e) {
             dataSource.close();
             throw e;

@@ -1,58 +1,45 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Coin, Connection, FolderOpened, Refresh, Right, Upload } from '@element-plus/icons-vue'
+import { Coin, Connection, Refresh, Right, Switch, Upload } from '@element-plus/icons-vue'
 import {
-  getDatabaseStatus, getLegacyDbStatus, importLegacyDatabases, migrateSqliteToPostgres,
-  resetDatabaseBackend, savePostgresBackend, testPostgres,
-  type DatabaseStatus, type LegacyDbStatus, type LegacyImportResult, type MigrationResult,
+  getDatabaseStatus, migrateSqliteToPostgres, savePostgresBackend, switchToPostgres,
+  switchToSqlite, testPostgres,
+  type DatabaseStatus, type DatabaseSwitchResult, type MigrationResult,
   type PostgresInput, type PostgresTestResult
 } from '../../api/settings'
 
 /**
- * 数据库后端面板：当前后端 → PostgreSQL 连接表单 → 连通性测试 → 一键迁移 → 保存（重启生效），
- * 以及旧版分域 SQLite 的<b>显式</b>导入。
+ * 数据库后端面板：当前后端 → PostgreSQL 连接表单 → 连通性测试 → 热切换。
  *
- * 交互上的三个坑，UI 必须直说，否则用户会误判：
- * 1. **保存不等于生效**：连接池在启动时装配，保存只落 `db-backend.yml`，必须重启；
- * 2. **迁移与切换是两件事**：迁移只搬数据，先迁移再保存再重启，顺序写在步骤条里；
- * 3. **旧库导入不再自动跑**：以前启动就静默导入并打日志，现在必须点按钮，先看巡检结果。
+ * 交互上必须说清的两件事：
+ * 1. **热切换不是重启**：点完立刻生效，连接池已换成新库，本页 backend 会立即变化；
+ * 2. **失败不动现状**：探活/建表/搬数据任何一步失败，运行中的后端都不会被切走，
+ *    配置也不会被改写——这类"宁可切不成，也不能让平台失去数据库"的保证要写在界面上。
  */
 const status = ref<DatabaseStatus | null>(null)
 const loading = ref(false)
 const testing = ref(false)
 const migrating = ref(false)
 const saving = ref(false)
+const switching = ref(false)
 
 const testResult = ref<PostgresTestResult | null>(null)
 const migration = ref<MigrationResult | null>(null)
-
-const legacy = ref<LegacyDbStatus | null>(null)
-const legacyResult = ref<LegacyImportResult | null>(null)
-const legacyLoading = ref(false)
-const legacyImporting = ref(false)
+const switchResult = ref<DatabaseSwitchResult | null>(null)
 
 const form = ref<PostgresInput>({
   url: 'jdbc:postgresql://127.0.0.1:5432/agent',
   username: 'agent',
-  password: ''
+  password: '',
+  migrate: true
 })
 
 const isPostgres = computed(() => status.value?.backend === 'POSTGRES')
 const migratable = computed(() => status.value?.migratable === true)
-
-/** 旧库文件大小：页面上给个量级即可，不必精确到字节。 */
-function formatSize(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit++
-  }
-  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
-}
+/** 实际生效后端与启动配置不一致 → 说明是热切换过来的，重启前要提醒 */
+const driftedFromConfig = computed(() =>
+  status.value != null && status.value.backend !== status.value.configuredBackend)
 
 async function load(): Promise<void> {
   loading.value = true
@@ -66,46 +53,6 @@ async function load(): Promise<void> {
     ElMessage.error(e instanceof Error ? e.message : '加载数据库状态失败')
   } finally {
     loading.value = false
-  }
-  await loadLegacy()
-}
-
-async function loadLegacy(): Promise<void> {
-  legacyLoading.value = true
-  try {
-    legacy.value = await getLegacyDbStatus()
-  } catch (e) {
-    // 旧库巡检失败不该拖垮整个面板：只在卡片里留空
-    legacy.value = null
-  } finally {
-    legacyLoading.value = false
-  }
-}
-
-async function importLegacy(force = false): Promise<void> {
-  const hint = force
-    ? '强制重放：忽略已完成标记，把旧库再读一遍（幂等，不会产生重复行）。继续？'
-    : `把旧库目录中的分域数据导入当前库？已有完成标记的文件会跳过，导入不覆盖现有行。\n\n目录：${legacy.value?.directory ?? ''}`
-  const ok = await ElMessageBox.confirm(hint, force ? '强制重放旧库' : '旧库导入确认', {
-    confirmButtonText: force ? '强制重放' : '开始导入',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(() => true).catch(() => false)
-  if (!ok) return
-  legacyImporting.value = true
-  legacyResult.value = null
-  try {
-    legacyResult.value = await importLegacyDatabases(force)
-    if (legacyResult.value.ok) {
-      ElMessage.success(legacyResult.value.message)
-    } else {
-      ElMessage.warning(legacyResult.value.message)
-    }
-    await loadLegacy()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '旧库导入失败')
-  } finally {
-    legacyImporting.value = false
   }
 }
 
@@ -126,8 +73,8 @@ async function testConnection(): Promise<void> {
 
 async function migrate(): Promise<void> {
   const ok = await ElMessageBox.confirm(
-    '把当前 SQLite 的数据迁移到目标 PostgreSQL？会在目标库建表并逐表复制，已有行不会被覆盖。'
-      + '迁移不停机，完成后仍需保存配置并重启才会切换到 PostgreSQL。',
+    '把当前 SQLite 的数据搬到目标 PostgreSQL？会在目标库建表并逐表复制，已有行不会被覆盖，'
+      + '但不会切换后端——之后仍需点「热切换」。',
     '迁移确认',
     { confirmButtonText: '开始迁移', cancelButtonText: '取消', type: 'warning' }
   ).then(() => true).catch(() => false)
@@ -148,6 +95,49 @@ async function migrate(): Promise<void> {
   }
 }
 
+async function hotSwitch(): Promise<void> {
+  const dragging = form.value.migrate ? '并先把当前 SQLite 数据搬过去' : '不搬数据'
+  const ok = await ElMessageBox.confirm(
+    `立即切换到 PostgreSQL（${dragging}）？\n\n`
+      + '探活 → 建表 → 搬数据 → 原子切换，全程不重启。\n'
+      + '任何一步失败都不会切换，现有后端继续可用。',
+    '热切换确认',
+    { confirmButtonText: '立即切换', cancelButtonText: '取消', type: 'warning' }
+  ).then(() => true).catch(() => false)
+  if (!ok) return
+  switching.value = true
+  switchResult.value = null
+  try {
+    switchResult.value = await switchToPostgres(form.value)
+    ElMessage.success(switchResult.value.message)
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '热切换失败')
+  } finally {
+    switching.value = false
+  }
+}
+
+async function backToSqlite(): Promise<void> {
+  const ok = await ElMessageBox.confirm(
+    '热切换回 SQLite？PostgreSQL 里的数据不会删除，只是不再使用它。',
+    '切回 SQLite',
+    { confirmButtonText: '切回', cancelButtonText: '取消', type: 'warning' }
+  ).then(() => true).catch(() => false)
+  if (!ok) return
+  switching.value = true
+  switchResult.value = null
+  try {
+    switchResult.value = await switchToSqlite()
+    ElMessage.success(switchResult.value.message)
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '切回失败')
+  } finally {
+    switching.value = false
+  }
+}
+
 async function save(): Promise<void> {
   saving.value = true
   try {
@@ -158,22 +148,6 @@ async function save(): Promise<void> {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     saving.value = false
-  }
-}
-
-async function reset(): Promise<void> {
-  const ok = await ElMessageBox.confirm(
-    '清除 PostgreSQL 配置并回到 SQLite？重启后生效，SQLite 文件里的数据不受影响。',
-    '回到 SQLite',
-    { confirmButtonText: '清除', cancelButtonText: '取消', type: 'warning' }
-  ).then(() => true).catch(() => false)
-  if (!ok) return
-  try {
-    const result = await resetDatabaseBackend()
-    ElMessage.success(result.message)
-    await load()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '清除失败')
   }
 }
 
@@ -189,6 +163,9 @@ defineExpose({ load })
         <h2 class="db-title">数据库</h2>
         <p class="db-sub">
           当前后端：<strong>{{ status?.backend ?? '—' }}</strong>
+          <el-tag v-if="status?.hotReload" size="small" type="success" effect="plain" class="db-tag">
+            支持热切换
+          </el-tag>
           <span class="db-url">{{ status?.jdbcUrl }}</span>
         </p>
       </div>
@@ -196,12 +173,13 @@ defineExpose({ load })
     </header>
 
     <el-alert
-      v-if="isPostgres"
-      type="success"
+      v-if="driftedFromConfig"
+      type="warning"
       :closable="false"
       show-icon
-      title="当前已在用 PostgreSQL"
-      description="迁移入口仅在 SQLite 后端可用；如需换库，先清除配置并重启回到 SQLite，或直接改目标地址后保存。"
+      title="运行中的后端与启动配置不一致"
+      :description="`当前实际在用 ${status?.backend}，而进程启动时配置的是 ${status?.configuredBackend}。`
+        + `这是热切换的结果，无需处理；重启后会以配置文件为准。`"
     />
 
     <section class="db-card">
@@ -219,16 +197,23 @@ defineExpose({ load })
             :placeholder="status?.hasPassword ? '留空 = 沿用已保存的密码' : '数据库密码'"
           />
         </el-form-item>
+        <el-form-item label="切换时搬数据">
+          <el-switch v-model="form.migrate" />
+          <span class="db-hint-text">关闭则只切后端，不搬现有 SQLite 数据</span>
+        </el-form-item>
       </el-form>
 
       <div class="db-actions">
         <el-button :icon="Connection" :loading="testing" @click="testConnection">测试连接</el-button>
         <el-button
-          type="primary" :icon="Upload" :loading="migrating"
-          :disabled="!migratable" @click="migrate"
-        >一键迁移 SQLite 数据</el-button>
-        <el-button :loading="saving" @click="save">保存（重启生效）</el-button>
-        <el-button v-if="status?.savedTarget" text type="danger" @click="reset">回到 SQLite</el-button>
+          type="primary" :icon="Switch" :loading="switching"
+          :disabled="switching" @click="hotSwitch"
+        >热切换（立即生效）</el-button>
+        <el-button :icon="Upload" :loading="migrating" :disabled="!migratable" @click="migrate">
+          仅迁移数据
+        </el-button>
+        <el-button :loading="saving" @click="save">仅保存配置</el-button>
+        <el-button v-if="isPostgres" text type="danger" @click="backToSqlite">切回 SQLite</el-button>
       </div>
 
       <el-alert
@@ -241,6 +226,21 @@ defineExpose({ load })
           <span>{{ testResult.message }}</span>
           <span v-if="testResult.ok" class="db-meta">
             · {{ testResult.serverVersion }} · {{ testResult.latencyMs }}ms
+          </span>
+        </template>
+      </el-alert>
+
+      <el-alert
+        v-if="switchResult"
+        type="success"
+        :closable="false" show-icon class="db-result"
+        :title="switchResult.message"
+      >
+        <template #default>
+          <span>
+            {{ switchResult.fromBackend }} → {{ switchResult.toBackend }}
+            · 搬迁 {{ switchResult.copiedRows }} 行
+            · 耗时 {{ switchResult.elapsedMs }}ms
           </span>
         </template>
       </el-alert>
@@ -273,89 +273,18 @@ defineExpose({ load })
     </section>
 
     <section class="db-card db-hint">
-      <h3 class="card-title">切换顺序</h3>
+      <h3 class="card-title">热切换做了什么</h3>
       <ol class="db-steps">
-        <li>填目标 PostgreSQL 地址 → <strong>测试连接</strong>通过；</li>
-        <li><strong>一键迁移</strong>把 SQLite 数据搬过去（可重复执行，不会覆盖 PG 已有行）；</li>
-        <li><strong>保存</strong>写入 <code>db-backend.yml</code>（密码加密落盘，明文不回流前端）；</li>
-        <li><strong>重启平台</strong>，启动时按新配置装配连接池与方言；</li>
-        <li>重启后本页后端会显示 <code>POSTGRES</code>；SQLite 文件保留作为回退。</li>
+        <li><strong>探活</strong>：目标库连不上就直接失败，现有后端一行数据都不动；</li>
+        <li><strong>建表</strong>：对目标库跑同一套迁移脚本，表/索引与当前版本一致；</li>
+        <li><strong>搬数据</strong>：按表结构交集逐行复制，已存在的行跳过，可重复执行；</li>
+        <li><strong>落配置</strong>：写入 <code>db-backend.yml</code>，保证重启后仍指向新库；</li>
+        <li><strong>原子替换</strong>：把运行中的连接池换成新库，全程不重启，失败则一切照旧。</li>
       </ol>
-      <p class="db-file">配置文件：<code>{{ status?.configFile }}</code></p>
-    </section>
-
-    <section class="db-card">
-      <h3 class="card-title"><el-icon><FolderOpened /></el-icon> 旧库导入（历史分域 SQLite）</h3>
-      <p class="db-sub">
-        改造前按域拆分的 <code>.db</code> 文件不再在启动时自动导入——启动只做只读巡检，
-        由你确认后再执行。目录：<code>{{ legacy?.directory || '—' }}</code>
+      <p class="db-file">
+        配置文件：<code>{{ status?.configFile }}</code>
+        　·　后端在运行时切换，<strong>不需要重启</strong>
       </p>
-
-      <el-alert
-        v-if="legacy && legacy.enabled === false"
-        type="info"
-        :closable="false" show-icon
-        title="旧库导入已关闭"
-        description="agent.db.import-legacy=false，可改配置后重启再启用。"
-      />
-      <el-alert
-        v-else-if="legacy && legacy.files.length === 0"
-        type="info"
-        :closable="false" show-icon
-        title="未发现历史分域库"
-        description="该目录下没有 projects/automation/conversations 等旧库文件，无需导入。"
-      />
-
-      <template v-else-if="legacy">
-        <el-table :data="legacy.files" size="small" max-height="260" class="db-table">
-          <el-table-column prop="file" label="旧库文件" min-width="180" show-overflow-tooltip />
-          <el-table-column label="大小" width="100" align="right">
-            <template #default="{ row }">{{ formatSize(row.sizeBytes) }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="110">
-            <template #default="{ row }">
-              <el-tag :type="row.imported ? 'success' : 'warning'" size="small" effect="plain">
-                {{ row.imported ? '已导入' : '待导入' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="记录行数" width="110" align="right">
-            <template #default="{ row }">
-              {{ row.imported ? row.importedRows : '—' }}
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <div class="db-actions">
-          <el-button
-            type="primary" :icon="Upload" :loading="legacyImporting"
-            :disabled="!legacy.enabled" @click="importLegacy(false)"
-          >开始导入</el-button>
-          <el-button
-            :loading="legacyImporting" :disabled="!legacy.enabled || !legacy.files.length"
-            @click="importLegacy(true)"
-          >强制重放</el-button>
-          <el-button :icon="Refresh" :loading="legacyLoading" @click="loadLegacy">重新巡检</el-button>
-        </div>
-      </template>
-
-      <el-table
-        v-if="legacyResult && legacyResult.files.length"
-        :data="legacyResult.files" size="small" max-height="240" class="db-table"
-      >
-        <el-table-column prop="file" label="文件" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="copied" label="新增行" width="90" align="right" />
-        <el-table-column label="结果" width="90">
-          <template #default="{ row }">
-            <el-tag :type="row.ok ? (row.skipped ? 'info' : 'success') : 'danger'"
-                    size="small" effect="plain">
-              {{ row.ok ? (row.skipped ? '跳过' : 'OK') : '失败' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="error" label="说明" min-width="200" show-overflow-tooltip />
-      </el-table>
-      <p v-if="legacyResult" class="db-summary">{{ legacyResult.message }}</p>
     </section>
   </div>
 </template>
@@ -382,6 +311,9 @@ defineExpose({ load })
   margin: 4px 0 0;
   font-size: var(--text-xs);
   color: var(--ink-muted);
+}
+.db-tag {
+  margin-left: 8px;
 }
 .db-url {
   margin-left: 8px;
@@ -416,6 +348,11 @@ defineExpose({ load })
   margin-top: 2px;
 }
 .db-meta {
+  color: var(--ink-faint);
+}
+.db-hint-text {
+  margin-left: 10px;
+  font-size: var(--text-2xs);
   color: var(--ink-faint);
 }
 .db-summary {

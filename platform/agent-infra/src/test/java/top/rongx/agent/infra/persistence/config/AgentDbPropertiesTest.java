@@ -13,22 +13,18 @@ class AgentDbPropertiesTest {
     @Test
     @DisplayName("未配置数据源时回落 SQLite 默认单文件")
     void defaultsToSqlite() {
-        AgentDbProperties props = new AgentDbProperties("", "", "", "", null, null);
+        AgentDbProperties props = new AgentDbProperties("", "", "", "", null);
 
         assertEquals(DbBackend.SQLITE, props.backend());
         assertEquals("jdbc:sqlite:./data/workspaces/_platform/platform.db", props.jdbcUrl());
         assertEquals(8, props.poolSize());
-        // 导入只由设置页显式触发；这个开关决定设置页是否允许执行，默认放开。
-        org.junit.jupiter.api.Assertions.assertTrue(props.importLegacy());
-        org.junit.jupiter.api.Assertions.assertFalse(
-                new AgentDbProperties("", "", "", "", null, false).importLegacy());
     }
 
     @Test
     @DisplayName("配置 PostgreSQL URL 时切到 PG")
     void postgresUrlSelectsPostgres() {
         AgentDbProperties props = new AgentDbProperties(
-                "jdbc:postgresql://127.0.0.1:5432/agent", "agent", "secret", "", 12, false);
+                "jdbc:postgresql://127.0.0.1:5432/agent", "agent", "secret", "", 12);
 
         assertTrue(props.isPostgres());
         assertEquals("jdbc:postgresql://127.0.0.1:5432/agent", props.jdbcUrl());
@@ -39,7 +35,7 @@ class AgentDbPropertiesTest {
     @DisplayName("显式 SQLite URL 优先于 sqlite-file 配置")
     void explicitSqliteUrlWins() {
         AgentDbProperties props = new AgentDbProperties(
-                "jdbc:sqlite:/tmp/custom.db", "", "", "/tmp/ignored.db", 4, false);
+                "jdbc:sqlite:/tmp/custom.db", "", "", "/tmp/ignored.db", 4);
 
         assertEquals(DbBackend.SQLITE, props.backend());
         assertEquals("jdbc:sqlite:/tmp/custom.db", props.jdbcUrl());
@@ -49,6 +45,6 @@ class AgentDbPropertiesTest {
     @DisplayName("不支持的 JDBC URL 必须显式失败，不能静默回落")
     void rejectsUnknownJdbcUrl() {
         assertThrows(EnvironmentException.class,
-                () -> new AgentDbProperties("jdbc:mysql://127.0.0.1/db", "", "", "", 8, false));
+                () -> new AgentDbProperties("jdbc:mysql://127.0.0.1/db", "", "", "", 8));
     }
 }

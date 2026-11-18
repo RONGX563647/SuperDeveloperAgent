@@ -1201,21 +1201,24 @@ export function installCapability(id: string): Promise<CapabilityInstallResult> 
 
 /** 当前数据库后端状态（设置页「数据库」分区）。 */
 export interface DatabaseStatus {
+  /** 实际生效的后端：取自连接池，热切换后立即变化 */
   backend: 'SQLITE' | 'POSTGRES'
+  /** 启动时配置的后端：热切换不改它，只有重启才会一致 */
+  configuredBackend: 'SQLITE' | 'POSTGRES'
   /** 已脱敏的 JDBC URL */
   jdbcUrl: string
   sqliteFile: string
   poolSize: number
   configFile: string
-  /** db-backend.yml 里已保存的目标（下次启动生效） */
+  /** db-backend.yml 里已保存的目标 */
   savedUrl: string
   savedUsername: string
   savedTarget: boolean
   hasPassword: boolean
   /** 只有当前是 SQLite 才谈得上"迁移到 PG" */
   migratable: boolean
-  /** 配置是否允许设置页执行旧库导入 */
-  legacyImportEnabled: boolean
+  /** 支持热切换：改完立刻生效，不需要重启 */
+  hotReload: boolean
 }
 
 /** 目标 PostgreSQL 连接参数；password 留空 = 沿用已保存的密文。 */
@@ -1223,6 +1226,8 @@ export interface PostgresInput {
   url: string
   username: string
   password?: string
+  /** 切换时是否顺带搬运当前 SQLite 数据（默认 true） */
+  migrate?: boolean
 }
 
 export interface PostgresTestResult {
@@ -1252,6 +1257,19 @@ export interface MigrationResult {
   elapsedMs: number
 }
 
+/** 热切换结果：不重启进程，连接池已换成新后端。 */
+export interface DatabaseSwitchResult {
+  ok: boolean
+  message: string
+  fromBackend: 'SQLITE' | 'POSTGRES'
+  toBackend: 'SQLITE' | 'POSTGRES'
+  target: string
+  copiedRows: number
+  skippedTables: number
+  elapsedMs: number
+  restartRequired: false
+}
+
 export function getDatabaseStatus(): Promise<DatabaseStatus> {
   return apiFetch('/api/v1/settings/database')
 }
@@ -1263,6 +1281,15 @@ export function testPostgres(input: PostgresInput): Promise<PostgresTestResult> 
   })
 }
 
+/** 热切换到 PostgreSQL：探活 → 建表 → 搬数据 → 落配置 → 原子替换，无需重启。 */
+export function switchToPostgres(input: PostgresInput): Promise<DatabaseSwitchResult> {
+  return apiFetch('/api/v1/settings/database/switch', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+/** 只搬数据不切换后端。 */
 export function migrateSqliteToPostgres(input: PostgresInput): Promise<MigrationResult> {
   return apiFetch('/api/v1/settings/database/migrate', {
     method: 'POST',
@@ -1270,9 +1297,9 @@ export function migrateSqliteToPostgres(input: PostgresInput): Promise<Migration
   })
 }
 
+/** 只落盘配置，不切换（等合适时机再切）。 */
 export function savePostgresBackend(input: PostgresInput): Promise<{
   ok: boolean
-  restartRequired: boolean
   configFile: string
   message: string
 }> {
@@ -1282,63 +1309,8 @@ export function savePostgresBackend(input: PostgresInput): Promise<{
   })
 }
 
-export function resetDatabaseBackend(): Promise<{
-  ok: boolean
-  restartRequired: boolean
-  message: string
-}> {
+/** 热切换回 SQLite（PG 数据保留，不清空）。 */
+export function switchToSqlite(): Promise<DatabaseSwitchResult> {
   return apiFetch('/api/v1/settings/database', { method: 'DELETE' })
 }
 
-// ---------------------------------------------------------------- 旧库导入
-
-/** 单个历史分域库的巡检状态（只读，不产生副作用）。 */
-export interface LegacyDbFile {
-  file: string
-  sizeBytes: number
-  /** 是否已有 legacy-import 完成标记 */
-  imported: boolean
-  /** 标记里记录的导入行数 */
-  importedRows: number
-}
-
-export interface LegacyDbStatus {
-  directory: string
-  backend: 'SQLITE' | 'POSTGRES'
-  /** 还有未导入的旧库文件 */
-  pending: boolean
-  /** 配置是否允许导入（agent.db.import-legacy） */
-  enabled: boolean
-  files: LegacyDbFile[]
-}
-
-export interface LegacyImportFileResult {
-  file: string
-  copied: number
-  skipped: boolean
-  ok: boolean
-  error: string | null
-}
-
-export interface LegacyImportResult {
-  ok: boolean
-  directory: string
-  copiedRows: number
-  imported: number
-  skippedFiles: number
-  failedFiles: number
-  files: LegacyImportFileResult[]
-  message: string
-}
-
-export function getLegacyDbStatus(): Promise<LegacyDbStatus> {
-  return apiFetch('/api/v1/settings/database/legacy')
-}
-
-/** 显式触发旧库导入；force=true 忽略完成标记重放（仍幂等）。 */
-export function importLegacyDatabases(force = false): Promise<LegacyImportResult> {
-  return apiFetch('/api/v1/settings/database/legacy/import', {
-    method: 'POST',
-    body: JSON.stringify({ force })
-  })
-}
