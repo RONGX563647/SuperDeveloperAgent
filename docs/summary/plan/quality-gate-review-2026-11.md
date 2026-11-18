@@ -288,6 +288,23 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 | O16 | ArchUnit 收紧 | `allowStoreCreation=false` | spec-checks 24 用例全绿 |
 | O17 | 前端自检 | `web/tools/ts-resolve.mjs` + `pnpm test` | 3 个脚本 38 条断言全绿，pre-push 自动跑（0.59s） |
 
+
+### 第五批落地（安全扫描 + 红队自审 + 预算校准）
+
+| # | 能力 | 落点 | 验证 |
+|---|---|---|---|
+| O18 | 安全扫描 | `ci.yml` 的 `security` job（gitleaks + osv-scanner） | YAML 结构校验通过；action 版本在 GitHub 侧首次运行确认 |
+| O19 | 红队自审 | `gate.py red-team` | 注入违规 → 扫描必红并报出 R03/R04/R08/R11；24.3s |
+| O20 | 预算校准 | `LAYER_BUDGET_SECONDS`：pre-commit 60s→90s，新增 web-test 10s | `metrics` 全部 OK；依据写进 spec §3.3.6 |
+
+**并行测试的实测结论（否定方案）**：按模块各起一个 mvn 并行跑，executor+tools 实测
+28.2s vs 串行 25.3s——Maven 启动占大头，并行没有收益；`forkCount=8` 还会让 gateway
+的进程/端口用例失败。因此保持串行，把预算按真实构成校准，而不是堆并发。
+
+**过程中踩的坑**：`subprocess.run(capture_output=True)` 在本机某些状态下返回
+`stdout=None`（Maven 子进程 + shell=True + 自定义 env 组合），导致红队读不到输出。
+改为「输出重定向到临时文件再读回」后稳定复现结论。
+
 ## 验收契约
 
 ### 契约条款（此节是完成判定的唯一口径）
@@ -333,15 +350,16 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 | C6 | 阶段二 | 已完成 | `spec-checks/pom.xml` 置 false；基线存在（0 违规）故仍全绿 |
 | C7 | 阶段二 | 已完成 | `fixtures/sample` + `fixtures/clean` + `RuleFixtureSelfTest`：14 条规则全命中、正例零误报；顺带发现并修掉 R05/R10 两条死规则 |
 | C8 | 阶段二 | 已完成 | `gate.py doctor` 打印 python/git/JDK 实际版本、mvn、hooksPath、会话与缓存；JAVA_HOME=17 时仍能报出实际使用 jdk21 |
-| C9 | 阶段三 | 未开始 | 待加 gitleaks / osv-scanner job |
-| C10 | 阶段三 | 未开始 | 待引入 failsafe 与 integration tag |
+| C9 | 阶段三 | 已完成 | `ci.yml` 新增 `security` job：gitleaks（扫历史提交）+ osv-scanner（`-r --skip-git`）；需在 GitHub 侧确认 action 版本可用 |
+| C10 | 阶段三 | 阻塞 | 需要修改 agent-infra（当前另一会话正在其中改动）；且 PG Testcontainers 需要 docker/网络。待该会话收尾后单独开一轮 |
 | C11 | 阶段三 | 已完成 | `.git/session-archive/gate-metrics.json` 采集 pre-commit/spec-checks/full-test；`gate.py metrics` 输出 p50/p95 与预算判定 |
-| C12 | 阶段四 | 未开始 | 待建立门禁红队自审 |
+| C12 | 阶段四 | 已完成 | `gate.py red-team`：注入 R03/R04/R08/R11 违规样本，断言扫描必须红并报出规则编号；实测 24.3s，输出「红队自审通过，规则编号 [R03, R04, R08, R11]」 |
 
 ---
 
 ## 变更记录
 
+- 2026-11-18T23:10 第五批：CI 安全扫描 job、`gate.py red-team` 红队自审、耗时预算按实测校准（pre-commit 90s）；C9/C12 置为已完成，C10 标记阻塞（并发会话占用 agent-infra）。
 - 2026-11-18T22:50 第四批落地：CI 工作流、fixture 规则自测（抓出 R05/R10 死规则并改为整文件匹配）、覆盖率闸门（逐模块棘轮）、ArchUnit 收紧、前端零依赖自检；C1/C3/C4/C6/C7 置为已完成。
 - 2026-11-18T21:25 第三批落地：多会话并行（per-worktree 会话注册表）、`doctor`、`metrics`、`install-hooks` 走 `core.hooksPath`；C2/C8/C11 置为已完成。
 - 2026-11-18T20:40 第二批落地：慢测试 `@Tag("slow")`（gateway f=2 时 −12.4s）、模块级绿色证据（pre-push 兜底按闭包跳过）、`ApiDocsSnapshotTest` 并发敏感性说明；新增验收项 C14。

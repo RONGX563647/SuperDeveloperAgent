@@ -600,6 +600,12 @@ def incremental_test_command(staged_files: list[str]) -> str:
                  f"{SLOW_GROUP_FLAG}".strip())
     return f"{compile_step} && {test_step}"
 
+# 说明（为什么不按模块并行）：不同模块各起一个 mvn 并行跑过一版，实测
+# 「executor(12s) + tools(11s)」并行 28.2s、串行 25.3s —— Maven 启动与 reactor
+# 校验占大头，两个小模块并行反而更慢；只有"两个都很重的模块"（gateway 28.8s +
+# infra 19.4s）才可能省 ~15s。收益不稳，且并行会与 IDE 里同时跑的构建抢锁/抢
+# target 目录，所以保持串行，改用预算校准（见 LAYER_BUDGET_SECONDS）。
+
 
 def worktree_git_dir() -> Path:
     """当前 worktree 自己的 git dir（per-worktree 测试锁就放这里）。"""
@@ -802,6 +808,7 @@ def is_exempt(path: str) -> bool:
         path.startswith("docs/")
         or path.startswith("tools/session-archive/")
         or path.startswith(".githooks/")
+        or path.startswith(".github/")          # CI 配置：本地不跑测试，由 CI 自己跑
         or path.startswith(".trae-html-share-packages/")  # 分享产物，非源码
         or path in {".gitignore", ".pre-commit-config.yaml", "agent.md"}
         or path.endswith(".md")
@@ -1598,6 +1605,7 @@ def full_test_backstop() -> int:
 
 
 
+
 def web_tests() -> int:
     """前端零依赖自检（platform/web 下的三个 .test.ts 脚本）。
 
@@ -1633,6 +1641,69 @@ def web_tests() -> int:
     record_metric("web-test", time.time() - begun, result="PASSED")
     out(f"前端自检通过（{len(scripts)} 个脚本）")
     return 0
+
+
+
+def cmd_red_team(args) -> int:
+    """门禁红队自审：故意注入违规，确认门禁真的会红。
+
+    <p>解决的问题：规则/扫描器一旦写坏（正则失效、路径剪枝写错、作用域标错），
+    门禁会静默变成"永远绿"，而没有人会去验一条通过的规则。这里每个季度（或每次
+    改 spec-checks 之后）跑一次，用真实违规样本反证检查器有效。
+
+    <p>做法：在临时目录造一个最小的 platform 树（{@code .../src/main/java/...}），
+    用 {@code -Dspec.root} 指过去跑 {@code ForbiddenPatternScanTest}：
+    <b>必须失败</b>。它要是通过，说明禁令扫描已经失效。
+    """
+    with tempfile.TemporaryDirectory(prefix="gate-red-team-") as tmp:
+        root = Path(tmp)
+        java_file = (root / "platform" / "demo" / "src" / "main" / "java"
+                     / "top" / "rongx" / "agent" / "demo" / "RedTeamSample.java")
+        java_file.parent.mkdir(parents=True, exist_ok=True)
+        java_file.write_text(
+            "package top.rongx.agent.demo;\n\n"
+            "/** 红队样本：故意违反 R11（System.out）与 R04（new Thread）。 */\n"
+            "class RedTeamSample {\n"
+            "    void a() { System.out.println(\"red-team\"); }\n"
+            "    void b() { new Thread(() -> { }).start(); }\n"
+            "}\n",
+            encoding="utf-8")
+        xml_file = (root / "platform" / "demo" / "src" / "main" / "resources" / "mapper" / "RedTeam.xml")
+        xml_file.parent.mkdir(parents=True, exist_ok=True)
+        xml_file.write_text(
+            "<mapper namespace=\"demo\">\n"
+            "  <select id=\"x\">SELECT * FROM demo WHERE k = '${k}'</select>\n"
+            "</mapper>\n",
+            encoding="utf-8")
+
+        mvn = maven_binary()
+        ensure_jdk()
+        command = (f"{mvn} -B -nsu -pl spec-checks -am -Dmaven.test.skip=true "
+                   f"-Djacoco.skip=true install")
+        proc = subprocess.run(command, cwd=ROOT / "platform", shell=True, env=build_env())
+        if proc.returncode != 0:
+            return fail("红队自审无法运行：spec-checks 编译失败")
+
+        probe = (f"{mvn} -B -nsu -pl spec-checks test -Dtest=ForbiddenPatternScanTest "
+                 f"-Dspec.root=\"{root}\" -Djacoco.skip=true")
+        out(f"注入违规样本并执行：{probe}")
+        # 输出重定向到临时文件再读回：比进程内管道 capture 稳（实测本机某些情况下
+        # subprocess.run(capture_output=True) 会返回 stdout=None，拿不到断言依据）。
+        log_file = root / "probe.log"
+        with log_file.open("w", encoding="utf-8", errors="replace") as log:
+            proc = subprocess.run(probe, cwd=ROOT / "platform", shell=True, env=build_env(),
+                                  stdout=log, stderr=subprocess.STDOUT)
+        text = log_file.read_text(encoding="utf-8", errors="replace")
+        if proc.returncode == 0:
+            out(text[-2000:])
+            return fail("红队自审失败：注入的违规没有被检出，禁令扫描已失效")
+
+        hits = {rid for rid in ("R04", "R08", "R11", "R03") if rid in text}
+        if not hits:
+            return fail("红队自审失败：扫描红了，但没报出预期规则编号（R03/R04/R08/R11）")
+        out(f"红队自审通过：注入的违规被检出，规则编号 {sorted(hits)}")
+        record_metric("red-team", 0.0, result="PASSED", rules=",".join(sorted(hits)))
+        return 0
 
 
 def cmd_gate_pre_push(args) -> int:
@@ -1671,7 +1742,11 @@ def cmd_gate_pre_push(args) -> int:
 
 GATE_METRICS = "gate-metrics.json"
 METRICS_MAX_ENTRIES = 200
-LAYER_BUDGET_SECONDS = {"pre-commit": 60, "spec-checks": 180, "full-test": 600}
+# pre-commit 预算按真实构成校准：单模块 13~47s；同时改两个重模块（gateway 28.8s +
+# infra 19.4s + 编译）实测 70.3s，属于正常工作量而非退化。预算的作用是抓"又退化成
+# 全量跑"（那会是 167s+），不是逼着把正常路径压进 60s。
+LAYER_BUDGET_SECONDS = {"pre-commit": 90, "spec-checks": 180, "full-test": 600,
+                        "web-test": 10}
 
 
 def record_metric(layer: str, seconds: float, **extra) -> None:
@@ -2018,6 +2093,7 @@ def main() -> int:
     sub.add_parser("status").set_defaults(func=cmd_status)
     sub.add_parser("doctor").set_defaults(func=cmd_doctor)
     sub.add_parser("install-hooks").set_defaults(func=cmd_install_hooks)
+    sub.add_parser("red-team").set_defaults(func=cmd_red_team)
     p = sub.add_parser("metrics")
     p.add_argument("--limit", type=int, default=20, help="每层取最近多少条（默认 20）")
     p.set_defaults(func=cmd_metrics)

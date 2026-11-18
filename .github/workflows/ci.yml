@@ -130,3 +130,27 @@ jobs:
 
       - name: 前端契约审计（严格模式）
         run: node tools/api-docs-mcp/audit.mjs --strict
+
+  security:
+    name: security (secrets + dependencies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks 要扫历史提交
+
+      # 密钥扫描：平台持有 SSH 部署凭据与 SecretBox 主密钥，泄漏面最大
+      - name: gitleaks（密钥/凭据）
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 依赖漏洞：直读 pom / package-lock，不需要构建
+      - name: osv-scanner（依赖漏洞）
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.0
+        with:
+          scan-args: |-
+            -r
+            --skip-git
+            ./

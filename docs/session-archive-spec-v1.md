@@ -186,6 +186,32 @@ docs/
 
 **覆盖率闸门只吃 verify**：`mvn test`（pre-commit 用）不做覆盖率检查，避免为每次提交增加成本；
 CI 与手动 `mvn verify` 才执行 `jacoco:check`。
+
+### 3.3.5 门禁红队自审
+
+`python tools/session-archive/gate.py red-team`：在临时目录造一个最小 platform 树，
+写入故意违规的样本（`System.out` / `new Thread` / `SELECT *` / `${}`），用 `-Dspec.root`
+指过去跑 `ForbiddenPatternScanTest`——**必须失败**。它要是一路绿灯，说明扫描器已经失效
+（正则写坏、剪枝把样本剪掉、作用域标错）。
+
+- 成本约 25s（含 spec-checks 编译），不进 pre-commit；改完 `spec-checks` 或每季度跑一次。
+- 与 `RuleFixtureSelfTest` 分工：fixture 自测保证「每条规则都能命中样例」，
+  红队自审保证「整条链路（扫描器 + maven 参数 + 报告）真的会红」。
+
+### 3.3.6 耗时预算的校准原则
+
+预算的作用是**抓退化**，不是把正常路径强行压进某个数字：
+
+| 层 | 预算 | 依据 |
+|---|---|---|
+| pre-commit | 90s | 单模块 13~47s；同时改两个重模块（gateway 28.8s + infra 19.4s + 编译）实测 70.3s 属正常。退化形态是全量跑（167s+） |
+| spec-checks | 180s | 实测 20~34s（tree 未变命中缓存） |
+| full-test | 600s | 全 reactor 4 fork 实测 90s |
+| web-test | 10s | 实测 0.5~0.6s |
+
+按模块并行跑测试实测**没有收益**（executor 12s + tools 11s：并行 28.2s vs 串行 25.3s，
+Maven 启动与 reactor 校验占大头），因此保持串行；`forkCount=8` 会让 gateway 的进程/端口
+用例直接失败，也不能靠堆 fork 数。
 注意 `install-hooks` 清理旧副本时必须用
 `git rev-parse --absolute-git-dir` 拼 `hooks/`，不能用 `--git-path hooks`
 ——设置 `core.hooksPath` 后后者返回 `.githooks` 本身，会把仓库里的钩子脚本删掉。
