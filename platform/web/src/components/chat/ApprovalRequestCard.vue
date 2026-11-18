@@ -78,6 +78,8 @@ async function doConfirm(): Promise<void> {
     const message = error instanceof Error ? error.message : '确认失败'
     applyError.value = message
     ElMessage.error(message)
+    // 确认阶段失败（含高危密码错误）同样要回执：否则 Agent 只会看到"待确认"并重复推卡
+    emit('failed', { changeId: props.changeId, reason: `确认阶段失败：${message}` })
   }
 }
 

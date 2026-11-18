@@ -68,11 +68,13 @@ public class SandboxConfig {
                                     + "请启动 Docker，或改为 mode=process（不隔离）");
                 }
                 log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
+                sweep(sandbox);
                 return new DockerActionRunner(sandbox);
             }
             default -> {
                 if (sandbox.available()) {
                     log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
+                    sweep(sandbox);
                     return new DockerActionRunner(sandbox);
                 }
                 // fail-closed：绝不因为 Docker 没起来就悄悄降级为无隔离的宿主执行
@@ -80,6 +82,21 @@ public class SandboxConfig {
                                 + "请启动 Docker，或仅限本地开发显式设置 "
                                 + "agent.sandbox.mode=process");
             }
+        }
+    }
+
+    /**
+     * 启动清扫：删除上个进程遗留的构建容器。
+     *
+     * <p>{@code --rm} 只在 docker CLI 正常退出时生效；动作超时或平台被 kill 时 CLI 先死，
+     * 容器会带着固定名字继续跑，占住内存并可能让下一次同名启动失败。
+     * 清理失败不影响启动：沙箱可用性已在调用前确认。
+     */
+    private static void sweep(DockerSandbox sandbox) {
+        try {
+            sandbox.sweepStaleContainers(log::info);
+        } catch (RuntimeException e) {
+            log.warn("遗留容器清扫失败（不影响启动）：{}", e.toString());
         }
     }
 }

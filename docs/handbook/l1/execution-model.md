@@ -23,8 +23,10 @@ summary: 一条对话请求从 SSE 入口到工具执行、状态落盘与上下
 
 ## 关键约束（改这里的代码前必须知道）
 
-- **对话链路没有"用户已确认"的回传通道**：非生产会话用 `BYPASS` 而不是 `ACCEPT_EDITS`，
+- **工具审批没有"用户已确认"的回传通道，但变更卡有**：非生产会话用 `BYPASS` 而不是 `ACCEPT_EDITS`，
   否则需要确认的工具会永久停在执行中；真正的门禁在平台层（写工具拒绝生产、变更单、部署令牌）。
+  例外是变更卡/环境绑定卡：前端在确认、执行、失败三个结果上都会把结论回灌给 Agent
+  （见 `ChatView#continueAfterUserAction`），模型也可用 `change_status` 主动查。
 - **只读会话不挂 MCP**：MCP 工具没有 `readOnly` 元数据，挂进来等于绕过只读工具面。
 - **工具输出有两层截断**：工具侧 `agent.tools.max-output-chars` 先截，会话侧
   `ConversationContextTrimmer#trim` 在落盘前再按预算裁剪；裁剪窗口不能以 TOOL 消息开头。

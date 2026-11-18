@@ -105,12 +105,14 @@ public class ChangeTools {
     /**
      * 向<b>当前操作人</b>发起确认（不是模型自我批准）。
      *
-     * <p>安全边界：本方法只读变更单并返回 {@code PENDING_USER_CONFIRMATION}；
-     * 不调用 {@code ConfirmTokenService}，不触发任何执行。真正的确认仍由用户在平台
-     * 确认卡片上完成（令牌只由已登录的 HTTP 请求签发）。
+     * <p>安全边界：本方法只读变更单；不调用 {@code ConfirmTokenService}，不触发任何执行。
+     * 真正的确认仍由用户在平台确认卡片上完成（令牌只由已登录的 HTTP 请求签发）。
      *
      * <p>之所以提供这个工具：模型在长流程里需要"明确地把单号推到用户面前"，
      * 而不是只在正文里写一句"请确认"——后者无法驱动确认卡片，用户容易漏掉。
+     *
+     * <p>返回的 status 一律取自 {@link ChangePlan#status()}：已经确认/执行过的单
+     * 直接回报真实状态，避免模型看到硬编码的 PENDING 而反复推卡。
      */
     @Tool(name = "confirm", description = "Resend the approval card for a change.",
             readOnly = false, concurrencySafe = false)
@@ -148,6 +150,42 @@ public class ChangeTools {
                     """.formatted(ChangeWire.line(plan.changeId()), plan.kind(), plan.env(), plan.summary());
         }
         String gate = plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN";
+        if (plan.status() == ChangePlan.Status.APPLIED) {
+            return """
+                    status: APPLIED
+                    %s
+                    planHash: %s
+                    kind: %s
+                    env: %s
+                    summary: %s
+                    next: 该变更已执行完成，无需再次确认或推卡；直接汇报结果即可。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(), plan.env(),
+                    plan.summary());
+        }
+        if (plan.status() == ChangePlan.Status.CONFIRMED) {
+            return """
+                    status: CONFIRMED
+                    %s
+                    planHash: %s
+                    kind: %s
+                    env: %s
+                    summary: %s
+                    next: 操作人已确认，可直接调用 apply 执行；不要再推送确认卡片。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(), plan.env(),
+                    plan.summary());
+        }
+        if (plan.status() == ChangePlan.Status.FAILED) {
+            return """
+                    status: FAILED
+                    %s
+                    planHash: %s
+                    kind: %s
+                    env: %s
+                    summary: %s
+                    next: 上次执行失败；先向操作人说明失败原因，需要重试时再登记新的变更。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(), plan.env(),
+                    plan.summary());
+        }
         return """
                 status: PENDING_USER_CONFIRMATION
                 %s
@@ -164,42 +202,5 @@ public class ChangeTools {
                 plan.highRisk(), gate, plan.summary(),
                 plan.highRisk() ? "高危变更需二次密码" : "一次性令牌 5 分钟有效",
                 plan.changeId());
-    }
-
-    /**
-     * 查询变更单状态（只读）。
-     *
-     * <p>确认卡是异步广播，模型无法"等待"；有了这个工具就能在后续轮次里主动查
-     * PENDING / CONFIRMED / APPLIED / FAILED，而不用靠猜或反复推卡。
-     */
-    @Tool(name = "change_status",
-            description = "Get change status: PENDING..FAILED.",
-            readOnly = true, concurrencySafe = true)
-    public String status(
-            @ToolParam(name = "change_id",
-                    description = "request_confirmation 返回的 changeId（chg-...）")
-            String changeId,
-            ProjectContext ctx) {
-        if (changeId == null || changeId.isBlank()) {
-            return "err: change_id 不能为空";
-        }
-        ChangePlan plan = registry.find(changeId.trim()).orElse(null);
-        if (plan == null) {
-            return "err: 变更不存在或已过期：" + changeId;
-        }
-        if (!plan.projectId().equals(ctx.projectId())) {
-            return "err: 该变更不属于当前项目（" + plan.projectId() + "）";
-        }
-        return """
-                changeId: %s
-                status: %s
-                kind: %s
-                env: %s
-                executable: %s
-                highRisk: %s
-                createdAt: %s
-                summary: %s
-                """.formatted(plan.changeId(), plan.status().name(), plan.kind(), plan.env(),
-                plan.executable(), plan.highRisk(), plan.createdAt(), plan.summary());
     }
 }
