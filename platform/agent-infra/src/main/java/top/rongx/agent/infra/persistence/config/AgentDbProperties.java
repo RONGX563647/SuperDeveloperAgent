@@ -30,7 +30,10 @@ public record AgentDbProperties(
         sqliteFile = sqliteFile == null || sqliteFile.isBlank()
                 ? DEFAULT_SQLITE_FILE : sqliteFile.trim();
         poolSize = poolSize == null || poolSize < 1 ? 8 : poolSize;
-        importLegacy = importLegacy != null && importLegacy;
+        // 默认开启一次性导入：迁移后所有 Store 改读统一库，若旧库存在却不导入，
+        // 用户看到的就是"历史数据凭空消失"。导入是 INSERT OR IGNORE 幂等且只填
+        // 统一库的空表，不会覆盖新库现有行；确需跳过时显式设 false。
+        importLegacy = importLegacy == null || importLegacy;
         if (!url.isEmpty()
                 && !url.startsWith(SQLITE_PREFIX)
                 && !url.startsWith(POSTGRES_PREFIX)) {

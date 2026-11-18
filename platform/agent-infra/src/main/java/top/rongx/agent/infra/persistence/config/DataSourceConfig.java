@@ -15,6 +15,7 @@ import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.infra.persistence.LegacySqliteImporter;
 import top.rongx.agent.infra.persistence.PlatformDb;
+import top.rongx.agent.infra.persistence.SqliteWalCheckpointer;
 
 /**
  * 双库装配：默认 SQLite，配置 {@code agent.db.url} 后切 PostgreSQL。
@@ -66,10 +67,19 @@ public class DataSourceConfig {
         return PlatformDb.managed(dataSource, entityManagerFactory);
     }
 
-    /** 显式开关 {@code agent.db.import-legacy=true} 时，把旧的多文件 SQLite 导入统一库。 */
+    /** 启动时把旧的多文件 SQLite 导入统一库（默认开启，可显式关闭）。 */
     @Bean(initMethod = "run")
     public LegacySqliteImporter legacySqliteImporter(PlatformDb platformDb, AgentDbProperties props) {
         return new LegacySqliteImporter(platformDb, props);
+    }
+
+    /**
+     * 应用就绪后把统一库的 WAL 合并回主文件。作为 {@link org.springframework.boot.ApplicationRunner}
+     * 会在所有 {@code initMethod}（含旧库导入）之后执行，确保导入数据一并落盘。
+     */
+    @Bean
+    public SqliteWalCheckpointer sqliteWalCheckpointer(PlatformDb platformDb, AgentDbProperties props) {
+        return new SqliteWalCheckpointer(platformDb, props);
     }
 
     private static void prepareSqliteDirectory(String jdbcUrl) {

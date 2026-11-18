@@ -76,41 +76,60 @@ public class LegacySqliteImporter {
     }
 
     private void importIntoNewSqlite(Path directory) {
+        int totalCopied = 0;
         try (Connection target = db.dataSource().getConnection()) {
             for (String fileName : LEGACY_FILES) {
                 Path legacy = directory.resolve(fileName);
                 if (!Files.isRegularFile(legacy)) {
                     continue;
                 }
-                copyAttached(target, legacy);
+                totalCopied += copyAttached(target, legacy);
             }
         } catch (SQLException e) {
             log.warn("旧库导入失败（不影响启动）: {}", e.getMessage());
         }
+        // 导入写入的数据同样先进 WAL；立即 checkpoint 让主文件自包含，
+        // 否则"导入成功"后只拷 .db 仍会丢掉刚导入的行（与本次 bug 同源）。
+        if (totalCopied > 0 && !properties.isPostgres()) {
+            try {
+                SqliteWalCheckpointer.Checkpoint cp = SqliteWalCheckpointer.checkpoint(db.dataSource());
+                log.info("旧库导入后 checkpoint：busy={} 合并={} 页", cp.busy(), cp.checkpointed());
+            } catch (SQLException e) {
+                log.warn("旧库导入后 checkpoint 失败: {}", e.getMessage());
+            }
+        }
     }
 
-    private void copyAttached(Connection target, Path legacy) throws SQLException {
+    private int copyAttached(Connection target, Path legacy) throws SQLException {
         String alias = "legacy";
+        int copied = 0;
+        int skippedTables = 0;
         try (Statement statement = target.createStatement()) {
             statement.execute("ATTACH DATABASE '" + legacy.toString().replace("'", "''")
                     + "' AS " + alias);
-            int copied = 0;
             for (String table : tables(target, alias)) {
                 try {
                     List<String> columns = commonColumns(target, "main." + table, alias + "." + table);
                     if (columns.isEmpty()) {
+                        // 不再静默跳过：明确告警，避免"导入完成"却少了一整张表的数据。
+                        skippedTables++;
+                        log.warn("旧表 {} 在统一库中无同名表或公共列，已跳过（数据未导入）: {}",
+                                table, legacy.getFileName());
                         continue;
                     }
                     String list = String.join(", ", columns);
                     copied += statement.executeUpdate("INSERT OR IGNORE INTO main." + table
                             + " (" + list + ") SELECT " + list + " FROM " + alias + "." + table);
                 } catch (SQLException e) {
+                    skippedTables++;
                     log.warn("跳过旧表 {}: {}", table, e.getMessage());
                 }
             }
             statement.execute("DETACH DATABASE " + alias);
-            log.info("旧库导入完成: {} -> {} 行", legacy.getFileName(), copied);
         }
+        log.info("旧库导入完成: {} -> 新增 {} 行{}", legacy.getFileName(), copied,
+                skippedTables == 0 ? "" : "，跳过 " + skippedTables + " 张表");
+        return copied;
     }
 
     private void importIntoPostgres(Path directory) {
