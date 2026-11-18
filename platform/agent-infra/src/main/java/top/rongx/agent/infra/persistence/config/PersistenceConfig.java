@@ -11,7 +11,10 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  * 因此在这里显式声明。领域层不出现任何 JPA 类型。
  */
 @Configuration
-@EntityScan(basePackages = {"top.rongx.agent.infra", "top.rongx.agent.governance"})
+@EntityScan(basePackages = {
+        "top.rongx.agent.infra",
+        "top.rongx.agent.governance",
+        "top.rongx.agent.gateway"})
 @EnableJpaRepositories(basePackages = {"top.rongx.agent.infra", "top.rongx.agent.governance"})
 public class PersistenceConfig {
 }

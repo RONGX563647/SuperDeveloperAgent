@@ -9,13 +9,12 @@ spring:
       enabled: true
   jpa:
     open-in-view: false
+    hibernate:
+      ddl-auto: update
     properties:
       hibernate.jdbc.batch_size: 50
       hibernate.order_inserts: true
       hibernate.order_updates: true
-  # Flyway 由 DataSourceConfig 在 PG 模式下显式执行；SQLite 没有官方 Flyway 模块。
-  flyway:
-    enabled: false
 
 # OpenAPI：/v3/api-docs 是唯一规范源，/doc.html 是 Swagger UI（保持 Knife4j 的习惯路径）。
 # Knife4j 4.5 依赖 springdoc 2.x，与 Boot 4 不兼容，因此 UI 由 springdoc 自带页面提供。
@@ -114,7 +113,7 @@ agent:
       agent-fallback: ${AGENT_PIPELINE_AUTO_REPAIR_AGENT:true}
       auto-resume: ${AGENT_PIPELINE_AUTO_RESUME:true}
   # 预置项目清单（agent.projects.items）已移除：项目统一走下面的「项目接入」，
-  # 由项目页接入后落库（data/workspaces/_platform/projects.db）。
+  # 由项目页接入后落库（统一库 data/workspaces/_platform/platform.db）。
   # 项目接入
   intake:
     # 工作区边界（shared-root 模式）：配置后目录浏览限制在此边界内，

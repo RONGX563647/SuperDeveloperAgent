@@ -2,23 +2,26 @@ package top.rongx.agent.infra.persistence.config;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import jakarta.persistence.EntityManagerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import javax.sql.DataSource;
-import org.flywaydb.core.Flyway;
 import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.infra.persistence.LegacySqliteImporter;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
  * 双库装配：默认 SQLite，配置 {@code agent.db.url} 后切 PostgreSQL。
  *
- * <p>PG 的 schema 由 Flyway 管理；SQLite 没有官方 Flyway 模块，由 Hibernate
- * 根据实体生成/升级（本地单机场景）。两边的实体定义保持同一套。
+ * <p>两库使用同一套 JPA 实体，schema 由 Hibernate {@code hbm2ddl.auto=update}
+ * 在启动时生成/补齐。SQLite 没有官方 Flyway 模块，为避免两套 DDL 漂移，
+ * PG 也不再单独维护迁移脚本。
  */
 @Configuration
 public class DataSourceConfig {
@@ -44,38 +47,29 @@ public class DataSourceConfig {
             config.addDataSourceProperty("busy_timeout", "5000");
             config.addDataSourceProperty("foreign_keys", "on");
         }
-
-        HikariDataSource dataSource = new HikariDataSource(config);
-        if (props.isPostgres()) {
-            try {
-                migratePostgres(dataSource);
-            } catch (RuntimeException e) {
-                dataSource.close();
-                throw e;
-            }
-        }
-        return dataSource;
+        return new HikariDataSource(config);
     }
 
     @Bean
     public HibernatePropertiesCustomizer hibernateProperties(AgentDbProperties props) {
         return properties -> {
-            if (props.isPostgres()) {
-                properties.put("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
-                properties.put("hibernate.hbm2ddl.auto", "none");
-            } else {
-                properties.put("hibernate.dialect", "org.hibernate.community.dialect.SQLiteDialect");
-                properties.put("hibernate.hbm2ddl.auto", "update");
-            }
+            properties.put("hibernate.dialect", props.isPostgres()
+                    ? "org.hibernate.dialect.PostgreSQLDialect"
+                    : "org.hibernate.community.dialect.SQLiteDialect");
+            properties.put("hibernate.hbm2ddl.auto", "update");
         };
     }
 
-    private static void migratePostgres(DataSource dataSource) {
-        Flyway.configure()
-                .dataSource(dataSource)
-                .locations("classpath:db/migration/postgresql")
-                .load()
-                .migrate();
+    /** 统一持久化入口：Store 通过它拿事务与原生查询，不再各自打开连接。 */
+    @Bean
+    public PlatformDb platformDb(DataSource dataSource, EntityManagerFactory entityManagerFactory) {
+        return PlatformDb.managed(dataSource, entityManagerFactory);
+    }
+
+    /** 显式开关 {@code agent.db.import-legacy=true} 时，把旧的多文件 SQLite 导入统一库。 */
+    @Bean(initMethod = "run")
+    public LegacySqliteImporter legacySqliteImporter(PlatformDb platformDb, AgentDbProperties props) {
+        return new LegacySqliteImporter(platformDb, props);
     }
 
     private static void prepareSqliteDirectory(String jdbcUrl) {
