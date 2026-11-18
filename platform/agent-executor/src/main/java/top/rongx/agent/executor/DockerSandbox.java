@@ -44,12 +44,14 @@ public class DockerSandbox {
 
     /** 缓存卷初始化预算：首次创卷 + 冷镜像启动会超过 30s（线上实测偶发 E-302）。 */
     private static final long CACHE_INIT_TIMEOUT_MS = 90_000L;
-
     /** 缓存卷初始化尝试次数：超时属于瞬时基础设施问题，先自动重试再交给自愈。 */
     private static final int CACHE_INIT_ATTEMPTS = 2;
 
     /** 初始化完成标记：进程重启后据此跳过 chown -R，避免每次白白扫一遍 GB 级缓存。 */
     private static final String READY_MARKER = "/cache/.agent-ready";
+
+    /** 构建容器的运行用户：缓存目录也归它所有（与 --user 保持一致）。 */
+    private static final String CACHE_UID = "1000:1000";
 
     /** 镜像预检预算：本机已有时秒级返回；缺镜像时不能把"没有"误判成"网络慢"。 */
     private static final long IMAGE_INSPECT_TIMEOUT_MS = 5_000L;
@@ -380,11 +382,10 @@ public class DockerSandbox {
     private void initCacheVolume(String volume, BooleanSupplier cancelled, Consumer<String> live) {
         for (int attempt = 1; attempt <= CACHE_INIT_ATTEMPTS; attempt++) {
             try {
-                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live, "mkdir", "-p",
+                runInit(volume, cancelled, live, "mkdir", "-p",
                         "/cache/m2", "/cache/npm", "/cache/pnpm", "/cache/corepack");
-                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live,
-                        "chown", "-R", "1000:1000", "/cache");
-                runAsRoot(volume, CACHE_INIT_TIMEOUT_MS, cancelled, live, "touch", READY_MARKER);
+                chownBestEffort(volume, cancelled, live);
+                runInit(volume, cancelled, live, "touch", READY_MARKER);
                 return;
             } catch (EnvironmentException e) {
                 boolean aborted = cancelled != null && cancelled.getAsBoolean();
@@ -397,20 +398,69 @@ public class DockerSandbox {
         }
     }
 
-    private void runAsRoot(String volume, long timeoutMs, BooleanSupplier cancelled,
-                           Consumer<String> live, String... argv) {
-        List<String> cmd = rootCommand(volume, argv);
-        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
-        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, timeoutMs,
-                cancelled == null ? () -> false : cancelled, live);
-        if (outcome.errorCode() != null) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "缓存卷初始化失败（" + outcome.errorCode() + "）："
-                    + outcome.summary() + "；命令：" + String.join(" ", cmd));
+    /**
+     * 缓存卷初始化命令：先按构建用户执行，被拒再回退 root。
+     *
+     * <p>为什么不能只用 root：Docker Desktop（Windows/WSL2）对已有卷做 userns 映射时，
+     * 容器内 root 反而写不了属主为 1000 的目录（Permission denied）；而全新卷的根目录
+     * 属主是 root，1000 用户又写不了。两种卷都要能初始化，所以按"1000 → root"回退。
+     * 只对命令被拒（E-101）回退，超时/中断直接抛出，避免双倍等待。
+     */
+    private void runInit(String volume, BooleanSupplier cancelled, Consumer<String> live,
+                         String... argv) {
+        ProcessExecutor.StepOutcome outcome =
+                execAs(volume, CACHE_UID, CACHE_INIT_TIMEOUT_MS, cancelled, live, argv);
+        if (outcome.errorCode() == null) {
+            return;
         }
+        // 只有"命令被执行器拒绝/非零退出"才值得换 root 再试；超时与取消是基础设施问题。
+        if (!ErrorCode.COMPILE_FAILED.code().equals(outcome.errorCode())) {
+            throw initFailure(outcome, volume, argv);
+        }
+        ProcessExecutor.StepOutcome asRoot =
+                execAs(volume, "0:0", CACHE_INIT_TIMEOUT_MS, cancelled, live, argv);
+        if (asRoot.errorCode() != null) {
+            throw initFailure(asRoot, volume, argv);
+        }
+    }
+
+    private EnvironmentException initFailure(ProcessExecutor.StepOutcome outcome, String volume,
+                                             String... argv) {
+        return new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
+                "缓存卷初始化失败（" + outcome.errorCode() + "，卷 " + volume + "）："
+                        + outcome.summary() + "；命令：" + String.join(" ", argv));
+    }
+
+    /**
+     * 属主校正只是"尽力而为"：Windows 的 Docker Desktop 卷不支持 chown
+     * （会报 Operation not permitted），而缓存卷的可用性由 mkdir 与完成标记保证。
+     * 这里失败只记日志，否则整个流水线会被一个无实际影响的步骤卡死。
+     */
+    private void chownBestEffort(String volume, BooleanSupplier cancelled, Consumer<String> live) {
+        List<String> cmd = initCommand(volume, "0:0", "chown", "-R", "1000:1000", "/cache");
+        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, CACHE_INIT_TIMEOUT_MS,
+                cancelled == null ? () -> false : cancelled, live);
+        if (outcome.exitCode() != 0) {
+            notify(live, "[sandbox] 属主校正未生效（exit " + outcome.exitCode()
+                    + "，Windows 卷不支持 chown 属正常），继续初始化\n");
+        }
+    }
+
+    private ProcessExecutor.StepOutcome execAs(String volume, String user, long timeoutMs,
+                                               BooleanSupplier cancelled, Consumer<String> live,
+                                               String... argv) {
+        List<String> cmd = initCommand(volume, user, argv);
+        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
+        return commandExecutor.run(cmd, timeoutMs, cancelled == null ? () -> false : cancelled, live);
     }
 
     /** 特权容器命令行：只用于缓存卷初始化（需要 root 才能建目录 / chown）。 */
     private List<String> rootCommand(String volume, String... argv) {
+        return initCommand(volume, "0:0", argv);
+    }
+
+    private List<String> initCommand(String volume, String user, String... argv) {
         List<String> cmd = new ArrayList<>();
         cmd.add(dockerBinary);
         cmd.add("run");
@@ -433,7 +483,7 @@ public class DockerSandbox {
         cmd.add("--memory");
         cmd.add(memory);
         cmd.add("--user");
-        cmd.add("0:0");
+        cmd.add(user);
         cmd.add("-v");
         cmd.add(volume + ":/cache");
         // 用可信最小镜像初始化，绝不用构建镜像（构建镜像可能被投毒，root 下直接接管宿主 Docker）

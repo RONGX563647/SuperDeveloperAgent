@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +45,12 @@ class ConfirmTokenServiceTest {
 
     private final MutableClock clock = new MutableClock();
     private final ConfirmTokenService service = new ConfirmTokenService(clock);
+
+    /** 关闭缓存的独立库，否则 Windows 上 @TempDir 删除会因 SQLite 文件占用失败。 */
+    @AfterEach
+    void releaseDb() {
+        GovernanceDb.closeAll();
+    }
 
     @Test
     @DisplayName("正常签发并消费")

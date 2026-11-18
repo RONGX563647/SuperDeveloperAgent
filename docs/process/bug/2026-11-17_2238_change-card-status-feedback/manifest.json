@@ -13,7 +13,7 @@
   "solution": "ChangePlan 增加 executable() 与 status(PENDING/CONFIRMED/APPLIED/FAILED) 并持久化，推卡前过滤不可执行变更，确认/执行/失败时更新状态；新增只读工具 change_status；卡片失败 emit failed 由 ChatView 回灌给 Agent（流式期间排队补发）；确认卡改为紧凑布局，diff/日志按需展开",
   "commits": [
     {
-      "sha": "eaf56bc9f313c0285318e4a78c3b24d1d98a9622",
+      "sha": "898c6e0e79bcc7f01d0c39617d4b361ecc952f6d",
       "subject": "fix(change): 留痕单不弹确认卡、失败回执回灌并支持查询变更状态",
       "category": "bug",
       "files": [
@@ -190,6 +190,6 @@
   },
   "chain": {
     "prev": "e26e65db46b0c314113ec4e950a3b82427b2882879fbf23f4262978aea607c06",
-    "self": "9f178bf2430d715a1b9a1c009431f4ef24e82c36d203c6c29c62186e6061e873"
+    "self": "03f6e672e6257752620a07680644bbde8cee9a20f2ad89a2228fd1b085c4c93e"
   }
 }

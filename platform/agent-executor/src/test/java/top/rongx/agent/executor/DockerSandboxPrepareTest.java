@@ -192,6 +192,33 @@ class DockerSandboxPrepareTest {
     }
 
     @Test
+    @DisplayName("缓存卷根目录属主不是构建用户：1000 被拒后自动回退 root 再初始化")
+    void initFallsBackToRootWhenUserIsForbidden() {
+        List<String> attemptedUsers = new ArrayList<>();
+        Recorder recorder = new Recorder(cmd -> {
+            if (isReadyProbe(cmd)) {
+                return ProcessExecutor.StepOutcome.failed(1, null, "not found");
+            }
+            if (cmd.contains("mkdir")) {
+                String user = cmd.get(cmd.indexOf("--user") + 1);
+                attemptedUsers.add(user);
+                if ("1000:1000".equals(user)) {
+                    // 全新卷的 /cache 属主是 root，1000 用户写不了
+                    return ProcessExecutor.StepOutcome.failed(1, "E-101", "mkdir: Permission denied");
+                }
+            }
+            return ok();
+        });
+
+        sandbox(recorder).prepareCacheVolume(Path.of("E:/work/P"), () -> false, null);
+
+        assertEquals(List.of("1000:1000", "0:0"), attemptedUsers,
+                "被拒后必须换 root 再试一次，而不是直接失败");
+        assertTrue(recorder.commands.get(recorder.commands.size() - 1).contains("touch"),
+                "回退成功后仍要写完成标记");
+    }
+
+    @Test
     @DisplayName("准备失败不缓存卷：下一次动作必须重新初始化")
     void failedPrepareIsNotCached() {
         Recorder recorder = new Recorder(cmd -> timeout());

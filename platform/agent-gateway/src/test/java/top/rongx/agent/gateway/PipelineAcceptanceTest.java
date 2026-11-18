@@ -26,6 +26,7 @@ import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.executor.BuiltInPipelineEngine;
 import top.rongx.agent.executor.DockerActionRunner;
+import top.rongx.agent.executor.DockerDeployer;
 import top.rongx.agent.executor.DockerSandbox;
 import top.rongx.agent.executor.ProcessActionRunner;
 import top.rongx.agent.infra.git.GitWorktreeManager;
@@ -49,7 +50,8 @@ import top.rongx.agent.domain.error.PlatformException;
 class PipelineAcceptanceTest {
 
     private static final String TOOLCHAIN = "node:20-alpine";
-    private static final String CONTAINER = "ci-e2e-web";
+    /** 平台部署器给 RY/test 起的容器名（DockerDeployer 的命名规则）。 */
+    private static final String CONTAINER = DockerDeployer.containerName("RY", "test");
     private static final int PORT = 18081;
 
     @TempDir
@@ -82,17 +84,6 @@ class PipelineAcceptanceTest {
     private static final String BAD_TEST = """
             console.error('FAIL: deliberate test failure');
             process.exit(1);
-            """;
-
-    /** 部署脚本（人写在仓库里、review 过；平台只执行 argv）。 */
-    private static final String DEPLOY_JS = """
-            const cp = require('child_process');
-            const tag = process.argv[2];
-            cp.spawnSync('docker', ['rm', '-f', 'ci-e2e-web']);   // 不存在时也继续
-            const r = cp.spawnSync('docker', ['run', '-d', '--rm', '--name', 'ci-e2e-web',
-                                              '-p', '18081:3000', tag], {encoding: 'utf8'});
-            if (r.status !== 0) { console.error('deploy failed: ' + r.stderr); process.exit(1); }
-            console.log('deployed ' + tag);
             """;
 
     @BeforeAll
@@ -170,9 +161,10 @@ class PipelineAcceptanceTest {
         // 部署后真实 HTTP 可访问
         assertEquals("OK", httpGet("http://127.0.0.1:" + PORT + "/healthz"));
 
-        // 产物：源码文件 + 镜像（含 digest）
+        // 产物：源码文件（运行结束后归档到 <workspace>/artifacts/<runId>/）+ 镜像（含 digest）
         List<ArtifactRef> artifacts = current.artifacts(runId);
-        assertTrue(artifacts.stream().anyMatch(a -> a.kind().equals("file") && a.ref().equals("app.js")),
+        assertTrue(artifacts.stream().anyMatch(a -> a.kind().equals("file")
+                        && a.ref().replace('\\', '/').endsWith("/app.js")),
                 "应收集到构建产物 app.js：" + artifacts);
         ArtifactRef image = artifacts.stream().filter(a -> a.kind().equals("image"))
                 .findFirst().orElseThrow(() -> new AssertionError("缺少镜像产物：" + artifacts));
@@ -202,10 +194,17 @@ class PipelineAcceptanceTest {
         List<String> ids = current.stages(badRun).stream().map(StageResult::stageId).toList();
         assertFalse(ids.contains("deploy"), "失败后不得部署：" + ids);
         assertFalse(ids.contains("health"), "失败后不得执行健康检查：" + ids);
-        assertTrue(ids.stream().anyMatch(s -> s.startsWith("on-failure:")),
-                "应执行 on-failure 回滚：" + ids + "\n日志：" + current.logTail(badRun));
-        assertTrue(current.logTail(badRun).contains("deployed ci-" + goodSha.substring(0, 7)),
-                "回滚应把上一个好版本重新部署，日志：" + current.logTail(badRun));
+        StageResult rollback = current.stages(badRun).stream()
+                .filter(s -> s.stageId().equals("rollback")).findFirst()
+                .orElseThrow(() -> new AssertionError("应执行 on-failure 回滚：" + ids
+                        + "\n日志：" + current.logTail(badRun)));
+        assertEquals(StageStatus.SUCCEEDED, rollback.status(),
+                "回滚应把上一个好版本重新部署：" + current.logTail(badRun));
+        // 回滚部署的是上一次成功发布的镜像，而不是本次失败提交的镜像
+        String lastGoodImage = "ci-test-" + goodSha.substring(0, 7);
+        assertTrue(rollback.artifacts().stream().anyMatch(a -> "deployment".equals(a.kind())
+                        && lastGoodImage.equals(a.meta().get("image"))),
+                "回滚应部署上一好版本镜像 " + lastGoodImage + "：" + rollback.artifacts());
 
         StageResult failedTest = current.stages(badRun).stream()
                 .filter(s -> s.stageId().equals("test")).findFirst().orElseThrow();
@@ -259,6 +258,11 @@ class PipelineAcceptanceTest {
     private static void writeFiles(Path repo, String appJs, String testBody) throws Exception {
         String pipeline = """
                 name: release
+                deploy:
+                  target: docker
+                  port: %d
+                  containerPort: 3000
+                  healthPath: /healthz
                 stages:
                   - id: build
                     type: action
@@ -273,20 +277,19 @@ class PipelineAcceptanceTest {
                     action: image_package
                     runner: host
                   - id: deploy
-                    type: action
-                    action: stack_deploy
-                    runner: host
+                    type: deploy
                   - id: health
                     type: health
                     url: http://127.0.0.1:%d/healthz
                     expected: 200
                 on-failure:
                   - id: rollback
-                    type: action
-                    action: stack_rollback
-                    runner: host
-                """.formatted(PORT);
+                    type: rollback
+                """.formatted(PORT, PORT);
 
+        // 部署/回滚走平台的 deploy 段 + type: deploy/rollback（宿主部署器），
+        // 仓库里写 runner: host 的脚本会被降级进沙箱（沙箱内没有 docker CLI），
+        // 那既不是生产路径，也测不出平台部署能力。
         String actions = """
                 actions:
                   backend_build:
@@ -297,15 +300,6 @@ class PipelineAcceptanceTest {
                   backend_test:
                     run: ["node", "test.js"]
                     timeout: 2m
-                  image_package:
-                    run: ["docker", "build", "-q", "-t", "${tag}", "."]
-                    timeout: 3m
-                  stack_deploy:
-                    run: ["node", "deploy.js", "${tag}"]
-                    timeout: 2m
-                  stack_rollback:
-                    run: ["node", "deploy.js", "${tag}"]
-                    timeout: 2m
                 """;
 
         Files.writeString(repo.resolve("ci/pipeline.yml"), pipeline, StandardCharsets.UTF_8);
@@ -313,7 +307,6 @@ class PipelineAcceptanceTest {
         Files.writeString(repo.resolve("Dockerfile"), DOCKERFILE, StandardCharsets.UTF_8);
         Files.writeString(repo.resolve("app.js"), appJs, StandardCharsets.UTF_8);
         Files.writeString(repo.resolve("test.js"), testBody, StandardCharsets.UTF_8);
-        Files.writeString(repo.resolve("deploy.js"), DEPLOY_JS, StandardCharsets.UTF_8);
     }
 
     private static String commit(Path repo, String message) throws Exception {

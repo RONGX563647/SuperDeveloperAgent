@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.patch.CodePatch;
@@ -16,6 +17,12 @@ class PatchRegistryTest {
 
     @TempDir
     Path dir;
+
+    /** 关闭缓存的独立库，否则 Windows 上 @TempDir 删除会因 SQLite 文件占用失败。 */
+    @AfterEach
+    void releaseDb() {
+        GovernanceDb.closeAll();
+    }
 
     private CodePatch patch(String id, long createdAt) {
         return new CodePatch(id, "DEMO", "dev", "abc123", "patch/DEMO",
