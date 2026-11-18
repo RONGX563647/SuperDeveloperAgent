@@ -238,8 +238,12 @@ public class WorkspaceRunExecutor {
             ConversationRun current = runs.findRun(base.id()).orElse(base);
             long now = System.currentTimeMillis();
             long started = current.startedAt() == 0 ? now : current.startedAt();
-            ConversationRun updated = runs.updateRun(current.withStatus(
-                    status, trim(result), trim(error), started, now));
+            ConversationRun updated = current.withStatus(
+                    status, trim(result), trim(error), started, now);
+            // 先补时间线再落终态：等待方看到 terminal 时，本轮记录必须已经可读，
+            // 否则同一会话紧接着的下一轮会读到旧时间线并把它覆盖掉。
+            saveTranscript(updated);
+            runs.updateRun(updated);
             conversations.update(updated.conversationId(), updated.ownerUserId(),
                     new ConversationPatch(null, null, null, summaryOf(updated),
                             conversationStatus(status), null, null));
@@ -247,7 +251,6 @@ public class WorkspaceRunExecutor {
                     updated.conversationId(), updated.id(), updated.ownerUserId(),
                     "run.status", status.name(), updated.result(), now));
             track(updated, ledgerState(status), summaryOf(updated), updated.error());
-            saveTranscript(updated);
             handles.remove(updated.id());
             handle.streamDone.countDown();
             handle.done.countDown();

@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
@@ -54,6 +56,10 @@ class ConversationManagerTest {
     private final ProjectRepository projects = new FakeProjects();
 
     private ConversationManager manager(ChatService chat, int concurrency) {
+        return manager(store, chat, concurrency);
+    }
+
+    private ConversationManager manager(InMemoryStore store, ChatService chat, int concurrency) {
         WorkspaceRunExecutor executor = new WorkspaceRunExecutor(provider(() -> chat), store, store,
                 store, new WorkspaceEventBus(),
                 top.rongx.agent.domain.run.RunLedgerRepository.noop(), concurrency);
@@ -129,6 +135,24 @@ class ConversationManagerTest {
         String payload = manager.transcript(c.id(), USER).orElseThrow();
         assertTrue(payload.contains("第一轮") && payload.contains("第二轮"),
                 "第二轮运行时不能覆盖第一轮的时间线：" + payload);
+    }
+
+    @Test
+    @DisplayName("时间线落库之前不对外暴露终态，避免下一轮读到旧时间线")
+    void terminalStatusVisibleOnlyAfterTranscriptSaved() throws Exception {
+        BlockingStore blocking = new BlockingStore();
+        ConversationManager manager = manager(blocking, new EchoChat(), 1);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        String runId = manager.send(c.id(), USER, "检查构建");
+
+        assertTrue(blocking.entered.await(3, TimeUnit.SECONDS), "运行应进入时间线写入");
+        assertEquals(ConversationStatus.RUNNING,
+                manager.findOwned(c.id(), USER).orElseThrow().status(),
+                "时间线未写完时不能先对外显示终态");
+
+        blocking.release.countDown();
+        assertEquals(RunStatus.SUCCEEDED, manager.waitForRun(runId, USER, 3_000).status());
+        assertTrue(manager.transcript(c.id(), USER).orElseThrow().contains("检查构建"));
     }
 
     @Test
@@ -271,8 +295,25 @@ class ConversationManagerTest {
         }
     }
 
+    /** 时间线写入可控阻塞，用于验证“先落时间线、再暴露终态”的顺序。 */
+    private static final class BlockingStore extends InMemoryStore {
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public void saveTranscript(String conversationId, String payload) {
+            entered.countDown();
+            try {
+                release.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            super.saveTranscript(conversationId, payload);
+        }
+    }
+
     /** 三份仓库接口的内存实现（测试专用）。 */
-    private static final class InMemoryStore implements ConversationRepository,
+    private static class InMemoryStore implements ConversationRepository,
             ConversationRunRepository, WorkspaceTaskRepository, ConversationTranscriptRepository {
         private final Map<String, Conversation> conversations = new ConcurrentHashMap<>();
         private final Map<String, ConversationRun> runs = new ConcurrentHashMap<>();
