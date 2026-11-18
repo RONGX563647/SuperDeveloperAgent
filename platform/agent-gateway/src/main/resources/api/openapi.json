@@ -6463,6 +6463,52 @@
         }
       }
     },
+    "/api/v1/ci/runs/{runId}/log/lines" : {
+      "get" : {
+        "tags" : [ "pipeline-controller" ],
+        "summary" : "log lines",
+        "operationId" : "logLines",
+        "parameters" : [ {
+          "name" : "runId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "offset",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        }, {
+          "name" : "limit",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 500
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ci/runs/{runId}/artifacts/{index}/file" : {
       "get" : {
         "tags" : [ "pipeline-controller" ],

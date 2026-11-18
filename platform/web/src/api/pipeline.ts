@@ -187,6 +187,38 @@ export function fetchRunLog(runId: string, offset: number): Promise<RunLogSlice>
   )
 }
 
+/** 行分页日志：虚拟滚动与「共 N 行」都靠它。 */
+export interface RunLogPage {
+  /** 起始行号（0 基，已按实际总行数夹紧） */
+  offset: number
+  /** 本次生效的行数上限 */
+  limit: number
+  /** 日志总行数 */
+  total: number
+  lines: string[]
+  /** 还有更多行 */
+  truncated: boolean
+  /** 已读到末尾 */
+  complete: boolean
+}
+
+/**
+ * 按行取日志窗口。
+ *
+ * 增量接口只给 text 时前端拿不到总行数：既算不出滚动高度，也只能把整段日志塞进 DOM。
+ * 需要虚拟滚动或「跳到末尾」时用这个接口。
+ */
+export function fetchRunLogLines(
+  runId: string,
+  offset = 0,
+  limit = 500,
+): Promise<RunLogPage> {
+  const q = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  return apiFetch<RunLogPage>(
+    `/api/v1/ci/runs/${encodeURIComponent(runId)}/log/lines?${q}`
+  )
+}
+
 /** 取消一次运行（只对未终态生效）。 */
 export function cancelRun(runId: string): Promise<RunView> {
   return apiFetch<RunView>(`/api/v1/ci/runs/${encodeURIComponent(runId)}/cancel`, {

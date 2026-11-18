@@ -52,6 +52,7 @@ import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.PipelineEngine.LogLinePage;
 import top.rongx.agent.domain.port.PipelineEngine.ImageVersion;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.StagePreview;
@@ -1513,6 +1514,37 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 s == null ? Set.of() : s.sensitiveValues);
         // 片段脱敏后长度可能变化，end 用「原始已读位置」表达，前端只用 offset 续传
         return new LogSlice(from, raw.length(), added);
+    }
+
+    /**
+     * 行分页日志：在未脱敏缓冲上切行，再对本页做脱敏。
+     *
+     * <p>与 {@link #logFrom} 同样的理由——先切再脱敏，行号语义才稳定；
+     * 全量脱敏后再切会因替换长度变化而错位。
+     */
+    @Override
+    public LogLinePage logLines(String runId, int offset, int limit) {
+        RunState s = runs.get(runId);
+        String raw;
+        if (s != null) {
+            synchronized (s.log) {
+                raw = s.log.toString();
+            }
+        } else {
+            raw = history.list().stream()
+                    .filter(h -> h.runId().equals(runId))
+                    .findFirst().map(RunSnapshot::log).orElse("");
+        }
+        LogLinePage page = LogLinePage.of(raw, offset, limit);
+        if (page.lines().isEmpty()) {
+            return page;
+        }
+        Set<String> sensitive = s == null ? Set.of() : s.sensitiveValues;
+        List<String> redacted = page.lines().stream()
+                .map(line -> ProcessExecutor.redact(line, sensitive))
+                .toList();
+        return new LogLinePage(page.offset(), page.limit(), page.total(), redacted,
+                page.truncated());
     }
 
     /** 构建历史列表（含重启前落盘的运行），转为 domain 视图。 */

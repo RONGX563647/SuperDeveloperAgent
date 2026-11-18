@@ -111,6 +111,55 @@ public interface PipelineEngine {
     record LogSlice(int offset, int end, String text) {
     }
 
+    /**
+     * 行分页日志：一次只返回 {@code limit} 行，并告知总行数与是否还有更多。
+     *
+     * <p>为什么字节 offset 不够：前端要做虚拟滚动就必须知道「一共多少行、我现在在第几行」。
+     * 只给 {@code text} 时页面只能把整包日志塞进 DOM——几十万行的构建日志会直接卡死，
+     * 右侧滚动条也因此永远算不对高度。
+     *
+     * @param offset 起始行号（0 基）
+     * @param limit  最多返回行数（实现方需做上限保护）
+     */
+    default LogLinePage logLines(String runId, int offset, int limit) {
+        String full = logTail(runId);
+        return LogLinePage.of(full == null ? "" : full, offset, limit);
+    }
+
+    /**
+     * 行分页结果。
+     *
+     * @param offset    起始行号（已按实际日志长度夹紧）
+     * @param limit     请求的行数上限（实际生效值）
+     * @param total     日志总行数
+     * @param lines     本次返回的行（不含行尾换行符）
+     * @param truncated 是否因为 limit 而截断（还有更多行）
+     */
+    record LogLinePage(int offset, int limit, int total, List<String> lines, boolean truncated) {
+
+        /** 行分页的公共实现：按 {@code \\R} 切行，越界返回空页，limit 夹到 [1, MAX]。 */
+        public static LogLinePage of(String text, int offset, int limit) {
+            int size = Math.max(1, Math.min(limit, MAX_LINES));
+            // split 保留尾部空串会让「最后一行换行」多算一行，先按行尾换行裁剪
+            String body = text == null ? "" : text;
+            List<String> all = body.isEmpty()
+                    ? List.of()
+                    : List.of(body.split("\\R", -1));
+            // 文本以换行结尾时最后一个是空串，不算一行
+            if (!all.isEmpty() && all.get(all.size() - 1).isEmpty()) {
+                all = all.subList(0, all.size() - 1);
+            }
+            int total = all.size();
+            int from = Math.min(Math.max(0, offset), total);
+            int to = Math.min(from + size, total);
+            return new LogLinePage(from, size, total,
+                    List.copyOf(all.subList(from, to)), to < total);
+        }
+
+        /** 单次返回的行数上限：太大就失去分页的意义，也会把响应体撑爆。 */
+        public static final int MAX_LINES = 5_000;
+    }
+
     /** 最近构建历史（含重启前落盘的运行）；默认无。 */
     default List<RunSummary> history() {
         return List.of();
