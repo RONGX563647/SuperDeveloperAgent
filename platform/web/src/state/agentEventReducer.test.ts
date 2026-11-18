@@ -197,5 +197,27 @@ import { renderMarkdown } from '../utils/markdown'
   check('heartbeat 后正文正常', next.streamingTurn?.text === 'ok')
 }
 
+// 14. 入参不可用标记：区分「工具无参」与「参数丢失」
+{
+  let p = emptyAgentProjection()
+  p = reduceAgentEvent(p, ev('tool.started', 1, { name: 'workspace_write', toolCallId: 'w-1' }))
+  p = reduceAgentEvent(p, ev('tool.completed', 2, {
+    toolCallId: 'w-1', argsUnavailable: true,
+  }))
+  check('argsUnavailable 透传到轨迹', p.tools['w-1']?.argsUnavailable === true,
+    JSON.stringify(p.tools['w-1']))
+
+  // 有入参时不能误标：真实参数优先，标记位应被覆盖为 false
+  let q = emptyAgentProjection()
+  q = reduceAgentEvent(q, ev('tool.started', 1, { name: 'grep', toolCallId: 'g-1' }))
+  q = reduceAgentEvent(q, ev('tool.arguments', 2, { toolCallId: 'g-1', args: '{"pattern":"x"}' }))
+  q = reduceAgentEvent(q, ev('tool.completed', 3, {
+    toolCallId: 'g-1', argsUnavailable: true,
+  }))
+  check('有入参时不算不可用', q.tools['g-1']?.argsUnavailable !== true,
+    JSON.stringify(q.tools['g-1']))
+  check('有入参时保留参数', q.tools['g-1']?.arguments === '{"pattern":"x"}')
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)
