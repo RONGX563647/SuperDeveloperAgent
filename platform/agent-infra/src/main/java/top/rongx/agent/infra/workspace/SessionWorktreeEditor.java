@@ -191,7 +191,7 @@ public class SessionWorktreeEditor implements SessionWorkspaceEditor {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "工作树没有可提交的改动");
         }
         List<String> files = changes.stream().map(SessionWorktreeEditor::pathOf).toList();
-        String sha = git.commitAllChecked(located.worktree(), message);
+        String sha = git.commitOnly(located.worktree(), message);
         return new Commit(sha, located.branch(), files);
     }
 
