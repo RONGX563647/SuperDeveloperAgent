@@ -1,0 +1,47 @@
+---
+canonical: docs/summary/2026-11/2026-11-18_2308_gate-security.md
+schema: session-summary/v1
+period: 2026-11
+createdAt: 2026-11-18T23:08:36+08:00
+extends: worktree-commit-hook
+refs:
+  - chore/2026-11-18_2308_gate-security
+metrics:
+  sessions: 1
+  casesAdded: 0
+  casesTotal: 0
+  passRate: "0%"
+  lineCoverage: "N/A"
+  coverageDelta: "N/A"
+  patchCoverage: "N/A"
+  gate: WARN
+---
+
+# 门禁安全扫描与红队自审
+
+## 概述
+门禁安全扫描与红队自审
+feat(gate): CI 安全扫描、红队自审与耗时预算校准
+
+## 交付清单
+| 提交 | 类别 | 说明 |
+|---|---|---|
+| `e9a6461` | feat | feat(gate): CI 安全扫描、红队自审与耗时预算校准 |
+
+## 测试与质量总结
+- 命令：`未执行`
+- 结果：SKIPPED；Tests run: 0, Failures: 0, Errors: 0, Skipped: 0
+- 新增用例：0
+- 行覆盖率：N/A（JaCoCo；patch coverage 需按 diff 统计，暂记 N/A）
+- 质量门禁：**WARN**
+
+## 风险敞口
+- 未覆盖的新增文件：见失败测试
+- 跳过用例：见 evidence 中 Skipped 计数
+
+## 遗留与建议
+- 无
+
+## 链接
+- 归档：`docs/process/chore/2026-11-18_2308_gate-security/manifest.json`
+- 上一份同域总结：worktree-commit-hook
