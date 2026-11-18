@@ -1,0 +1,147 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-18_1828_test-harness-incremental",
+  "category": "chore",
+  "title": "测试门禁增量化、ArchUnit 冻结基线并启用并行",
+  "createdAt": "2026-11-18T18:28:43+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "测试门禁增量化、ArchUnit 冻结基线并启用并行",
+    "toolCallCount": 0
+  },
+  "problem": "测试门禁增量化、ArchUnit 冻结基线并启用并行",
+  "solution": "test(harness): pre-commit 改增量测试，ArchUnit 冻结基线并启用并行",
+  "commits": [
+    {
+      "sha": "b3bbbeaaaa69c887974fbb46b3600949658f03c4",
+      "subject": "test(harness): pre-commit 改增量测试，ArchUnit 冻结基线并启用并行",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/spec-checks/archunit_store/19fc382c-b1ef-4e3c-b816-25c58b426d43",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/6fea9481-6e8e-48c3-8e49-bf2b4180e8e2",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/7349bd7e-b399-4ff8-a275-fd3448a54924",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/8ca4d52a-2ed0-47c4-8fb9-d26e875ca1bd",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/959b6514-b8d1-45bc-95cf-74878d1d4723",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/f0e15fd0-8b8f-4008-b331-db0e45e9e2c3",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/f65993eb-4bd2-4331-98cd-dcabd4c49121",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/stored.rules",
+          "status": "A",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "06acbc2306041155691a59a96258c393dd679c61"
+        },
+        {
+          "path": "platform/spec-checks/pom.xml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "7e0a75b6eb0657acb1bba2bc72c914d0a2a5bcd4"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ArchitectureRulesTest.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 14,
+          "blobHash": "3b4dea40183b9d6babdaa4266cfd4f6900fb7076"
+        },
+        {
+          "path": "platform/spec-checks/src/test/resources/junit-platform.properties",
+          "status": "A",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "a371dcaa6aaa52b96ea8389ce7de2226cc632afd"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 71,
+          "deletions": 25,
+          "blobHash": "5a4f3b210b33b4f11167d61ff017f56b224708a9"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ArchitectureRulesTest.java",
+        "status": "M",
+        "additions": 21,
+        "deletions": 14,
+        "blobHash": "3b4dea40183b9d6babdaa4266cfd4f6900fb7076"
+      },
+      {
+        "path": "platform/spec-checks/src/test/resources/junit-platform.properties",
+        "status": "A",
+        "additions": 3,
+        "deletions": 0,
+        "blobHash": "a371dcaa6aaa52b96ea8389ce7de2226cc632afd"
+      }
+    ],
+    "casesAdded": 0,
+    "command": "mvn -B -pl spec-checks test",
+    "result": "PASSED",
+    "evidence": "Tests run: 22, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "spec-checks"
+    ],
+    "verification": "spec-checks 全量 22 用例通过；pre-commit 增量命令端到端验证排除 spec-checks；gate.py self-test 通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_1828_test-harness-incremental"
+    ]
+  },
+  "chain": {
+    "prev": "11916824238c85ce7109bca876c9af8bd26d894b50caa1f5ec8fa2e39a9f7e04",
+    "self": "cd638e2f03919bae7cb42be9167f61eb8d62045df4d5e134c9172622a8e8678c"
+  }
+}
