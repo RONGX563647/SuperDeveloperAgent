@@ -22,10 +22,11 @@
   - `EditorToolsTest`（生产/无工作树/未授权/已授权/超限/路径逃逸）
   - `SessionWorktreeEditorTest`（临时 git 仓库：open→write→diff→commit，复用与拒绝）
   - `ChangePlanTest` 增 `editor_branch` 断言；`ToolChainTest` 增装配断言
-- [ ] T6 验收
+- [x] T6 验收
   - `mvn -B -pl agent-tools,agent-infra -am test`
   - `mvn -B -pl spec-checks -am test`（含 ToolSchemaBudget / Handbook / ArchUnit）
   - `python tools/handbook/build.py sync`
   - 不重启后端/前端
+  - 补充 `workspace_open` 前置检查用例（生产 / 无工作树）
 - [ ] T7 归档与提交
   - `gate.py start` → `git commit -F` → `gate.py finish` → 提交 docs

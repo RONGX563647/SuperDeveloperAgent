@@ -99,7 +99,11 @@ class SessionWorktreeEditorTest {
         assertTrue(commit.sha().matches("[0-9a-f]{40}"), commit.sha());
         assertEquals("agent/session-wt-demo", commit.branch());
         assertTrue(commit.files().stream().anyMatch(f -> f.startsWith("src")), commit.files().toString());
-        assertTrue(editor.diff("RY", "wt-demo").changes().isEmpty(), "提交后应无未提交改动");
+        // 提交后与 HEAD 应无内容差异：用 diff --stat（按内容比较）判断，
+        // 避免 status 的 stat 缓存在极短时间内给出"疑似修改"的假阳性
+        SessionWorkspaceEditor.Diff afterCommit = editor.diff("RY", "wt-demo");
+        assertTrue(afterCommit.stat().isBlank(),
+                "提交后仍有改动：" + afterCommit.changes() + " / " + afterCommit.stat());
     }
 
     @Test

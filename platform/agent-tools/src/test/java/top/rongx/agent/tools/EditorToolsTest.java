@@ -133,6 +133,15 @@ class EditorToolsTest {
         assertTrue(editor.writes.isEmpty());
     }
 
+    @Test
+    @DisplayName("workspace_open 同样受生产环境与工作树前置检查约束")
+    void openGuarded() {
+        EditorTools tools = new EditorTools(new FakeEditor(), new MemoryChangeStore());
+
+        assertTrue(tools.open(ctx("prod", "wt-demo")).startsWith("err:"));
+        assertTrue(tools.open(ctx("test", null)).startsWith("err:"));
+    }
+
     private static String changeId(String text) {
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("changeId:\\s*(chg-[A-Za-z0-9-]+)").matcher(text);
