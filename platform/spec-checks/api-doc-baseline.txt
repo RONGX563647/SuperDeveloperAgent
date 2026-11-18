@@ -41,7 +41,6 @@ GitIssueController#get
 GitIssueController#list
 GitIssueController#reopen
 GitIssueController#sync
-GitIssueController#update
 GitIssueIntegrationController#delete
 GitIssueIntegrationController#list
 GitIssueIntegrationController#save
