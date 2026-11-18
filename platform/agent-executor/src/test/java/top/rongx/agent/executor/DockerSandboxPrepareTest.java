@@ -150,6 +150,48 @@ class DockerSandboxPrepareTest {
     }
 
     @Test
+    @DisplayName("不同项目的缓存卷并行初始化：一个项目的冷启动不再阻塞另一个项目")
+    void differentProjectsPrepareInParallel() throws Exception {
+        java.util.concurrent.CountDownLatch aInitializing = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch releaseA = new java.util.concurrent.CountDownLatch(1);
+        Recorder recorder = new Recorder(cmd -> {
+            if (isReadyProbe(cmd)) {
+                return ProcessExecutor.StepOutcome.failed(1, null, "not found");
+            }
+            // 项目 A 的初始化（mkdir/chown/touch）一直卡着，模拟大缓存的 chown -R
+            if (cmd.stream().anyMatch(a -> a.contains(":/cache"))
+                    && String.join(" ", cmd).contains("agent-cache-a:")) {
+                aInitializing.countDown();
+                try {
+                    releaseA.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return ok();
+        });
+        DockerSandbox sandbox = sandbox(recorder);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> a = pool.submit(
+                    () -> sandbox.prepareCacheVolume(Path.of("E:/work/A"), () -> false, null));
+            assertTrue(aInitializing.await(5, java.util.concurrent.TimeUnit.SECONDS), "项目 A 应开始初始化");
+            java.util.concurrent.Future<?> b = pool.submit(
+                    () -> sandbox.prepareCacheVolume(Path.of("E:/work/B"), () -> false, null));
+
+            b.get(5, java.util.concurrent.TimeUnit.SECONDS); // 全局锁时这里会超时
+            assertTrue(sandbox.wrap(Path.of("E:/work/B"), List.of("mvn", "-v"))
+                    .contains("agent-cache-b:/cache"), "项目 B 的缓存卷独立");
+
+            releaseA.countDown();
+            a.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            releaseA.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("准备失败不缓存卷：下一次动作必须重新初始化")
     void failedPrepareIsNotCached() {
         Recorder recorder = new Recorder(cmd -> timeout());
