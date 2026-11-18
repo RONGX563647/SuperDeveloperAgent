@@ -75,6 +75,19 @@ export function listGitIssues(query: GitIssueQuery = {}): Promise<GitIssueRow[]>
   return apiFetch(`/api/v1/git-issues${qs ? `?${qs}` : ''}`)
 }
 
+/** 版本号候选项：当前分支推导的建议值 + 仓库现有标签。 */
+export interface GitIssueVersions {
+  branch: string
+  /** 当前分支推导出的默认版本；空 = 仓库不可用，只能手输 */
+  suggested: string
+  tags: string[]
+}
+
+export function getGitIssueVersions(projectId: string): Promise<GitIssueVersions> {
+  const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+  return apiFetch(`/api/v1/git-issues/versions${qs}`)
+}
+
 export function getGitIssue(id: string): Promise<GitIssueRow> {
   return apiFetch(`/api/v1/git-issues/${encodeURIComponent(id)}`)
 }

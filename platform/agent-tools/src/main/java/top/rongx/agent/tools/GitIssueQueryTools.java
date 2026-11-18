@@ -40,12 +40,14 @@ public class GitIssueQueryTools {
             return "当前没有匹配的任务。evidence: user:" + ctx.userId();
         }
         return list.stream()
-                .map(i -> "- [%s/%s/%s] %s  %s%s  %s/%s#%s  labels:%s  id:%s"
+                .map(i -> "- [%s/%s/%s] %s  %s%s  v%s  %s/%s#%s  labels:%s  id:%s  code:%s"
                         .formatted(i.state(), i.kind(), i.priority(), i.title(), i.syncStatus(),
                                 i.syncError().isBlank() ? "" : "(" + i.syncError() + ")",
+                                i.version().isBlank() ? "-" : i.version(),
                                 i.provider(), i.repo().isBlank() ? "-" : i.repo(),
                                 i.number().isBlank() ? "-" : i.number(),
-                                i.labels().isBlank() ? "-" : i.labels(), i.id()))
+                                i.labels().isBlank() ? "-" : i.labels(), i.id(),
+                                i.code().isBlank() ? "-" : i.code()))
                 .collect(Collectors.joining("\n", "tasks:\n", "\nevidence: user:" + ctx.userId()));
     }
 
@@ -61,10 +63,12 @@ public class GitIssueQueryTools {
                 .collect(Collectors.joining("\n"));
         return """
                 id: %s
+                code: %s
                 title: %s
                 state: %s
                 kind: %s
                 priority: %s
+                version: %s
                 provider/repo/number: %s / %s / %s
                 sync: %s %s
                 url: %s
@@ -75,8 +79,10 @@ public class GitIssueQueryTools {
                 comments:
                 %s
                 evidence: task:%s
-                """.formatted(issue.id(), issue.title(), issue.state(), issue.kind(),
-                issue.priority(), issue.provider(),
+                """.formatted(issue.id(), issue.code().isBlank() ? "-" : issue.code(),
+                issue.title(), issue.state(), issue.kind(),
+                issue.priority(), issue.version().isBlank() ? "-" : issue.version(),
+                issue.provider(),
                 issue.repo(), issue.number().isBlank() ? "-" : issue.number(),
                 issue.syncStatus(), issue.syncError(), issue.url(),
                 issue.labels().isBlank() ? "-" : issue.labels(),

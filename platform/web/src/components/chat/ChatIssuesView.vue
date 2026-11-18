@@ -7,14 +7,14 @@ import {
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
+  getGitIssueVersions,
   listGitIssueComments, listGitIssues, reopenGitIssue, syncGitIssue, updateGitIssue,
   uploadIssueImage,
   type GitIssueCommentRow, type GitIssuePriority, type GitIssueRow,
 } from '../../api/issues'
 import MarkdownView from './MarkdownView.vue'
 import { appStore } from '../../stores/app'
-import { gitBranches, listProjects, type ProjectRow } from '../../api/project'
-import { listGitTags } from '../../api/pipeline'
+import { listProjects, type ProjectRow } from '../../api/project'
 import VisXYContainer from '@unovis/vue/containers/xy-container'
 import VisSingleContainer from '@unovis/vue/containers/single-container'
 import VisStackedBar, { VisStackedBarSelectors } from '@unovis/vue/components/stacked-bar'
@@ -558,29 +558,25 @@ const form = reactive({
 /** 关联版本号：候选来自项目现有 git 标签；默认值是当前分支版本线的下一个补丁版本。 */
 const versionOptions = ref<string[]>([])
 const versionSuggestion = ref('')
+const versionBranch = ref('')
 let versionLoadedFor = ''
 
-/** 版本建议：版本线分支（0.1.0-snapshot）取该线最大补丁 +1；其他分支取最新标签。 */
-function suggestVersion(branch: string, tags: string[]): string {
-  const matched = /^(\d+)\.(\d+)\.0-snapshot$/.exec((branch ?? '').trim())
-  if (!matched) return tags[0] ?? ''
-  const line = `${matched[1]}.${matched[2]}`
-  let best = -1
-  for (const tag of tags) {
-    const patch = new RegExp(`^${line.replace('.', '\\.')}\\.(\\d+)$`).exec(tag.trim())
-    if (patch) best = Math.max(best, Number(patch[1]))
-  }
-  return best < 0 ? `${line}.0` : `${line}.${best + 1}`
-}
-
+/**
+ * 版本上下文全部取自后端 `/git-issues/versions`。
+ *
+ * 不在前端再算一遍：版本推导规则（版本线取最大补丁 +1、其他分支取最新标签）
+ * 一旦两边各写一份，任务栏显示的版本号就会和实际打 tag 的版本号对不上。
+ */
 async function loadVersionContext(projectId: string): Promise<void> {
   if (!projectId || versionLoadedFor === projectId) return
   versionLoadedFor = projectId
   try {
-    const [branches, tags] = await Promise.all([gitBranches(projectId), listGitTags(projectId)])
-    versionOptions.value = tags
-    versionSuggestion.value = suggestVersion(branches.current, tags)
+    const versions = await getGitIssueVersions(projectId)
+    versionBranch.value = versions.branch
+    versionOptions.value = versions.tags ?? []
+    versionSuggestion.value = versions.suggested ?? ''
   } catch {
+    versionBranch.value = ''
     versionOptions.value = []
     versionSuggestion.value = ''
   }
@@ -1348,6 +1344,9 @@ defineExpose({ openCreate, focus })
               <div class="editor-field">
                 <div class="editor-label-row">
                   <span class="editor-label">关联版本号</span>
+                  <span class="editor-hint">
+                    {{ versionBranch ? `当前分支 ${versionBranch}` : '仓库不可用，只能手输' }}
+                  </span>
                   <button
                     v-if="versionSuggestion && form.version !== versionSuggestion"
                     type="button" class="editor-upload"
@@ -2691,6 +2690,12 @@ defineExpose({ openCreate, focus })
   gap: 8px;
   align-items: center;
   justify-content: space-between;
+}
+/* 版本号输入框旁的来源提示：说明默认值是怎么来的（当前分支版本线 / 最新标签）。 */
+.editor-hint {
+  font-size: 10px;
+  color: var(--ink-muted);
+  margin-right: auto;
 }
 .editor-upload {
   display: inline-flex;

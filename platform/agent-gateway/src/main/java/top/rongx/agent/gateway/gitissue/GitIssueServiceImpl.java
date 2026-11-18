@@ -276,7 +276,7 @@ public class GitIssueServiceImpl implements GitIssueService {
     }
 
     /** 版本建议：版本线分支取最大补丁 +1；非版本分支取最新标签。 */
-    static String suggestVersion(String branch, List<String> tags) {
+    public static String suggestVersion(String branch, List<String> tags) {
         List<String> safeTags = tags == null ? List.of() : tags;
         var matcher = VERSION_BRANCH.matcher(branch == null ? "" : branch.trim());
         if (!matcher.matches()) {

@@ -5858,6 +5858,34 @@
         }
       }
     },
+    "/api/v1/git-issues/versions" : {
+      "get" : {
+        "tags" : [ "git-issue-controller" ],
+        "summary" : "versions",
+        "operationId" : "versions",
+        "parameters" : [ {
+          "name" : "projectId",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/git-issues/count" : {
       "get" : {
         "tags" : [ "git-issue-controller" ],
