@@ -206,9 +206,12 @@ class HostDeployerTest {
 
     /** 起一个长时间运行的进程，模拟平台此前拉起的 java -jar。 */
     private static Process sleepy() throws IOException {
-        return new ProcessBuilder("powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 60")
-                .redirectErrorStream(true)
-                .start();
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT)
+                .contains("win");
+        ProcessBuilder builder = windows
+                ? new ProcessBuilder("powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 60")
+                : new ProcessBuilder("sleep", "60");
+        return builder.redirectErrorStream(true).start();
     }
 
     private Path ptr(String name) {

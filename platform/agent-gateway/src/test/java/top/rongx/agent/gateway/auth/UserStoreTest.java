@@ -12,8 +12,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import top.rongx.agent.infra.sqlite.SqliteConnections;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /** 种子密码固定化 + 设置页改密 + 旧版随机密码迁移。 */
 class UserStoreTest {
@@ -24,7 +24,7 @@ class UserStoreTest {
     /** Windows 上连接池持有 SQLite 句柄会让 @TempDir 删除失败，收尾时显式释放。 */
     @AfterEach
     void releaseConnections() {
-        SqliteConnections.closePool(tempDir.resolve("_platform/users.db"));
+        PlatformDb.closeAll();
     }
 
     @Test

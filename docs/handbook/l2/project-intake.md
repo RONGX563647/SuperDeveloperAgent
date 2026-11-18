@@ -24,7 +24,7 @@ git 操作在 `GitWorktreeManager.java`，HTTP 入口在 `ProjectIntakeControlle
 - `ProjectIntakeService.IntakeRequest`：`projectId`、`localPath`、`repoUrl`、`type`、`gitInitIfMissing`、`storageMode`、`cloneTargetDir`、可选 HTTPS 凭据。
 - `projectId` 白名单：大写字母开头，大写字母/数字/下划线，2-16 位。
 - `storageMode` 默认 `DIRECT`：本地目录就地使用，远程仓库 clone 到用户选择目录；`MANAGED` 才建立平台 bare。
-- 工作区根 `agent.workspace.root`；接入项目持久化到 `<workspace>/_platform/projects.db`。
+- 工作区根 `agent.workspace.root`；接入项目持久化到统一库 `<workspace>/_platform/platform.db`（配置 `agent.db.url` 时落 PostgreSQL）。
 - HTTP 入口：`POST /api/v1/projects/intake/local`、`/intake/remote`，状态查询 `GET /intake/{projectId}/status`。
 
 ## 输出

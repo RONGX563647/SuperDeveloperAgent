@@ -1,12 +1,7 @@
 package top.rongx.agent.infra.env;
 
+import jakarta.persistence.EntityManager;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
@@ -33,232 +29,90 @@ import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
- * 环境模板 / 中间件资源 / 环境变量 / 项目覆盖 / 绑定 / 端口租约的 SQLite 实现。
+ * 环境模板 / 中间件资源 / 环境变量 / 项目覆盖 / 绑定 / 端口租约的 JPA 实现。
  *
- * <p>与旧的 {@code project_env_vars} 共存：启动时把旧表迁移到
- * {@code project_env_overrides}（不删旧表，便于回滚）。
+ * <p>表结构由 {@code top.rongx.agent.infra.persistence.entity} 下的实体生成；
+ * 连接、事务与 SQLite/PostgreSQL 方言由 Hibernate 负责。历史实现里的建表、
+ * 补列与旧表迁移已移除，统一入口见 {@link PlatformDb}。
  */
 @Repository
 public class SqliteEnvironmentStore implements EnvironmentStore {
 
     private static final Logger log = LoggerFactory.getLogger(SqliteEnvironmentStore.class);
 
-    private static final String SCHEMA = """
-            CREATE TABLE IF NOT EXISTS env_templates (
-                env            TEXT PRIMARY KEY,
-                network        TEXT,
-                default_target TEXT NOT NULL DEFAULT 'docker',
-                default_port   INTEGER NOT NULL DEFAULT 8080,
-                health_path    TEXT NOT NULL DEFAULT '/healthz',
-                runtime_mode   TEXT,
-                namespace      TEXT,
-                server_id      TEXT,
-                updated_at     INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS env_resources (
-                id            TEXT PRIMARY KEY,
-                env           TEXT NOT NULL,
-                kind          TEXT NOT NULL,
-                name          TEXT NOT NULL,
-                host          TEXT NOT NULL,
-                port          INTEGER NOT NULL,
-                container_port INTEGER NOT NULL DEFAULT 0,
-                internal_host TEXT,
-                database_name TEXT,
-                username      TEXT,
-                password_enc  TEXT,
-                password_iv   TEXT,
-                network       TEXT,
-                server_id     TEXT,
-                source        TEXT,
-                running       INTEGER NOT NULL DEFAULT 0,
-                last_check_at INTEGER NOT NULL DEFAULT 0,
-                last_error    TEXT,
-                updated_at    INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_env_resources_env ON env_resources(env);
-            CREATE TABLE IF NOT EXISTS env_vars (
-                env        TEXT NOT NULL,
-                var_key    TEXT NOT NULL,
-                value_enc  TEXT NOT NULL,
-                value_iv   TEXT NOT NULL,
-                is_secret  INTEGER NOT NULL DEFAULT 1,
-                source     TEXT,
-                updated_at INTEGER NOT NULL,
-                value_kind TEXT NOT NULL DEFAULT 'INLINE',
-                secret_ref TEXT,
-                PRIMARY KEY (env, var_key)
-            );
-            CREATE TABLE IF NOT EXISTS project_env_overrides (
-                project_id TEXT NOT NULL,
-                env        TEXT NOT NULL,
-                var_key    TEXT NOT NULL,
-                value_enc  TEXT NOT NULL,
-                value_iv   TEXT NOT NULL,
-                is_secret  INTEGER NOT NULL DEFAULT 1,
-                updated_at INTEGER NOT NULL,
-                value_kind TEXT NOT NULL DEFAULT 'INLINE',
-                secret_ref TEXT,
-                PRIMARY KEY (project_id, env, var_key)
-            );
-            CREATE TABLE IF NOT EXISTS secrets (
-                id         TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                env        TEXT NOT NULL,
-                name       TEXT NOT NULL,
-                value_enc  TEXT NOT NULL,
-                value_iv   TEXT NOT NULL,
-                version    INTEGER NOT NULL DEFAULT 1,
-                created_at INTEGER NOT NULL,
-                rotated_at INTEGER NOT NULL DEFAULT 0,
-                UNIQUE (project_id, env, name)
-            );
-            CREATE TABLE IF NOT EXISTS env_bindings (
-                id           TEXT PRIMARY KEY,
-                project_id   TEXT NOT NULL,
-                env          TEXT NOT NULL,
-                mapping_json TEXT NOT NULL,
-                mapping_hash TEXT NOT NULL,
-                created_by   TEXT,
-                confirmed_by TEXT,
-                confirmed_at INTEGER NOT NULL DEFAULT 0,
-                expires_at   INTEGER NOT NULL DEFAULT 0,
-                status       TEXT NOT NULL DEFAULT 'DRAFT',
-                created_at   INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS deploy_port_leases (
-                project_id     TEXT NOT NULL,
-                env            TEXT NOT NULL,
-                container_port INTEGER NOT NULL,
-                host_port      INTEGER NOT NULL,
-                run_id         TEXT,
-                updated_at     INTEGER NOT NULL,
-                PRIMARY KEY (project_id, env, container_port)
-            );
-            CREATE TABLE IF NOT EXISTS project_service_leases (
-                project_id TEXT NOT NULL,
-                env        TEXT NOT NULL,
-                service    TEXT NOT NULL,
-                host_port  INTEGER NOT NULL,
-                status     TEXT NOT NULL DEFAULT 'STOPPED',
-                pid        INTEGER NOT NULL DEFAULT 0,
-                updated_at INTEGER NOT NULL,
-                PRIMARY KEY (project_id, env, service)
-            );
+    private static final String TEMPLATE_COLUMNS = """
+            env, network, default_target, default_port, health_path,
+            runtime_mode, namespace, server_id, updated_at
             """;
 
-    private final Path dbFile;
+    private static final String RESOURCE_COLUMNS = """
+            id, env, kind, name, host, port, container_port, internal_host,
+            database_name, username,
+            password_enc, password_iv, network, server_id, source,
+            running, last_check_at, last_error, updated_at
+            """;
+
+    private static final String BINDING_COLUMNS = """
+            id, project_id, env, mapping_json, mapping_hash, created_by,
+            confirmed_by, confirmed_at, expires_at, status, created_at
+            """;
+
+    private final PlatformDb db;
     private final SecretBox secretBox;
 
+    @Autowired
+    public SqliteEnvironmentStore(PlatformDb db, SecretBox secretBox) {
+        this.db = db;
+        this.secretBox = secretBox;
+        seedTemplates();
+    }
+
+    /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public SqliteEnvironmentStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
-        this.secretBox = secretBox;
-        initSchema();
+        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db")), secretBox);
     }
 
-    private void initSchema() {
-        try (Connection conn = open(); Statement st = conn.createStatement()) {
-            for (String ddl : SCHEMA.split(";")) {
-                if (!ddl.isBlank()) {
-                    st.executeUpdate(ddl);
-                }
-            }
-            ensureColumns(st);
-            seedTemplates(st);
-            migrateLegacy(st);
-        } catch (SQLException e) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    /** 老库补列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。 */
-    private void ensureColumns(Statement st) throws SQLException {
-        ensureColumn(st, "env_templates", "runtime_mode", "runtime_mode TEXT");
-        ensureColumn(st, "env_templates", "namespace", "namespace TEXT");
-        ensureColumn(st, "env_templates", "server_id", "server_id TEXT");
-        ensureColumn(st, "env_resources", "container_port",
-                "container_port INTEGER NOT NULL DEFAULT 0");
-        ensureColumn(st, "env_resources", "internal_host", "internal_host TEXT");
-        ensureColumn(st, "env_vars", "value_kind", "value_kind TEXT NOT NULL DEFAULT 'INLINE'");
-        ensureColumn(st, "env_vars", "secret_ref", "secret_ref TEXT");
-        ensureColumn(st, "project_env_overrides", "value_kind",
-                "value_kind TEXT NOT NULL DEFAULT 'INLINE'");
-        ensureColumn(st, "project_env_overrides", "secret_ref", "secret_ref TEXT");
-    }
-
-    private void ensureColumn(Statement st, String table, String column, String ddl)
-            throws SQLException {
-        try (ResultSet rs = st.executeQuery("PRAGMA table_info(" + table + ")")) {
-            while (rs.next()) {
-                if (column.equalsIgnoreCase(rs.getString("name"))) {
-                    return;
-                }
-            }
-        }
-        st.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + ddl);
-    }
-
-    private void seedTemplates(Statement st) throws SQLException {
+    private void seedTemplates() {
         long now = System.currentTimeMillis();
         String[][] rows = {
                 {"dev", "host", "8080", "/healthz", "LOCAL_DEV", "agent-dev", null},
                 {"test", "docker", "8080", "/healthz", "LOCAL_TEST", "agent-test", "agent-test-net"},
                 {"prod", "server", "8080", "/healthz", "SERVER", "agent-prod", "agent-prod-net"},
         };
-        for (String[] r : rows) {
-            st.executeUpdate("""
-                    INSERT OR IGNORE INTO env_templates
-                        (env, network, default_target, default_port, health_path,
-                         runtime_mode, namespace, server_id, updated_at)
-                    VALUES ('%s', %s, '%s', %s, '%s', '%s', '%s', NULL, %d)
-                    """.formatted(r[0], r[6] == null ? "NULL" : "'" + r[6] + "'",
-                    r[1], r[2], r[3], r[4], r[5], now));
+        try {
+            db.inTx(em -> {
+                for (String[] r : rows) {
+                    PlatformDb.update(em, """
+                            INSERT INTO env_templates
+                                (env, network, default_target, default_port, health_path,
+                                 runtime_mode, namespace, server_id, updated_at)
+                            VALUES (?,?,?,?,?,?,?,?,?)
+                            ON CONFLICT(env) DO NOTHING
+                            """, r[0], r[6], r[1], Integer.parseInt(r[2]), r[3], r[4], r[5], null, now);
+                }
+                return null;
+            });
+        } catch (RuntimeException e) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境表初始化失败：" + e.getMessage(), e);
         }
-    }
-
-    /** 旧表 project_env_vars → project_env_overrides；旧表不存在时跳过。 */
-    private void migrateLegacy(Statement st) throws SQLException {
-        try (ResultSet rs = st.executeQuery(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='project_env_vars'")) {
-            if (!rs.next()) {
-                return;
-            }
-        }
-        st.executeUpdate("""
-                INSERT OR IGNORE INTO project_env_overrides
-                    (project_id, env, var_key, value_enc, value_iv, is_secret, updated_at)
-                SELECT project_id, env, var_key, value_enc, value_iv, is_secret, updated_at
-                FROM project_env_vars
-                """);
-    }
-
-    private Connection open() throws SQLException {
-        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
     }
 
     // ---------------------------------------------------------------- 模板
 
     @Override
     public List<EnvTemplate> templates() {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT env, network, default_target, default_port, health_path, "
-                             + "runtime_mode, namespace, server_id, updated_at "
-                             + "FROM env_templates ORDER BY CASE env WHEN 'dev' THEN 1 "
-                             + "WHEN 'test' THEN 2 ELSE 3 END")) {
-            try (ResultSet rs = st.executeQuery()) {
-                List<EnvTemplate> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapTemplate(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        String sql = "SELECT " + TEMPLATE_COLUMNS + " FROM env_templates ORDER BY CASE env "
+                + "WHEN 'dev' THEN 1 WHEN 'test' THEN 2 ELSE 3 END";
+        try {
+            return db.read(em -> PlatformDb.rows(em, sql).stream()
+                    .map(SqliteEnvironmentStore::mapTemplate).toList());
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板查询失败：" + e.getMessage(), e);
         }
     }
@@ -266,16 +120,11 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     @Override
     public Optional<EnvTemplate> template(String env) {
         requireEnv(env);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT env, network, default_target, default_port, health_path, "
-                             + "runtime_mode, namespace, server_id, updated_at "
-                             + "FROM env_templates WHERE env = ?")) {
-            st.setString(1, env);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapTemplate(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + TEMPLATE_COLUMNS + " FROM env_templates WHERE env = ?", env)
+                    .map(SqliteEnvironmentStore::mapTemplate));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板查询失败：" + e.getMessage(), e);
         }
     }
@@ -283,47 +132,44 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     @Override
     public void saveTemplate(EnvTemplate t) {
         requireEnv(t.env());
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO env_templates
-                         (env, network, default_target, default_port, health_path,
-                          runtime_mode, namespace, server_id, updated_at)
-                     VALUES (?,?,?,?,?,?,?,?,?)
-                     ON CONFLICT(env) DO UPDATE SET
-                         network=excluded.network,
-                         default_target=excluded.default_target,
-                         default_port=excluded.default_port,
-                         health_path=excluded.health_path,
-                         runtime_mode=excluded.runtime_mode,
-                         namespace=excluded.namespace,
-                         server_id=excluded.server_id,
-                         updated_at=excluded.updated_at
-                     """)) {
-            st.setString(1, t.env());
-            st.setString(2, blankToNull(t.network()));
-            st.setString(3, t.defaultTarget() == null || t.defaultTarget().isBlank()
-                    ? "docker" : t.defaultTarget());
-            st.setInt(4, t.defaultPort() <= 0 ? 8080 : t.defaultPort());
-            st.setString(5, t.healthPath() == null || t.healthPath().isBlank()
-                    ? "/healthz" : t.healthPath());
-            st.setString(6, t.runtimeMode() == null || t.runtimeMode().isBlank()
-                    ? RuntimeMode.defaultFor(t.env()).name() : t.runtimeMode());
-            st.setString(7, t.namespace() == null || t.namespace().isBlank()
-                    ? EnvTemplate.defaultNamespace(t.env()) : t.namespace());
-            st.setString(8, blankToNull(t.serverId()));
-            st.setLong(9, System.currentTimeMillis());
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    INSERT INTO env_templates
+                        (env, network, default_target, default_port, health_path,
+                         runtime_mode, namespace, server_id, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(env) DO UPDATE SET
+                        network=excluded.network,
+                        default_target=excluded.default_target,
+                        default_port=excluded.default_port,
+                        health_path=excluded.health_path,
+                        runtime_mode=excluded.runtime_mode,
+                        namespace=excluded.namespace,
+                        server_id=excluded.server_id,
+                        updated_at=excluded.updated_at
+                    """,
+                    t.env(),
+                    blankToNull(t.network()),
+                    t.defaultTarget() == null || t.defaultTarget().isBlank()
+                            ? "docker" : t.defaultTarget(),
+                    t.defaultPort() <= 0 ? 8080 : t.defaultPort(),
+                    t.healthPath() == null || t.healthPath().isBlank()
+                            ? "/healthz" : t.healthPath(),
+                    t.runtimeMode() == null || t.runtimeMode().isBlank()
+                            ? RuntimeMode.defaultFor(t.env()).name() : t.runtimeMode(),
+                    t.namespace() == null || t.namespace().isBlank()
+                            ? EnvTemplate.defaultNamespace(t.env()) : t.namespace(),
+                    blankToNull(t.serverId()),
+                    System.currentTimeMillis()));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板保存失败：" + e.getMessage(), e);
         }
     }
 
-    private EnvTemplate mapTemplate(ResultSet rs) throws SQLException {
-        return new EnvTemplate(rs.getString("env"), rs.getString("network"),
-                rs.getString("default_target"), rs.getInt("default_port"),
-                rs.getString("health_path"), rs.getString("runtime_mode"),
-                rs.getString("namespace"), rs.getString("server_id"),
-                rs.getLong("updated_at"));
+    private static EnvTemplate mapTemplate(Object[] row) {
+        return new EnvTemplate((String) row[0], (String) row[1], (String) row[2],
+                ((Number) row[3]).intValue(), (String) row[4], (String) row[5],
+                (String) row[6], (String) row[7], ((Number) row[8]).longValue());
     }
 
     // ---------------------------------------------------------------- 资源
@@ -331,40 +177,22 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     @Override
     public List<EnvResource> resources(String env) {
         requireEnv(env);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT id, env, kind, name, host, port, container_port, internal_host, "
-                             + "database_name, username, "
-                             + "password_enc, password_iv, network, server_id, source, "
-                             + "running, last_check_at, last_error, updated_at "
-                             + "FROM env_resources WHERE env = ? ORDER BY kind, name")) {
-            st.setString(1, env);
-            try (ResultSet rs = st.executeQuery()) {
-                List<EnvResource> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapResource(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                    "SELECT " + RESOURCE_COLUMNS + " FROM env_resources WHERE env = ? ORDER BY kind, name",
+                    env).stream().map(this::mapResource).toList());
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<EnvResource> resource(String id) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT id, env, kind, name, host, port, container_port, internal_host, "
-                             + "database_name, username, "
-                             + "password_enc, password_iv, network, server_id, source, "
-                             + "running, last_check_at, last_error, updated_at "
-                             + "FROM env_resources WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapResource(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + RESOURCE_COLUMNS + " FROM env_resources WHERE id = ?", id)
+                    .map(this::mapResource));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源查询失败：" + e.getMessage(), e);
         }
     }
@@ -376,49 +204,47 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         SecretBox.Sealed sealed = r.password() == null || r.password().isEmpty()
                 ? null : secretBox.encrypt(r.password());
         long now = System.currentTimeMillis();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO env_resources
-                         (id, env, kind, name, host, port, container_port, internal_host,
-                          database_name, username,
-                          password_enc, password_iv, network, server_id, source,
-                          running, last_check_at, last_error, updated_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                     ON CONFLICT(id) DO UPDATE SET
-                         env=excluded.env, kind=excluded.kind, name=excluded.name,
-                         host=excluded.host, port=excluded.port,
-                         container_port=excluded.container_port,
-                         internal_host=excluded.internal_host,
-                         database_name=excluded.database_name, username=excluded.username,
-                         network=excluded.network, server_id=excluded.server_id,
-                         source=excluded.source, running=excluded.running,
-                         last_check_at=excluded.last_check_at, last_error=excluded.last_error,
-                         updated_at=excluded.updated_at
-                         %s
-                     """.formatted(sealed == null ? ""
-                    : ", password_enc=excluded.password_enc, password_iv=excluded.password_iv"))) {
-            int i = 1;
-            st.setString(i++, id);
-            st.setString(i++, r.env());
-            st.setString(i++, r.kind());
-            st.setString(i++, r.name() == null || r.name().isBlank() ? r.kind() : r.name());
-            st.setString(i++, r.host());
-            st.setInt(i++, r.port());
-            st.setInt(i++, r.containerPort());
-            st.setString(i++, blankToNull(r.internalHost()));
-            st.setString(i++, blankToNull(r.databaseName()));
-            st.setString(i++, blankToNull(r.username()));
-            st.setString(i++, sealed == null ? null : sealed.cipherB64());
-            st.setString(i++, sealed == null ? null : sealed.ivB64());
-            st.setString(i++, blankToNull(r.network()));
-            st.setString(i++, blankToNull(r.serverId()));
-            st.setString(i++, r.source() == null ? "MANUAL" : r.source());
-            st.setInt(i++, r.lastCheckAt() > 0 && r.running() ? 1 : 0);
-            st.setLong(i++, r.lastCheckAt());
-            st.setString(i++, blankToNull(r.lastError()));
-            st.setLong(i, now);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        String sql = """
+                INSERT INTO env_resources
+                    (id, env, kind, name, host, port, container_port, internal_host,
+                     database_name, username,
+                     password_enc, password_iv, network, server_id, source,
+                     running, last_check_at, last_error, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    env=excluded.env, kind=excluded.kind, name=excluded.name,
+                    host=excluded.host, port=excluded.port,
+                    container_port=excluded.container_port,
+                    internal_host=excluded.internal_host,
+                    database_name=excluded.database_name, username=excluded.username,
+                    network=excluded.network, server_id=excluded.server_id,
+                    source=excluded.source, running=excluded.running,
+                    last_check_at=excluded.last_check_at, last_error=excluded.last_error,
+                    updated_at=excluded.updated_at
+                """ + (sealed == null ? ""
+                : ", password_enc=excluded.password_enc, password_iv=excluded.password_iv");
+        try {
+            db.run(em -> PlatformDb.update(em, sql,
+                    id,
+                    r.env(),
+                    r.kind(),
+                    r.name() == null || r.name().isBlank() ? r.kind() : r.name(),
+                    r.host(),
+                    r.port(),
+                    r.containerPort(),
+                    blankToNull(r.internalHost()),
+                    blankToNull(r.databaseName()),
+                    blankToNull(r.username()),
+                    sealed == null ? null : sealed.cipherB64(),
+                    sealed == null ? null : sealed.ivB64(),
+                    blankToNull(r.network()),
+                    blankToNull(r.serverId()),
+                    r.source() == null ? "MANUAL" : r.source(),
+                    r.lastCheckAt() > 0 && r.running() ? 1 : 0,
+                    r.lastCheckAt(),
+                    blankToNull(r.lastError()),
+                    now));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源保存失败：" + e.getMessage(), e);
         }
         return resource(id).orElseThrow();
@@ -426,50 +252,44 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
 
     @Override
     public void deleteResource(String id) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("DELETE FROM env_resources WHERE id = ?")) {
-            st.setString(1, id);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em, "DELETE FROM env_resources WHERE id = ?", id));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源删除失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public void recordHealth(String id, boolean running, String error) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     UPDATE env_resources SET running=?, last_check_at=?, last_error=?, updated_at=?
-                     WHERE id=?
-                     """)) {
-            st.setInt(1, running ? 1 : 0);
-            st.setLong(2, System.currentTimeMillis());
-            st.setString(3, blankToNull(error));
-            st.setLong(4, System.currentTimeMillis());
-            st.setString(5, id);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        long now = System.currentTimeMillis();
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    UPDATE env_resources SET running=?, last_check_at=?, last_error=?, updated_at=?
+                    WHERE id=?
+                    """, running ? 1 : 0, now, blankToNull(error), now, id));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "健康检查结果写入失败：" + e.getMessage(), e);
         }
     }
 
-    private EnvResource mapResource(ResultSet rs) throws SQLException {
-        String enc = rs.getString("password_enc");
-        String iv = rs.getString("password_iv");
+    private EnvResource mapResource(Object[] row) {
+        String enc = (String) row[10];
+        String iv = (String) row[11];
         String password = null;
         if (enc != null && iv != null) {
             try {
                 password = secretBox.decrypt(enc, iv);
             } catch (RuntimeException e) {
-                log.warn("中间件密码解密失败 id={}：{}", rs.getString("id"), e.getMessage());
+                log.warn("中间件密码解密失败 id={}：{}", row[0], e.getMessage());
             }
         }
-        return new EnvResource(rs.getString("id"), rs.getString("env"), rs.getString("kind"),
-                rs.getString("name"), rs.getString("host"), rs.getInt("port"),
-                rs.getInt("container_port"), rs.getString("internal_host"),
-                rs.getString("database_name"), rs.getString("username"), password,
-                rs.getString("network"), rs.getString("server_id"), rs.getString("source"),
-                rs.getInt("running") == 1, rs.getLong("last_check_at"), rs.getString("last_error"));
+        return new EnvResource((String) row[0], (String) row[1], (String) row[2],
+                (String) row[3], (String) row[4], ((Number) row[5]).intValue(),
+                ((Number) row[6]).intValue(), (String) row[7],
+                (String) row[8], (String) row[9], password,
+                (String) row[12], (String) row[13], (String) row[14],
+                ((Number) row[15]).intValue() == 1, ((Number) row[16]).longValue(),
+                (String) row[17]);
     }
 
     // ---------------------------------------------------------------- 环境变量
@@ -478,29 +298,27 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public List<EnvVariable> envVars(String env) {
         requireEnv(env);
         Map<String, String> plain = plainEnvVars(env);
-        List<EnvVariable> out = new ArrayList<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT var_key, is_secret, source, updated_at, value_kind, secret_ref "
-                             + "FROM env_vars WHERE env = ? ORDER BY var_key")) {
-            st.setString(1, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    String key = rs.getString("var_key");
-                    boolean secret = rs.getInt("is_secret") == 1;
-                    String kind = rs.getString("value_kind");
-                    String ref = rs.getString("secret_ref");
+        String sql = "SELECT var_key, is_secret, source, updated_at, value_kind, secret_ref "
+                + "FROM env_vars WHERE env = ? ORDER BY var_key";
+        try {
+            return db.read(em -> {
+                List<EnvVariable> out = new ArrayList<>();
+                for (Object[] row : PlatformDb.rows(em, sql, env)) {
+                    String key = (String) row[0];
+                    boolean secret = ((Number) row[1]).intValue() == 1;
+                    String kind = (String) row[4];
+                    String ref = (String) row[5];
                     String value = plain.getOrDefault(key, "");
                     String shown = EnvVariable.KIND_SECRET_REF.equals(kind) && ref != null
                             ? "secret://" + ref
                             : secret ? secretBox.mask(value) : value;
                     out.add(new EnvVariable(null, env, key, secret, shown,
-                            rs.getString("source") == null ? "TEMPLATE" : rs.getString("source"),
-                            rs.getLong("updated_at"), kind, ref));
+                            row[2] == null ? "TEMPLATE" : (String) row[2],
+                            ((Number) row[3]).longValue(), kind, ref));
                 }
                 return out;
-            }
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量查询失败：" + e.getMessage(), e);
         }
     }
@@ -512,47 +330,41 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         long now = System.currentTimeMillis();
         String ref = SecretRefs.whole(value);
         boolean refMode = ref != null;
-        try (Connection conn = open()) {
-            boolean keep = value == null || value.isEmpty();
-            if (keep && !exists(conn, "env_vars", "env", env, "var_key", key)) {
-                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新变量必须提供值：" + key);
-            }
-            if (keep) {
-                try (PreparedStatement st = conn.prepareStatement(
-                        "UPDATE env_vars SET is_secret=?, source=?, updated_at=? WHERE env=? AND var_key=?")) {
-                    st.setInt(1, secret ? 1 : 0);
-                    st.setString(2, source == null ? "TEMPLATE" : source);
-                    st.setLong(3, now);
-                    st.setString(4, env);
-                    st.setString(5, key);
-                    st.executeUpdate();
+        boolean keep = value == null || value.isEmpty();
+        SecretBox.Sealed sealed = keep ? null : secretBox.encrypt(refMode ? "" : value);
+        try {
+            db.inTx(em -> {
+                if (keep && !exists(em, "env_vars", "env", env, "var_key", key)) {
+                    throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新变量必须提供值：" + key);
                 }
-            } else {
-                SecretBox.Sealed sealed = secretBox.encrypt(refMode ? "" : value);
-                try (PreparedStatement st = conn.prepareStatement("""
-                        INSERT INTO env_vars
-                            (env, var_key, value_enc, value_iv, is_secret, source, updated_at,
-                             value_kind, secret_ref)
-                        VALUES (?,?,?,?,?,?,?,?,?)
-                        ON CONFLICT(env, var_key) DO UPDATE SET
-                            value_enc=excluded.value_enc, value_iv=excluded.value_iv,
-                            is_secret=excluded.is_secret, source=excluded.source,
-                            updated_at=excluded.updated_at, value_kind=excluded.value_kind,
-                            secret_ref=excluded.secret_ref
-                        """)) {
-                    st.setString(1, env);
-                    st.setString(2, key);
-                    st.setString(3, sealed.cipherB64());
-                    st.setString(4, sealed.ivB64());
-                    st.setInt(5, refMode || secret ? 1 : 0);
-                    st.setString(6, source == null ? "TEMPLATE" : source);
-                    st.setLong(7, now);
-                    st.setString(8, refMode ? EnvVariable.KIND_SECRET_REF : EnvVariable.KIND_INLINE);
-                    st.setString(9, ref);
-                    st.executeUpdate();
+                if (keep) {
+                    PlatformDb.update(em,
+                            "UPDATE env_vars SET is_secret=?, source=?, updated_at=? WHERE env=? AND var_key=?",
+                            secret ? 1 : 0, source == null ? "TEMPLATE" : source, now, env, key);
+                } else {
+                    PlatformDb.update(em, """
+                            INSERT INTO env_vars
+                                (env, var_key, value_enc, value_iv, is_secret, source, updated_at,
+                                 value_kind, secret_ref)
+                            VALUES (?,?,?,?,?,?,?,?,?)
+                            ON CONFLICT(env, var_key) DO UPDATE SET
+                                value_enc=excluded.value_enc, value_iv=excluded.value_iv,
+                                is_secret=excluded.is_secret, source=excluded.source,
+                                updated_at=excluded.updated_at, value_kind=excluded.value_kind,
+                                secret_ref=excluded.secret_ref
+                            """,
+                            env, key, sealed.cipherB64(), sealed.ivB64(),
+                            refMode || secret ? 1 : 0,
+                            source == null ? "TEMPLATE" : source,
+                            now,
+                            refMode ? EnvVariable.KIND_SECRET_REF : EnvVariable.KIND_INLINE,
+                            ref);
                 }
-            }
-        } catch (SQLException e) {
+                return null;
+            });
+        } catch (EnvironmentException e) {
+            throw e;
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量保存失败：" + e.getMessage(), e);
         }
         return envVars(env).stream().filter(v -> v.key().equals(key)).findFirst().orElseThrow();
@@ -562,19 +374,11 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public Optional<String> envVarValue(String env, String key) {
         requireEnv(env);
         requireKey(key);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT value_enc, value_iv FROM env_vars WHERE env = ? AND var_key = ?")) {
-            st.setString(1, env);
-            st.setString(2, key);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(secretBox.decrypt(rs.getString("value_enc"),
-                        rs.getString("value_iv")));
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT value_enc, value_iv FROM env_vars WHERE env = ? AND var_key = ?", env, key)
+                    .map(row -> secretBox.decrypt((String) row[0], (String) row[1])));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量读取失败：" + e.getMessage(), e);
         }
     }
@@ -613,19 +417,17 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
 
     /** 变量名 → 来源（TEMPLATE / RESOURCE）。 */
     private Map<String, String> envVarSources(String env) {
-        Map<String, String> out = new LinkedHashMap<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT var_key, source FROM env_vars WHERE env = ?")) {
-            st.setString(1, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    out.put(rs.getString("var_key"),
-                            rs.getString("source") == null ? "TEMPLATE" : rs.getString("source"));
+        try {
+            return db.read(em -> {
+                Map<String, String> out = new LinkedHashMap<>();
+                for (Object[] row : PlatformDb.rows(em,
+                        "SELECT var_key, source FROM env_vars WHERE env = ?", env)) {
+                    out.put((String) row[0],
+                            row[1] == null ? "TEMPLATE" : (String) row[1]);
                 }
-            }
-            return out;
-        } catch (SQLException e) {
+                return out;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量来源查询失败：" + e.getMessage(), e);
         }
     }
@@ -634,13 +436,10 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public void deleteEnvVar(String env, String key) {
         requireEnv(env);
         requireKey(key);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM env_vars WHERE env=? AND var_key=?")) {
-            st.setString(1, env);
-            st.setString(2, key);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM env_vars WHERE env=? AND var_key=?", env, key));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量删除失败：" + e.getMessage(), e);
         }
     }
@@ -650,38 +449,32 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     private Map<String, String> plainOverrides(String projectId, String env) {
-        Map<String, String> out = new LinkedHashMap<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT var_key, value_enc, value_iv FROM project_env_overrides "
-                             + "WHERE project_id = ? AND env = ? ORDER BY var_key")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    out.put(rs.getString("var_key"), secretBox.decrypt(
-                            rs.getString("value_enc"), rs.getString("value_iv")));
+        try {
+            return db.read(em -> {
+                Map<String, String> out = new LinkedHashMap<>();
+                for (Object[] row : PlatformDb.rows(em,
+                        "SELECT var_key, value_enc, value_iv FROM project_env_overrides "
+                                + "WHERE project_id = ? AND env = ? ORDER BY var_key",
+                        projectId, env)) {
+                    out.put((String) row[0], secretBox.decrypt((String) row[1], (String) row[2]));
                 }
-            }
-            return out;
-        } catch (SQLException e) {
+                return out;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖查询失败：" + e.getMessage(), e);
         }
     }
 
     private Map<String, String> plainMap(String sql, String env) {
-        Map<String, String> out = new LinkedHashMap<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    out.put(rs.getString("var_key"), secretBox.decrypt(
-                            rs.getString("value_enc"), rs.getString("value_iv")));
+        try {
+            return db.read(em -> {
+                Map<String, String> out = new LinkedHashMap<>();
+                for (Object[] row : PlatformDb.rows(em, sql, env)) {
+                    out.put((String) row[0], secretBox.decrypt((String) row[1], (String) row[2]));
                 }
-            }
-            return out;
-        } catch (SQLException e) {
+                return out;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量读取失败：" + e.getMessage(), e);
         }
     }
@@ -693,30 +486,26 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireProject(projectId);
         requireEnv(env);
         Map<String, String> plain = plainOverrides(projectId, env);
-        List<EnvVariable> out = new ArrayList<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT var_key, is_secret, updated_at, value_kind, secret_ref "
-                             + "FROM project_env_overrides "
-                             + "WHERE project_id=? AND env=? ORDER BY var_key")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    String key = rs.getString("var_key");
-                    boolean secret = rs.getInt("is_secret") == 1;
-                    String kind = rs.getString("value_kind");
-                    String ref = rs.getString("secret_ref");
+        String sql = "SELECT var_key, is_secret, updated_at, value_kind, secret_ref "
+                + "FROM project_env_overrides WHERE project_id=? AND env=? ORDER BY var_key";
+        try {
+            return db.read(em -> {
+                List<EnvVariable> out = new ArrayList<>();
+                for (Object[] row : PlatformDb.rows(em, sql, projectId, env)) {
+                    String key = (String) row[0];
+                    boolean secret = ((Number) row[1]).intValue() == 1;
+                    String kind = (String) row[3];
+                    String ref = (String) row[4];
                     String value = plain.getOrDefault(key, "");
                     String shown = EnvVariable.KIND_SECRET_REF.equals(kind) && ref != null
                             ? "secret://" + ref
                             : secret ? secretBox.mask(value) : value;
                     out.add(new EnvVariable(projectId, env, key, secret, shown, "OVERRIDE",
-                            rs.getLong("updated_at"), kind, ref));
+                            ((Number) row[2]).longValue(), kind, ref));
                 }
                 return out;
-            }
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖查询失败：" + e.getMessage(), e);
         }
     }
@@ -729,48 +518,39 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         long now = System.currentTimeMillis();
         String ref = SecretRefs.whole(value);
         boolean refMode = ref != null;
-        try (Connection conn = open()) {
-            boolean keep = value == null || value.isEmpty();
-            if (keep && !overrideExists(conn, projectId, env, key)) {
-                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新覆盖项必须提供值：" + key);
-            }
-            if (keep) {
-                try (PreparedStatement st = conn.prepareStatement("""
-                        UPDATE project_env_overrides SET is_secret=?, updated_at=?
-                        WHERE project_id=? AND env=? AND var_key=?
-                        """)) {
-                    st.setInt(1, secret ? 1 : 0);
-                    st.setLong(2, now);
-                    st.setString(3, projectId);
-                    st.setString(4, env);
-                    st.setString(5, key);
-                    st.executeUpdate();
+        boolean keep = value == null || value.isEmpty();
+        SecretBox.Sealed sealed = keep ? null : secretBox.encrypt(refMode ? "" : value);
+        try {
+            db.inTx(em -> {
+                if (keep && !overrideExists(em, projectId, env, key)) {
+                    throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "新覆盖项必须提供值：" + key);
                 }
-            } else {
-                SecretBox.Sealed sealed = secretBox.encrypt(refMode ? "" : value);
-                try (PreparedStatement st = conn.prepareStatement("""
-                        INSERT INTO project_env_overrides
-                            (project_id, env, var_key, value_enc, value_iv, is_secret, updated_at,
-                             value_kind, secret_ref)
-                        VALUES (?,?,?,?,?,?,?,?,?)
-                        ON CONFLICT(project_id, env, var_key) DO UPDATE SET
-                            value_enc=excluded.value_enc, value_iv=excluded.value_iv,
-                            is_secret=excluded.is_secret, updated_at=excluded.updated_at,
-                            value_kind=excluded.value_kind, secret_ref=excluded.secret_ref
-                        """)) {
-                    st.setString(1, projectId);
-                    st.setString(2, env);
-                    st.setString(3, key);
-                    st.setString(4, sealed.cipherB64());
-                    st.setString(5, sealed.ivB64());
-                    st.setInt(6, refMode || secret ? 1 : 0);
-                    st.setLong(7, now);
-                    st.setString(8, refMode ? EnvVariable.KIND_SECRET_REF : EnvVariable.KIND_INLINE);
-                    st.setString(9, ref);
-                    st.executeUpdate();
+                if (keep) {
+                    PlatformDb.update(em, """
+                            UPDATE project_env_overrides SET is_secret=?, updated_at=?
+                            WHERE project_id=? AND env=? AND var_key=?
+                            """, secret ? 1 : 0, now, projectId, env, key);
+                } else {
+                    PlatformDb.update(em, """
+                            INSERT INTO project_env_overrides
+                                (project_id, env, var_key, value_enc, value_iv, is_secret, updated_at,
+                                 value_kind, secret_ref)
+                            VALUES (?,?,?,?,?,?,?,?,?)
+                            ON CONFLICT(project_id, env, var_key) DO UPDATE SET
+                                value_enc=excluded.value_enc, value_iv=excluded.value_iv,
+                                is_secret=excluded.is_secret, updated_at=excluded.updated_at,
+                                value_kind=excluded.value_kind, secret_ref=excluded.secret_ref
+                            """,
+                            projectId, env, key, sealed.cipherB64(), sealed.ivB64(),
+                            refMode || secret ? 1 : 0, now,
+                            refMode ? EnvVariable.KIND_SECRET_REF : EnvVariable.KIND_INLINE,
+                            ref);
                 }
-            }
-        } catch (SQLException e) {
+                return null;
+            });
+        } catch (EnvironmentException e) {
+            throw e;
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖保存失败：" + e.getMessage(), e);
         }
         return overrides(projectId, env).stream()
@@ -782,14 +562,11 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireProject(projectId);
         requireEnv(env);
         requireKey(key);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM project_env_overrides WHERE project_id=? AND env=? AND var_key=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setString(3, key);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM project_env_overrides WHERE project_id=? AND env=? AND var_key=?",
+                    projectId, env, key));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖删除失败：" + e.getMessage(), e);
         }
     }
@@ -800,23 +577,20 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public List<SecretEntry> secrets(String projectId, String env) {
         requireProject(projectId);
         requireEnv(env);
-        List<SecretEntry> out = new ArrayList<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     SELECT project_id, env, name, version, rotated_at, created_at
-                     FROM secrets WHERE project_id=? AND env=? ORDER BY name
-                     """)) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    long updated = Math.max(rs.getLong("rotated_at"), rs.getLong("created_at"));
-                    out.add(new SecretEntry(rs.getString("project_id"), rs.getString("env"),
-                            rs.getString("name"), rs.getInt("version"), updated));
+        String sql = "SELECT project_id, env, name, version, rotated_at, created_at "
+                + "FROM secrets WHERE project_id=? AND env=? ORDER BY name";
+        try {
+            return db.read(em -> {
+                List<SecretEntry> out = new ArrayList<>();
+                for (Object[] row : PlatformDb.rows(em, sql, projectId, env)) {
+                    long updated = Math.max(((Number) row[4]).longValue(),
+                            ((Number) row[5]).longValue());
+                    out.add(new SecretEntry((String) row[0], (String) row[1],
+                            (String) row[2], ((Number) row[3]).intValue(), updated));
                 }
-            }
-            return out;
-        } catch (SQLException e) {
+                return out;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥查询失败：" + e.getMessage(), e);
         }
     }
@@ -831,24 +605,26 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         }
         long now = System.currentTimeMillis();
         SecretBox.Sealed sealed = secretBox.encrypt(value);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO secrets
-                         (id, project_id, env, name, value_enc, value_iv, version, created_at, rotated_at)
-                     VALUES (?,?,?,?,?,?,1,?,0)
-                     ON CONFLICT(project_id, env, name) DO UPDATE SET
-                         value_enc=excluded.value_enc, value_iv=excluded.value_iv,
-                         version=secrets.version + 1, rotated_at=excluded.created_at
-                     """)) {
-            st.setString(1, java.util.UUID.randomUUID().toString());
-            st.setString(2, projectId);
-            st.setString(3, env);
-            st.setString(4, name);
-            st.setString(5, sealed.cipherB64());
-            st.setString(6, sealed.ivB64());
-            st.setLong(7, now);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.inTx(em -> {
+                // 实体未声明 (project_id, env, name) 唯一约束，先取现有 id 再按主键 upsert，
+                // 语义与原 UNIQUE 冲突一致：保留 created_at，版本 +1。
+                String id = PlatformDb.first(em,
+                                "SELECT id FROM secrets WHERE project_id=? AND env=? AND name=?",
+                                projectId, env, name)
+                        .map(Object::toString)
+                        .orElseGet(() -> java.util.UUID.randomUUID().toString());
+                PlatformDb.update(em, """
+                        INSERT INTO secrets
+                            (id, project_id, env, name, value_enc, value_iv, version, created_at, rotated_at)
+                        VALUES (?,?,?,?,?,?,1,?,0)
+                        ON CONFLICT(id) DO UPDATE SET
+                            value_enc=excluded.value_enc, value_iv=excluded.value_iv,
+                            version=secrets.version + 1, rotated_at=excluded.created_at
+                        """, id, projectId, env, name, sealed.cipherB64(), sealed.ivB64(), now);
+                return null;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥保存失败：" + e.getMessage(), e);
         }
         return secrets(projectId, env).stream()
@@ -871,14 +647,11 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireProject(projectId);
         requireEnv(env);
         requireSecretName(name);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM secrets WHERE project_id=? AND env=? AND name=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setString(3, name);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM secrets WHERE project_id=? AND env=? AND name=?",
+                    projectId, env, name));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥删除失败：" + e.getMessage(), e);
         }
     }
@@ -888,35 +661,24 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireProject(projectId);
         requireEnv(env);
         requireSecretName(name);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT value_enc, value_iv FROM secrets WHERE project_id=? AND env=? AND name=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setString(3, name);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(secretBox.decrypt(rs.getString("value_enc"),
-                        rs.getString("value_iv")));
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT value_enc, value_iv FROM secrets WHERE project_id=? AND env=? AND name=?",
+                    projectId, env, name)
+                    .map(row -> secretBox.decrypt((String) row[0], (String) row[1])));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥读取失败：" + e.getMessage(), e);
         }
     }
 
     private int secretVersion(String projectId, String env, String name) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT version FROM secrets WHERE project_id=? AND env=? AND name=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setString(3, name);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? rs.getInt("version") : 0;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.first(em,
+                            "SELECT version FROM secrets WHERE project_id=? AND env=? AND name=?",
+                            projectId, env, name)
+                    .map(v -> ((Number) v).intValue())
+                    .orElse(0));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "密钥版本读取失败：" + e.getMessage(), e);
         }
     }
@@ -936,45 +698,40 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     private Map<String, StoredValue> storedOverrides(String projectId, String env) {
-        Map<String, StoredValue> out = new LinkedHashMap<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT var_key, value_enc, value_iv, value_kind, secret_ref "
-                             + "FROM project_env_overrides WHERE project_id=? AND env=? "
-                             + "ORDER BY var_key")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    String kind = rs.getString("value_kind");
-                    String ref = rs.getString("secret_ref");
+        try {
+            return db.read(em -> {
+                Map<String, StoredValue> out = new LinkedHashMap<>();
+                for (Object[] row : PlatformDb.rows(em,
+                        "SELECT var_key, value_enc, value_iv, value_kind, secret_ref "
+                                + "FROM project_env_overrides WHERE project_id=? AND env=? "
+                                + "ORDER BY var_key", projectId, env)) {
+                    String kind = (String) row[3];
+                    String ref = (String) row[4];
                     String value = EnvVariable.KIND_SECRET_REF.equals(kind)
-                            ? "" : secretBox.decrypt(rs.getString("value_enc"), rs.getString("value_iv"));
-                    out.put(rs.getString("var_key"), new StoredValue(value, kind, ref));
+                            ? "" : secretBox.decrypt((String) row[1], (String) row[2]);
+                    out.put((String) row[0], new StoredValue(value, kind, ref));
                 }
-            }
-            return out;
-        } catch (SQLException e) {
+                return out;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "项目覆盖查询失败：" + e.getMessage(), e);
         }
     }
 
     private Map<String, StoredValue> storedValues(String sql, String env) {
-        Map<String, StoredValue> out = new LinkedHashMap<>();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, env);
-            try (ResultSet rs = st.executeQuery()) {
-                while (rs.next()) {
-                    String kind = rs.getString("value_kind");
-                    String ref = rs.getString("secret_ref");
+        try {
+            return db.read(em -> {
+                Map<String, StoredValue> out = new LinkedHashMap<>();
+                for (Object[] row : PlatformDb.rows(em, sql, env)) {
+                    String kind = (String) row[3];
+                    String ref = (String) row[4];
                     String value = EnvVariable.KIND_SECRET_REF.equals(kind)
-                            ? "" : secretBox.decrypt(rs.getString("value_enc"), rs.getString("value_iv"));
-                    out.put(rs.getString("var_key"), new StoredValue(value, kind, ref));
+                            ? "" : secretBox.decrypt((String) row[1], (String) row[2]);
+                    out.put((String) row[0], new StoredValue(value, kind, ref));
                 }
-            }
-            return out;
-        } catch (SQLException e) {
+                return out;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境变量读取失败：" + e.getMessage(), e);
         }
     }
@@ -1094,30 +851,24 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     private boolean isSecretOverride(String projectId, String env, String key) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT is_secret FROM project_env_overrides "
-                             + "WHERE project_id=? AND env=? AND var_key=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setString(3, key);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() && rs.getInt(1) == 1;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.first(em,
+                            "SELECT is_secret FROM project_env_overrides "
+                                    + "WHERE project_id=? AND env=? AND var_key=?",
+                            projectId, env, key)
+                    .map(v -> ((Number) v).intValue() == 1)
+                    .orElse(false));
+        } catch (RuntimeException e) {
             return true;
         }
     }
 
     private boolean flag(String sql, String... args) {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(sql)) {
-            for (int i = 0; i < args.length; i++) {
-                st.setString(i + 1, args[i]);
-            }
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() && rs.getInt(1) == 1;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.first(em, sql, (Object[]) args)
+                    .map(v -> ((Number) v).intValue() == 1)
+                    .orElse(false));
+        } catch (RuntimeException e) {
             return true;
         }
     }
@@ -1136,31 +887,29 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireEnv(b.env());
         String id = b.id() == null || b.id().isBlank() ? newId("bind") : b.id();
         long now = System.currentTimeMillis();
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO env_bindings
-                         (id, project_id, env, mapping_json, mapping_hash, created_by,
-                          confirmed_by, confirmed_at, expires_at, status, created_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                     ON CONFLICT(id) DO UPDATE SET
-                         mapping_json=excluded.mapping_json, mapping_hash=excluded.mapping_hash,
-                         status=excluded.status, confirmed_by=excluded.confirmed_by,
-                         confirmed_at=excluded.confirmed_at, expires_at=excluded.expires_at
-                     """)) {
-            int i = 1;
-            st.setString(i++, id);
-            st.setString(i++, b.projectId());
-            st.setString(i++, b.env());
-            st.setString(i++, b.mappingJson());
-            st.setString(i++, b.mappingHash());
-            st.setString(i++, b.createdBy());
-            st.setString(i++, b.confirmedBy());
-            st.setLong(i++, b.confirmedAt());
-            st.setLong(i++, b.expiresAt());
-            st.setString(i++, b.status() == null ? "DRAFT" : b.status());
-            st.setLong(i, now);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    INSERT INTO env_bindings
+                        (id, project_id, env, mapping_json, mapping_hash, created_by,
+                         confirmed_by, confirmed_at, expires_at, status, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        mapping_json=excluded.mapping_json, mapping_hash=excluded.mapping_hash,
+                        status=excluded.status, confirmed_by=excluded.confirmed_by,
+                        confirmed_at=excluded.confirmed_at, expires_at=excluded.expires_at
+                    """,
+                    id,
+                    b.projectId(),
+                    b.env(),
+                    b.mappingJson(),
+                    b.mappingHash(),
+                    b.createdBy(),
+                    b.confirmedBy(),
+                    b.confirmedAt(),
+                    b.expiresAt(),
+                    b.status() == null ? "DRAFT" : b.status(),
+                    now));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定保存失败：" + e.getMessage(), e);
         }
         return binding(id).orElseThrow();
@@ -1168,72 +917,47 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
 
     @Override
     public Optional<EnvBinding> binding(String id) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT id, project_id, env, mapping_json, mapping_hash, created_by, "
-                             + "confirmed_by, confirmed_at, expires_at, status, created_at "
-                             + "FROM env_bindings WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(new EnvBinding(
-                        rs.getString("id"), rs.getString("project_id"), rs.getString("env"),
-                        rs.getString("mapping_json"), rs.getString("mapping_hash"),
-                        rs.getString("created_by"), rs.getString("confirmed_by"),
-                        rs.getLong("confirmed_at"), rs.getLong("expires_at"),
-                        rs.getString("status")));
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + BINDING_COLUMNS + " FROM env_bindings WHERE id = ?", id)
+                    .map(SqliteEnvironmentStore::mapBinding));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<EnvBinding> latestConfirmedBinding(String projectId, String env) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT id, project_id, env, mapping_json, mapping_hash, created_by, "
-                             + "confirmed_by, confirmed_at, expires_at, status, created_at "
-                             + "FROM env_bindings WHERE project_id = ? AND env = ? "
-                             + "AND status = 'CONFIRMED' AND expires_at > ? "
-                             + "ORDER BY confirmed_at DESC, created_at DESC LIMIT 1")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setLong(3, System.currentTimeMillis());
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(new EnvBinding(
-                        rs.getString("id"), rs.getString("project_id"), rs.getString("env"),
-                        rs.getString("mapping_json"), rs.getString("mapping_hash"),
-                        rs.getString("created_by"), rs.getString("confirmed_by"),
-                        rs.getLong("confirmed_at"), rs.getLong("expires_at"),
-                        rs.getString("status")));
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + BINDING_COLUMNS + " FROM env_bindings "
+                            + "WHERE project_id = ? AND env = ? "
+                            + "AND status = 'CONFIRMED' AND expires_at > ? "
+                            + "ORDER BY confirmed_at DESC, created_at DESC LIMIT 1",
+                    projectId, env, System.currentTimeMillis())
+                    .map(SqliteEnvironmentStore::mapBinding));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public void confirmBinding(String id, String confirmedBy, long expiresAt) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     UPDATE env_bindings
-                     SET status='CONFIRMED', confirmed_by=?, confirmed_at=?, expires_at=?
-                     WHERE id=?
-                     """)) {
-            st.setString(1, confirmedBy);
-            st.setLong(2, System.currentTimeMillis());
-            st.setLong(3, expiresAt);
-            st.setString(4, id);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    UPDATE env_bindings
+                    SET status='CONFIRMED', confirmed_by=?, confirmed_at=?, expires_at=?
+                    WHERE id=?
+                    """, confirmedBy, System.currentTimeMillis(), expiresAt, id));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定确认失败：" + e.getMessage(), e);
         }
+    }
+
+    private static EnvBinding mapBinding(Object[] row) {
+        return new EnvBinding((String) row[0], (String) row[1], (String) row[2],
+                (String) row[3], (String) row[4], (String) row[5], (String) row[6],
+                ((Number) row[7]).longValue(), ((Number) row[8]).longValue(), (String) row[9]);
     }
 
     // ---------------------------------------------------------------- 端口租约
@@ -1242,22 +966,16 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public Optional<PortLease> lease(String projectId, String env, int containerPort) {
         requireProject(projectId);
         requireEnv(env);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT project_id, env, container_port, host_port, run_id, updated_at "
-                             + "FROM deploy_port_leases "
-                             + "WHERE project_id=? AND env=? AND container_port=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setInt(3, containerPort);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(new PortLease(projectId, env, containerPort,
-                        rs.getInt("host_port"), rs.getString("run_id"), rs.getLong("updated_at")));
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT project_id, env, container_port, host_port, run_id, updated_at "
+                            + "FROM deploy_port_leases "
+                            + "WHERE project_id=? AND env=? AND container_port=?",
+                    projectId, env, containerPort)
+                    .map(row -> new PortLease(projectId, env, containerPort,
+                            ((Number) row[3]).intValue(), (String) row[4],
+                            ((Number) row[5]).longValue())));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "端口租约查询失败：" + e.getMessage(), e);
         }
     }
@@ -1266,23 +984,21 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public List<PortLease> leases(String projectId, String env) {
         requireProject(projectId);
         requireEnv(env);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT project_id, env, container_port, host_port, run_id, updated_at "
-                             + "FROM deploy_port_leases "
-                             + "WHERE project_id=? AND env=? ORDER BY container_port")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            try (ResultSet rs = st.executeQuery()) {
+        try {
+            return db.read(em -> {
                 List<PortLease> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(new PortLease(projectId, env, rs.getInt("container_port"),
-                            rs.getInt("host_port"), rs.getString("run_id"),
-                            rs.getLong("updated_at")));
+                for (Object[] row : PlatformDb.rows(em,
+                        "SELECT project_id, env, container_port, host_port, run_id, updated_at "
+                                + "FROM deploy_port_leases "
+                                + "WHERE project_id=? AND env=? ORDER BY container_port",
+                        projectId, env)) {
+                    out.add(new PortLease(projectId, env, ((Number) row[2]).intValue(),
+                            ((Number) row[3]).intValue(), (String) row[4],
+                            ((Number) row[5]).longValue()));
                 }
                 return out;
-            }
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "端口租约查询失败：" + e.getMessage(), e);
         }
     }
@@ -1291,23 +1007,18 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     public void saveLease(PortLease lease) {
         requireProject(lease.projectId());
         requireEnv(lease.env());
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO deploy_port_leases
-                         (project_id, env, container_port, host_port, run_id, updated_at)
-                     VALUES (?,?,?,?,?,?)
-                     ON CONFLICT(project_id, env, container_port) DO UPDATE SET
-                         host_port=excluded.host_port, run_id=excluded.run_id,
-                         updated_at=excluded.updated_at
-                     """)) {
-            st.setString(1, lease.projectId());
-            st.setString(2, lease.env());
-            st.setInt(3, lease.containerPort());
-            st.setInt(4, lease.hostPort());
-            st.setString(5, lease.runId());
-            st.setLong(6, System.currentTimeMillis());
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    INSERT INTO deploy_port_leases
+                        (project_id, env, container_port, host_port, run_id, updated_at)
+                    VALUES (?,?,?,?,?,?)
+                    ON CONFLICT(project_id, env, container_port) DO UPDATE SET
+                        host_port=excluded.host_port, run_id=excluded.run_id,
+                        updated_at=excluded.updated_at
+                    """,
+                    lease.projectId(), lease.env(), lease.containerPort(),
+                    lease.hostPort(), lease.runId(), System.currentTimeMillis()));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "端口租约保存失败：" + e.getMessage(), e);
         }
     }
@@ -1333,21 +1044,18 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     }
 
     private List<ServiceLease> queryServiceLeases(String sql, String... args) {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(sql)) {
-            for (int i = 0; i < args.length; i++) {
-                st.setString(i + 1, args[i]);
-            }
-            try (ResultSet rs = st.executeQuery()) {
+        try {
+            return db.read(em -> {
                 List<ServiceLease> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(new ServiceLease(rs.getString("project_id"), rs.getString("env"),
-                            rs.getString("service"), rs.getInt("host_port"),
-                            rs.getString("status"), rs.getLong("pid"),
-                            rs.getLong("updated_at")));
+                for (Object[] row : PlatformDb.rows(em, sql, (Object[]) args)) {
+                    out.add(new ServiceLease((String) row[0], (String) row[1],
+                            (String) row[2], ((Number) row[3]).intValue(),
+                            (String) row[4], ((Number) row[5]).longValue(),
+                            ((Number) row[6]).longValue()));
                 }
                 return out;
-            }
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "本地服务租约查询失败：" + e.getMessage(), e);
         }
     }
@@ -1357,24 +1065,19 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireProject(lease.projectId());
         requireEnv(lease.env());
         requireService(lease.service());
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO project_service_leases
-                         (project_id, env, service, host_port, status, pid, updated_at)
-                     VALUES (?,?,?,?,?,?,?)
-                     ON CONFLICT(project_id, env, service) DO UPDATE SET
-                         host_port=excluded.host_port, status=excluded.status,
-                         pid=excluded.pid, updated_at=excluded.updated_at
-                     """)) {
-            st.setString(1, lease.projectId());
-            st.setString(2, lease.env());
-            st.setString(3, lease.service());
-            st.setInt(4, lease.hostPort());
-            st.setString(5, lease.status() == null ? "STOPPED" : lease.status());
-            st.setLong(6, lease.pid());
-            st.setLong(7, System.currentTimeMillis());
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    INSERT INTO project_service_leases
+                        (project_id, env, service, host_port, status, pid, updated_at)
+                    VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(project_id, env, service) DO UPDATE SET
+                        host_port=excluded.host_port, status=excluded.status,
+                        pid=excluded.pid, updated_at=excluded.updated_at
+                    """,
+                    lease.projectId(), lease.env(), lease.service(), lease.hostPort(),
+                    lease.status() == null ? "STOPPED" : lease.status(),
+                    lease.pid(), System.currentTimeMillis()));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "本地服务租约保存失败：" + e.getMessage(), e);
         }
     }
@@ -1384,44 +1087,28 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         requireProject(projectId);
         requireEnv(env);
         requireService(service);
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM project_service_leases "
-                             + "WHERE project_id=? AND env=? AND service=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setString(3, service);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM project_service_leases WHERE project_id=? AND env=? AND service=?",
+                    projectId, env, service));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "本地服务租约删除失败：" + e.getMessage(), e);
         }
     }
 
     // ---------------------------------------------------------------- 工具
 
-    private boolean exists(Connection conn, String table, String col1, String val1,
-                           String col2, String val2) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT 1 FROM " + table + " WHERE " + col1 + "=? AND " + col2 + "=?")) {
-            st.setString(1, val1);
-            st.setString(2, val2);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next();
-            }
-        }
+    private static boolean exists(EntityManager em, String table, String col1, String val1,
+                                  String col2, String val2) {
+        return PlatformDb.first(em,
+                "SELECT 1 FROM " + table + " WHERE " + col1 + "=? AND " + col2 + "=?",
+                val1, val2).isPresent();
     }
 
-    private boolean overrideExists(Connection conn, String projectId, String env, String key)
-            throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT 1 FROM project_env_overrides WHERE project_id=? AND env=? AND var_key=?")) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            st.setString(3, key);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next();
-            }
-        }
+    private static boolean overrideExists(EntityManager em, String projectId, String env, String key) {
+        return PlatformDb.first(em,
+                "SELECT 1 FROM project_env_overrides WHERE project_id=? AND env=? AND var_key=?",
+                projectId, env, key).isPresent();
     }
 
     private static String newId(String prefix) {

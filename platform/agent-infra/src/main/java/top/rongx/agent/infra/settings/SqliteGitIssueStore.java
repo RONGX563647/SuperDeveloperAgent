@@ -1,15 +1,12 @@
 package top.rongx.agent.infra.settings;
 
+import jakarta.persistence.EntityManager;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.gitissue.GitIssue;
@@ -20,75 +17,16 @@ import top.rongx.agent.domain.gitissue.GitIssueRepository;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
- * Issue 任务 / 评论 / 事件去重 / 集成配置的 SQLite 存储。
+ * Issue 任务 / 评论 / 事件去重 / 集成配置的存储。
  *
- * <p>与平台的其它设置共用 {@code _platform/projects.db}；webhook 密钥按平台主密钥
+ * <p>表结构由 Hibernate 依据 {@code @Entity} 生成；webhook 密钥按平台主密钥
  * AES-GCM 加密，接口只回掩码。
  */
 @Repository
 public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrationRepository {
-
-    private static final String SCHEMA = """
-            CREATE TABLE IF NOT EXISTS git_issues (
-                id           TEXT PRIMARY KEY,
-                code         TEXT NOT NULL DEFAULT '',
-                user_id      TEXT NOT NULL,
-                project_id   TEXT,
-                provider     TEXT NOT NULL,
-                repo         TEXT NOT NULL,
-                issue_number TEXT NOT NULL,
-                title        TEXT NOT NULL,
-                body         TEXT,
-                state        TEXT NOT NULL,
-                kind         TEXT NOT NULL DEFAULT 'BUG',
-                priority     TEXT NOT NULL DEFAULT 'P2',
-                labels       TEXT,
-                url          TEXT,
-                source       TEXT NOT NULL,
-                sync_status  TEXT NOT NULL,
-                sync_error   TEXT,
-                assignee     TEXT,
-                created_at   INTEGER NOT NULL,
-                updated_at   INTEGER NOT NULL,
-                version      TEXT NOT NULL DEFAULT ''
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_git_issues_user
-                ON git_issues (user_id, updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_git_issues_remote
-                ON git_issues (provider, repo, issue_number);
-
-            CREATE TABLE IF NOT EXISTS git_issue_comments (
-                id         TEXT PRIMARY KEY,
-                issue_id   TEXT NOT NULL,
-                author     TEXT,
-                body       TEXT NOT NULL,
-                source     TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_git_issue_comments_issue
-                ON git_issue_comments (issue_id, created_at);
-
-            CREATE TABLE IF NOT EXISTS git_issue_events (
-                event_key   TEXT PRIMARY KEY,
-                received_at INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS git_integrations (
-                provider           TEXT PRIMARY KEY,
-                owner_user_id      TEXT,
-                enabled            INTEGER NOT NULL,
-                repo_whitelist     TEXT,
-                secret_enc         TEXT,
-                secret_iv          TEXT,
-                auto_create_task   INTEGER NOT NULL,
-                sync_direction     TEXT NOT NULL,
-                conflict_policy    TEXT NOT NULL,
-                updated_at         INTEGER NOT NULL
-            )
-            """;
 
     private static final String ISSUE_COLUMNS = """
             id, code, user_id, project_id, provider, repo, issue_number, title, body, state, kind,
@@ -101,59 +39,21 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             auto_create_task, sync_direction, conflict_policy, updated_at
             """;
 
-    private final Path dbFile;
+    private final PlatformDb db;
     private final SecretBox secretBox;
 
+    @Autowired
+    public SqliteGitIssueStore(PlatformDb db, SecretBox secretBox) {
+        this.db = db;
+        this.secretBox = secretBox;
+    }
+
+    /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public SqliteGitIssueStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
-        this.secretBox = secretBox;
-        initSchema();
-    }
-
-    private void initSchema() {
-        try (Connection conn = open(); java.sql.Statement st = conn.createStatement()) {
-            // SQLite JDBC 一次 prepare 只执行第一条语句，需要逐条执行建表/索引
-            for (String sql : SCHEMA.split(";")) {
-                String statement = sql.trim();
-                if (!statement.isEmpty()) {
-                    st.executeUpdate(statement);
-                }
-            }
-            // 旧库补列：kind / priority 是后加字段，CREATE TABLE IF NOT EXISTS 不会补
-            java.util.Set<String> columns = new java.util.HashSet<>();
-            try (ResultSet rs = st.executeQuery("PRAGMA table_info(git_issues)")) {
-                while (rs.next()) {
-                    columns.add(rs.getString("name").toLowerCase(Locale.ROOT));
-                }
-            }
-            if (!columns.contains("kind")) {
-                st.executeUpdate(
-                        "ALTER TABLE git_issues ADD COLUMN kind TEXT NOT NULL DEFAULT 'BUG'");
-            }
-            if (!columns.contains("priority")) {
-                st.executeUpdate(
-                        "ALTER TABLE git_issues ADD COLUMN priority TEXT NOT NULL DEFAULT 'P2'");
-            }
-            if (!columns.contains("code")) {
-                st.executeUpdate(
-                        "ALTER TABLE git_issues ADD COLUMN code TEXT NOT NULL DEFAULT ''");
-                backfillCodes(conn);
-            }
-            // 关联版本号：老库补空列，创建任务时再由服务层补默认值
-            if (!columns.contains("version")) {
-                st.executeUpdate(
-                        "ALTER TABLE git_issues ADD COLUMN version TEXT NOT NULL DEFAULT ''");
-            }
-        } catch (SQLException e) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "git issue 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
+        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db")), secretBox);
     }
 
     // ---------------------------------------------------------------- Issue
@@ -180,33 +80,22 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             args.add(like);
         }
         sql.append(" ORDER BY CASE state WHEN 'OPEN' THEN 0 ELSE 1 END, updated_at DESC");
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(sql.toString())) {
-            for (int i = 0; i < args.size(); i++) {
-                st.setObject(i + 1, args.get(i));
-            }
-            try (ResultSet rs = st.executeQuery()) {
-                List<GitIssue> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapIssue(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em, sql.toString(), args.toArray()).stream()
+                    .map(SqliteGitIssueStore::mapIssue).toList());
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<GitIssue> find(String id, String userId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + ISSUE_COLUMNS + " FROM git_issues WHERE id = ? AND user_id = ?")) {
-            st.setString(1, id);
-            st.setString(2, userId);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapIssue(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                            "SELECT " + ISSUE_COLUMNS + " FROM git_issues WHERE id = ? AND user_id = ?",
+                            id, userId)
+                    .map(SqliteGitIssueStore::mapIssue));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务查询失败：" + e.getMessage(), e);
         }
     }
@@ -216,18 +105,16 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
         if (number == null || number.isBlank()) {
             return Optional.empty();
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + ISSUE_COLUMNS + " FROM git_issues "
-                             + "WHERE provider = ? AND repo = ? AND issue_number = ? "
-                             + "ORDER BY updated_at DESC LIMIT 1")) {
-            st.setString(1, provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT));
-            st.setString(2, repo == null ? "" : repo.trim());
-            st.setString(3, number.trim());
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapIssue(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        String normalizedProvider = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
+        String normalizedRepo = repo == null ? "" : repo.trim();
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                            "SELECT " + ISSUE_COLUMNS + " FROM git_issues "
+                                    + "WHERE provider = ? AND repo = ? AND issue_number = ? "
+                                    + "ORDER BY updated_at DESC LIMIT 1",
+                            normalizedProvider, normalizedRepo, number.trim())
+                    .map(SqliteGitIssueStore::mapIssue));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务绑定查询失败：" + e.getMessage(), e);
         }
     }
@@ -235,94 +122,50 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
     @Override
     public GitIssue save(GitIssue issue) {
         long now = System.currentTimeMillis();
-        try (Connection conn = open()) {
-            boolean exists;
-            try (PreparedStatement st = conn.prepareStatement(
-                    "SELECT 1 FROM git_issues WHERE id = ?")) {
-                st.setString(1, issue.id());
-                try (ResultSet rs = st.executeQuery()) {
-                    exists = rs.next();
+        try {
+            return db.inTx(em -> {
+                boolean exists = PlatformDb.first(em,
+                        "SELECT 1 FROM git_issues WHERE id = ?", issue.id()).isPresent();
+                // 编码只在首次创建时分配；更新路径沿用数据库里的值，避免被空值覆盖
+                String code = issue.code() == null ? "" : issue.code().trim();
+                if (code.isBlank()) {
+                    code = exists ? existingCode(em, issue.id()) : nextCode(em, issue);
                 }
-            }
-            // 编码只在首次创建时分配；更新路径沿用数据库里的值，避免被空值覆盖
-            String code = issue.code() == null ? "" : issue.code().trim();
-            if (code.isBlank()) {
-                code = exists ? existingCode(conn, issue.id()) : nextCode(conn, issue);
-            }
-            if (!exists) {
-                try (PreparedStatement st = conn.prepareStatement("""
-                        INSERT INTO git_issues
-                            (id, code, user_id, project_id, provider, repo, issue_number, title, body,
-                             state, kind, priority, labels, url, source, sync_status, sync_error,
-                             assignee, created_at, updated_at, version)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                        """)) {
-                    bindIssue(st, issue, code, now);
-                    st.executeUpdate();
+                if (!exists) {
+                    PlatformDb.update(em, """
+                            INSERT INTO git_issues
+                                (id, code, user_id, project_id, provider, repo, issue_number, title, body,
+                                 state, kind, priority, labels, url, source, sync_status, sync_error,
+                                 assignee, created_at, updated_at, version)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            issue.id(), code, issue.userId(), issue.projectId(), issue.provider(),
+                            issue.repo(), issue.number(), issue.title(), issue.body(), issue.state(),
+                            issue.kind(), issue.priority(), issue.labels(), issue.url(), issue.source(),
+                            issue.syncStatus(), issue.syncError(), issue.assignee(),
+                            issue.createdAt() > 0 ? issue.createdAt() : now, now, issue.version());
+                } else {
+                    PlatformDb.update(em, """
+                            UPDATE git_issues SET
+                                project_id=?, provider=?, repo=?, issue_number=?, title=?, body=?,
+                                state=?, kind=?, priority=?, labels=?, url=?, source=?, sync_status=?,
+                                sync_error=?, assignee=?, updated_at=?, version=?
+                            WHERE id=?
+                            """,
+                            issue.projectId(), issue.provider(), issue.repo(), issue.number(),
+                            issue.title(), issue.body(), issue.state(), issue.kind(), issue.priority(),
+                            issue.labels(), issue.url(), issue.source(), issue.syncStatus(),
+                            issue.syncError(), issue.assignee(), now, issue.version(), issue.id());
                 }
-            } else {
-                try (PreparedStatement st = conn.prepareStatement("""
-                        UPDATE git_issues SET
-                            project_id=?, provider=?, repo=?, issue_number=?, title=?, body=?,
-                            state=?, kind=?, priority=?, labels=?, url=?, source=?, sync_status=?,
-                            sync_error=?, assignee=?, updated_at=?, version=?
-                        WHERE id=?
-                        """)) {
-                    st.setString(1, issue.projectId());
-                    st.setString(2, issue.provider());
-                    st.setString(3, issue.repo());
-                    st.setString(4, issue.number());
-                    st.setString(5, issue.title());
-                    st.setString(6, issue.body());
-                    st.setString(7, issue.state());
-                    st.setString(8, issue.kind());
-                    st.setString(9, issue.priority());
-                    st.setString(10, issue.labels());
-                    st.setString(11, issue.url());
-                    st.setString(12, issue.source());
-                    st.setString(13, issue.syncStatus());
-                    st.setString(14, issue.syncError());
-                    st.setString(15, issue.assignee());
-                    st.setLong(16, now);
-                    st.setString(17, issue.version());
-                    st.setString(18, issue.id());
-                    st.executeUpdate();
-                }
-            }
-            GitIssue saved = new GitIssue(issue.id(), code, issue.userId(), issue.projectId(),
-                    issue.provider(), issue.repo(), issue.number(), issue.title(), issue.body(),
-                    issue.state(), issue.kind(), issue.priority(), issue.labels(), issue.url(),
-                    issue.source(), issue.syncStatus(), issue.syncError(), issue.assignee(),
-                    issue.createdAt() > 0 ? issue.createdAt() : now, now, issue.version());
-            return saved;
-        } catch (SQLException e) {
+                return new GitIssue(issue.id(), code, issue.userId(), issue.projectId(),
+                        issue.provider(), issue.repo(), issue.number(), issue.title(), issue.body(),
+                        issue.state(), issue.kind(), issue.priority(), issue.labels(), issue.url(),
+                        issue.source(), issue.syncStatus(), issue.syncError(), issue.assignee(),
+                        issue.createdAt() > 0 ? issue.createdAt() : now, now, issue.version());
+            });
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务保存失败：" + e.getMessage(), e);
         }
-    }
-
-    private void bindIssue(PreparedStatement st, GitIssue issue, String code, long now)
-            throws SQLException {
-        st.setString(1, issue.id());
-        st.setString(2, code);
-        st.setString(3, issue.userId());
-        st.setString(4, issue.projectId());
-        st.setString(5, issue.provider());
-        st.setString(6, issue.repo());
-        st.setString(7, issue.number());
-        st.setString(8, issue.title());
-        st.setString(9, issue.body());
-        st.setString(10, issue.state());
-        st.setString(11, issue.kind());
-        st.setString(12, issue.priority());
-        st.setString(13, issue.labels());
-        st.setString(14, issue.url());
-        st.setString(15, issue.source());
-        st.setString(16, issue.syncStatus());
-        st.setString(17, issue.syncError());
-        st.setString(18, issue.assignee());
-        st.setLong(19, issue.createdAt() > 0 ? issue.createdAt() : now);
-        st.setLong(20, now);
-        st.setString(21, issue.version());
     }
 
     /**
@@ -330,96 +173,49 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
      *
      * <p>同一用户、同一项目、同一分类取当前最大序号 +1；旧任务没有编码时按创建顺序回填。
      */
-    /** 更新时沿用已分配的编码：调用方没带 code 也不能把它清空。 */
-    private static String existingCode(Connection conn, String issueId) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT code FROM git_issues WHERE id = ?")) {
-            st.setString(1, issueId);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() && rs.getString(1) != null ? rs.getString(1) : "";
-            }
-        }
+    private static String nextCode(EntityManager em, GitIssue issue) {
+        String prefix = codePrefix(issue.kind());
+        String project = issue.projectId() == null ? "" : issue.projectId();
+        Object current = PlatformDb.first(em,
+                "SELECT COALESCE(MAX(CAST(SUBSTR(code, ?) AS INTEGER)), 0) FROM git_issues "
+                        + "WHERE user_id = ? AND kind = ? AND COALESCE(project_id, '') = ? "
+                        + "AND code LIKE ?",
+                prefix.length() + 1, issue.userId(), issue.kind(), project, prefix + "%")
+                .orElse(0);
+        int next = current instanceof Number number ? number.intValue() + 1 : 1;
+        return prefix + next;
     }
 
-    private static String nextCode(Connection conn, GitIssue issue) throws SQLException {        String prefix = codePrefix(issue.kind());
-        String project = issue.projectId() == null ? "" : issue.projectId();
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT COALESCE(MAX(CAST(SUBSTR(code, ?) AS INTEGER)), 0) FROM git_issues "
-                        + "WHERE user_id = ? AND kind = ? AND IFNULL(project_id, '') = ? "
-                        + "AND code LIKE ?")) {
-            st.setInt(1, prefix.length() + 1);
-            st.setString(2, issue.userId());
-            st.setString(3, issue.kind());
-            st.setString(4, project);
-            st.setString(5, prefix + "%");
-            try (ResultSet rs = st.executeQuery()) {
-                return prefix + (rs.next() ? rs.getInt(1) + 1 : 1);
-            }
-        }
+    /** 更新时沿用已分配的编码：调用方没带 code 也不能把它清空。 */
+    private static String existingCode(EntityManager em, String issueId) {
+        return PlatformDb.<String>first(em, "SELECT code FROM git_issues WHERE id = ?", issueId)
+                .map(value -> value == null ? "" : value)
+                .orElse("");
     }
 
     private static String codePrefix(String kind) {
         return "FEAT".equalsIgnoreCase(kind) ? "FEAT-" : "BUG-";
     }
 
-    /** 老库升级：按创建顺序给已有任务补编码，保证任务页展示连续。 */
-    private void backfillCodes(Connection conn) throws SQLException {
-        record Pending(String id, String userId, String projectId, String kind) {
-        }
-        List<Pending> pending = new ArrayList<>();
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT id, user_id, project_id, kind FROM git_issues "
-                        + "WHERE code = '' ORDER BY created_at, id");
-             ResultSet rs = st.executeQuery()) {
-            while (rs.next()) {
-                pending.add(new Pending(rs.getString("id"), rs.getString("user_id"),
-                        rs.getString("project_id"), rs.getString("kind")));
-            }
-        }
-        java.util.Map<String, Integer> counters = new java.util.HashMap<>();
-        try (PreparedStatement st = conn.prepareStatement(
-                "UPDATE git_issues SET code = ? WHERE id = ?")) {
-            for (Pending item : pending) {
-                String prefix = codePrefix(item.kind());
-                String key = item.userId() + "|" + (item.projectId() == null ? "" : item.projectId())
-                        + "|" + prefix;
-                int seq = counters.merge(key, 1, Integer::sum);
-                st.setString(1, prefix + seq);
-                st.setString(2, item.id());
-                st.executeUpdate();
-            }
-        }
-    }
-
     @Override
     public void delete(String id, String userId) {
-        try (Connection conn = open()) {
-            try (PreparedStatement st = conn.prepareStatement(
-                    "DELETE FROM git_issues WHERE id = ? AND user_id = ?")) {
-                st.setString(1, id);
-                st.setString(2, userId);
-                st.executeUpdate();
-            }
-            try (PreparedStatement st = conn.prepareStatement(
-                    "DELETE FROM git_issue_comments WHERE issue_id = ?")) {
-                st.setString(1, id);
-                st.executeUpdate();
-            }
-        } catch (SQLException e) {
+        try {
+            db.inTx(em -> {
+                PlatformDb.update(em, "DELETE FROM git_issues WHERE id = ? AND user_id = ?", id, userId);
+                PlatformDb.update(em, "DELETE FROM git_issue_comments WHERE issue_id = ?", id);
+                return null;
+            });
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务删除失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public long countOpen(String userId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT COUNT(*) FROM git_issues WHERE user_id = ? AND state = 'OPEN'")) {
-            st.setString(1, userId);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.count(em,
+                    "SELECT COUNT(*) FROM git_issues WHERE user_id = ? AND state = 'OPEN'", userId));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务统计失败：" + e.getMessage(), e);
         }
     }
@@ -428,54 +224,46 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
 
     @Override
     public List<GitIssueComment> comments(String issueId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     SELECT id, issue_id, author, body, source, created_at
-                     FROM git_issue_comments WHERE issue_id = ? ORDER BY created_at, id
-                     """)) {
-            st.setString(1, issueId);
-            try (ResultSet rs = st.executeQuery()) {
-                List<GitIssueComment> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapComment(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em, """
+                            SELECT id, issue_id, author, body, source, created_at
+                            FROM git_issue_comments WHERE issue_id = ? ORDER BY created_at, id
+                            """, issueId).stream()
+                    .map(SqliteGitIssueStore::mapComment).toList());
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "评论查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public GitIssueComment addComment(GitIssueComment comment) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT OR REPLACE INTO git_issue_comments
-                         (id, issue_id, author, body, source, created_at)
-                     VALUES (?,?,?,?,?,?)
-                     """)) {
-            st.setString(1, comment.id());
-            st.setString(2, comment.issueId());
-            st.setString(3, comment.author());
-            st.setString(4, comment.body());
-            st.setString(5, comment.source());
-            st.setLong(6, comment.createdAt() > 0 ? comment.createdAt() : System.currentTimeMillis());
-            st.executeUpdate();
+        try {
+            db.run(em -> PlatformDb.update(em, """
+                    INSERT INTO git_issue_comments
+                        (id, issue_id, author, body, source, created_at)
+                    VALUES (?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        issue_id = excluded.issue_id,
+                        author = excluded.author,
+                        body = excluded.body,
+                        source = excluded.source,
+                        created_at = excluded.created_at
+                    """,
+                    comment.id(), comment.issueId(), comment.author(), comment.body(),
+                    comment.source(),
+                    comment.createdAt() > 0 ? comment.createdAt() : System.currentTimeMillis()));
             return comment;
-        } catch (SQLException e) {
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "评论保存失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public void deleteComment(String commentId, String issueId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM git_issue_comments WHERE id = ? AND issue_id = ?")) {
-            st.setString(1, commentId);
-            st.setString(2, issueId);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM git_issue_comments WHERE id = ? AND issue_id = ?", commentId, issueId));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "评论删除失败：" + e.getMessage(), e);
         }
     }
@@ -488,19 +276,16 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
             return false;
         }
         long now = System.currentTimeMillis();
-        try (Connection conn = open()) {
-            try (PreparedStatement cleanup = conn.prepareStatement(
-                    "DELETE FROM git_issue_events WHERE received_at < ?")) {
-                cleanup.setLong(1, now - 30L * 24 * 3600 * 1000);
-                cleanup.executeUpdate();
-            }
-            try (PreparedStatement st = conn.prepareStatement(
-                    "INSERT OR IGNORE INTO git_issue_events (event_key, received_at) VALUES (?,?)")) {
-                st.setString(1, eventKey);
-                st.setLong(2, now);
-                return st.executeUpdate() > 0;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.inTx(em -> {
+                PlatformDb.update(em, "DELETE FROM git_issue_events WHERE received_at < ?",
+                        now - 30L * 24 * 3600 * 1000);
+                return PlatformDb.update(em, """
+                        INSERT INTO git_issue_events (event_key, received_at) VALUES (?,?)
+                        ON CONFLICT(event_key) DO NOTHING
+                        """, eventKey, now) > 0;
+            });
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "事件去重失败：" + e.getMessage(), e);
         }
     }
@@ -509,50 +294,43 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
 
     @Override
     public List<GitIssueIntegration> findAll() {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + INTEGRATION_COLUMNS + " FROM git_integrations "
-                             + "ORDER BY provider")) {
-            try (ResultSet rs = st.executeQuery()) {
-                List<GitIssueIntegration> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapIntegration(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                            "SELECT " + INTEGRATION_COLUMNS + " FROM git_integrations ORDER BY provider")
+                    .stream().map(this::mapIntegration).toList());
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<GitIssueIntegration> find(String provider) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + INTEGRATION_COLUMNS + " FROM git_integrations WHERE provider = ?")) {
-            st.setString(1, normalizeProvider(provider));
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapIntegration(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        String normalized = normalizeProvider(provider);
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                            "SELECT " + INTEGRATION_COLUMNS + " FROM git_integrations WHERE provider = ?",
+                            normalized)
+                    .map(this::mapIntegration));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<String> secretOf(String provider) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT secret_enc, secret_iv FROM git_integrations WHERE provider = ?")) {
-            st.setString(1, normalizeProvider(provider));
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next() || rs.getString("secret_enc") == null) {
-                    return Optional.empty();
-                }
-                return Optional.of(secretBox.decrypt(
-                        rs.getString("secret_enc"), rs.getString("secret_iv")));
-            }
-        } catch (SQLException e) {
+        String normalized = normalizeProvider(provider);
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                            "SELECT secret_enc, secret_iv FROM git_integrations WHERE provider = ?",
+                            normalized)
+                    .flatMap(row -> {
+                        String enc = (String) row[0];
+                        if (enc == null) {
+                            return Optional.empty();
+                        }
+                        return Optional.of(secretBox.decrypt(enc, (String) row[1]));
+                    }));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Webhook 密钥读取失败：" + e.getMessage(), e);
         }
     }
@@ -561,126 +339,121 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
     public GitIssueIntegration save(Draft draft, String webhookSecret, String ownerUserId) {
         String provider = normalizeProvider(draft.provider());
         long now = System.currentTimeMillis();
-        try (Connection conn = open()) {
-            SecretBox.Sealed existing = existingSecret(conn, provider);
-            SecretBox.Sealed sealed = webhookSecret != null && !webhookSecret.isBlank()
-                    ? secretBox.encrypt(webhookSecret.trim()) : existing;
-            String direction = normalizeDirection(draft.syncDirection());
-            String conflict = "PLATFORM_WINS".equalsIgnoreCase(draft.conflictPolicy())
-                    ? "PLATFORM_WINS" : "GIT_WINS";
-            String owner = ownerUserId == null ? "" : ownerUserId;
-            try (PreparedStatement st = conn.prepareStatement("""
-                    INSERT INTO git_integrations
-                        (provider, owner_user_id, enabled, repo_whitelist, secret_enc, secret_iv,
-                         auto_create_task, sync_direction, conflict_policy, updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(provider) DO UPDATE SET
-                        owner_user_id=excluded.owner_user_id,
-                        enabled=excluded.enabled,
-                        repo_whitelist=excluded.repo_whitelist,
-                        secret_enc=COALESCE(excluded.secret_enc, git_integrations.secret_enc),
-                        secret_iv=COALESCE(excluded.secret_iv, git_integrations.secret_iv),
-                        auto_create_task=excluded.auto_create_task,
-                        sync_direction=excluded.sync_direction,
-                        conflict_policy=excluded.conflict_policy,
-                        updated_at=excluded.updated_at
-                    """)) {
-                st.setString(1, provider);
-                st.setString(2, owner);
-                st.setBoolean(3, draft.enabled());
-                st.setString(4, draft.repoWhitelist() == null ? "" : draft.repoWhitelist().trim());
-                st.setString(5, sealed == null ? null : sealed.cipherB64());
-                st.setString(6, sealed == null ? null : sealed.ivB64());
-                st.setBoolean(7, draft.autoCreateTask());
-                st.setString(8, direction);
-                st.setString(9, conflict);
-                st.setLong(10, now);
-                st.executeUpdate();
-            }
-            return find(provider).orElseThrow();
-        } catch (SQLException e) {
+        try {
+            db.inTx(em -> {
+                SecretBox.Sealed existing = existingSecret(em, provider);
+                SecretBox.Sealed sealed = webhookSecret != null && !webhookSecret.isBlank()
+                        ? secretBox.encrypt(webhookSecret.trim()) : existing;
+                String direction = normalizeDirection(draft.syncDirection());
+                String conflict = "PLATFORM_WINS".equalsIgnoreCase(draft.conflictPolicy())
+                        ? "PLATFORM_WINS" : "GIT_WINS";
+                String owner = ownerUserId == null ? "" : ownerUserId;
+                PlatformDb.update(em, """
+                        INSERT INTO git_integrations
+                            (provider, owner_user_id, enabled, repo_whitelist, secret_enc, secret_iv,
+                             auto_create_task, sync_direction, conflict_policy, updated_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(provider) DO UPDATE SET
+                            owner_user_id=excluded.owner_user_id,
+                            enabled=excluded.enabled,
+                            repo_whitelist=excluded.repo_whitelist,
+                            secret_enc=COALESCE(excluded.secret_enc, secret_enc),
+                            secret_iv=COALESCE(excluded.secret_iv, secret_iv),
+                            auto_create_task=excluded.auto_create_task,
+                            sync_direction=excluded.sync_direction,
+                            conflict_policy=excluded.conflict_policy,
+                            updated_at=excluded.updated_at
+                        """,
+                        provider, owner, draft.enabled() ? 1 : 0,
+                        draft.repoWhitelist() == null ? "" : draft.repoWhitelist().trim(),
+                        sealed == null ? null : sealed.cipherB64(),
+                        sealed == null ? null : sealed.ivB64(),
+                        draft.autoCreateTask() ? 1 : 0, direction, conflict, now);
+                return null;
+            });
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置保存失败：" + e.getMessage(), e);
         }
+        return find(provider).orElseThrow();
     }
 
-    private SecretBox.Sealed existingSecret(Connection conn, String provider) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT secret_enc, secret_iv FROM git_integrations WHERE provider = ?")) {
-            st.setString(1, provider);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next() || rs.getString("secret_enc") == null) {
-                    return null;
-                }
-                return new SecretBox.Sealed(rs.getString("secret_enc"), rs.getString("secret_iv"));
-            }
-        }
+    private SecretBox.Sealed existingSecret(EntityManager em, String provider) {
+        return PlatformDb.row(em,
+                        "SELECT secret_enc, secret_iv FROM git_integrations WHERE provider = ?", provider)
+                .flatMap(row -> {
+                    String enc = (String) row[0];
+                    if (enc == null) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new SecretBox.Sealed(enc, (String) row[1]));
+                })
+                .orElse(null);
     }
 
     @Override
     public void delete(String provider) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM git_integrations WHERE provider = ?")) {
-            st.setString(1, normalizeProvider(provider));
-            st.executeUpdate();
-        } catch (SQLException e) {
+        String normalized = normalizeProvider(provider);
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM git_integrations WHERE provider = ?", normalized));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Issue 同步配置删除失败：" + e.getMessage(), e);
         }
     }
 
     // ---------------------------------------------------------------- 映射
 
-    private GitIssue mapIssue(ResultSet rs) throws SQLException {
+    private static GitIssue mapIssue(Object[] row) {
         return new GitIssue(
-                rs.getString("id"),
-                rs.getString("code"),
-                rs.getString("user_id"),
-                rs.getString("project_id"),
-                rs.getString("provider"),
-                rs.getString("repo"),
-                rs.getString("issue_number"),
-                rs.getString("title"),
-                rs.getString("body"),
-                rs.getString("state"),
-                rs.getString("kind"),
-                rs.getString("priority"),
-                rs.getString("labels"),
-                rs.getString("url"),
-                rs.getString("source"),
-                rs.getString("sync_status"),
-                rs.getString("sync_error"),
-                rs.getString("assignee"),
-                rs.getLong("created_at"),
-                rs.getLong("updated_at"),
-                rs.getString("version"));
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
+                (String) row[4],
+                (String) row[5],
+                (String) row[6],
+                (String) row[7],
+                (String) row[8],
+                (String) row[9],
+                (String) row[10],
+                (String) row[11],
+                (String) row[12],
+                (String) row[13],
+                (String) row[14],
+                (String) row[15],
+                (String) row[16],
+                (String) row[17],
+                ((Number) row[18]).longValue(),
+                ((Number) row[19]).longValue(),
+                (String) row[20]);
     }
 
-    private GitIssueComment mapComment(ResultSet rs) throws SQLException {
+    private static GitIssueComment mapComment(Object[] row) {
         return new GitIssueComment(
-                rs.getString("id"),
-                rs.getString("issue_id"),
-                rs.getString("author"),
-                rs.getString("body"),
-                rs.getString("source"),
-                rs.getLong("created_at"));
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
+                (String) row[4],
+                ((Number) row[5]).longValue());
     }
 
-    private GitIssueIntegration mapIntegration(ResultSet rs) throws SQLException {
-        String enc = rs.getString("secret_enc");
-        String plain = enc == null ? "" : secretBox.decrypt(enc, rs.getString("secret_iv"));
+    private GitIssueIntegration mapIntegration(Object[] row) {
+        String enc = (String) row[4];
+        String plain = enc == null ? "" : secretBox.decrypt(enc, (String) row[5]);
         String masked = plain.isBlank() ? null
                 : (plain.length() <= 4 ? "***" : plain.substring(0, 4) + "***");
         return new GitIssueIntegration(
-                rs.getString("provider"),
-                rs.getString("owner_user_id"),
-                rs.getBoolean("enabled"),
-                rs.getString("repo_whitelist"),
+                (String) row[0],
+                (String) row[1],
+                ((Number) row[2]).intValue() == 1,
+                (String) row[3],
                 !plain.isBlank(),
                 masked,
-                rs.getBoolean("auto_create_task"),
-                rs.getString("sync_direction"),
-                rs.getString("conflict_policy"),
-                rs.getLong("updated_at"));
+                ((Number) row[6]).intValue() == 1,
+                (String) row[7],
+                (String) row[8],
+                ((Number) row[9]).longValue());
     }
 
     private static String normalizeProvider(String provider) {

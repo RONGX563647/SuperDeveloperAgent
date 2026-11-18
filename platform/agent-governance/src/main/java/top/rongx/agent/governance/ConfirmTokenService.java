@@ -1,12 +1,9 @@
 package top.rongx.agent.governance;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -25,7 +22,7 @@ import top.rongx.agent.domain.error.PromotionException;
  *   <li>令牌与计划绑定：{@code planHash} 在执行前必须比对。</li>
  * </ol>
  *
- * <p>令牌落 SQLite（{@code <workspace>/_platform/governance.db}）：重启后仍可消费，
+ * <p>令牌落统一库（{@code <workspace>/_platform/platform.db}）：重启后仍可消费，
  * 多实例共享同一数据文件时也保持一致。消费用 {@code UPDATE ... WHERE used=0} 原子完成，
  * 并发下只有一次能成功。
  */
@@ -35,54 +32,47 @@ public class ConfirmTokenService {
     /** 默认有效期 5 分钟。 */
     public static final Duration TTL = Duration.ofMinutes(5);
 
-    private static final String SCHEMA = """
-            CREATE TABLE IF NOT EXISTS confirm_tokens (
-                token      TEXT PRIMARY KEY,
-                user_id    TEXT NOT NULL,
-                change_id  TEXT NOT NULL,
-                plan_hash  TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                used       INTEGER NOT NULL DEFAULT 0
-            )
-            """;
-
-    private final Path dbFile;
+    private final GovernanceDb db;
     private final SecureRandom random = new SecureRandom();
     private final Clock clock;
 
-    /** 生产装配：令牌落工作区 SQLite。 */
+    /** 生产装配：令牌落工作区统一库。 */
     @Autowired public ConfirmTokenService(
-            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this(Clock.systemUTC(), Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("governance.db"));
+            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
+            GovernanceDb db) {
+        this(Clock.systemUTC(), db);
     }
 
-    /** 供测试注入固定时钟（{@code dbFile == null} 时为纯内存，不触碰磁盘）。 */
+    /** 独立进程：按工作区根目录定位统一库文件。 */
+    public ConfirmTokenService(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+        this(Clock.systemUTC(), platformDbFile(Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db")));
+    }
+
+    /** 供测试注入固定时钟（{@code db == null} 时为纯内存，不触碰磁盘）。 */
     public ConfirmTokenService(Clock clock) {
-        this(clock, null);
+        this(clock, (GovernanceDb) null);
     }
 
     ConfirmTokenService(Clock clock, Path dbFile) {
-        this.clock = clock;
-        this.dbFile = dbFile;
-        if (dbFile != null) {
-            initSchema();
-        }
+        this(clock, dbFile == null ? (GovernanceDb) null : GovernanceDb.sqlite(platformDbFile(dbFile)));
     }
 
-    private void initSchema() {
+    /** 独立运行时要保证库文件所在目录存在；schema 仍由 Hibernate 生成。 */
+    private static Path platformDbFile(Path dbFile) {
+        Path file = dbFile.toAbsolutePath().normalize();
         try {
-            Files.createDirectories(dbFile.getParent());
-            try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
-                st.executeUpdate();
-            }
-        } catch (SQLException | java.io.IOException e) {
-            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "confirm_tokens 表初始化失败：" + e.getMessage(), e);
+            Files.createDirectories(file.getParent());
+        } catch (IOException e) {
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌存储目录创建失败：" + e.getMessage(), e);
         }
+        return file;
     }
 
-    private Connection open() throws SQLException {
-        return GovernanceDb.open(dbFile);
+    /** {@code db == null} 表示纯内存模式。 */
+    ConfirmTokenService(Clock clock, GovernanceDb db) {
+        this.clock = clock;
+        this.db = db;
     }
 
     /**
@@ -105,7 +95,7 @@ public class ConfirmTokenService {
         ConfirmToken token = new ConfirmToken(HexFormat.of().formatHex(buf), userId, changeId, planHash,
                 clock.instant().plus(TTL), false);
         // 4. 入库待消费
-        if (dbFile == null) {
+        if (db == null) {
             memory.put(token.token(), token);
         } else {
             insert(token);
@@ -120,7 +110,7 @@ public class ConfirmTokenService {
      */
     public ConfirmToken consume(String tokenValue, String changeId, String planHash) {
         // 1. 令牌必须存在
-        ConfirmToken token = dbFile == null ? memory.get(tokenValue) : select(tokenValue);
+        ConfirmToken token = db == null ? memory.get(tokenValue) : select(tokenValue);
         if (token == null) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌不存在");
         }
@@ -142,7 +132,7 @@ public class ConfirmTokenService {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "计划已变更，请重新确认");
         }
         // 6. 原子标记为已用：并发消费只有一次能成功（一次性）
-        if (dbFile == null) {
+        if (db == null) {
             memory.put(tokenValue, token.markUsed());
         } else if (!markUsed(tokenValue)) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌已被使用");
@@ -153,17 +143,15 @@ public class ConfirmTokenService {
     /** 清理过期令牌（可由定时任务调用）。 */
     public int purgeExpired() {
         Instant now = clock.instant();
-        if (dbFile == null) {
+        if (db == null) {
             int before = memory.size();
             memory.entrySet().removeIf(e -> e.getValue().expired(now));
             return before - memory.size();
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM confirm_tokens WHERE expires_at < ?")) {
-            st.setLong(1, now.toEpochMilli());
-            return st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            return db.inTx(em -> GovernanceDb.update(em,
+                    "DELETE FROM confirm_tokens WHERE expires_at < ?", now.toEpochMilli()));
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌清理失败：" + e.getMessage(), e);
         }
     }
@@ -174,66 +162,62 @@ public class ConfirmTokenService {
     private final java.util.Map<String, ConfirmToken> memory = new java.util.concurrent.ConcurrentHashMap<>();
 
     private void insert(ConfirmToken token) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO confirm_tokens (token, user_id, change_id, plan_hash, expires_at, used)
-                     VALUES (?,?,?,?,?,?)
-                     """)) {
-            st.setString(1, token.token());
-            st.setString(2, token.userId());
-            st.setString(3, token.changeId());
-            st.setString(4, token.planHash());
-            st.setLong(5, token.expiresAt().toEpochMilli());
-            st.setInt(6, token.used() ? 1 : 0);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        String sql = """
+                INSERT INTO confirm_tokens (token, user_id, change_id, plan_hash, expires_at, used)
+                VALUES (?,?,?,?,?,?)
+                """;
+        try {
+            db.run(em -> GovernanceDb.update(em, sql,
+                    token.token(),
+                    token.userId(),
+                    token.changeId(),
+                    token.planHash(),
+                    token.expiresAt().toEpochMilli(),
+                    token.used() ? 1 : 0));
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌签发失败：" + e.getMessage(), e);
         }
     }
 
     private ConfirmToken select(String tokenValue) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     SELECT token, user_id, change_id, plan_hash, expires_at, used
-                     FROM confirm_tokens WHERE token = ?
-                     """)) {
-            st.setString(1, tokenValue);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return null;
-                }
-                return new ConfirmToken(rs.getString("token"), rs.getString("user_id"),
-                        rs.getString("change_id"), rs.getString("plan_hash"),
-                        Instant.ofEpochMilli(rs.getLong("expires_at")), rs.getInt("used") == 1);
-            }
-        } catch (SQLException e) {
+        String sql = """
+                SELECT token, user_id, change_id, plan_hash, expires_at, used
+                FROM confirm_tokens WHERE token = ?
+                """;
+        try {
+            return db.read(em -> GovernanceDb.row(em, sql, tokenValue)
+                    .map(row -> new ConfirmToken(
+                            (String) row[0],
+                            (String) row[1],
+                            (String) row[2],
+                            (String) row[3],
+                            Instant.ofEpochMilli(((Number) row[4]).longValue()),
+                            ((Number) row[5]).intValue() == 1))
+                    .orElse(null));
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌查询失败：" + e.getMessage(), e);
         }
     }
 
     /** 原子消费：只有 {@code used=0} 那一行会被更新。 */
     private boolean markUsed(String tokenValue) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "UPDATE confirm_tokens SET used = 1 WHERE token = ? AND used = 0")) {
-            st.setString(1, tokenValue);
-            return st.executeUpdate() == 1;
-        } catch (SQLException e) {
+        try {
+            return db.inTx(em -> GovernanceDb.update(em,
+                    "UPDATE confirm_tokens SET used = 1 WHERE token = ? AND used = 0", tokenValue) == 1);
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌消费失败：" + e.getMessage(), e);
         }
     }
 
     private void delete(String tokenValue) {
-        if (dbFile == null) {
+        if (db == null) {
             memory.remove(tokenValue);
             return;
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM confirm_tokens WHERE token = ?")) {
-            st.setString(1, tokenValue);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> GovernanceDb.update(em,
+                    "DELETE FROM confirm_tokens WHERE token = ?", tokenValue));
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "确认令牌清理失败：" + e.getMessage(), e);
         }
     }

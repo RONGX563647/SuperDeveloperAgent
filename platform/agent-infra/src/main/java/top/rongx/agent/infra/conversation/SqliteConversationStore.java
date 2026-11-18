@@ -3,13 +3,9 @@ package top.rongx.agent.infra.conversation;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.conversation.Conversation;
@@ -24,14 +20,14 @@ import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
-import top.rongx.agent.infra.sqlite.SqliteConnections;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
- * 工作区会话 / 运行 / 任务的 SQLite 存储。
+ * 工作区会话 / 运行 / 任务的 JPA 实现。
  *
- * <p>三张表放在 {@code _platform/conversations.db}：与会话正文（AgentScope 加密状态）分开，
+ * <p>表结构由 {@code *Entity} 生成；连接、事务与 SQLite/PostgreSQL 方言由 Hibernate 负责。
  * 列表与状态查询不触碰加密内容，也不需要解密。
  *
  * <p>owner 过滤在 SQL 层完成：模型传入的 conversationId 不可信，越权必须在存储层挡住。
@@ -57,171 +53,62 @@ public class SqliteConversationStore
             created_at, updated_at
             """;
 
-    private static final String CONVERSATION_SCHEMA = """
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                owner_user_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                role TEXT NOT NULL,
-                env TEXT NOT NULL,
-                worktree TEXT,
-                status TEXT NOT NULL,
-                summary TEXT NOT NULL DEFAULT '',
-                pinned INTEGER NOT NULL DEFAULT 0,
-                archived INTEGER NOT NULL DEFAULT 0,
-                parent_conversation_id TEXT,
-                last_activity_at INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                model_connection_id TEXT,
-                model_name TEXT
-            )
-            """;
+    private final PlatformDb db;
 
-    private static final String CONVERSATION_INDEX = """
-            CREATE INDEX IF NOT EXISTS idx_conversations_project_owner
-            ON conversations(project_id, owner_user_id, last_activity_at DESC)
-            """;
+    @Autowired
+    public SqliteConversationStore(PlatformDb db) {
+        this.db = db;
+    }
 
-    private static final String RUN_SCHEMA = """
-            CREATE TABLE IF NOT EXISTS conversation_runs (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                conversation_id TEXT NOT NULL,
-                owner_user_id TEXT NOT NULL,
-                goal TEXT NOT NULL,
-                goal_key TEXT NOT NULL,
-                status TEXT NOT NULL,
-                result TEXT NOT NULL DEFAULT '',
-                error TEXT NOT NULL DEFAULT '',
-                created_at INTEGER NOT NULL,
-                started_at INTEGER NOT NULL DEFAULT 0,
-                ended_at INTEGER NOT NULL DEFAULT 0
-            )
-            """;
-
-    private static final String RUN_INDEX_ACTIVE = """
-            CREATE INDEX IF NOT EXISTS idx_runs_active
-            ON conversation_runs(project_id, goal_key, status)
-            """;
-
-    private static final String RUN_INDEX_CONVERSATION = """
-            CREATE INDEX IF NOT EXISTS idx_runs_conversation
-            ON conversation_runs(conversation_id, created_at DESC)
-            """;
-
-    private static final String TASK_SCHEMA = """
-            CREATE TABLE IF NOT EXISTS workspace_tasks (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                conversation_id TEXT,
-                goal TEXT NOT NULL,
-                expected_output TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL,
-                priority INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            )
-            """;
-
-    private static final String TASK_INDEX = """
-            CREATE INDEX IF NOT EXISTS idx_tasks_project
-            ON workspace_tasks(project_id, status, priority)
-            """;
-
-    /** 会话时间线：payload 是前端 timeline JSON（{messages, tools}），服务端不解析。 */
-    private static final String TRANSCRIPT_SCHEMA = """
-            CREATE TABLE IF NOT EXISTS conversation_messages (
-                conversation_id TEXT PRIMARY KEY,
-                payload TEXT NOT NULL,
-                updated_at INTEGER NOT NULL
-            )
-            """;
-
-    private final Path dbFile;
-
+    /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public SqliteConversationStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("conversations.db");
+        this(platformDb(workspaceRoot));
+    }
+
+    private static PlatformDb platformDb(String workspaceRoot) {
+        Path dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db");
         try {
             Files.createDirectories(dbFile.getParent());
         } catch (IOException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话数据库目录创建失败：" + e.getMessage(), e);
         }
-        initSchema();
-    }
-
-    private void initSchema() {
-        try (Connection conn = open()) {
-            for (String ddl : List.of(CONVERSATION_SCHEMA, CONVERSATION_INDEX,
-                    RUN_SCHEMA, RUN_INDEX_ACTIVE, RUN_INDEX_CONVERSATION,
-                    TASK_SCHEMA, TASK_INDEX, TRANSCRIPT_SCHEMA)) {
-                try (PreparedStatement st = conn.prepareStatement(ddl)) {
-                    st.executeUpdate();
-                }
-            }
-            // 旧库升级：model_connection_id / model_name 是后加的列，幂等补齐
-            ensureColumn(conn, "conversations", "model_connection_id", "TEXT");
-            ensureColumn(conn, "conversations", "model_name", "TEXT");
-        } catch (SQLException e) {
-            throw new RunException(ErrorCode.RUN_INVALID_STATE, "conversations 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private static void ensureColumn(Connection conn, String table, String column, String type)
-            throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement("PRAGMA table_info(" + table + ")");
-             ResultSet rs = st.executeQuery()) {
-            while (rs.next()) {
-                if (column.equalsIgnoreCase(rs.getString("name"))) {
-                    return;
-                }
-            }
-        }
-        try (PreparedStatement st = conn.prepareStatement(
-                "ALTER TABLE " + table + " ADD COLUMN " + column + " " + type)) {
-            st.executeUpdate();
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return SqliteConnections.get(dbFile);
+        return PlatformDb.sqlite(dbFile);
     }
 
     // ------------------------------------------------------------------ 会话
 
     @Override
     public Conversation save(Conversation conversation) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO conversations
-                         (id, project_id, owner_user_id, title, kind, role, env, worktree, status,
-                          summary, pinned, archived, parent_conversation_id,
-                          last_activity_at, created_at, model_connection_id, model_name)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                     """)) {
-            st.setString(1, conversation.id());
-            st.setString(2, conversation.projectId());
-            st.setString(3, conversation.ownerUserId());
-            st.setString(4, conversation.title());
-            st.setString(5, conversation.kind().name());
-            st.setString(6, conversation.role());
-            st.setString(7, conversation.env());
-            st.setString(8, conversation.worktree());
-            st.setString(9, conversation.status().name());
-            st.setString(10, conversation.summary());
-            st.setInt(11, conversation.pinned() ? 1 : 0);
-            st.setInt(12, conversation.archived() ? 1 : 0);
-            st.setString(13, conversation.parentConversationId());
-            st.setLong(14, conversation.lastActivityAt());
-            st.setLong(15, conversation.createdAt());
-            st.setString(16, conversation.modelConnectionId());
-            st.setString(17, conversation.modelName());
-            st.executeUpdate();
+        String sql = """
+                INSERT INTO conversations
+                    (id, project_id, owner_user_id, title, kind, role, env, worktree, status,
+                     summary, pinned, archived, parent_conversation_id,
+                     last_activity_at, created_at, model_connection_id, model_name)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """;
+        try {
+            db.run(em -> PlatformDb.update(em, sql,
+                    conversation.id(),
+                    conversation.projectId(),
+                    conversation.ownerUserId(),
+                    conversation.title(),
+                    conversation.kind().name(),
+                    conversation.role(),
+                    conversation.env(),
+                    conversation.worktree(),
+                    conversation.status().name(),
+                    conversation.summary(),
+                    conversation.pinned() ? 1 : 0,
+                    conversation.archived() ? 1 : 0,
+                    conversation.parentConversationId(),
+                    conversation.lastActivityAt(),
+                    conversation.createdAt(),
+                    conversation.modelConnectionId(),
+                    conversation.modelName()));
             return conversation;
-        } catch (SQLException e) {
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话保存失败：" + e.getMessage(), e);
         }
     }
@@ -231,9 +118,11 @@ public class SqliteConversationStore
         if (id == null || id.isBlank()) {
             return Optional.empty();
         }
-        try (Connection conn = open()) {
-            return find(conn, id);
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + CONVERSATION_COLUMNS + " FROM conversations WHERE id = ?", id)
+                    .map(SqliteConversationStore::mapConversation));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话查询失败：" + e.getMessage(), e);
         }
     }
@@ -253,18 +142,10 @@ public class SqliteConversationStore
                 + "WHERE project_id = ? AND owner_user_id = ?"
                 + (includeArchived ? "" : " AND archived = 0")
                 + " ORDER BY pinned DESC, last_activity_at DESC";
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, projectId);
-            st.setString(2, ownerUserId);
-            try (ResultSet rs = st.executeQuery()) {
-                List<Conversation> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapConversation(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em, sql, projectId, ownerUserId).stream()
+                    .map(SqliteConversationStore::mapConversation).toList());
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话列表查询失败：" + e.getMessage(), e);
         }
     }
@@ -274,15 +155,10 @@ public class SqliteConversationStore
         String sql = "SELECT " + CONVERSATION_COLUMNS + " FROM conversations "
                 + "WHERE project_id = ? AND owner_user_id = ? AND kind = ? "
                 + "ORDER BY created_at LIMIT 1";
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, projectId);
-            st.setString(2, ownerUserId);
-            st.setString(3, ConversationKind.SUPERVISOR.name());
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapConversation(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em, sql, projectId, ownerUserId,
+                    ConversationKind.SUPERVISOR.name()).map(SqliteConversationStore::mapConversation));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "调度会话查询失败：" + e.getMessage(), e);
         }
     }
@@ -292,78 +168,58 @@ public class SqliteConversationStore
         if (id == null || id.isBlank() || patch == null) {
             return Optional.empty();
         }
-        try (Connection conn = open()) {
-            Optional<Conversation> existing = find(conn, id);
-            if (existing.isEmpty() || !existing.get().ownerUserId().equals(ownerUserId)) {
-                return Optional.empty();
-            }
-            Conversation merged = merge(existing.get(), patch);
-            try (PreparedStatement st = conn.prepareStatement("""
-                    UPDATE conversations SET
-                        title = ?, env = ?, worktree = ?, status = ?, summary = ?,
-                        pinned = ?, archived = ?, last_activity_at = ?,
-                        model_connection_id = ?, model_name = ?
-                    WHERE id = ? AND owner_user_id = ?
-                    """)) {
-                st.setString(1, merged.title());
-                st.setString(2, merged.env());
-                st.setString(3, merged.worktree());
-                st.setString(4, merged.status().name());
-                st.setString(5, merged.summary());
-                st.setInt(6, merged.pinned() ? 1 : 0);
-                st.setInt(7, merged.archived() ? 1 : 0);
-                st.setLong(8, merged.lastActivityAt());
-                st.setString(9, merged.modelConnectionId());
-                st.setString(10, merged.modelName());
-                st.setString(11, id);
-                st.setString(12, ownerUserId);
-                st.executeUpdate();
-            }
-            return Optional.of(merged);
-        } catch (SQLException e) {
+        String sql = """
+                UPDATE conversations SET
+                    title = ?, env = ?, worktree = ?, status = ?, summary = ?,
+                    pinned = ?, archived = ?, last_activity_at = ?,
+                    model_connection_id = ?, model_name = ?
+                WHERE id = ? AND owner_user_id = ?
+                """;
+        try {
+            return db.inTx(em -> {
+                Optional<Conversation> existing = PlatformDb.row(em,
+                        "SELECT " + CONVERSATION_COLUMNS + " FROM conversations WHERE id = ?", id)
+                        .map(SqliteConversationStore::mapConversation);
+                if (existing.isEmpty() || !existing.get().ownerUserId().equals(ownerUserId)) {
+                    return Optional.<Conversation>empty();
+                }
+                Conversation merged = merge(existing.get(), patch);
+                PlatformDb.update(em, sql,
+                        merged.title(),
+                        merged.env(),
+                        merged.worktree(),
+                        merged.status().name(),
+                        merged.summary(),
+                        merged.pinned() ? 1 : 0,
+                        merged.archived() ? 1 : 0,
+                        merged.lastActivityAt(),
+                        merged.modelConnectionId(),
+                        merged.modelName(),
+                        id,
+                        ownerUserId);
+                return Optional.of(merged);
+            });
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话更新失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public boolean delete(String id, String ownerUserId) {
-        try (Connection conn = open()) {
-            conn.setAutoCommit(false);
-            try {
-                int removed;
-                try (PreparedStatement st = conn.prepareStatement(
-                        "DELETE FROM conversations WHERE id = ? AND owner_user_id = ?")) {
-                    st.setString(1, id);
-                    st.setString(2, ownerUserId);
-                    removed = st.executeUpdate();
-                }
+        try {
+            return db.inTx(em -> {
+                int removed = PlatformDb.update(em,
+                        "DELETE FROM conversations WHERE id = ? AND owner_user_id = ?", id, ownerUserId);
                 if (removed == 0) {
-                    conn.rollback();
                     return false;
                 }
                 // 会话删了，历史运行与任务不能留孤儿行：跟着一起物理删除
-                try (PreparedStatement st = conn.prepareStatement(
-                        "DELETE FROM conversation_runs WHERE conversation_id = ?")) {
-                    st.setString(1, id);
-                    st.executeUpdate();
-                }
-                try (PreparedStatement st = conn.prepareStatement(
-                        "DELETE FROM workspace_tasks WHERE conversation_id = ?")) {
-                    st.setString(1, id);
-                    st.executeUpdate();
-                }
-                try (PreparedStatement st = conn.prepareStatement(
-                        "DELETE FROM conversation_messages WHERE conversation_id = ?")) {
-                    st.setString(1, id);
-                    st.executeUpdate();
-                }
-                conn.commit();
+                PlatformDb.update(em, "DELETE FROM conversation_runs WHERE conversation_id = ?", id);
+                PlatformDb.update(em, "DELETE FROM workspace_tasks WHERE conversation_id = ?", id);
+                PlatformDb.update(em, "DELETE FROM conversation_messages WHERE conversation_id = ?", id);
                 return true;
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            }
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话删除失败：" + e.getMessage(), e);
         }
     }
@@ -393,35 +249,25 @@ public class SqliteConversationStore
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private Optional<Conversation> find(Connection conn, String id) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT " + CONVERSATION_COLUMNS + " FROM conversations WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapConversation(rs)) : Optional.empty();
-            }
-        }
-    }
-
-    private Conversation mapConversation(ResultSet rs) throws SQLException {
+    private static Conversation mapConversation(Object[] row) {
         return new Conversation(
-                rs.getString("id"),
-                rs.getString("project_id"),
-                rs.getString("owner_user_id"),
-                rs.getString("title"),
-                ConversationKind.valueOf(rs.getString("kind")),
-                rs.getString("role"),
-                rs.getString("env"),
-                rs.getString("worktree"),
-                ConversationStatus.valueOf(rs.getString("status")),
-                rs.getString("summary"),
-                rs.getInt("pinned") == 1,
-                rs.getInt("archived") == 1,
-                rs.getString("parent_conversation_id"),
-                rs.getLong("last_activity_at"),
-                rs.getLong("created_at"),
-                rs.getString("model_connection_id"),
-                rs.getString("model_name"));
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
+                ConversationKind.valueOf((String) row[4]),
+                (String) row[5],
+                (String) row[6],
+                (String) row[7],
+                ConversationStatus.valueOf((String) row[8]),
+                (String) row[9],
+                ((Number) row[10]).intValue() == 1,
+                ((Number) row[11]).intValue() == 1,
+                (String) row[12],
+                ((Number) row[13]).longValue(),
+                ((Number) row[14]).longValue(),
+                (String) row[15],
+                (String) row[16]);
     }
 
     // ------------------------------------------------------------------ 会话时间线
@@ -431,32 +277,27 @@ public class SqliteConversationStore
         if (conversationId == null || conversationId.isBlank()) {
             return Optional.empty();
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT payload FROM conversation_messages WHERE conversation_id = ?")) {
-            st.setString(1, conversationId);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getString("payload")) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.<String>first(em,
+                    "SELECT payload FROM conversation_messages WHERE conversation_id = ?",
+                    conversationId));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话历史查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public void saveTranscript(String conversationId, String payload) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO conversation_messages (conversation_id, payload, updated_at)
-                     VALUES (?, ?, ?)
-                     ON CONFLICT(conversation_id) DO UPDATE SET
-                         payload = excluded.payload, updated_at = excluded.updated_at
-                     """)) {
-            st.setString(1, conversationId);
-            st.setString(2, payload);
-            st.setLong(3, System.currentTimeMillis());
-            st.executeUpdate();
-        } catch (SQLException e) {
+        String sql = """
+                INSERT INTO conversation_messages (conversation_id, payload, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    payload = excluded.payload, updated_at = excluded.updated_at
+                """;
+        try {
+            db.run(em -> PlatformDb.update(em, sql,
+                    conversationId, payload, System.currentTimeMillis()));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话历史保存失败：" + e.getMessage(), e);
         }
     }
@@ -465,49 +306,49 @@ public class SqliteConversationStore
 
     @Override
     public ConversationRun saveRun(ConversationRun run) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO conversation_runs
-                         (id, project_id, conversation_id, owner_user_id, goal, goal_key,
-                          status, result, error, created_at, started_at, ended_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                     """)) {
-            st.setString(1, run.id());
-            st.setString(2, run.projectId());
-            st.setString(3, run.conversationId());
-            st.setString(4, run.ownerUserId());
-            st.setString(5, run.goal());
-            st.setString(6, run.goalKey());
-            st.setString(7, run.status().name());
-            st.setString(8, run.result());
-            st.setString(9, run.error());
-            st.setLong(10, run.createdAt());
-            st.setLong(11, run.startedAt());
-            st.setLong(12, run.endedAt());
-            st.executeUpdate();
+        String sql = """
+                INSERT INTO conversation_runs
+                    (id, project_id, conversation_id, owner_user_id, goal, goal_key,
+                     status, result, error, created_at, started_at, ended_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """;
+        try {
+            db.run(em -> PlatformDb.update(em, sql,
+                    run.id(),
+                    run.projectId(),
+                    run.conversationId(),
+                    run.ownerUserId(),
+                    run.goal(),
+                    run.goalKey(),
+                    run.status().name(),
+                    run.result(),
+                    run.error(),
+                    run.createdAt(),
+                    run.startedAt(),
+                    run.endedAt()));
             return run;
-        } catch (SQLException e) {
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行保存失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public ConversationRun updateRun(ConversationRun run) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     UPDATE conversation_runs SET
-                         status = ?, result = ?, error = ?, started_at = ?, ended_at = ?
-                     WHERE id = ?
-                     """)) {
-            st.setString(1, run.status().name());
-            st.setString(2, run.result());
-            st.setString(3, run.error());
-            st.setLong(4, run.startedAt());
-            st.setLong(5, run.endedAt());
-            st.setString(6, run.id());
-            st.executeUpdate();
+        String sql = """
+                UPDATE conversation_runs SET
+                    status = ?, result = ?, error = ?, started_at = ?, ended_at = ?
+                WHERE id = ?
+                """;
+        try {
+            db.run(em -> PlatformDb.update(em, sql,
+                    run.status().name(),
+                    run.result(),
+                    run.error(),
+                    run.startedAt(),
+                    run.endedAt(),
+                    run.id()));
             return run;
-        } catch (SQLException e) {
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行更新失败：" + e.getMessage(), e);
         }
     }
@@ -517,14 +358,11 @@ public class SqliteConversationStore
         if (id == null || id.isBlank()) {
             return Optional.empty();
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + RUN_COLUMNS + " FROM conversation_runs WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapRun(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + RUN_COLUMNS + " FROM conversation_runs WHERE id = ?", id)
+                    .map(SqliteConversationStore::mapRun));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行查询失败：" + e.getMessage(), e);
         }
     }
@@ -534,15 +372,11 @@ public class SqliteConversationStore
         String sql = "SELECT " + RUN_COLUMNS + " FROM conversation_runs "
                 + "WHERE conversation_id = ? AND status IN (?, ?) "
                 + "ORDER BY created_at DESC LIMIT 1";
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, conversationId);
-            st.setString(2, RunStatus.QUEUED.name());
-            st.setString(3, RunStatus.RUNNING.name());
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapRun(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em, sql, conversationId,
+                    RunStatus.QUEUED.name(), RunStatus.RUNNING.name())
+                    .map(SqliteConversationStore::mapRun));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "活动运行查询失败：" + e.getMessage(), e);
         }
     }
@@ -552,16 +386,11 @@ public class SqliteConversationStore
         String sql = "SELECT " + RUN_COLUMNS + " FROM conversation_runs "
                 + "WHERE project_id = ? AND goal_key = ? AND status IN (?, ?) "
                 + "ORDER BY created_at DESC LIMIT 1";
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, projectId);
-            st.setString(2, goalKey);
-            st.setString(3, RunStatus.QUEUED.name());
-            st.setString(4, RunStatus.RUNNING.name());
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapRun(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em, sql, projectId, goalKey,
+                    RunStatus.QUEUED.name(), RunStatus.RUNNING.name())
+                    .map(SqliteConversationStore::mapRun));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "重复目标查询失败：" + e.getMessage(), e);
         }
     }
@@ -581,84 +410,76 @@ public class SqliteConversationStore
     }
 
     private List<ConversationRun> queryRuns(String sql, String key, int limit) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, key);
-            st.setInt(2, limit);
-            try (ResultSet rs = st.executeQuery()) {
-                List<ConversationRun> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapRun(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em, sql, key, limit).stream()
+                    .map(SqliteConversationStore::mapRun).toList());
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行列表查询失败：" + e.getMessage(), e);
         }
     }
 
-    private ConversationRun mapRun(ResultSet rs) throws SQLException {
+    private static ConversationRun mapRun(Object[] row) {
         return new ConversationRun(
-                rs.getString("id"),
-                rs.getString("project_id"),
-                rs.getString("conversation_id"),
-                rs.getString("owner_user_id"),
-                rs.getString("goal"),
-                rs.getString("goal_key"),
-                RunStatus.valueOf(rs.getString("status")),
-                rs.getString("result"),
-                rs.getString("error"),
-                rs.getLong("created_at"),
-                rs.getLong("started_at"),
-                rs.getLong("ended_at"));
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
+                (String) row[4],
+                (String) row[5],
+                RunStatus.valueOf((String) row[6]),
+                (String) row[7],
+                (String) row[8],
+                ((Number) row[9]).longValue(),
+                ((Number) row[10]).longValue(),
+                ((Number) row[11]).longValue());
     }
 
     // ------------------------------------------------------------------ 任务
 
     @Override
     public WorkspaceTask saveTask(WorkspaceTask task) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO workspace_tasks
-                         (id, project_id, conversation_id, goal, expected_output, status, priority,
-                          created_at, updated_at)
-                     VALUES (?,?,?,?,?,?,?,?,?)
-                     """)) {
-            st.setString(1, task.id());
-            st.setString(2, task.projectId());
-            st.setString(3, task.conversationId());
-            st.setString(4, task.goal());
-            st.setString(5, task.expectedOutput());
-            st.setString(6, task.status().name());
-            st.setInt(7, task.priority());
-            st.setLong(8, task.createdAt());
-            st.setLong(9, task.updatedAt());
-            st.executeUpdate();
+        String sql = """
+                INSERT INTO workspace_tasks
+                    (id, project_id, conversation_id, goal, expected_output, status, priority,
+                     created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """;
+        try {
+            db.run(em -> PlatformDb.update(em, sql,
+                    task.id(),
+                    task.projectId(),
+                    task.conversationId(),
+                    task.goal(),
+                    task.expectedOutput(),
+                    task.status().name(),
+                    task.priority(),
+                    task.createdAt(),
+                    task.updatedAt()));
             return task;
-        } catch (SQLException e) {
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务保存失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public WorkspaceTask updateTask(WorkspaceTask task) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     UPDATE workspace_tasks SET
-                         conversation_id = ?, goal = ?, expected_output = ?, status = ?,
-                         priority = ?, updated_at = ?
-                     WHERE id = ?
-                     """)) {
-            st.setString(1, task.conversationId());
-            st.setString(2, task.goal());
-            st.setString(3, task.expectedOutput());
-            st.setString(4, task.status().name());
-            st.setInt(5, task.priority());
-            st.setLong(6, task.updatedAt());
-            st.setString(7, task.id());
-            st.executeUpdate();
+        String sql = """
+                UPDATE workspace_tasks SET
+                    conversation_id = ?, goal = ?, expected_output = ?, status = ?,
+                    priority = ?, updated_at = ?
+                WHERE id = ?
+                """;
+        try {
+            db.run(em -> PlatformDb.update(em, sql,
+                    task.conversationId(),
+                    task.goal(),
+                    task.expectedOutput(),
+                    task.status().name(),
+                    task.priority(),
+                    task.updatedAt(),
+                    task.id()));
             return task;
-        } catch (SQLException e) {
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务更新失败：" + e.getMessage(), e);
         }
     }
@@ -668,14 +489,11 @@ public class SqliteConversationStore
         if (id == null || id.isBlank()) {
             return Optional.empty();
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + TASK_COLUMNS + " FROM workspace_tasks WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(mapTask(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + TASK_COLUMNS + " FROM workspace_tasks WHERE id = ?", id)
+                    .map(SqliteConversationStore::mapTask));
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务查询失败：" + e.getMessage(), e);
         }
     }
@@ -697,31 +515,24 @@ public class SqliteConversationStore
     }
 
     private List<WorkspaceTask> queryTasks(String sql, String key) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(sql)) {
-            st.setString(1, key);
-            try (ResultSet rs = st.executeQuery()) {
-                List<WorkspaceTask> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(mapTask(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em, sql, key).stream()
+                    .map(SqliteConversationStore::mapTask).toList());
+        } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务列表查询失败：" + e.getMessage(), e);
         }
     }
 
-    private WorkspaceTask mapTask(ResultSet rs) throws SQLException {
+    private static WorkspaceTask mapTask(Object[] row) {
         return new WorkspaceTask(
-                rs.getString("id"),
-                rs.getString("project_id"),
-                rs.getString("conversation_id"),
-                rs.getString("goal"),
-                rs.getString("expected_output"),
-                TaskStatus.valueOf(rs.getString("status")),
-                rs.getInt("priority"),
-                rs.getLong("created_at"),
-                rs.getLong("updated_at"));
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
+                (String) row[4],
+                TaskStatus.valueOf((String) row[5]),
+                ((Number) row[6]).intValue(),
+                ((Number) row[7]).longValue(),
+                ((Number) row[8]).longValue());
     }
 }

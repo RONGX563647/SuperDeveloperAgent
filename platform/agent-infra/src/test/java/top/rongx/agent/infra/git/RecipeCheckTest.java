@@ -30,7 +30,7 @@ class RecipeCheckTest {
     private Map<String, Object> runCheck() {
         ProjectIntakeService svc = new ProjectIntakeService(
                 new GitWorktreeManager(repo.getParent()),
-                new IntakeProjectStore(repo.getParent().resolve("_platform/projects.db")),
+                new IntakeProjectStore(repo.getParent().resolve("_platform/platform.db")),
                 repo.getParent().toString());
         return svc.recipeCheck(repo);
     }

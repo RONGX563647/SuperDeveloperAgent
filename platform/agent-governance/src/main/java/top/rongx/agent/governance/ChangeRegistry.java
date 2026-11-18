@@ -1,24 +1,22 @@
 package top.rongx.agent.governance;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import top.rongx.agent.domain.change.ChangePlan;
 import top.rongx.agent.domain.change.PlanHasher;
 import top.rongx.agent.domain.port.ChangeStore;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.PromotionException;
 
 /**
- * 变更单存储（SQLite 持久化）。
+ * 变更单存储（JPA 持久化）。
  *
  * <p>职责边界：<b>只负责登记与查询</b>。签发确认令牌必须由 {@link ConfirmTokenService}
  * 在"用户已登录的请求链路"中完成，工具无权调用。
@@ -28,70 +26,37 @@ import top.rongx.agent.domain.error.PromotionException;
  * "基于实际配方"的哈希。
  *
  * <p>持久化原因：变更单是"人工确认—执行"的凭证，进程重启后仍必须能查到并核验，
- * 否则确认卡片会凭空消失。落盘位置与其它平台数据一致：{@code <workspace>/_platform/governance.db}。
+ * 否则确认卡片会凭空消失。落盘位置与其它平台数据一致：{@code <workspace>/_platform/platform.db}。
  */
 @Service
 public class ChangeRegistry implements ChangeStore {
 
-    private static final String SCHEMA = """
-            CREATE TABLE IF NOT EXISTS change_plans (
-                change_id          TEXT PRIMARY KEY,
-                project_id         TEXT NOT NULL,
-                env                TEXT NOT NULL,
-                kind               TEXT NOT NULL,
-                plan_hash          TEXT NOT NULL,
-                summary            TEXT,
-                image_digest       TEXT,
-                frontend_dist_hash TEXT,
-                high_risk          INTEGER NOT NULL DEFAULT 0,
-                created_at         INTEGER NOT NULL,
-                status             TEXT NOT NULL DEFAULT 'PENDING'
-            )
+    private static final String COLUMNS = """
+            change_id, project_id, env, kind, plan_hash, summary,
+            image_digest, frontend_dist_hash, high_risk, created_at, status
             """;
 
-    private final Path dbFile;
+    private final GovernanceDb db;
+
+    @Autowired
+    public ChangeRegistry(GovernanceDb db) {
+        this.db = db;
+    }
 
     public ChangeRegistry(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("governance.db");
-        initSchema();
+        this(GovernanceDb.sqlite(platformDbFile(workspaceRoot)));
     }
 
-    private void initSchema() {
+    /** 独立运行时要保证库文件所在目录存在；schema 仍由 Hibernate 生成。 */
+    private static Path platformDbFile(String workspaceRoot) {
+        Path dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db");
         try {
             Files.createDirectories(dbFile.getParent());
-            try (Connection conn = open()) {
-                try (PreparedStatement st = conn.prepareStatement(SCHEMA)) {
-                    st.executeUpdate();
-                }
-                // 老库补状态列：已有变更单默认视为待确认
-                if (!hasColumn(conn, "change_plans", "status")) {
-                    try (PreparedStatement st = conn.prepareStatement(
-                            "ALTER TABLE change_plans ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")) {
-                        st.executeUpdate();
-                    }
-                }
-            }
-        } catch (SQLException | java.io.IOException e) {
-            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "change_plans 表初始化失败：" + e.getMessage(), e);
+        } catch (IOException e) {
+            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单存储目录创建失败：" + e.getMessage(), e);
         }
-    }
-
-    private static boolean hasColumn(Connection conn, String table, String column)
-            throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement("PRAGMA table_info(" + table + ")");
-             ResultSet rs = st.executeQuery()) {
-            while (rs.next()) {
-                if (column.equalsIgnoreCase(rs.getString("name"))) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private Connection open() throws SQLException {
-        return GovernanceDb.open(dbFile);
+        return dbFile;
     }
 
     @Override
@@ -110,27 +75,27 @@ public class ChangeRegistry implements ChangeStore {
     }
 
     private ChangePlan save(ChangePlan plan) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT INTO change_plans
-                         (change_id, project_id, env, kind, plan_hash, summary,
-                          image_digest, frontend_dist_hash, high_risk, created_at, status)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                     """)) {
-            st.setString(1, plan.changeId());
-            st.setString(2, plan.projectId());
-            st.setString(3, plan.env());
-            st.setString(4, plan.kind());
-            st.setString(5, plan.planHash());
-            st.setString(6, plan.summary());
-            st.setString(7, plan.imageDigest());
-            st.setString(8, plan.frontendDistHash());
-            st.setInt(9, plan.highRisk() ? 1 : 0);
-            st.setLong(10, plan.createdAt().toEpochMilli());
-            st.setString(11, plan.status().name());
-            st.executeUpdate();
+        String sql = """
+                INSERT INTO change_plans
+                    (change_id, project_id, env, kind, plan_hash, summary,
+                     image_digest, frontend_dist_hash, high_risk, created_at, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """;
+        try {
+            db.run(em -> GovernanceDb.update(em, sql,
+                    plan.changeId(),
+                    plan.projectId(),
+                    plan.env(),
+                    plan.kind(),
+                    plan.planHash(),
+                    plan.summary(),
+                    plan.imageDigest(),
+                    plan.frontendDistHash(),
+                    plan.highRisk() ? 1 : 0,
+                    plan.createdAt().toEpochMilli(),
+                    plan.status().name()));
             return plan;
-        } catch (SQLException e) {
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单登记失败：" + e.getMessage(), e);
         }
     }
@@ -140,31 +105,11 @@ public class ChangeRegistry implements ChangeStore {
         if (changeId == null || changeId.isBlank()) {
             return Optional.empty();
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     SELECT change_id, project_id, env, kind, plan_hash, summary,
-                            image_digest, frontend_dist_hash, high_risk, created_at, status
-                     FROM change_plans WHERE change_id = ?
-                     """)) {
-            st.setString(1, changeId);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(new ChangePlan(
-                        rs.getString("change_id"),
-                        rs.getString("project_id"),
-                        rs.getString("env"),
-                        rs.getString("kind"),
-                        rs.getString("plan_hash"),
-                        rs.getString("summary"),
-                        rs.getString("image_digest"),
-                        rs.getString("frontend_dist_hash"),
-                        rs.getInt("high_risk") == 1,
-                        Instant.ofEpochMilli(rs.getLong("created_at")),
-                        statusOf(rs.getString("status"))));
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> GovernanceDb.row(em,
+                    "SELECT " + COLUMNS + " FROM change_plans WHERE change_id = ?", changeId)
+                    .map(ChangeRegistry::map));
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单查询失败：" + e.getMessage(), e);
         }
     }
@@ -174,13 +119,11 @@ public class ChangeRegistry implements ChangeStore {
         if (changeId == null || changeId.isBlank()) {
             return;
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "UPDATE change_plans SET status = ? WHERE change_id = ?")) {
-            st.setString(1, (status == null ? ChangePlan.Status.PENDING : status).name());
-            st.setString(2, changeId);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> GovernanceDb.update(em,
+                    "UPDATE change_plans SET status = ? WHERE change_id = ?",
+                    (status == null ? ChangePlan.Status.PENDING : status).name(), changeId));
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单状态更新失败：" + e.getMessage(), e);
         }
     }
@@ -196,13 +139,26 @@ public class ChangeRegistry implements ChangeStore {
 
     /** 清理早于 cutoff 的变更单（确认卡片只关心近期数据）。返回删除行数。 */
     public int purgeBefore(Instant cutoff) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM change_plans WHERE created_at < ?")) {
-            st.setLong(1, cutoff.toEpochMilli());
-            return st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            return db.inTx(em -> GovernanceDb.update(em,
+                    "DELETE FROM change_plans WHERE created_at < ?", cutoff.toEpochMilli()));
+        } catch (RuntimeException e) {
             throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "变更单清理失败：" + e.getMessage(), e);
         }
+    }
+
+    private static ChangePlan map(Object[] row) {
+        return new ChangePlan(
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
+                (String) row[4],
+                (String) row[5],
+                (String) row[6],
+                (String) row[7],
+                ((Number) row[8]).intValue() == 1,
+                Instant.ofEpochMilli(((Number) row[9]).longValue()),
+                statusOf((String) row[10]));
     }
 }
