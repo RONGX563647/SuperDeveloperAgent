@@ -51,6 +51,8 @@ class DualStackPipelineTest {
     private static final String NODE_IMAGE = "node:20-alpine";
     private static final int PORT = 18082;
     private static final String CONTAINER = "dual-e2e-web";
+    /** 等待上限必须覆盖单个阶段的 5 分钟预算，否则冷缓存下 npm install 会先被测试判超时。 */
+    private static final int AWAIT_SECONDS = 330;
 
     @TempDir
     static Path workspaces;
@@ -115,7 +117,7 @@ class DualStackPipelineTest {
         // verify 只检查构建：不产镜像（镜像打包在 release 流水线验证），
         // 因此这里断言的是双栈编译与产物，而不是镜像阶段。
         String runId = engine.trigger("RY", "verify", Map.of("gitSha", goodSha));
-        awaitTerminal(engine, runId, 180);
+        awaitTerminal(engine, runId, AWAIT_SECONDS);
 
         assertEquals(StageStatus.SUCCEEDED, engine.status(runId),
                 "双栈流水线失败，stages：" + engine.stages(runId) + "，日志：" + engine.logTail(runId));
@@ -153,7 +155,7 @@ class DualStackPipelineTest {
     @DisplayName("D2 构建历史落盘：新建引擎实例仍可查询旧 run")
     void historySurvivesRestart() throws Exception {
         String runId = engine.trigger("RY", "verify", Map.of("gitSha", goodSha));
-        awaitTerminal(engine, runId, 180);
+        awaitTerminal(engine, runId, AWAIT_SECONDS);
         assertEquals(StageStatus.SUCCEEDED, engine.status(runId), engine.logTail(runId));
 
         // 模拟重启：新引擎，只从磁盘恢复
@@ -184,8 +186,8 @@ class DualStackPipelineTest {
     void sameProjectSerial() throws Exception {
         String a = engine.trigger("RY", "verify", Map.of("gitSha", goodSha));
         String b = engine.trigger("RY", "verify", Map.of("gitSha", goodSha));
-        awaitTerminal(engine, a, 180);
-        awaitTerminal(engine, b, 180);
+        awaitTerminal(engine, a, AWAIT_SECONDS);
+        awaitTerminal(engine, b, AWAIT_SECONDS);
         assertEquals(StageStatus.SUCCEEDED, engine.status(a), engine.logTail(a));
         assertEquals(StageStatus.SUCCEEDED, engine.status(b), engine.logTail(b));
         assertTrue(((BuiltInPipelineEngine) engine).pendingCount() >= 0);
@@ -198,7 +200,7 @@ class DualStackPipelineTest {
     void cancelStopsRun() throws Exception {
         String runId = engine.trigger("RY", "verify", Map.of("gitSha", goodSha));
         engine.cancel(runId);
-        awaitTerminal(engine, runId, 180);
+        awaitTerminal(engine, runId, AWAIT_SECONDS);
         StageStatus status = engine.status(runId);
         assertTrue(status == StageStatus.CANCELLED || status == StageStatus.SUCCEEDED,
                 "取消后状态应为 CANCELLED（若已跑完允许 SUCCEEDED），实际：" + status);
@@ -247,7 +249,8 @@ class DualStackPipelineTest {
                     timeout: 5m
                   frontend_build:
                     run:
-                      - ["npm", "install", "--no-audit", "--no-fund"]
+                      # --prefer-offline：优先用缓存卷，避免验收用例被公网 npm 抖动拖到阶段超时
+                      - ["npm", "install", "--prefer-offline", "--no-audit", "--no-fund"]
                       - ["npm", "run", "build"]
                     produce: ["dist/index.html"]
                     timeout: 5m

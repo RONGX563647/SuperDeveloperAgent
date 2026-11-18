@@ -91,6 +91,16 @@ agent:
     dispatch:
       max-parallel: ${AGENT_WORKSPACE_DISPATCH_MAX_PARALLEL:4}
       max-duration-seconds: ${AGENT_WORKSPACE_DISPATCH_MAX_DURATION:600}
+    # 运行看门狗：卡死/排队超时的运行自动收敛到 FAILED，避免永远显示「运行中」
+    watchdog:
+      interval-ms: ${AGENT_WORKSPACE_WATCHDOG_INTERVAL_MS:30000}
+      initial-delay-ms: ${AGENT_WORKSPACE_WATCHDOG_INITIAL_DELAY_MS:30000}
+      run-timeout-ms: ${AGENT_WORKSPACE_WATCHDOG_RUN_TIMEOUT_MS:600000}
+      queue-timeout-ms: ${AGENT_WORKSPACE_WATCHDOG_QUEUE_TIMEOUT_MS:600000}
+    # 时间线订阅：SSE 轮询间隔与单条连接的生命周期上限
+    timeline:
+      poll-ms: ${AGENT_WORKSPACE_TIMELINE_POLL_MS:500}
+      stream-timeout-ms: ${AGENT_WORKSPACE_TIMELINE_STREAM_TIMEOUT_MS:600000}
   # 能力市场：设置页「MCP 市场 / Skill 市场」直接读外部目录，不再内置虚构条目。
   # 内网无外网时改为镜像地址，或用 HTTPS_PROXY/HTTP_PROXY 让平台走代理。
   market:

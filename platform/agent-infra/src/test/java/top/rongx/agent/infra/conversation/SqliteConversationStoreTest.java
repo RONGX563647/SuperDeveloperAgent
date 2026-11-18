@@ -16,6 +16,7 @@ import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationStatus;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.TimelineEntry;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 
 /** 会话元数据持久化：owner 隔离、状态更新、运行与任务，重启后仍可读。 */
@@ -73,10 +74,12 @@ class SqliteConversationStoreTest {
                 RunStatus.QUEUED, "", "", now, 0, 0));
         assertEquals("run-1", store.findActiveByConversation("s-1").orElseThrow().id());
         assertEquals("run-1", store.findActiveByGoal("RY", "key").orElseThrow().id());
+        assertEquals(1, store.findActiveRuns(10).size(), "未终态的运行应能被看门狗扫到");
 
         store.updateRun(store.findRun("run-1").orElseThrow()
                 .withStatus(RunStatus.SUCCEEDED, "完成", "", now, now + 1));
         assertTrue(store.findActiveByConversation("s-1").isEmpty());
+        assertTrue(store.findActiveRuns(10).isEmpty(), "终态运行不再出现在看门狗扫描里");
 
         store.saveTask(new WorkspaceTask("task-1", "RY", "s-1", "补测试", "单测通过",
                 TaskStatus.TODO, 2, now, now));
@@ -128,5 +131,35 @@ class SqliteConversationStoreTest {
         store.save(Conversation.normal("s-2", "RY", "alice", "t2", "test", null));
         assertFalse(store.delete("s-2", "bob"));
         assertTrue(store.find("s-2").isPresent());
+    }
+
+    @Test
+    @DisplayName("服务端时间线只追加、按 seq 游标续读，重启后仍在")
+    void timelineAppendAndCursor() {
+        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        long first = store.append("s-1", "user", "user", "帮我修构建", null, null);
+        long second = store.append("s-1", "tool_call", "assistant", null, "read_file", "call-1");
+        long third = store.append("s-1", "tool_result", "tool", "file content", "read_file", "call-1");
+        store.append("s-2", "user", "user", "另一个会话", null, null);
+
+        assertTrue(first < second && second < third, "seq 必须单调递增");
+        List<TimelineEntry> all = store.entries("s-1", 0, 100);
+        assertEquals(List.of("user", "tool_call", "tool_result"),
+                all.stream().map(TimelineEntry::kind).toList());
+        assertEquals("read_file", all.get(2).tool());
+        assertEquals("call-1", all.get(2).toolCallId());
+
+        // 断线续传：只返回游标之后的记录
+        assertEquals(List.of(third), store.entries("s-1", second, 100).stream()
+                .map(TimelineEntry::seq).toList());
+
+        // 新实例模拟重启：历史仍可读，且会话之间互不串
+        SqliteConversationStore reopened = new SqliteConversationStore(root.toString());
+        assertEquals(3, reopened.entries("s-1", 0, 100).size());
+        assertEquals(1, reopened.entries("s-2", 0, 100).size());
+
+        reopened.deleteByConversation("s-1");
+        assertTrue(reopened.entries("s-1", 0, 100).isEmpty(), "删除会话应清空时间线");
+        assertEquals(1, reopened.entries("s-2", 0, 100).size(), "不能误删其他会话");
     }
 }

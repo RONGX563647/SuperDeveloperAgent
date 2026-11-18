@@ -20,4 +20,7 @@ public interface ConversationRunRepository {
     List<ConversationRun> findRunsByProject(String projectId, int limit);
 
     List<ConversationRun> findRunsByConversation(String conversationId, int limit);
+
+    /** 全部未终态的运行（排队 + 运行中），供看门狗扫描卡死任务。 */
+    List<ConversationRun> findActiveRuns(int limit);
 }

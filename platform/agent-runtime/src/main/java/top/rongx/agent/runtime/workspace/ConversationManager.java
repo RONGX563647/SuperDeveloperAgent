@@ -19,12 +19,16 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.ConversationTimelineRepository;
 import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
+import top.rongx.agent.domain.conversation.DispatchNode;
+import top.rongx.agent.domain.conversation.DispatchNodeResult;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.SessionDataCleaner;
 import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.TimelineEntry;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
@@ -58,6 +62,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     private final ConversationRepository conversations;
     private final ConversationRunRepository runs;
     private final WorkspaceTaskRepository tasks;
+    private final ConversationTimelineRepository timelines;
     private final ConversationTranscriptRepository transcripts;
     private final ProjectRepository projects;
     private final WorkspaceRunExecutor executor;
@@ -72,6 +77,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                                ConversationRunRepository runs,
                                WorkspaceTaskRepository tasks,
                                ConversationTranscriptRepository transcripts,
+                               ConversationTimelineRepository timelines,
                                ProjectRepository projects,
                                WorkspaceRunExecutor executor,
                                UserRolePort userRoles,
@@ -84,6 +90,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         this.runs = runs;
         this.tasks = tasks;
         this.transcripts = transcripts;
+        this.timelines = timelines;
         this.projects = projects;
         this.executor = executor;
         this.userRoles = userRoles;
@@ -227,6 +234,20 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                     + MAX_TRANSCRIPT_BYTES + " 字节）");
         }
         transcripts.saveTranscript(conversationId, payload);
+    }
+
+    /**
+     * 服务端时间线增量读取（游标即 seq）。
+     *
+     * <p>{@code afterSeq} 是上一条已读到的 seq；断线/换端后从这里续读，不会重复也不会漏。
+     * 单次最多 500 条，避免一次拉爆。
+     */
+    public List<TimelineEntry> timeline(String conversationId, String ownerUserId, long afterSeq,
+                                        int limit) {
+        conversations.findByOwner(conversationId, ownerUserId)
+                .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId));
+        return timelines.entries(conversationId, Math.max(0, afterSeq),
+                Math.max(1, Math.min(limit, 500)));
     }
 
     public List<ConversationRun> runsOfProject(String projectId, int limit) {
@@ -439,6 +460,47 @@ public class ConversationManager implements WorkspaceSupervisorPort {
             @Override
             public boolean cancel(String runId) {
                 return ConversationManager.this.cancelRun(runId, ownerUserId);
+            }
+
+            @Override
+            public String openTicket(DispatchNode node, String conversationId) {
+                long now = System.currentTimeMillis();
+                try {
+                    WorkspaceTask ticket = tasks.saveTask(new WorkspaceTask("task-" + shortId(),
+                            projectId, conversationId,
+                            "[" + node.id() + "] " + node.message(),
+                            "验收依据：会话 " + conversationId + " 的最终结论（超时 "
+                                    + node.timeoutSeconds() + "s，重试 " + node.retries() + " 次）",
+                            TaskStatus.RUNNING, 0, now, now));
+                    return ticket.id();
+                } catch (RuntimeException e) {
+                    // 票据是旁路：登记失败不能阻断派发
+                    log.warn("登记派发票据失败 node={}：{}", node.id(), e.getMessage());
+                    return null;
+                }
+            }
+
+            @Override
+            public void closeTicket(String ticketId, DispatchNodeResult result) {
+                if (ticketId == null) {
+                    return;
+                }
+                WorkspaceTask task = tasks.findTask(ticketId).orElse(null);
+                if (task == null) {
+                    return;
+                }
+                TaskStatus status = switch (result.status()) {
+                    case "SUCCEEDED" -> TaskStatus.DONE;
+                    case "CANCELLED" -> TaskStatus.CANCELLED;
+                    default -> TaskStatus.BLOCKED;
+                };
+                String evidence = "结果：" + result.status()
+                        + (result.conversationId().isBlank() ? "" : "，会话 " + result.conversationId())
+                        + (result.runId().isBlank() ? "" : "，运行 " + result.runId())
+                        + (result.error().isBlank() ? "" : "，错误 " + oneLine(result.error(), 200));
+                tasks.saveTask(new WorkspaceTask(task.id(), task.projectId(), task.conversationId(),
+                        task.goal(), oneLine(task.expectedOutput() + "；" + evidence, 600),
+                        status, task.priority(), task.createdAt(), System.currentTimeMillis()));
             }
         };
         // 服务端配置兜底：收紧模型给的并行度、总时长与熔断阈值，避免一次派发把工作区配额吃满

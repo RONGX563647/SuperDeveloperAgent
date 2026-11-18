@@ -5950,6 +5950,97 @@
         }
       }
     },
+    "/api/v1/conversations/{conversationId}/timeline" : {
+      "get" : {
+        "tags" : [ "workspace-controller" ],
+        "summary" : "timeline",
+        "operationId" : "timeline",
+        "parameters" : [ {
+          "name" : "conversationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "after_seq",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int64",
+            "default" : 0
+          }
+        }, {
+          "name" : "limit",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 200
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/TimelineEntry"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversationId}/timeline/stream" : {
+      "get" : {
+        "tags" : [ "workspace-controller" ],
+        "summary" : "timeline stream",
+        "operationId" : "timelineStream",
+        "parameters" : [ {
+          "name" : "conversationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "after_seq",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int64",
+            "default" : 0
+          }
+        }, {
+          "name" : "Last-Event-ID",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "text/event-stream" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SseEmitter"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/conversations/{conversationId}/runs" : {
       "get" : {
         "tags" : [ "workspace-controller" ],
@@ -8405,6 +8496,46 @@
           },
           "truncated" : {
             "type" : "boolean"
+          }
+        }
+      },
+      "TimelineEntry" : {
+        "type" : "object",
+        "properties" : {
+          "seq" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "conversationId" : {
+            "type" : "string"
+          },
+          "kind" : {
+            "type" : "string"
+          },
+          "role" : {
+            "type" : "string"
+          },
+          "text" : {
+            "type" : "string"
+          },
+          "tool" : {
+            "type" : "string"
+          },
+          "toolCallId" : {
+            "type" : "string"
+          },
+          "at" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        }
+      },
+      "SseEmitter" : {
+        "type" : "object",
+        "properties" : {
+          "timeout" : {
+            "type" : "integer",
+            "format" : "int64"
           }
         }
       },

@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-18T13:26:52+08:00",
-  "sourceCommit": "fa90b56cefe5dede5a7809abcb8e2532e75316b0",
+  "generatedAt": "2026-11-18T15:33:45+08:00",
+  "sourceCommit": "ee481ead7272d8f731341d5cb45f9923f457b076",
   "docs": [
     {
       "level": "L1",
@@ -106,8 +106,8 @@
       "symbol": "ChatController#chat",
       "source": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
       "module": "agent-gateway",
-      "start": 124,
-      "end": 211
+      "start": 128,
+      "end": 222
     },
     {
       "id": "gateway-deploy-gate/require-if-needed",

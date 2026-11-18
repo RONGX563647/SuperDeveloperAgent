@@ -13,9 +13,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,9 +31,11 @@ import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
 import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
+import top.rongx.agent.domain.conversation.ConversationTimelineRepository;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.TimelineEntry;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
 import top.rongx.agent.domain.port.ProjectRepository;
@@ -63,7 +67,7 @@ class ConversationManagerTest {
         WorkspaceRunExecutor executor = new WorkspaceRunExecutor(provider(() -> chat), store, store,
                 store, new WorkspaceEventBus(),
                 top.rongx.agent.domain.run.RunLedgerRepository.noop(), concurrency);
-        return new ConversationManager(store, store, store, store, projects, executor, userId -> false,
+        return new ConversationManager(store, store, store, store, store, projects, executor, userId -> false,
                 top.rongx.agent.domain.conversation.SessionDataCleaner.noop(),
                 DispatchPlan.DEFAULT_MAX_PARALLEL, DispatchPlan.DEFAULT_MAX_DURATION_SECONDS);
     }
@@ -122,6 +126,27 @@ class ConversationManagerTest {
         assertTrue(payload.contains("检查构建"), "时间线应包含派发的提问：" + payload);
         assertTrue(payload.contains("已完成构建检查"), "时间线应包含运行产出：" + payload);
         assertTrue(payload.contains("\"tools\""), "时间线结构需与前端一致（messages + tools）");
+    }
+
+    @Test
+    @DisplayName("服务端事件时间线按 seq 游标增量读取，且只有 owner 能读")
+    void eventTimelineIsCursorReadable() {
+        ConversationManager manager = manager(new SilentChat(), 1);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        long first = store.append(c.id(), "user", "user", "修一下构建", null, null);
+        long second = store.append(c.id(), "tool_call", "assistant", null, "read_file", "call-1");
+        long third = store.append(c.id(), "tool_result", "tool", "file content", "read_file", "call-1");
+
+        List<TimelineEntry> all = manager.timeline(c.id(), USER, 0, 100);
+        assertEquals(List.of("user", "tool_call", "tool_result"),
+                all.stream().map(TimelineEntry::kind).toList());
+        // 断线续传：游标之后的记录
+        assertEquals(List.of(second, third), manager.timeline(c.id(), USER, first, 100).stream()
+                .map(TimelineEntry::seq).toList());
+        assertEquals(List.of(third), manager.timeline(c.id(), USER, second, 100).stream()
+                .map(TimelineEntry::seq).toList());
+        // 别人的会话读不到
+        assertThrows(PlatformException.class, () -> manager.timeline(c.id(), "bob", 0, 100));
     }
 
     @Test
@@ -314,12 +339,38 @@ class ConversationManagerTest {
 
     /** 三份仓库接口的内存实现（测试专用）。 */
     private static class InMemoryStore implements ConversationRepository,
-            ConversationRunRepository, WorkspaceTaskRepository, ConversationTranscriptRepository {
+            ConversationRunRepository, WorkspaceTaskRepository, ConversationTranscriptRepository,
+            ConversationTimelineRepository {
         private final Map<String, Conversation> conversations = new ConcurrentHashMap<>();
         private final Map<String, ConversationRun> runs = new ConcurrentHashMap<>();
         private final Map<String, WorkspaceTask> tasks = new ConcurrentHashMap<>();
         private final Map<String, String> transcripts = new ConcurrentHashMap<>();
+        private final Map<String, List<TimelineEntry>> timeline = new ConcurrentHashMap<>();
         private final AtomicInteger seq = new AtomicInteger();
+        private final AtomicLong timelineSeq = new AtomicLong();
+
+        @Override
+        public long append(String conversationId, String kind, String role, String text,
+                           String tool, String toolCallId) {
+            long seq = timelineSeq.incrementAndGet();
+            timeline.computeIfAbsent(conversationId, key -> new CopyOnWriteArrayList<>())
+                    .add(new TimelineEntry(seq, conversationId, kind, role, text, tool,
+                            toolCallId, System.currentTimeMillis()));
+            return seq;
+        }
+
+        @Override
+        public List<TimelineEntry> entries(String conversationId, long afterSeq, int limit) {
+            return timeline.getOrDefault(conversationId, List.of()).stream()
+                    .filter(e -> e.seq() > afterSeq)
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public void deleteByConversation(String conversationId) {
+            timeline.remove(conversationId);
+        }
 
         @Override
         public Conversation save(Conversation conversation) {
@@ -443,6 +494,14 @@ class ConversationManagerTest {
             return runs.values().stream()
                     .filter(r -> r.conversationId().equals(conversationId))
                     .sorted(Comparator.comparingLong(ConversationRun::createdAt).reversed())
+                    .limit(limit).toList();
+        }
+
+        @Override
+        public List<ConversationRun> findActiveRuns(int limit) {
+            return runs.values().stream()
+                    .filter(r -> !r.status().terminal())
+                    .sorted(Comparator.comparingLong(ConversationRun::createdAt))
                     .limit(limit).toList();
         }
 

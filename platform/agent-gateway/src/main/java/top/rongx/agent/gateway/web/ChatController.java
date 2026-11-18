@@ -35,6 +35,7 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.web.dto.ChatRequest;
 import top.rongx.agent.governance.ChangeRegistry;
 import top.rongx.agent.runtime.ChatService;
+import top.rongx.agent.runtime.ConversationTimelineRecorder;
 import top.rongx.agent.runtime.workspace.ConversationManager;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
@@ -72,6 +73,7 @@ public class ChatController {
     private final AgentStreamLimiter limiter;
     private final AgentMetrics metrics;
     private final ConversationManager conversations;
+    private final ConversationTimelineRecorder timelineRecorder;
     private final ModelRegistry models;
     private final ModelConnectionRepository connections;
     private final ModelCatalogRepository catalog;
@@ -88,6 +90,7 @@ public class ChatController {
                           AgentStreamLimiter limiter,
                           AgentMetrics metrics,
                           ConversationManager conversations,
+                          ConversationTimelineRecorder timelineRecorder,
                           ModelRegistry models,
                           ModelConnectionRepository connections,
                           ModelCatalogRepository catalog,
@@ -102,6 +105,7 @@ public class ChatController {
         this.limiter = limiter;
         this.metrics = metrics;
         this.conversations = conversations;
+        this.timelineRecorder = timelineRecorder;
         this.models = models;
         this.connections = connections;
         this.catalog = catalog;
@@ -136,6 +140,10 @@ public class ChatController {
         // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树/模型
         conversations.ensureFromChat(ctx, request.sessionId(), request.message(),
                 request.worktree(), request.modelConnectionId(), request.modelName());
+        // 2.2 服务端时间线：每轮的真实事件落盘（前端 transcript 只是渲染镜像，不能当账本）
+        ConversationTimelineRecorder.Recorder timeline =
+                timelineRecorder.begin(request.sessionId());
+        timeline.user(request.message());
         // 3. 并发闸门：拿不到许可直接 429，不构建 Agent、不拉起 MCP
         AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
@@ -183,15 +191,17 @@ public class ChatController {
             Map<String, StringBuilder> toolResults = new HashMap<>();
             Disposable disposable = events.subscribe(
                     event -> onEvent(event, emitter, ctx, toolNames, toolResults, seq, cancel,
-                            sendLock, active.modelName()),
+                            sendLock, active.modelName(), timeline),
                     error -> {
                         failed.set(true);
                         log.error("对话流异常 project={} env={}", ctx.projectId(), ctx.env(), error);
+                        timeline.finish(String.valueOf(error.getMessage()));
                         sendError(emitter, error, sendLock);
                         cancel.run();
                         emitter.complete();
                     },
                     () -> {
+                        timeline.finish("");
                         emitter.complete();
                         cancel.run();
                     });
@@ -203,6 +213,7 @@ public class ChatController {
         } catch (RuntimeException error) {
             failed.set(true);
             log.error("对话启动失败 project={} env={}", ctx.projectId(), ctx.env(), error);
+            timeline.finish(String.valueOf(error.getMessage()));
             sendError(emitter, error, sendLock);
             cancel.run();
             emitter.complete();
@@ -231,7 +242,9 @@ public class ChatController {
 
     private void onEvent(AgentEvent event, SseEmitter emitter, ProjectContext ctx,
                          Map<String, String> toolNames, Map<String, StringBuilder> toolResults,
-                         AtomicLong seq, Runnable cancel, Object sendLock, String modelName) {
+                         AtomicLong seq, Runnable cancel, Object sendLock, String modelName,
+                         ConversationTimelineRecorder.Recorder timeline) {
+        timeline.onEvent(event);
         try {
             if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
                 toolNames.put(call.getToolCallId(), call.getToolCallName());

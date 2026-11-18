@@ -15,9 +15,11 @@ import top.rongx.agent.domain.conversation.ConversationRepository;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
+import top.rongx.agent.domain.conversation.ConversationTimelineRepository;
 import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.TimelineEntry;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
 import top.rongx.agent.domain.error.ErrorCode;
@@ -35,7 +37,7 @@ import top.rongx.agent.infra.persistence.PlatformDb;
 @Repository
 public class SqliteConversationStore
         implements ConversationRepository, ConversationRunRepository, WorkspaceTaskRepository,
-        ConversationTranscriptRepository {
+        ConversationTranscriptRepository, ConversationTimelineRepository {
 
     private static final String CONVERSATION_COLUMNS = """
             id, project_id, owner_user_id, title, kind, role, env, worktree, status, summary,
@@ -273,6 +275,60 @@ public class SqliteConversationStore
     // ------------------------------------------------------------------ 会话时间线
 
     @Override
+    public long append(String conversationId, String kind, String role, String text, String tool,
+                       String toolCallId) {
+        try {
+            return db.inTx(em -> {
+                var entity = new top.rongx.agent.infra.persistence.entity.ConversationTimelineEntity(
+                        conversationId, kind, role, text, tool, toolCallId,
+                        System.currentTimeMillis());
+                em.persist(entity);
+                em.flush();
+                return entity.getSeq();
+            });
+        } catch (RuntimeException e) {
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "时间线写入失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public List<TimelineEntry> entries(String conversationId, long afterSeq, int limit) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return List.of();
+        }
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                            """
+                            SELECT seq, conversation_id, kind, role, text, tool, tool_call_id, created_at
+                            FROM conversation_timeline
+                            WHERE conversation_id = ? AND seq > ?
+                            ORDER BY seq
+                            LIMIT ?
+                            """,
+                            conversationId, afterSeq, limit)
+                    .stream()
+                    .map(row -> new TimelineEntry(
+                            ((Number) row[0]).longValue(),
+                            (String) row[1],
+                            (String) row[2],
+                            (String) row[3],
+                            (String) row[4],
+                            (String) row[5],
+                            (String) row[6],
+                            ((Number) row[7]).longValue()))
+                    .toList());
+        } catch (RuntimeException e) {
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "时间线查询失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void deleteByConversation(String conversationId) {
+        db.run(em -> PlatformDb.update(em,
+                "DELETE FROM conversation_timeline WHERE conversation_id = ?", conversationId));
+    }
+
+    @Override
     public Optional<String> findTranscript(String conversationId) {
         if (conversationId == null || conversationId.isBlank()) {
             return Optional.empty();
@@ -407,6 +463,19 @@ public class SqliteConversationStore
         String sql = "SELECT " + RUN_COLUMNS + " FROM conversation_runs "
                 + "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?";
         return queryRuns(sql, conversationId, Math.max(1, limit));
+    }
+
+    @Override
+    public List<ConversationRun> findActiveRuns(int limit) {
+        String sql = "SELECT " + RUN_COLUMNS + " FROM conversation_runs "
+                + "WHERE status IN (?, ?) ORDER BY created_at ASC LIMIT ?";
+        try {
+            return db.read(em -> PlatformDb.rows(em, sql,
+                            RunStatus.QUEUED.name(), RunStatus.RUNNING.name(), Math.max(1, limit))
+                    .stream().map(SqliteConversationStore::mapRun).toList());
+        } catch (RuntimeException e) {
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "活动运行扫描失败：" + e.getMessage(), e);
+        }
     }
 
     private List<ConversationRun> queryRuns(String sql, String key, int limit) {

@@ -48,7 +48,7 @@ import top.rongx.agent.runtime.ChatService;
  * 取消时同时移除排队任务并释放上游事件流（触发 MCP 客户端关闭）。
  */
 @Component
-public class WorkspaceRunExecutor {
+public class WorkspaceRunExecutor implements RunAborter {
 
     private static final Logger log = LoggerFactory.getLogger(WorkspaceRunExecutor.class);
 
@@ -127,14 +127,51 @@ public class WorkspaceRunExecutor {
                 subscription.dispose();
             }
             Future<?> future = handle.future;
+            ConversationRun current = runs.findRun(runId).orElse(null);
             if (future != null) {
+                // 快速路径：排队中的任务立刻从队列移除，空出的并发位给后续运行，
+                // 而不是等线程池出队时才看到 cancelled 标记。
+                if (future instanceof Runnable runnable && current != null) {
+                    pool(current.projectId()).remove(runnable);
+                }
                 future.cancel(false);
             }
-            ConversationRun current = runs.findRun(runId).orElse(null);
             if (current == null) {
                 return false;
             }
             finish(current, RunStatus.CANCELLED, "", "已取消", handle);
+            return true;
+        }
+    }
+
+    @Override
+    public boolean fail(String runId, String reason) {
+        Handle handle = handles.get(runId);
+        if (handle == null) {
+            return false;
+        }
+        synchronized (handle) {
+            if (handle.finished.get()) {
+                return false;
+            }
+            handle.cancelled.set(true);
+            handle.streamDone.countDown();
+            Disposable subscription = handle.subscription.get();
+            if (subscription != null) {
+                subscription.dispose();
+            }
+            Future<?> future = handle.future;
+            ConversationRun current = runs.findRun(runId).orElse(null);
+            if (future != null) {
+                if (future instanceof Runnable runnable && current != null) {
+                    pool(current.projectId()).remove(runnable);
+                }
+                future.cancel(false);
+            }
+            if (current == null) {
+                return false;
+            }
+            finish(current, RunStatus.FAILED, "", reason, handle);
             return true;
         }
     }
