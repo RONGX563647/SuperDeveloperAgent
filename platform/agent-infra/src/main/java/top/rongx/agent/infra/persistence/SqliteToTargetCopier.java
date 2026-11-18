@@ -16,9 +16,8 @@ import java.util.Set;
 /**
  * SQLite 源库 → 目标库（PostgreSQL 或另一 SQLite）的逐表行复制。
  *
- * <p>用途：设置页「一键迁移」把当前 SQLite 数据搬到 PostgreSQL。与
- * {@link LegacySqliteImporter} 的区别是：后者处理"8 个历史分域库 → 统一库"的一次性导入
- * 并写完成标记；本类只做"两个已建好 schema 的库之间搬行"，schema 由 Flyway 负责建。
+ * <p>用途：设置页把当前 SQLite 数据搬到 PostgreSQL（热切换的数据搬运阶段）。
+ * 本类只做"两个已建好 schema 的库之间搬行"，schema 由 Flyway 负责建。
  *
  * <p><b>语义</b>：只复制两边都存在的表与列（以目标库列为准，交集为复制集合），
  * 逐行 {@code INSERT ... ON CONFLICT DO NOTHING}，因此可重复执行且不会覆盖目标库已有行。
@@ -78,6 +77,9 @@ public final class SqliteToTargetCopier {
                 int before = count(target, table);
                 copyRows(source, target, table, columns);
                 int copied = Math.max(0, count(target, table) - before);
+                // 表是带显式 id 搬过去的：PostgreSQL 不会因此推进 identity 序列，
+                // 不拨正的话应用下一次自增插入就会撞主键（token_usage_pkey 就是这么炸的）。
+                IdentitySequenceSync.sync(target, table);
                 copiedTotal += copied;
                 sourceTotal += sourceRows;
                 results.add(new TableResult(table, copied, sourceRows, null));
