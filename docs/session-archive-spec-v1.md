@@ -32,10 +32,12 @@ docs/
     docs/    …
     deploy/  …
   summary/                              # 人读总结（markdown + frontmatter），双索引
-    2026-11/                            # 时间维（按月）
+    2026-11/                            # 时间维（按月，权威内容）
       2026-11-16_deploy-track.md
-    deploy-track/                       # 功能维
+    deploy-track/                       # 功能维（会话总结轨：feat/bug/chore/docs/deploy）
       2026-11_versioning.md
+    plan/                               # 方案维：评审 / 优化方案（不生成 process 归档，见 §4.6）
+      quality-gate-review-2026-11.md    # 双索引副本，canonical 指回时间维主文件
 ```
 
 ## 3. process 归档规范
@@ -118,6 +120,37 @@ docs/
   未跟踪文件）在 `SESSION_ARCHIVE_EVIDENCE_TTL_MIN`（默认 60 分钟）内已验证为绿色时直接复用证据，
   改提交信息之类的重试不再重跑。缩小范围用 `SESSION_ARCHIVE_TEST_CMD`。
 
+#### 3.3.1 各层测试范围（性能契约）
+
+门禁要快，就必须让每层只干该干的事。**提交求快、推送求全、CI 求彻底**：
+
+| 层 | 范围 | 实测（16 核 / 热态） |
+|---|---|---|
+| pre-commit | 受影响模块全部 `test-compile`（含下游，抓编译期破坏）+ **只跑变更模块自己的测试** | domain 改动 13s；gateway 改动 47s |
+| pre-push | 归档契约 + handbook 漂移 + `spec-checks` 全量（ArchUnit 架构/契约） | ~20s（tree 未变则命中缓存） |
+| CI（`mvn verify`） | 全 reactor 测试 + spec-checks | 90s（4 fork） |
+
+历史教训：pre-commit 曾用 `-pl <mods> -amd test`，改 `agent-domain` 这类基座模块时
+`-amd` 会连带跑全部下游模块的**测试**，命令退化成全 reactor 测试（167s），"增量"名存实亡。
+现在把 `-amd` 只用于 `test-compile`（4s），测试范围收窄到变更模块。
+
+- **全量兜底**：CI 缺失或改动风险高时，设 `SESSION_ARCHIVE_FULL_TEST=1` 让 pre-push
+  跑一次全 reactor 测试（结果按 tree 缓存，同 tree 重推不重跑）。CI 就位后不必开。
+- **测试并行**：surefire 默认 `forkCount=2`（`platform/pom.xml` 的 `surefire.forkCount`）；
+  门禁在核数 ≥8 的机器上自动提到 4。测试类之间不共享状态（各自 `@TempDir`），可安全并发。
+  实测全 reactor：1 fork 167s / 2 forks 126s / 4 forks 90s。
+- **JDK 探测**：`JAVA_HOME` 已达标时直接返回，不扫描安装目录；否则按候选列表缓存到
+  `.git/session-archive/jdk.json`。全量扫描要对每个候选起 `java -version`，实测 3.7s，
+  是门禁里最贵的纯 Python 开销。
+- **慢测试分组**：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代这类集成型用例打
+  `@Tag("slow")`，pre-commit 用 `-DexcludedGroups=slow` 排除，pre-push 全量兜底与 CI 全跑。
+  实测 gateway：`forkCount=2` 时 40.3s→27.9s；`forkCount=4` 时只差 2.5s（并行已掩盖）。
+- **模块级绿色证据**：`SESSION_ARCHIVE_FULL_TEST=1` 的全量兜底不再无条件跑整个 reactor。
+  每个模块按「自身源码指纹 + 全部上游模块闭包哈希」记账（`.git/session-archive/module-evidence/`），
+  闭包未变的模块直接跳过；改动只落在一个叶模块时，推送从全量 167s 降到只跑那一个模块。
+  闭包哈希是内容寻址的，不需要 TTL：源码一变哈希就变，旧证据自动失效。
+
+
 ### 3.4 只增不改
 
 1. **hash 链**：每类（feat/bug/…）一条链，`chain.prev` 指向同类上一份 `self`，首份为 GENESIS。
@@ -162,7 +195,10 @@ docs/
 
 - 一份 summary = 一个 markdown 文件，双索引两处存放（时间维 + 功能维），内容互链。
 - 路径：`docs/summary/<YYYY-MM>/<YYYY-MM-DD>_<slug>.md` + `docs/summary/<track>/<YYYY-MM>_<slug>.md`。
+- `track` 取值：会话总结轨 `feat|bug|chore|docs|deploy`（与 process 分类同名，语义为「这次会话的总结」）；
+  方案轨 `plan`（评审 / 优化方案，契约见 §4.6，**不是** process 分类，也不生成 manifest）。
 - 同等只增不改：同主题新进展 = 新文件 + frontmatter `extends` 回指旧文件（ADR supersede 风格）。
+  plan 类的版本化规则例外，见 §4.6.6。
 
 ### 4.2 frontmatter（数据聚合层）
 
@@ -248,14 +284,109 @@ FAIL 必须在下一期 summary 的「遗留与建议」中给出修复计划。
   （patch = 本期 refs 涉及的新增行覆盖）。
 - 未接入前各字段记 `N/A`，gate 降级为 WARN，不阻塞流程——但接入后 N/A 即 WARN。
 
+### 4.6 plan 类契约（评审与优化方案）
+
+本节自 2026-11-18 起生效。`docs/summary/plan/` 是与 feat/bug/chore/docs/deploy 并列的**方案轨**，
+承载「评审 → 现状证据 → 缺口分级 → 分批方案 → 验收契约 → 执行状态」这类横向文档。
+
+一句话定位：**plan 说"要怎么改"，process 记"已经改成了什么"。**
+
+#### 4.6.1 边界（三条硬线）
+
+1. plan 类**不生成 process 归档**：没有 manifest、不进 hash 链、不校验 commits / blobHash。
+2. plan 落地时照常按 feat/bug/chore 开归档；plan 只在「执行状态」里回指提交、归档 id 与证据。
+3. 一份 plan = 一个主题 + 一个周期。跨周期延续不新开文件，靠 `updatedAt` 与「变更记录」推进。
+
+#### 4.6.2 路径与命名
+
+| 角色 | 路径 | 说明 |
+|---|---|---|
+| 时间维主文件（权威内容） | `docs/summary/<YYYY-MM>/<YYYY-MM-DD>_<slug>.md` | 与 §4.1 一致，文件名含日期 |
+| 方案轨副本 | `docs/summary/plan/<YYYY-MM>_<slug>.md`（推荐）<br>`docs/summary/plan/<slug>-<YYYY-MM>.md`（等价，早期文件沿用） | 副本 frontmatter 增加 `canonical` 指向时间维主文件 |
+
+- `slug` 同其他文档：kebab-case，稳定不变；`<YYYY-MM>` 必须等于 frontmatter 的 `period`。
+- 两处正文保持一致；改动只在主文件改，副本同步。
+
+#### 4.6.3 frontmatter（`session-plan/v1`）
+
+```yaml
+schema: session-plan/v1                     # 固定，区别于 session-summary/v1
+kind: plan                                  # 固定
+slug: quality-gate-review                   # kebab-case，必须出现在文件名中
+period: 2026-11                             # YYYY-MM，必须出现在文件名中
+createdAt: 2026-11-18T20:04:00+08:00        # 首次立项时间，+08:00
+updatedAt: 2026-11-18T20:15:00+08:00        # 每次改正文必须前移，否则校验报错
+status: reviewing                           # draft|reviewing|approved|executing|done|dropped|superseded
+owner: YG                                   # 方案责任人
+verdict: FAIL                               # 被评审对象的现状结论：PASS|WARN|FAIL|N/A
+supersedes: null                            # 被本文件取代的旧 plan（slug 或相对路径）
+supersededBy: null                          # status=superseded 时必填
+refs: []                                    # 引用的 process 归档 id，必须真实存在（同 §4.2）
+canonical: docs/summary/2026-11/2026-11-18_quality-gate-review.md   # 仅方案轨副本有
+```
+
+- `verdict` 是「被评审对象」的结论，不是本文件的质量；`gate` 字段属于 session-summary，plan 不用。
+- `refs` 为空合法（方案常常先于落地），但**一旦填了就必须存在**，与 session-summary 同规则。
+
+#### 4.6.4 正文结构（必需章节，缺一即校验失败）
+
+| 章节 | 要求 | 机器校验 |
+|---|---|---|
+| `## 概述` | 2–4 句：评审对象、结论、影响面 | 必需 |
+| `## 现状与证据` | 每条结论后面跟可复核证据（命令输出、文件路径、grep 结果） | 必需 |
+| `## 缺口清单` | 按 P0/P1/P2 分级，每条带「证据 / 后果 / 等级」 | 必需 |
+| `## 优化方案` | 分阶段表格，每条有落点文件 | 必需 |
+| `## 验收契约` | 每条缺口一行：落点 + 验收命令 + 通过判定 + 反证（失败长什么样） | 必需 |
+| `## 执行状态` | 每条编号一行：未开始 / 进行中 / 已完成 / 放弃 + 依据（提交 sha、PR、证据文件） | 必需 |
+| `## 变更记录` | 追加式：时间 + 改了什么 + 为什么 | 必需 |
+| `## 链接` | 规格、相关归档、外部依据 | 必需 |
+
+**「验收契约」是 plan 能不能算方案的唯一标准**：一条缺口如果没有「可复制执行的验收命令 + 通过判定 + 反证」，
+它就只是意见，不是契约；`status` 也不得升到 `approved`。
+
+#### 4.6.5 与 session-summary 的差异
+
+| 维度 | session-summary（§4.2–4.4） | session-plan（本节） |
+|---|---|---|
+| schema | `session-summary/v1` | `session-plan/v1` |
+| 来源 | `gate.py finish` 从 manifest 自动生成 | 人写（agent 可起草），不自动生成 |
+| 是否进 process 归档 | 是（一份 summary 对应一份 manifest） | 否 |
+| 时间语义 | 一次会话 / 一个周期的事后账 | 一个方案的事前契约 + 事后状态 |
+| metrics 段 | 必需，禁止手编 | 不需要（plan 不聚合覆盖率） |
+| 变更 | 只增不改（新文件 + `extends`） | 允许原地更新 + 变更记录；拆题走 `supersedes` |
+
+#### 4.6.6 版本化：原地更新是允许的例外
+
+方案在评审中必然被改，因此 plan 类**不套用 §3.4 的"只增不改"**，改为：
+
+- 原地更新正文必须同时做到：`updatedAt` 前移 + 「变更记录」追加一行（写明改了哪节、为什么）。
+- 拆题 / 推翻重来：新 `slug` + 新文件，旧文件置 `status: superseded` 并填 `supersededBy`，新文件填 `supersedes`。
+- 已发布的 plan 文件（含时间维副本）**禁止删除或重命名**；作废只能靠 `status`。
+- `updatedAt` 不得早于 `createdAt`；校验器按此判定"有没有偷偷改而不留痕"。
+
+#### 4.6.7 校验（`gate.py validate`）
+
+对 `docs/summary/plan/**/*.md` 以及 frontmatter 里 `kind: plan` 的文件执行：
+
+1. frontmatter 存在，且 `schema=session-plan/v1`、`kind=plan`；
+2. `slug` 为 kebab-case 且出现在文件名中；`period` 形如 `YYYY-MM` 且出现在文件名中；
+3. `createdAt` / `updatedAt` 为 `+08:00` ISO 时间，且 `updatedAt >= createdAt`；
+4. `status` 在枚举内；`status=superseded` 时 `supersededBy` 非空；`verdict` 在 `PASS|WARN|FAIL|N/A` 内；`owner` 非空；
+5. 方案轨副本（`docs/summary/plan/` 下）必须有 `canonical`，指向存在的文件，且其 `slug`/`period` 与本文件一致；
+6. §4.6.4 的 8 个必需章节齐全；
+7. `refs` 内每个 process 归档 id 必须存在（与 §4.2 同规则）。
+
+校验失败 = `gate.py validate` 非零 = `ProcessArchiveTest` 红 = 禁止推送；与归档门禁同一条出口。
+
 ## 5. 落地件与执行
 
 | 件 | 位置 | 作用 |
 |---|---|---|
 | JSON Schema | `docs/schemas/process-manifest-v2.json`、`session-summary-v1.md` 的 frontmatter 说明 | 校验依据 |
 | 归档 skill | 仓库 skill `session-archive` | 会话末：跑测试 → 从 git 提取 commits/files → 生成 manifest（含 hash 链）→ 聚合 metrics 生成/追加 summary |
-| 校验器 | `spec-checks` 新增 `ProcessArchiveTest`（附单测，作为 feat 归档自身的合规样本） | §3.3/§3.4/§4.2 全部规则执行者 |
+| 校验器 | `spec-checks` 新增 `ProcessArchiveTest`（附单测，作为 feat 归档自身的合规样本） | §3.3/§3.4/§4.2/§4.6 全部规则执行者 |
 | 覆盖率 | 根 pom 加 JaCoCo 插件 | §4.5 数据来源 |
+| 方案轨 | `docs/summary/plan/` + `docs/summary/<YYYY-MM>/` 双份 | 评审/优化方案（§4.6）；由人写，校验器只做契约检查 |
 
 执行顺序（首次落地）：
 1. JaCoCo 插件 → 2. schema 文件 → 3. `ProcessArchiveTest` + 其单测 → 4. skill →
@@ -268,3 +399,5 @@ FAIL 必须在下一期 summary 的「遗留与建议」中给出修复计划。
 - 错误码枚举收敛、设计令牌重构 → **chore**
 - 本规格文档 → **docs**
 - 端口/环境/发布链路改造 → **deploy**
+- 质量门禁评审、跨模块整改方案、需要「验收契约 + 执行状态」的横向文档 → **plan**
+  （`docs/summary/plan/`，不进 process；落地时按实际改动另开 feat/bug/chore）

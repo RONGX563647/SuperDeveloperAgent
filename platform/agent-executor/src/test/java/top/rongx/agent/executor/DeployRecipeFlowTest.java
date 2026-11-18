@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import org.junit.jupiter.api.Tag;
 
 /**
  * 「跑通 → 固化 → 重放 → 服务器前置」整条链路。
@@ -48,6 +49,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  *   <li>**上服务器前必须有测试机成功案例**（不是审批流，是证据校验）。</li>
  * </ul>
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class DeployRecipeFlowTest {
 
     /** 夹具只用 JDK 自带命令：容器构建镜像里没有 node，避免把环境缺失误报成流水线失败。 */

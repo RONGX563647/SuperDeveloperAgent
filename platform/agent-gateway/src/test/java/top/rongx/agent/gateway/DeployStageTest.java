@@ -39,6 +39,7 @@ import top.rongx.agent.infra.recipe.RecipeActionResolver;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Tag;
 
 /**
  * 方案 C 的端到端验证（不依赖真实容器发布）：deploy stage → 平台部署器 → 证据链。
@@ -51,6 +52,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 时诚实失败（E-504），不允许假部署。这里用一个无副作用的 image_package 动作
  * （宿主执行器替身把它换成 {@code git status}）登记镜像产物，不真的构建镜像。
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class DeployStageTest {
 
     @TempDir

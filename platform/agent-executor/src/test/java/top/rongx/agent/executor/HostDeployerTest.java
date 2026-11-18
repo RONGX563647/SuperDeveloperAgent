@@ -22,6 +22,7 @@ import top.rongx.agent.domain.deploy.DeployTarget;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Tag;
 
 /**
  * HostDeployer 真实验收：真实 jar、真实进程、真实 HTTP。
@@ -33,6 +34,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>回滚真正回到 previous 指针指向的版本。</li>
  * </ol>
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class HostDeployerTest {
 
     private static final String PROJECT = "host-e2e";

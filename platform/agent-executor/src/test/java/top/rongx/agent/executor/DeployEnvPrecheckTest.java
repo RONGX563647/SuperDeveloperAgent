@@ -27,12 +27,15 @@ import top.rongx.agent.domain.settings.ProjectEnvVarRepository;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import org.junit.jupiter.api.Tag;
 
 /**
  * E-509 部署前 env 预检：deploy.env-required 声明的必填变量缺失时，
  * **在启动容器之前**失败并给出可操作的指引（RUOYIWNZ 痛点的根治：
  * 容器起来又被应用启动脚本杀掉，错误还被停旧噪音掩盖）。
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class DeployEnvPrecheckTest {
 
     private static final String PROJECT = "ENVCHECK";

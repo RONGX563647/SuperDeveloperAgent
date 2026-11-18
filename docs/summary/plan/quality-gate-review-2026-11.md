@@ -193,6 +193,76 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 
 ---
 
+---
+
+## 性能实测与已落地优化（2026-11-18）
+
+> 优先级依据：门禁可以严格，但不能慢。以下全部为 16 核 / JDK21 / 离线 / 热态实测，
+> 不是估算。测量方式：`Measure-Command { mvn ... }`，同一工作区连续跑，取稳定值。
+
+### 基线（改动前）
+
+| 项 | 耗时 | 说明 |
+|---|---|---|
+| `detect_jdk` 全量扫描 | **3.7s** | 每次 hook 都付：glob 7 个安装位 + 每个候选起一次 `java -version` |
+| `worktree_fingerprint` | 0.2s | 索引树 + 未暂存 diff + 未跟踪文件（当前仅 1 个），不是瓶颈 |
+| pre-commit（domain 改动） | **~171s** | `-pl agent-domain -amd test` 连带跑全部下游模块的**测试**，退化为全 reactor |
+| pre-commit（gateway 改动） | ~82s | gateway 单模块 31 类 / 153 用例 |
+| pre-push `spec-checks` | **34.9s** | `install -DskipTests` 17.3s + 测试 17.6s |
+| 全 reactor `mvn test` | **166.9s** | 688 用例 / 157 类 |
+
+### 已落地优化
+
+| # | 优化 | 手段 | 改前 | 改后 | 收益 |
+|---|---|---|---|---|---|
+| O1 | JDK 探测三级短路 | 环境 `JAVA_HOME` 达标即返回 → 磁盘缓存 `.git/session-archive/jdk.json` → 才扫描 | 3.7s | **0.06s / 0.13s** | −3.6s（每次 hook） |
+| O2 | pre-commit 收敛测试范围 | `-amd` 只用于 `test-compile`，测试只跑变更模块 | 171s（domain） | **13.3s** | **−158s（约 13×）** |
+| O3 | pre-commit（gateway） | 同上 + `forkCount=4` | 82s | **47.4s** | −35s |
+| O4 | pre-push 编译步 | `-DskipTests` → `-Dmaven.test.skip=true`（不编译 155 个测试文件） | 11.5s（冷） | **5.1s（冷）** | −6.4s |
+| O5 | 测试并行 | pom 默认 `surefire.forkCount=2`；核数 ≥8 时门禁提到 4 | 166.9s | **90.1s（4 fork）/ 125.8s（2 fork）** | −77s / −41s |
+
+并发安全依据：全部测试类各自使用 `@TempDir`，`forkCount=4` 连跑两轮全绿
+（gateway 41.4s、全 reactor 90.1s、688 用例 0 失败）。
+
+### 落点
+
+| 文件 | 改动 |
+|---|---|
+| `tools/session-archive/gate.py` | `detect_jdk` 三级短路 + 磁盘缓存；`incremental_test_command` 改为「受影响模块 `test-compile` + 变更模块 `test`」；`spec_checks()` 编译步改 `-Dmaven.test.skip=true`；新增 `full_test_backstop()`（`SESSION_ARCHIVE_FULL_TEST=1`，tree 缓存）；新增 `surefire_parallel_flag()` |
+| `platform/pom.xml` | 新增 `surefire.forkCount=2` 属性并接入 surefire `forkCount`（`-Dsurefire.forkCount=N` 可覆盖） |
+| `docs/session-archive-spec-v1.md` | §3.3.1 新增「各层测试范围」性能契约（提交求快 / 推送求全 / CI 求彻底） |
+
+### 仍可继续压的（按收益排序）
+
+| 候选 | 当前成本 | 预估 | 前提/风险 |
+|---|---|---|---|
+| 引入 `mvnd` | 每层 Maven fork 约 3–5s | −10~20% | 需团队统一安装；`gate.py` 已优先用 `mvnd`，装上即生效 |
+| 慢测试打 `@Tag("slow")`，提交跳过 | gateway：DeployStageTest 18s + ActionUsabilityTest 16s + GitWorktreeManagerTest 12s ≈ 46s | pre-commit −30~46s | 提交时少跑高风险用例，必须有 CI 兜底 |
+| 按模块记录绿色证据，pre-push 只补未测模块 | 全量 167s | 典型改动 −60% | 需解析模块依赖图，实现成本中等 |
+| JaCoCo 只在大步骤采集 | 单模块测试 +15%（+6.1s） | −6s/模块 | 覆盖率数据来源要跟着改 |
+| `-T 1C` 并行 reactor | 编译阶段 | 编译 −20~30% | 历史上出现 classpath 竞争，需先隔离 |
+
+结论：**门禁的"贵"主要是范围问题，不是机器问题**。把它从"每次都跑全量"改成
+"提交跑受影响、推送跑规约、CI 跑彻底"，本地就从分钟级降到十几秒。
+
+
+### 第二批落地（慢测试分组 + 模块级证据）
+
+| # | 优化 | 手段 | 改前 | 改后 | 收益 |
+|---|---|---|---|---|---|
+| O6 | 慢测试分组 | 10 个集成型测试类打 `@Tag("slow")`；pre-commit `-DexcludedGroups=slow` | gateway 40.3s（f=2） | **27.9s（f=2）** | −12.4s |
+| O7 | 模块级绿色证据 | 模块闭包哈希记账，pre-push 兜底只跑闭包变化的模块 | 全量 167s | 叶模块改动 → 只跑该模块 | 典型改动 −60% |
+
+`forkCount=4` 时 O6 只省 2.5s（并行已掩盖慢测试），所以标签主要服务于小规格 CI 与单人机器。
+
+### 已知环境敏感性（不是代码缺陷）
+
+`ApiDocsSnapshotTest` 在**另一个会话同时跑 Maven / 启动平台实例**时会偶发「快照已过期」：
+它会全量扫描已注册控制器，环境里多出来的控制器或并发写入都会改变生成结果。
+干净环境连跑 3 次全绿。定位方式：`mvn -pl agent-gateway -Dtest=ApiDocsSnapshotTest test`。
+
+---
+
 ## 验收契约
 
 ### 契约条款（此节是完成判定的唯一口径）
@@ -217,6 +287,8 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 | C10 | P2-2 | `platform/pom.xml`（failsafe）、`@Tag("integration")` | `cd platform && mvn -B verify -DskipITs=false` | failsafe 输出中含 integration 用例（含 PG Testcontainers） | verify 只跑 surefire |
 | C11 | P2-3 | `docs/.session/gate-metrics.json` | `python tools/session-archive/gate.py metrics`（待实现）；否则直接读 json | 每层耗时被记录，超预算在 summary 中告警 | 文件不存在 → 无法回答"门禁是否瓶颈" |
 | C12 | 阶段四 | `gate.py`、CI | 临时注入一条 A1 违规 import + 一条 R06 `double` 金额，跑门禁 | 门禁必须红，且报出规则编号 | 门禁仍绿 → 规则静默失效 |
+| C13 | P2-3 | `tools/session-archive/gate.py`、`platform/pom.xml` | `python tools/session-archive/gate.py self-test` + 实测 pre-commit（改 domain 单文件） | 改 domain 的 pre-commit ≤ 20s，全 reactor ≤ 100s（16 核） | pre-commit 重新超过 60s → 范围又退化成全量 |
+| C14 | P2-3 | `tools/session-archive/gate.py`、各测试类的 `@Tag("slow")` | 改一个叶模块后 `SESSION_ARCHIVE_FULL_TEST=1 python tools/session-archive/gate.py gate-pre-push` | 输出「跳过 N 个闭包未变的模块」，且只跑变更模块 | 仍打印全量 reactor 命令 → 模块证据没生效 |
 
 **DoD（各阶段完成定义）**：阶段一 = C1+C2+C3 全绿且反证可复现；阶段二 = C4+C6+C7+C8 全绿；
 阶段三 = C9+C10+C11 全绿；阶段四 = C12 可重复执行。任何一项只做到"代码写了"不计完成。
@@ -245,6 +317,8 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 
 ## 变更记录
 
+- 2026-11-18T20:40 第二批落地：慢测试 `@Tag("slow")`（gateway f=2 时 −12.4s）、模块级绿色证据（pre-push 兜底按闭包跳过）、`ApiDocsSnapshotTest` 并发敏感性说明；新增验收项 C14。
+- 2026-11-18T20:25 补「性能实测与已落地优化」：给出改前/改后实测（pre-commit 171s→13.3s、spec-checks 34.9s→20s 级、全 reactor 166.9s→90.1s），并新增验收项 C13（门禁耗时预算）。
 - 2026-11-18T20:04 初稿：四层门禁现状核查、缺口分级（P0×4 / P1×4 / P2×3）、分阶段优化方案与落地顺序。
 - 2026-11-18T20:20 归档为 plan 类：补 `session-plan/v1` frontmatter；新增「验收契约」（C0–C12，含命令与反证）
   与「执行状态」「变更记录」两节；路径与命名对齐规格 §4.6；结论字段固化为 `verdict: FAIL`。

@@ -313,6 +313,55 @@ def _java_major(home: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+def _jdk_cache_path() -> Path | None:
+    try:
+        return shared_state_dir() / "jdk.json"
+    except (GateError, OSError):
+        return None
+
+
+def _read_jdk_cache() -> str:
+    """磁盘缓存：候选列表未变时复用上次探测结果（探测本身约 3.7s，每次 hook 都要付）。"""
+    path = _jdk_cache_path()
+    if path is None or not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    home = data.get("home") or ""
+    if not home or not Path(home).is_dir():
+        return ""
+    if data.get("candidates") != _jdk_candidates():
+        return ""
+    return home
+
+
+def _write_jdk_cache(home: str) -> None:
+    path = _jdk_cache_path()
+    if path is None:
+        return
+    try:
+        write_json(path, {"schema": "jdk-cache/v1", "home": home,
+                          "candidates": _jdk_candidates()})
+    except OSError:
+        pass
+
+
+def _jdk_candidates() -> list[str]:
+    """探测候选：环境 JAVA_HOME + 常见安装位。只做 glob，不启动 JVM。"""
+    candidates: list[str] = []
+    env_home = os.environ.get("JAVA_HOME", "")
+    if env_home:
+        candidates.append(env_home)
+    for pattern in JDK_SCAN_GLOBS:
+        try:
+            candidates.extend(sorted(glob.glob(pattern)))
+        except OSError:
+            pass
+    return candidates
+
+
 def detect_jdk(env_home: str) -> str:
     """探测满足 JDK21+ 的 JAVA_HOME：环境变量优先，其次扫描常见安装目录。
 
@@ -320,21 +369,26 @@ def detect_jdk(env_home: str) -> str:
     surefire fork 出旧 JVM 去加载新编译的类必然崩（class file 65.0 vs 61.0）。
     环境里已有 ≥21 就直接用；否则在常见安装位里挑 major 最高的一个。
     找不到返回空串，由调用方决定如何报错。
+
+    <p><b>性能</b>：全量扫描要对每个候选起一次 {@code java -version}，实测约 3.7s，
+    是门禁里最贵的纯 Python 开销。因此按三级短路：
+    环境 JAVA_HOME 达标（最常见）→ 直接返回，零扫描；
+    上次探测结果仍有效（候选列表未变）→ 读磁盘缓存；
+    都不行才真正扫描。
     """
-    candidates: list[str] = []
-    if env_home:
-        candidates.append(env_home)
-    for pattern in JDK_SCAN_GLOBS:
-        try:
-            candidates.extend(glob.glob(pattern))
-        except OSError:
-            pass
+    if env_home and _java_major(env_home) >= JDK_MIN_MAJOR:
+        return env_home
+    cached = _read_jdk_cache()
+    if cached:
+        return cached
     # 多个版本满足时选最低的（最贴近项目基线 release=21，避免引入超前版本差异）。
     best, best_major = "", JDK_MIN_MAJOR + 1000
-    for cand in candidates:
+    for cand in _jdk_candidates():
         major = _java_major(cand)
         if JDK_MIN_MAJOR <= major < best_major:
             best, best_major = cand, major
+    if best:
+        _write_jdk_cache(best)
     return best
 
 
@@ -370,6 +424,25 @@ def maven_binary() -> str:
     return "mvn"
 
 
+# 测试类并行度：pom 默认 2（小规格 CI 不过载），核数够时门禁提到 4。
+# 实测 16 核全 reactor：1 fork 167s / 2 forks 126s / 4 forks 90s。
+PARALLEL_FORK_COUNT = 4
+PARALLEL_MIN_CORES = 8
+
+# 提交时跳过的测试分组：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代这类
+# 集成型用例打 @Tag("slow")。pre-commit 排除它们求快，pre-push 全量兜底与 CI 全跑。
+# 实测 gateway：forkCount=2 时 40.3s→27.9s；forkCount=4 时只差 2.5s（并行已掩盖）。
+SLOW_GROUP_FLAG = "-DexcludedGroups=slow"
+
+
+def surefire_parallel_flag() -> str:
+    """核数足够时给 surefire 提高 fork 数；否则返回空串用 pom 默认值。"""
+    cores = os.cpu_count() or 1
+    if cores >= PARALLEL_MIN_CORES:
+        return f"-Dsurefire.forkCount={PARALLEL_FORK_COUNT}"
+    return ""
+
+
 def changed_modules(staged_files: list[str]) -> list[str]:
     """本次提交涉及的 Maven 模块（platform/<模块>/ 前缀，排除前端 web）。"""
     mods = set()
@@ -381,20 +454,37 @@ def changed_modules(staged_files: list[str]) -> list[str]:
 
 
 def incremental_test_command(staged_files: list[str]) -> str:
-    """pre-commit 增量测试命令：只跑受影响模块及其下游（-amd），排除 spec-checks。
+    """pre-commit 增量测试：受影响模块先编译，再只跑变更模块的测试。
+
+    <p><b>为什么不再用 {@code -pl <mods> -amd test}</b>：{@code -amd} 会把全部下游模块
+    的<b>测试</b>一起跑起来。改 agent-domain 这种被所有模块依赖的基座时，命令退化成
+    全 reactor 测试（实测 166.9s），"增量"名存实亡。
+
+    <p>拆成两步后语义不变、成本骤降：
+    <ol>
+      <li>{@code -pl <mods> -amd test-compile -DskipTests}：编译全部受影响模块（含下游），
+          编译期破坏仍然当场发现；实测 4.2s。</li>
+      <li>{@code -pl <mods> test}：只跑变更模块自己的测试；domain 实测 8.4s。</li>
+    </ol>
+    下游模块的测试交给 pre-push（{@code SESSION_ARCHIVE_FULL_TEST=1}）或 CI 全量兜底：
+    提交时求快、推送/CI 求全，两层职责分开。
 
     <p>spec-checks（ArchUnit 架构 + 契约检查）是全量扫描，改动业务模块时排除它、
-    移到 pre-push/CI；只有改动 spec-checks 本身时才跑它验证检查规则。
+    移到 pre-push/CI；只有改 spec-checks 本身时才跑它验证检查规则。
     无 Maven 业务模块改动（如根 pom、tools/handbook）时跑全部业务模块、排除 spec-checks。
     """
     mvn = maven_binary()
     mods = changed_modules(staged_files)
     if not mods:
-        return f"{mvn} -B -pl !spec-checks test"
+        return f"{mvn} -B -nsu -pl !spec-checks test {surefire_parallel_flag()}".strip()
     if "spec-checks" in mods:
-        return f"{mvn} -B -pl spec-checks test"
+        return f"{mvn} -B -nsu -pl spec-checks test {surefire_parallel_flag()}".strip()
     pl = ",".join(mods)
-    return f"{mvn} -B -pl {pl},!spec-checks -amd test"
+    compile_step = (f"{mvn} -B -nsu -pl {pl},!spec-checks -amd "
+                    f"-DskipTests -Djacoco.skip=true test-compile")
+    test_step = (f"{mvn} -B -nsu -pl {pl} test {surefire_parallel_flag()} "
+                 f"{SLOW_GROUP_FLAG}".strip())
+    return f"{compile_step} && {test_step}"
 
 
 def worktree_git_dir() -> Path:
@@ -585,6 +675,11 @@ def cmd_gate_pre_commit(args) -> int:
         f"测试通过：{evidence['testsRun']} 个用例，失败 {evidence['failures']}，"
         f"错误 {evidence['errors']}，跳过 {evidence['skipped']}"
     )
+    # 记下"这些模块在当前闭包哈希下已跑绿"，供 pre-push 全量兜底按模块跳过。
+    try:
+        record_module_green(changed_modules(staged))
+    except (GateError, OSError):
+        pass
     return 0
 
 
@@ -912,6 +1007,120 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool) -> list[str]:
     return errors
 
 
+# ------------------------------------------------------- summary / plan 契约（§4.2、§4.6）
+
+PLAN_SCHEMA = "session-plan/v1"
+PLAN_STATUS = ("draft", "reviewing", "approved", "executing", "done", "dropped", "superseded")
+PLAN_VERDICTS = ("PASS", "WARN", "FAIL", "N/A")
+PLAN_SECTIONS = ("概述", "现状与证据", "缺口清单", "优化方案", "验收契约", "执行状态", "变更记录", "链接")
+SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
+ISO_CN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$")
+
+
+def frontmatter(text: str) -> str | None:
+    """frontmatter 文本块；不以 `---` 开头的文件返回 None（= 缺 frontmatter）。"""
+    if not text.startswith("---\n"):
+        return None
+    parts = text.split("---", 2)
+    return parts[1] if len(parts) >= 3 else None
+
+
+def frontmatter_scalars(front: str) -> dict[str, str]:
+    """只取顶层标量（`key: value`），跳过嵌套块、列表项与注释。"""
+    scalars: dict[str, str] = {}
+    for line in front.splitlines():
+        if not line or line.startswith((" ", "\t", "#")) or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        value = value.strip()
+        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        scalars[key.strip()] = value
+    return scalars
+
+
+def summary_refs(front: str) -> list[str]:
+    """frontmatter 里 refs 列表（缩进的 `- id` 行）。"""
+    refs: list[str] = []
+    in_refs = False
+    for line in front.splitlines():
+        if line.startswith("refs:"):
+            in_refs = True
+            continue
+        if in_refs and line.strip().startswith("- "):
+            refs.append(line.strip()[2:].strip())
+        elif in_refs and line and not line.startswith(" "):
+            in_refs = False
+    return refs
+
+
+def validate_plan_doc(path: Path, root: Path, text: str, front: str) -> list[str]:
+    """plan 类契约（spec §4.6）：字段、章节、双索引副本一致性。
+
+    <p>plan 不进 process 归档，所以这里只校验"文档形状"：能定位（slug/period 与文件名对齐）、
+    有状态语义（status/updatedAt 留痕）、有可执行口径（验收契约等 8 个章节）、
+    双索引两处说得上是同一份东西（canonical 指回主文件且 slug/period 一致）。
+    """
+    rel = path.relative_to(root) if path.is_relative_to(root) else path
+    meta = frontmatter_scalars(front)
+    errors: list[str] = []
+
+    if meta.get("schema") != PLAN_SCHEMA:
+        errors.append(f"{rel}: schema 必须是 {PLAN_SCHEMA}")
+    if meta.get("kind") != "plan":
+        errors.append(f"{rel}: kind 必须是 plan")
+    slug = meta.get("slug", "")
+    period = meta.get("period", "")
+    if not SLUG_RE.fullmatch(slug):
+        errors.append(f"{rel}: slug 必须为 kebab-case（实际 {slug or '缺失'}）")
+    elif slug not in path.stem:
+        errors.append(f"{rel}: 文件名必须包含 slug（{slug}）")
+    if not PERIOD_RE.fullmatch(period):
+        errors.append(f"{rel}: period 必须为 YYYY-MM（实际 {period or '缺失'}）")
+    elif period not in path.stem:
+        errors.append(f"{rel}: 文件名必须包含 period（{period}）")
+    created = meta.get("createdAt", "")
+    updated = meta.get("updatedAt", "")
+    for key, value in (("createdAt", created), ("updatedAt", updated)):
+        if not ISO_CN_RE.fullmatch(value):
+            errors.append(f"{rel}: {key} 必须为 +08:00 ISO 时间")
+    if ISO_CN_RE.fullmatch(created) and ISO_CN_RE.fullmatch(updated) and updated < created:
+        errors.append(f"{rel}: updatedAt 早于 createdAt（改了正文没留痕？）")
+    status = meta.get("status", "")
+    if status not in PLAN_STATUS:
+        errors.append(f"{rel}: status 非法（{status or '缺失'}；可选 {'/'.join(PLAN_STATUS)}）")
+    if status == "superseded" and meta.get("supersededBy", "null") in ("", "null"):
+        errors.append(f"{rel}: status=superseded 必须填 supersededBy")
+    verdict = meta.get("verdict", "")
+    if verdict not in PLAN_VERDICTS:
+        errors.append(f"{rel}: verdict 必须是 {'/'.join(PLAN_VERDICTS)}（实际 {verdict or '缺失'}）")
+    if not meta.get("owner"):
+        errors.append(f"{rel}: 缺少 owner")
+
+    body = text.split("---", 2)[2] if len(text.split("---", 2)) >= 3 else text
+    headings = {m.group(1).strip() for m in re.finditer(r"^##\s+(.+?)\s*$", body, re.M)}
+    for section in PLAN_SECTIONS:
+        if not any(h == section or h.startswith(section) for h in headings):
+            errors.append(f"{rel}: 缺少必需章节「## {section}」")
+
+    if path.parent.name == "plan":
+        canonical = meta.get("canonical", "")
+        if not canonical or canonical == "null":
+            errors.append(f"{rel}: 方案轨副本必须填 canonical 指向时间维主文件")
+        else:
+            target = root / canonical
+            if not target.is_file():
+                errors.append(f"{rel}: canonical 指向的文件不存在（{canonical}）")
+            else:
+                twin = frontmatter(
+                    target.read_text(encoding="utf-8", errors="replace")) or ""
+                twin_meta = frontmatter_scalars(twin)
+                if twin_meta.get("slug") != slug or twin_meta.get("period") != period:
+                    errors.append(f"{rel}: canonical 主文件的 slug/period 与本文件不一致")
+    return errors
+
+
 def validate_root(root: Path, skip_git: bool = False) -> list[str]:
     errors: list[str] = []
     process_root = root / "docs" / "process"
@@ -949,23 +1158,16 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
     if summary_root.is_dir():
         for path in sorted(summary_root.glob("**/*.md")):
             text = path.read_text(encoding="utf-8", errors="replace")
-            if not text.startswith("---\n"):
+            front = frontmatter(text)
+            if front is None:
                 errors.append(f"{path.relative_to(root)}: 缺少 frontmatter")
                 continue
-            front = text.split("---", 2)[1]
-            refs = []
-            in_refs = False
-            for line in front.splitlines():
-                if line.startswith("refs:"):
-                    in_refs = True
-                    continue
-                if in_refs and line.strip().startswith("- "):
-                    refs.append(line.strip()[2:].strip())
-                elif in_refs and line and not line.startswith(" "):
-                    in_refs = False
-            for ref in refs:
+            for ref in summary_refs(front):
                 if ref not in ids:
                     errors.append(f"{path.relative_to(root)}: 引用不存在的归档 {ref}")
+            meta = frontmatter_scalars(front)
+            if meta.get("kind") == "plan" or path.parent == summary_root / "plan":
+                errors.extend(validate_plan_doc(path, root, text, front))
     return errors
 
 
@@ -1090,17 +1292,189 @@ def spec_checks() -> int:
     ensure_jdk()
     lock_dir = worktree_git_dir() / "session-archive"
     with TestLock(lock_dir / "test.lock", "规约检查"):
-        compile_cmd = f"{mvn} -B -nsu -pl spec-checks -am -DskipTests -Djacoco.skip=true install"
+        # 只编译主代码：ArchUnit 读 target/classes，不需要任何模块的测试类。
+        # -DskipTests 仍会编译测试源码（155 个测试文件，实测多 15.2s），
+        # 必须用 -Dmaven.test.skip=true 才是真正跳过测试编译。
+        compile_cmd = (f"{mvn} -B -nsu -pl spec-checks -am "
+                       f"-Dmaven.test.skip=true -Djacoco.skip=true install")
         proc = subprocess.run(compile_cmd, cwd=ROOT / "platform", shell=True, env=build_env())
         if proc.returncode != 0:
             out(f"spec-checks 编译失败（{compile_cmd}）")
             return proc.returncode
-        proc = subprocess.run(f"{mvn} -B -nsu -pl spec-checks test",
+        proc = subprocess.run(f"{mvn} -B -nsu -pl spec-checks test {surefire_parallel_flag()}".strip(),
                               cwd=ROOT / "platform", shell=True, env=build_env())
     if proc.returncode == 0:
         write_json(cache, {"schema": "spec-checks-cache/v1", "tree": tree,
                            "result": "PASSED", "ranAt": now_iso()})
     return proc.returncode
+
+
+
+# ------------------------------------------------------------------ 模块级绿色证据
+# pre-push 全量兜底（SESSION_ARCHIVE_FULL_TEST=1）默认要跑整个 reactor。
+# 这里按「模块源码 + 它依赖的全部上游模块」算一个闭包哈希：闭包没变说明该模块的
+# 编译输入与可观察行为都不变，可直接跳过。改动只落在一个叶模块时，推送能从全量 167s
+# 降到只跑那一个模块。
+
+MODULE_EVIDENCE_DIR = "module-evidence"
+
+
+def module_dir_names() -> list[str]:
+    """platform/ 下的业务模块目录名（排除前端 web 与构建产物）。"""
+    platform = ROOT / "platform"
+    if not platform.is_dir():
+        return []
+    names = []
+    for child in sorted(platform.iterdir()):
+        if not child.is_dir() or child.name in ("web", "target"):
+            continue
+        if (child / "pom.xml").is_file():
+            names.append(child.name)
+    return names
+
+
+def module_source_hash(module: str) -> str:
+    """模块自身输入指纹：pom.xml + src/**（含测试源码），用 stat 而非内容，够快也够准。"""
+    digest = hashlib.sha256()
+    base = ROOT / "platform" / module
+    targets = [base / "pom.xml"] + sorted((base / "src").rglob("*")) if (base / "src").is_dir() else [base / "pom.xml"]
+    for path in targets:
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        digest.update(f"{rel}:{stat.st_size}:{stat.st_mtime_ns}\n".encode("utf-8"))
+    return digest.hexdigest()
+
+
+_ARTIFACT_RE = re.compile(r"<artifactId>([a-z0-9-]+)</artifactId>")
+
+
+def module_dependencies() -> dict[str, set[str]]:
+    """模块依赖图：解析各模块 pom 里的 <artifactId>agent-…</artifactId>（含 test 依赖）。"""
+    modules = module_dir_names()
+    known = set(modules)
+    deps: dict[str, set[str]] = {}
+    for module in modules:
+        text = (ROOT / "platform" / module / "pom.xml").read_text(encoding="utf-8", errors="replace")
+        found = {m for m in _ARTIFACT_RE.findall(text) if m in known and m != module}
+        deps[module] = found
+    return deps
+
+
+def module_closure_hashes() -> dict[str, str]:
+    """每个模块的闭包哈希 = 自身指纹 + 全部上游模块闭包哈希（递归）。"""
+    deps = module_dependencies()
+    own = {m: module_source_hash(m) for m in deps}
+    memo: dict[str, str] = {}
+    visiting: set[str] = set()
+
+    def closure(module: str) -> str:
+        if module in memo:
+            return memo[module]
+        if module in visiting:  # 依赖环：按自身指纹断开，不递归
+            return own.get(module, "")
+        visiting.add(module)
+        digest = hashlib.sha256()
+        digest.update(own.get(module, "").encode("utf-8"))
+        for dep in sorted(deps.get(module, ())):
+            digest.update(b"|")
+            digest.update(closure(dep).encode("utf-8"))
+        visiting.discard(module)
+        memo[module] = digest.hexdigest()
+        return memo[module]
+
+    for module in deps:
+        closure(module)
+    return memo
+
+
+def module_evidence_path(module: str) -> Path:
+    return shared_state_dir() / MODULE_EVIDENCE_DIR / f"{module}.json"
+
+
+def record_module_green(modules: list[str]) -> None:
+    """记录"这些模块在当前闭包哈希下已跑绿"。"""
+    if not modules:
+        return
+    closures = module_closure_hashes()
+    stamp = now_iso()
+    for module in modules:
+        closure = closures.get(module)
+        if not closure:
+            continue
+        try:
+            write_json(module_evidence_path(module),
+                       {"schema": "module-evidence/v1", "module": module,
+                        "closure": closure, "result": "PASSED", "ranAt": stamp})
+        except OSError:
+            pass
+
+
+def green_modules(modules: list[str]) -> list[str]:
+    """闭包哈希与上次跑绿一致（可跳过）的模块。"""
+    closures = module_closure_hashes()
+    green = []
+    for module in modules:
+        closure = closures.get(module)
+        path = module_evidence_path(module)
+        if not closure or not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("result") == "PASSED" and data.get("closure") == closure:
+            green.append(module)
+    return green
+
+def full_test_backstop() -> int:
+    """pre-push 可选的全量测试兜底（{@code SESSION_ARCHIVE_FULL_TEST=1} 开启）。
+
+    <p>定位：pre-commit 已把"受影响模块编译 + 变更模块测试"做完（秒级），
+    但下游模块的<b>测试</b>没跑。CI 存在时这层由 CI 承担；CI 缺失或改动风险高时
+    在这里补一次全 reactor 测试（实测 166.9s）。结果按 tree 缓存，同 tree 重推不重跑。
+    """
+    if os.environ.get("SESSION_ARCHIVE_FULL_TEST", "") not in ("1", "true", "yes"):
+        return 0
+    tree = write_tree()
+    cache = shared_state_dir() / "full-test-cache.json"
+    if cache.is_file():
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if data.get("tree") == tree and data.get("result") == "PASSED":
+            out(f"复用全量测试绿色缓存（{data.get('ranAt')}，tree 一致）")
+            return 0
+    mvn = maven_binary()
+    ensure_jdk()
+    modules = module_dir_names()
+    green = green_modules(modules)
+    pending = [m for m in modules if m not in green]
+    if modules and not pending:
+        out(f"全量测试兜底：{len(modules)} 个模块闭包哈希全部有绿色证据，跳过")
+        write_json(cache, {"schema": "full-test-cache/v1", "tree": tree,
+                           "result": "PASSED", "ranAt": now_iso()})
+        return 0
+    scope = ",".join(f"!{m}" for m in green) if green else ""
+    command = f"{mvn} -B -nsu -pl {scope or '!spec-checks'} test {surefire_parallel_flag()}".strip()
+    with TestLock(worktree_git_dir() / "session-archive" / "test.lock"):
+        if green:
+            out(f"全量测试兜底：跳过 {len(green)} 个闭包未变的模块（{', '.join(green)}），"
+                f"只跑 {', '.join(pending)}")
+        out(f"运行全量测试兜底：{command}")
+        proc = subprocess.run(command, cwd=ROOT / "platform", shell=True, env=build_env())
+    if proc.returncode != 0:
+        return proc.returncode
+    if pending:
+        record_module_green(pending)
+    write_json(cache, {"schema": "full-test-cache/v1", "tree": tree,
+                       "result": "PASSED", "ranAt": now_iso()})
+    return 0
 
 
 def cmd_gate_pre_push(args) -> int:
@@ -1124,6 +1498,8 @@ def cmd_gate_pre_push(args) -> int:
         return fail("Harness Handbook 已漂移：运行 python tools/handbook/build.py sync 并提交 docs/handbook")
     if spec_checks() != 0:
         return fail("spec-checks 规约检查未通过（架构 + 契约）；禁止推送")
+    if full_test_backstop() != 0:
+        return fail("全量测试兜底未通过（SESSION_ARCHIVE_FULL_TEST=1）；禁止推送")
     return 0
 
 
@@ -1222,6 +1598,61 @@ def cmd_self_test(args) -> int:
             return fail("self-test: 重排后链应恢复一致")
         if reseal_chain("feat", root / "docs" / "process"):
             return fail("self-test: 链已一致时重排不应再改文件")
+
+        # plan 类契约（spec §4.6）：双索引 + 字段 + 必需章节，缺一即红
+        def plan_doc(canonical: str = "", drop: str = "", **over: str) -> str:
+            fields = {
+                "schema": PLAN_SCHEMA,
+                "kind": "plan",
+                "slug": "demo-plan",
+                "period": "2026-11",
+                "createdAt": "2026-11-18T20:00:00+08:00",
+                "updatedAt": "2026-11-18T20:10:00+08:00",
+                "status": "reviewing",
+                "owner": "test",
+                "verdict": "WARN",
+                "supersedes": "null",
+                "supersededBy": "null",
+                "refs": "[]",
+            }
+            if canonical:
+                fields["canonical"] = canonical
+            fields.update(over)
+            head = ["---", *[f"{key}: {value}" for key, value in fields.items()], "---", ""]
+            sections = [f"## {name}\n内容\n" for name in PLAN_SECTIONS if name != drop]
+            return "\n".join(head + ["# 示例方案", "", *sections])
+
+        primary = root / "docs" / "summary" / "2026-11" / "2026-11-18_demo-plan.md"
+        plan = root / "docs" / "summary" / "plan" / "2026-11_demo-plan.md"
+        canonical = "docs/summary/2026-11/2026-11-18_demo-plan.md"
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        primary.write_text(plan_doc(), encoding="utf-8")
+        plan.write_text(plan_doc(canonical=canonical), encoding="utf-8")
+        errors = validate_root(root, skip_git=True)
+        if errors:
+            return fail(f"self-test: 合法 plan 不应报错：{errors}")
+
+        plan.write_text(plan_doc(canonical=canonical, status="wip"), encoding="utf-8")
+        if not any("status 非法" in e for e in validate_root(root, skip_git=True)):
+            return fail("self-test: plan status 非法应报错")
+
+        plan.write_text(plan_doc(canonical=canonical, drop="验收契约"), encoding="utf-8")
+        if not any("验收契约" in e for e in validate_root(root, skip_git=True)):
+            return fail("self-test: plan 缺必需章节应报错")
+
+        plan.write_text(plan_doc(canonical="docs/summary/2026-11/2026-11-18_nope.md"),
+                        encoding="utf-8")
+        if not any("canonical 指向的文件不存在" in e for e in validate_root(root, skip_git=True)):
+            return fail("self-test: plan canonical 悬空应报错")
+
+        plan.write_text(plan_doc(canonical=canonical, updatedAt="2026-11-18T19:00:00+08:00"),
+                        encoding="utf-8")
+        if not any("updatedAt 早于 createdAt" in e for e in validate_root(root, skip_git=True)):
+            return fail("self-test: plan updatedAt 倒退应报错")
+
+        plan.unlink()
+        primary.unlink()
     out("self-test OK")
     return 0
 

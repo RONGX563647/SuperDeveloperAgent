@@ -41,6 +41,11 @@
         <!-- springdoc 3.x 才支持 Spring Framework 7 / Boot 4；Knife4j 4.x 仍绑定 springdoc 2.x -->
         <springdoc.version>3.2.0</springdoc.version>
         <jacoco.version>0.8.12</jacoco.version>
+        <!-- surefire 并行 fork 数：测试类之间互不共享状态（各自 @TempDir），可安全并发。
+             实测 16 核：forkCount=1 → 全 reactor 167s；=2 → 126s；=4 → 90s。
+             默认取 2（小规格 CI 也不过载）；门禁在核数 ≥8 的机器上显式提到 4，
+             用 -Dsurefire.forkCount=N 覆盖，不要写死在插件配置里。 -->
+        <surefire.forkCount>2</surefire.forkCount>
     </properties>
 
     <dependencyManagement>
@@ -143,6 +148,9 @@
                     <!-- 与运行参数一致：测试里的 sqlite-jdbc 也会触发 JDK 24+ 受限方法告警。
                          @{argLine} 由 jacoco prepare-agent 注入；直接写死会覆盖它导致没有覆盖率数据。 -->
                     <argLine>@{argLine} --enable-native-access=ALL-UNNAMED</argLine>
+                    <!-- 测试类并行：见属性 surefire.forkCount 的说明（-Dsurefire.forkCount=N 可覆盖） -->
+                    <forkCount>${surefire.forkCount}</forkCount>
+                    <reuseForks>true</reuseForks>
                 </configuration>
             </plugin>
             <!-- 覆盖率数据供会话归档 summary 聚合（docs/session-archive-spec-v1.md §4.5） -->
