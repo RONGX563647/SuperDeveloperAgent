@@ -20,7 +20,7 @@ import top.rongx.agent.domain.conversation.TimelineEntry;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 
 /** 会话元数据持久化：owner 隔离、状态更新、运行与任务，重启后仍可读。 */
-class SqliteConversationStoreTest {
+class DbConversationStoreTest {
 
     @TempDir
     Path root;
@@ -28,7 +28,7 @@ class SqliteConversationStoreTest {
     @Test
     @DisplayName("会话 CRUD 与 owner 隔离")
     void conversationCrud() {
-        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        DbConversationStore store = new DbConversationStore(root.toString());
         Conversation saved = store.save(Conversation.normal("s-1", "RY", "alice",
                 "首条消息标题", "test", null));
 
@@ -55,7 +55,7 @@ class SqliteConversationStoreTest {
     @Test
     @DisplayName("每个工作区（按用户）只有一个调度会话")
     void supervisorIsUnique() {
-        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        DbConversationStore store = new DbConversationStore(root.toString());
         Conversation supervisor = new Conversation("sup-1", "RY", "alice", "工作区调度",
                 ConversationKind.SUPERVISOR, "supervisor", "test", null,
                 ConversationStatus.IDLE, "", true, false, null, 1, 1);
@@ -67,7 +67,7 @@ class SqliteConversationStoreTest {
     @Test
     @DisplayName("运行与任务落盘，重启（新实例）后仍可读")
     void runsAndTasksSurviveRestart() {
-        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        DbConversationStore store = new DbConversationStore(root.toString());
         store.save(Conversation.normal("s-1", "RY", "alice", "t", "test", null));
         long now = System.currentTimeMillis();
         store.saveRun(new ConversationRun("run-1", "RY", "s-1", "alice", "修复构建", "key",
@@ -85,7 +85,7 @@ class SqliteConversationStoreTest {
                 TaskStatus.TODO, 2, now, now));
 
         // 模拟进程重启：同一个文件，新实例
-        SqliteConversationStore reopened = new SqliteConversationStore(root.toString());
+        DbConversationStore reopened = new DbConversationStore(root.toString());
         assertEquals(RunStatus.SUCCEEDED, reopened.findRun("run-1").orElseThrow().status());
         assertEquals("补测试", reopened.findTasksByProject("RY").get(0).goal());
         assertEquals(1, reopened.findRunsByProject("RY", 10).size());
@@ -95,7 +95,7 @@ class SqliteConversationStoreTest {
     @Test
     @DisplayName("会话时间线落盘，重启（新实例）后仍可读")
     void transcriptSurvivesRestart() {
-        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        DbConversationStore store = new DbConversationStore(root.toString());
         store.save(Conversation.normal("s-1", "RY", "alice", "t", "test", null));
         String payload = "{\"messages\":[{\"id\":\"m-1\",\"role\":\"user\",\"text\":\"你好\"}]}";
         store.saveTranscript("s-1", payload);
@@ -103,7 +103,7 @@ class SqliteConversationStoreTest {
 
         // 覆盖写入而不是追加新行
         store.saveTranscript("s-1", "{\"messages\":[]}");
-        SqliteConversationStore reopened = new SqliteConversationStore(root.toString());
+        DbConversationStore reopened = new DbConversationStore(root.toString());
         assertEquals("{\"messages\":[]}", reopened.findTranscript("s-1").orElseThrow());
         assertTrue(reopened.findTranscript("missing").isEmpty());
     }
@@ -111,7 +111,7 @@ class SqliteConversationStoreTest {
     @Test
     @DisplayName("删除会话时历史运行与任务一并物理删除，不留孤儿行")
     void deleteCascadesRunsAndTasks() {
-        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        DbConversationStore store = new DbConversationStore(root.toString());
         store.save(Conversation.normal("s-1", "RY", "alice", "t", "test", null));
         long now = System.currentTimeMillis();
         store.saveRun(new ConversationRun("run-1", "RY", "s-1", "alice", "跑一下", "key",
@@ -136,7 +136,7 @@ class SqliteConversationStoreTest {
     @Test
     @DisplayName("服务端时间线只追加、按 seq 游标续读，重启后仍在")
     void timelineAppendAndCursor() {
-        SqliteConversationStore store = new SqliteConversationStore(root.toString());
+        DbConversationStore store = new DbConversationStore(root.toString());
         long first = store.append("s-1", "user", "user", "帮我修构建", null, null);
         long second = store.append("s-1", "tool_call", "assistant", null, "read_file", "call-1");
         long third = store.append("s-1", "tool_result", "tool", "file content", "read_file", "call-1");
@@ -154,7 +154,7 @@ class SqliteConversationStoreTest {
                 .map(TimelineEntry::seq).toList());
 
         // 新实例模拟重启：历史仍可读，且会话之间互不串
-        SqliteConversationStore reopened = new SqliteConversationStore(root.toString());
+        DbConversationStore reopened = new DbConversationStore(root.toString());
         assertEquals(3, reopened.entries("s-1", 0, 100).size());
         assertEquals(1, reopened.entries("s-2", 0, 100).size());
 

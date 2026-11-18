@@ -20,9 +20,9 @@ import top.rongx.agent.infra.persistence.SqliteWalCheckpointer;
 /**
  * 双库装配：默认 SQLite，配置 {@code agent.db.url} 后切 PostgreSQL。
  *
- * <p>两库使用同一套 JPA 实体，schema 由 Hibernate {@code hbm2ddl.auto=update}
- * 在启动时生成/补齐。SQLite 没有官方 Flyway 模块，为避免两套 DDL 漂移，
- * PG 也不再单独维护迁移脚本。
+ * <p>两库使用同一套 JPA 实体，schema 由 Flyway 统一迁移（V1 建表 / V2 自增表 / V3 索引，
+ * 见 {@code agent-infra/src/main/resources/db/migration}），Hibernate
+ * {@code hbm2ddl.auto=update} 仅作为安全网补缺列。
  */
 @Configuration
 public class DataSourceConfig {

@@ -37,7 +37,7 @@ import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
 import top.rongx.agent.gateway.bugfix.structured.FixOutput;
 import top.rongx.agent.gateway.bugfix.structured.ReproduceOutput;
 import top.rongx.agent.gateway.bugfix.structured.VerifyOutput;
-import top.rongx.agent.infra.bugfix.SqliteBugFixStore;
+import top.rongx.agent.infra.bugfix.DbBugFixStore;
 
 /**
  * 自动修复编排器的端到端测试：用脚本化 Agent / 假部署 / 假 Git 跑完整状态机，
@@ -55,7 +55,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void runsThroughAllStagesAndCreatesPullRequest() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy());
         BugFixRun started = orchestrator.start(issue("task-1", "BUG"));
 
@@ -74,7 +74,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void mergeTrackerCompletesRunOnlyAfterPullRequestMerged() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         FakeGit git = new FakeGit();
         BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy(), new FakeAgent(),
                 (run, sha) -> "部署成功：" + sha, git);
@@ -96,7 +96,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void mergeTrackerBlocksRunWhenPullRequestClosedWithoutMerge() {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         long now = System.currentTimeMillis();
         BugFixRun waiting = new BugFixRun("bf-waiting", "task-w", "u1", "p1", "GITHUB", "o/r",
                 "1", "标题", "描述", "agent/bugfix-w", BugFixStage.PULL_REQUEST,
@@ -116,7 +116,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void retryResumesFromBlockedStage() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         BugFixPolicy blocked = new BugFixPolicy(true, false, true, "test", "", 2, "", "", "", 0);
         store.save(blocked);
         BugFixOrchestrator orchestrator = orchestrator(store, blocked);
@@ -137,7 +137,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void triggerIgnoresFeatureAndDisabledPolicy() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         BugFixOrchestrator orchestrator = orchestrator(store, BugFixPolicy.defaults());
         DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
         beans.registerSingleton("bugFixOrchestrator", orchestrator);
@@ -161,7 +161,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void cancelDuringStageIsNotOverwrittenByLateResult() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         BugFixAgentPort slow = new FakeAgent() {
@@ -191,7 +191,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void serializesRunsOfTheSameProject() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         AtomicInteger active = new AtomicInteger();
         AtomicInteger max = new AtomicInteger();
         BugFixDeployPort deploy = (run, sha) -> {
@@ -217,7 +217,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void lowConfidenceReproductionBlocksBeforeFix() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         BugFixAgentPort weak = new FakeAgent() {
             @Override
             public <T> T runStructured(BugFixRun run, String prompt, Class<T> type) {
@@ -239,7 +239,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void verifyFailureReturnsToFixAndRetries() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         AtomicInteger verifyCalls = new AtomicInteger();
         BugFixAgentPort agent = new FakeAgent() {
             @Override
@@ -269,7 +269,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void recoverInterruptedRequeuesRunningRuns() {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         long now = System.currentTimeMillis();
         BugFixRun running = new BugFixRun("bf-running", "task-r", "u1", "p1", "GITHUB", "o/r",
                 "1", "标题", "描述", "agent/bugfix-running", BugFixStage.ANALYZE,
@@ -283,7 +283,7 @@ class BugFixOrchestratorTest {
 
     @Test
     void triggerSkipsIssueWithNoAutoFixLabel() throws Exception {
-        SqliteBugFixStore store = new SqliteBugFixStore(temp.toString());
+        DbBugFixStore store = new DbBugFixStore(temp.toString());
         store.save(enabledPolicy());
         BugFixOrchestrator orchestrator = orchestrator(store, enabledPolicy());
         DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
@@ -303,17 +303,17 @@ class BugFixOrchestratorTest {
 
     // ---------------------------------------------------------------- 装配
 
-    private BugFixOrchestrator orchestrator(SqliteBugFixStore store, BugFixPolicy policy) {
+    private BugFixOrchestrator orchestrator(DbBugFixStore store, BugFixPolicy policy) {
         return orchestrator(store, policy, new FakeAgent(), (run, sha) -> "部署成功：" + sha,
                 new FakeGit());
     }
 
-    private BugFixOrchestrator orchestrator(SqliteBugFixStore store, BugFixPolicy policy,
+    private BugFixOrchestrator orchestrator(DbBugFixStore store, BugFixPolicy policy,
                                             BugFixAgentPort agent, BugFixDeployPort deploy) {
         return orchestrator(store, policy, agent, deploy, new FakeGit());
     }
 
-    private BugFixOrchestrator orchestrator(SqliteBugFixStore store, BugFixPolicy policy,
+    private BugFixOrchestrator orchestrator(DbBugFixStore store, BugFixPolicy policy,
                                             BugFixAgentPort agent, BugFixDeployPort deploy,
                                             BugFixGitPort git) {
         store.save(policy);

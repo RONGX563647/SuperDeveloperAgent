@@ -83,4 +83,77 @@ class LegacySqliteImporterTest {
                 "SELECT COUNT(*) FROM run_ledger WHERE id = 'r1' AND summary = '旧记录'"));
         assertEquals(1, count);
     }
+
+    @Test
+    @DisplayName("导入完成后写入 platform_meta 标记，再次执行直接跳过")
+    void skipsFilesWithCompletionMarker() throws Exception {
+        Path platform = tempDir.resolve("platform.db");
+        Path legacy = tempDir.resolve("run_ledger.db");
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + legacy);
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE run_ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+                        project_id TEXT NOT NULL, subject_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+                        state TEXT NOT NULL, summary TEXT NOT NULL, error TEXT NOT NULL,
+                        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)
+                    """);
+            statement.execute("""
+                    INSERT INTO run_ledger VALUES ('r-m','CHAT','p1','','u1','SUCCEEDED','标记前','',1,2)
+                    """);
+        }
+
+        PlatformDb db = PlatformDb.sqlite(platform);
+        AgentDbProperties properties = new AgentDbProperties("", "", "",
+                platform.toString(), 2, true);
+
+        new LegacySqliteImporter(db, properties).run();
+        long marker = db.read(em -> PlatformDb.count(em,
+                "SELECT COUNT(*) FROM platform_meta WHERE meta_key = 'legacy-import:run_ledger.db'"));
+        assertEquals(1, marker, "导入完成后应写入 platform_meta 完成标记");
+
+        // 标记之后旧库继续新增数据：不应再被导入（一次性语义）
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + legacy);
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    INSERT INTO run_ledger VALUES ('r-m2','CHAT','p1','','u1','SUCCEEDED','标记后','',3,4)
+                    """);
+        }
+        new LegacySqliteImporter(db, properties).run();
+        long after = db.read(em -> PlatformDb.count(em,
+                "SELECT COUNT(*) FROM run_ledger WHERE id = 'r-m2'"));
+        assertEquals(0, after, "已有完成标记的旧库不应被再次导入");
+    }
+
+    @Test
+    @DisplayName("删除标记后重放：幂等不产生重复行")
+    void replaysAfterMarkerRemoved() throws Exception {
+        Path platform = tempDir.resolve("platform.db");
+        Path legacy = tempDir.resolve("run_ledger.db");
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + legacy);
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE run_ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+                        project_id TEXT NOT NULL, subject_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+                        state TEXT NOT NULL, summary TEXT NOT NULL, error TEXT NOT NULL,
+                        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)
+                    """);
+            statement.execute("""
+                    INSERT INTO run_ledger VALUES ('r-rp','CHAT','p1','','u1','SUCCEEDED','重放','',1,2)
+                    """);
+        }
+
+        PlatformDb db = PlatformDb.sqlite(platform);
+        AgentDbProperties properties = new AgentDbProperties("", "", "",
+                platform.toString(), 2, true);
+        new LegacySqliteImporter(db, properties).run();
+
+        // 模拟"重放"：手动删标记再跑一次
+        db.run(em -> PlatformDb.update(em,
+                "DELETE FROM platform_meta WHERE meta_key = 'legacy-import:run_ledger.db'"));
+        new LegacySqliteImporter(db, properties).run();
+
+        long count = db.read(em -> PlatformDb.count(em,
+                "SELECT COUNT(*) FROM run_ledger WHERE id = 'r-rp'"));
+        assertEquals(1, count, "重放不得产生重复行");
+    }
 }

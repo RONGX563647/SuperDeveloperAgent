@@ -12,20 +12,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 密钥引用：解析、掩码、摘要不含明文、缺失 fail-closed。 */
-class SqliteEnvironmentStoreSecretTest {
+class DbEnvironmentStoreSecretTest {
 
     @TempDir
     Path workspace;
 
-    private SqliteEnvironmentStore store() {
-        return new SqliteEnvironmentStore(workspace.toString(),
+    private DbEnvironmentStore store() {
+        return new DbEnvironmentStore(workspace.toString(),
                 new SecretBox(workspace.toString(), ""));
     }
 
     @Test
     @DisplayName("整值 secret:// 引用解析为明文，视图与摘要不泄露")
     void resolvesWholeSecretRef() {
-        SqliteEnvironmentStore store = store();
+        DbEnvironmentStore store = store();
         store.saveSecret("p1", "test", "db-password", "s3cr3t-value");
         store.saveEnvVar("test", "DB_PASSWORD", "secret://db-password", true, "TEMPLATE");
         store.saveEnvVar("test", "DB_HOST", "127.0.0.1", false, "TEMPLATE");
@@ -50,7 +50,7 @@ class SqliteEnvironmentStoreSecretTest {
     @Test
     @DisplayName("嵌入 ${secret:name} 占位符解析；轮换后版本变化")
     void resolvesEmbeddedSecretAndRotates() {
-        SqliteEnvironmentStore store = store();
+        DbEnvironmentStore store = store();
         store.saveSecret("p1", "test", "db-password", "v1");
         store.saveEnvVar("test", "DATABASE_URL",
                 "jdbc:mysql://db:3306/app?password=${secret:db-password}", true, "TEMPLATE");
@@ -70,7 +70,7 @@ class SqliteEnvironmentStoreSecretTest {
     @Test
     @DisplayName("引用不存在时进入 missingSecrets，不把占位符原样注入")
     void missingSecretIsFailClosedSignal() {
-        SqliteEnvironmentStore store = store();
+        DbEnvironmentStore store = store();
         store.saveEnvVar("test", "API_TOKEN", "secret://missing", true, "TEMPLATE");
         store.saveEnvVar("test", "URL", "https://x?t=${secret:missing}", true, "TEMPLATE");
 

@@ -156,7 +156,7 @@ npm run build      # vue-tsc strict + 产物
 ## 已知边界（不是遗漏）
 
 1. **`confirm` 工具不签发令牌**——它只把变更单标成待确认，令牌只能由人在 HTTP 接口签发（规约 §4.10 第一道守卫）；
-2. **默认单机 SQLite**——重启不丢；多副本部署需配置 `agent.db.url=jdbc:postgresql://…` 切到 PostgreSQL（两库共用同一套 JPA 实体与 schema）；
+2. **默认单机 SQLite**——重启不丢；多副本部署需配置 `agent.db.url=jdbc:postgresql://…` 切到 PostgreSQL（两库共用同一套 JPA 实体与 schema）。schema 与二级索引由 Flyway 统一迁移（`agent-infra/src/main/resources/db/migration`，V1 建表 / V2 自增表按 `{vendor}` 方言分文件 / V3 索引），Hibernate `ddl-auto=update` 仅作缺列安全网；存量库走 `baseline-on-migrate` 自动补齐索引；
 3. **用户体系默认落 SQLite**（3 个种子账号 + 项目成员列表），没有成员管理接口；多租户未做；
 4. **`GET /api/v1/fs/read` 未实现**——前端文件预览调用该端点，后端只有 ls/probe/roots；
 5. **事件映射用反射**——正式版应把 AgentScope 事件映射成稳定枚举；

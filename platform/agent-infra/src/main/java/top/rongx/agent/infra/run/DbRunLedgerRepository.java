@@ -22,7 +22,7 @@ import top.rongx.agent.infra.persistence.PlatformDb;
  * 不复制各编排的细节状态。
  */
 @Repository
-public class SqliteRunLedgerRepository implements RunLedgerRepository {
+public class DbRunLedgerRepository implements RunLedgerRepository {
 
     private static final String COLUMNS = """
             id, kind, project_id, subject_id, owner_user_id, state, summary, error,
@@ -43,12 +43,12 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
     private final PlatformDb db;
 
     @Autowired
-    public SqliteRunLedgerRepository(PlatformDb db) {
+    public DbRunLedgerRepository(PlatformDb db) {
         this.db = db;
     }
 
     /** 测试/独立进程：按工作区根目录定位统一库文件。 */
-    public SqliteRunLedgerRepository(String workspaceRoot) {
+    public DbRunLedgerRepository(String workspaceRoot) {
         this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("platform.db")));
     }
@@ -76,7 +76,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
     public Optional<RunRecord> find(String id) {
         try {
             return db.read(em -> PlatformDb.row(em,
-                    "SELECT " + COLUMNS + " FROM run_ledger WHERE id = ?", id).map(SqliteRunLedgerRepository::map));
+                    "SELECT " + COLUMNS + " FROM run_ledger WHERE id = ?", id).map(DbRunLedgerRepository::map));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本读取失败：" + e.getMessage(), e);
         }
@@ -88,7 +88,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
                 + " ORDER BY updated_at DESC LIMIT ?";
         try {
             return db.read(em -> PlatformDb.rows(em, sql, projectId,
-                    Math.max(1, Math.min(limit, 200))).stream().map(SqliteRunLedgerRepository::map).toList());
+                    Math.max(1, Math.min(limit, 200))).stream().map(DbRunLedgerRepository::map).toList());
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本查询失败：" + e.getMessage(), e);
         }
@@ -100,7 +100,7 @@ public class SqliteRunLedgerRepository implements RunLedgerRepository {
                 + " ORDER BY updated_at DESC";
         try {
             return db.read(em -> PlatformDb.rows(em, sql).stream()
-                    .map(SqliteRunLedgerRepository::map).toList());
+                    .map(DbRunLedgerRepository::map).toList());
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本查询失败：" + e.getMessage(), e);
         }

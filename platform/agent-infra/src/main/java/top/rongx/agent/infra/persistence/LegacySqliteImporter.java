@@ -3,7 +3,6 @@ package top.rongx.agent.infra.persistence;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -21,9 +20,18 @@ import top.rongx.agent.infra.persistence.config.AgentDbProperties;
  * 旧版多文件 SQLite → 统一库的一次性导入。
  *
  * <p>改造前平台按域拆成 8 个 {@code .db} 文件；改造后统一到 platform.db（或 PostgreSQL）。
- * 只有显式打开 {@code agent.db.import-legacy=true} 才执行，且逐表 {@code ON CONFLICT DO NOTHING}，
- * 不会覆盖统一库里已有的数据。SQLite 目标库走 {@code ATTACH} 原地复制；PostgreSQL
- * 目标库通过 SQLite JDBC 读出后批量写入。
+ *
+ * <p><b>执行语义（一次性）</b>：每个旧库文件导入完成后，在统一库 {@code platform_meta}
+ * 写入 {@code legacy-import:<文件名>} 标记；后续启动见到标记即跳过该文件，
+ * 无论当前后端是 SQLite 还是 PostgreSQL。标记与数据在同一连接内写入，
+ * 因此「导入了但没标记」只可能发生在进程崩溃窗口，此时下次启动按幂等
+ * {@code INSERT OR IGNORE / ON CONFLICT DO NOTHING} 重放一遍也不会产生重复行。
+ *
+ * <p>导入不会覆盖统一库已有数据（逐表 OR IGNORE / DO NOTHING）。确需重放时
+ * 删除对应的 {@code platform_meta} 行即可；彻底关闭导入用 {@code agent.db.import-legacy=false}。
+ *
+ * <p>SQLite 目标库走 {@code ATTACH} 原地复制；PostgreSQL 目标库通过 SQLite JDBC
+ * 读出后批量写入。
  */
 public class LegacySqliteImporter {
 
@@ -32,6 +40,9 @@ public class LegacySqliteImporter {
     private static final List<String> LEGACY_FILES = List.of(
             "projects.db", "automation.db", "conversations.db", "run_ledger.db",
             "token_usage.db", "users.db", "governance.db", "rate_limit.db");
+
+    /** platform_meta 标记前缀：legacy-import:<旧库文件名> -> 导入行数。 */
+    private static final String MARKER_PREFIX = "legacy-import:";
 
     private final PlatformDb db;
     private final AgentDbProperties properties;
@@ -48,13 +59,63 @@ public class LegacySqliteImporter {
         }
         Path directory = legacyDirectory();
         if (directory == null || !Files.isDirectory(directory)) {
-            log.info("未找到旧库目录，跳过导入: {}", directory);
+            log.debug("未找到旧库目录，跳过导入: {}", directory);
             return;
         }
-        if (properties.isPostgres()) {
-            importIntoPostgres(directory);
-        } else {
-            importIntoNewSqlite(directory);
+        int pending = 0;
+        for (String fileName : LEGACY_FILES) {
+            Path legacy = directory.resolve(fileName);
+            if (!Files.isRegularFile(legacy)) {
+                continue;
+            }
+            if (alreadyImported(fileName)) {
+                continue;
+            }
+            pending++;
+            importOne(legacy, fileName);
+        }
+        if (pending == 0) {
+            log.debug("旧库导入：全部文件均已有完成标记，无需处理（目录 {}）", directory);
+        }
+    }
+
+    /** 标记是否存在（读取失败视为未导入，宁可重放也不漏导）。 */
+    private boolean alreadyImported(String fileName) {
+        try {
+            return db.read(em -> PlatformDb.first(em,
+                    "SELECT meta_value FROM platform_meta WHERE meta_key = ?",
+                    MARKER_PREFIX + fileName)).isPresent();
+        } catch (RuntimeException e) {
+            log.warn("读取旧库导入标记失败（将重放 {}）: {}", fileName, e.getMessage());
+            return false;
+        }
+    }
+
+    /** 导入单个旧库并写完成标记；数据与标记同连接提交。 */
+    private void importOne(Path legacy, String fileName) {
+        try (Connection target = db.dataSource().getConnection()) {
+            boolean postgres = properties.isPostgres();
+            int copied = postgres
+                    ? copyFromSqlite(legacy, target)
+                    : copyAttached(target, legacy);
+            markImported(target, fileName, copied);
+            log.info("旧库一次性导入完成: {} -> {} 新增 {} 行{}",
+                    fileName, postgres ? "PostgreSQL" : "统一库", copied,
+                    copied == 0 ? "（旧库为空或行已在统一库中）" : "");
+        } catch (SQLException e) {
+            // 不写标记：下次启动自动重放该文件
+            log.warn("旧库导入失败（不影响启动，下次启动将重试 {}）: {}", fileName, e.getMessage());
+        }
+    }
+
+    private void markImported(Connection target, String fileName, int copied) throws SQLException {
+        String sql = "INSERT INTO platform_meta (meta_key, meta_value, updated_at) VALUES (?,?,?)"
+                + " ON CONFLICT(meta_key) DO NOTHING";
+        try (PreparedStatement statement = target.prepareStatement(sql)) {
+            statement.setString(1, MARKER_PREFIX + fileName);
+            statement.setString(2, String.valueOf(copied));
+            statement.setLong(3, System.currentTimeMillis());
+            statement.executeUpdate();
         }
     }
 
@@ -75,31 +136,7 @@ public class LegacySqliteImporter {
         return Path.of(file).toAbsolutePath().normalize().getParent();
     }
 
-    private void importIntoNewSqlite(Path directory) {
-        int totalCopied = 0;
-        try (Connection target = db.dataSource().getConnection()) {
-            for (String fileName : LEGACY_FILES) {
-                Path legacy = directory.resolve(fileName);
-                if (!Files.isRegularFile(legacy)) {
-                    continue;
-                }
-                totalCopied += copyAttached(target, legacy);
-            }
-        } catch (SQLException e) {
-            log.warn("旧库导入失败（不影响启动）: {}", e.getMessage());
-        }
-        // 导入写入的数据同样先进 WAL；立即 checkpoint 让主文件自包含，
-        // 否则"导入成功"后只拷 .db 仍会丢掉刚导入的行（与本次 bug 同源）。
-        if (totalCopied > 0 && !properties.isPostgres()) {
-            try {
-                SqliteWalCheckpointer.Checkpoint cp = SqliteWalCheckpointer.checkpoint(db.dataSource());
-                log.info("旧库导入后 checkpoint：busy={} 合并={} 页", cp.busy(), cp.checkpointed());
-            } catch (SQLException e) {
-                log.warn("旧库导入后 checkpoint 失败: {}", e.getMessage());
-            }
-        }
-    }
-
+    /** SQLite 目标：ATTACH 旧库原地复制，返回新增行数。 */
     private int copyAttached(Connection target, Path legacy) throws SQLException {
         String alias = "legacy";
         int copied = 0;
@@ -111,7 +148,6 @@ public class LegacySqliteImporter {
                 try {
                     List<String> columns = commonColumns(target, "main." + table, alias + "." + table);
                     if (columns.isEmpty()) {
-                        // 不再静默跳过：明确告警，避免"导入完成"却少了一整张表的数据。
                         skippedTables++;
                         log.warn("旧表 {} 在统一库中无同名表或公共列，已跳过（数据未导入）: {}",
                                 table, legacy.getFileName());
@@ -127,26 +163,11 @@ public class LegacySqliteImporter {
             }
             statement.execute("DETACH DATABASE " + alias);
         }
-        log.info("旧库导入完成: {} -> 新增 {} 行{}", legacy.getFileName(), copied,
-                skippedTables == 0 ? "" : "，跳过 " + skippedTables + " 张表");
         return copied;
     }
 
-    private void importIntoPostgres(Path directory) {
-        try (Connection target = db.dataSource().getConnection()) {
-            for (String fileName : LEGACY_FILES) {
-                Path legacy = directory.resolve(fileName);
-                if (!Files.isRegularFile(legacy)) {
-                    continue;
-                }
-                copyFromSqlite(legacy, target);
-            }
-        } catch (SQLException e) {
-            log.warn("旧库导入 PostgreSQL 失败（不影响启动）: {}", e.getMessage());
-        }
-    }
-
-    private void copyFromSqlite(Path legacy, Connection target) throws SQLException {
+    /** PostgreSQL 目标：JDBC 读旧库批量写入，返回新增行数。 */
+    private int copyFromSqlite(Path legacy, Connection target) throws SQLException {
         try (Connection source = java.sql.DriverManager.getConnection("jdbc:sqlite:" + legacy)) {
             int copied = 0;
             for (String table : tables(source, "main")) {
@@ -161,7 +182,7 @@ public class LegacySqliteImporter {
                     log.warn("跳过旧表 {}: {}", table, e.getMessage());
                 }
             }
-            log.info("旧库导入 PostgreSQL 完成: {} -> {} 行", legacy.getFileName(), copied);
+            return copied;
         }
     }
 

@@ -46,6 +46,21 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
+        <!-- Flyway：统一迁移管理（建表脚本在 agent-infra 的 db/migration 下）。
+             Flyway 10+ 按库拆模块：PG 在 flyway-database-postgresql，SQLite 仍在 flyway-core。 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <!-- Boot 4 把 Flyway 自动配置拆成了独立模块，必须显式引入才会执行迁移 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
         <!-- OpenAPI 3：/v3/api-docs + Swagger UI（/doc.html）。
              单源 = 运行时生成的规范；Knife4j 4.5 依赖 springdoc 2.x，与 Boot 4 不兼容，
              因此 /doc.html 由 springdoc 自带的 Swagger UI 提供（路径保持 Knife4j 习惯）。 -->

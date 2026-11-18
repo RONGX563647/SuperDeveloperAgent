@@ -36,7 +36,7 @@ import top.rongx.agent.infra.persistence.PlatformDb;
  * </ul>
  */
 @Repository
-public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, BugFixNotificationStore {
+public class DbBugFixStore implements BugFixRunStore, BugFixPolicyStore, BugFixNotificationStore {
 
     private static final String RUN_COLUMNS = """
             id, issue_id, user_id, project_id, provider, repo, issue_number, issue_title,
@@ -162,12 +162,12 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
     private final PlatformDb db;
 
     @Autowired
-    public SqliteBugFixStore(PlatformDb db) {
+    public DbBugFixStore(PlatformDb db) {
         this.db = db;
     }
 
     /** 测试/独立进程：按工作区根目录定位统一库文件。 */
-    public SqliteBugFixStore(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+    public DbBugFixStore(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this(standaloneDb(Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("platform.db")));
     }
@@ -226,7 +226,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT " + RUN_COLUMNS + " FROM bugfix_runs WHERE id = ?", id)
-                    .map(SqliteBugFixStore::mapRun));
+                    .map(DbBugFixStore::mapRun));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复运行查询失败：" + e.getMessage(), e);
         }
@@ -247,7 +247,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                         : byUser ? new Object[] {userId, limit <= 0 ? 50 : Math.min(limit, 200)}
                         : byIssue ? new Object[] {issueId, limit <= 0 ? 50 : Math.min(limit, 200)}
                         : new Object[] {limit <= 0 ? 50 : Math.min(limit, 200)};
-                return PlatformDb.rows(em, sql, args).stream().map(SqliteBugFixStore::mapRun).toList();
+                return PlatformDb.rows(em, sql, args).stream().map(DbBugFixStore::mapRun).toList();
             });
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复运行列表查询失败：" + e.getMessage(), e);
@@ -261,7 +261,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 + " ORDER BY updated_at LIMIT ?";
         try {
             return db.read(em -> PlatformDb.rows(em, sql, limit <= 0 ? 20 : Math.min(limit, 100))
-                    .stream().map(SqliteBugFixStore::mapRun).toList());
+                    .stream().map(DbBugFixStore::mapRun).toList());
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "待合并运行查询失败：" + e.getMessage(), e);
         }
@@ -276,7 +276,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
                 + " WHERE issue_id = ? AND status IN ('QUEUED','RUNNING')"
                 + " ORDER BY created_at DESC LIMIT 1";
         try {
-            return db.read(em -> PlatformDb.row(em, sql, issueId).map(SqliteBugFixStore::mapRun));
+            return db.read(em -> PlatformDb.row(em, sql, issueId).map(DbBugFixStore::mapRun));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "活动运行查询失败：" + e.getMessage(), e);
         }
@@ -657,7 +657,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
         try {
             return db.read(em -> PlatformDb.row(em,
                             "SELECT " + POLICY_COLUMNS + " FROM bugfix_policy WHERE id = 1")
-                    .map(SqliteBugFixStore::mapPolicy)
+                    .map(DbBugFixStore::mapPolicy)
                     .orElseGet(BugFixPolicy::defaults));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "自动修复策略读取失败：" + e.getMessage(), e);
@@ -674,7 +674,7 @@ public class SqliteBugFixStore implements BugFixRunStore, BugFixPolicyStore, Bug
             policy = db.read(em -> PlatformDb.row(em,
                             "SELECT " + POLICY_COLUMNS + " FROM bugfix_project_policy WHERE project_id = ?",
                             projectId)
-                    .map(SqliteBugFixStore::mapPolicy));
+                    .map(DbBugFixStore::mapPolicy));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "项目自动修复策略读取失败：" + e.getMessage(), e);
         }

@@ -39,9 +39,9 @@ import top.rongx.agent.infra.persistence.PlatformDb;
  * 补列与旧表迁移已移除，统一入口见 {@link PlatformDb}。
  */
 @Repository
-public class SqliteEnvironmentStore implements EnvironmentStore {
+public class DbEnvironmentStore implements EnvironmentStore {
 
-    private static final Logger log = LoggerFactory.getLogger(SqliteEnvironmentStore.class);
+    private static final Logger log = LoggerFactory.getLogger(DbEnvironmentStore.class);
 
     private static final String TEMPLATE_COLUMNS = """
             env, network, default_target, default_port, health_path,
@@ -64,14 +64,14 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
     private final SecretBox secretBox;
 
     @Autowired
-    public SqliteEnvironmentStore(PlatformDb db, SecretBox secretBox) {
+    public DbEnvironmentStore(PlatformDb db, SecretBox secretBox) {
         this.db = db;
         this.secretBox = secretBox;
         seedTemplates();
     }
 
     /** 测试/独立进程：按工作区根目录定位统一库文件。 */
-    public SqliteEnvironmentStore(
+    public DbEnvironmentStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
         this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
@@ -111,7 +111,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                 + "WHEN 'dev' THEN 1 WHEN 'test' THEN 2 ELSE 3 END";
         try {
             return db.read(em -> PlatformDb.rows(em, sql).stream()
-                    .map(SqliteEnvironmentStore::mapTemplate).toList());
+                    .map(DbEnvironmentStore::mapTemplate).toList());
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板查询失败：" + e.getMessage(), e);
         }
@@ -123,7 +123,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT " + TEMPLATE_COLUMNS + " FROM env_templates WHERE env = ?", env)
-                    .map(SqliteEnvironmentStore::mapTemplate));
+                    .map(DbEnvironmentStore::mapTemplate));
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板查询失败：" + e.getMessage(), e);
         }
@@ -920,7 +920,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT " + BINDING_COLUMNS + " FROM env_bindings WHERE id = ?", id)
-                    .map(SqliteEnvironmentStore::mapBinding));
+                    .map(DbEnvironmentStore::mapBinding));
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定查询失败：" + e.getMessage(), e);
         }
@@ -935,7 +935,7 @@ public class SqliteEnvironmentStore implements EnvironmentStore {
                             + "AND status = 'CONFIRMED' AND expires_at > ? "
                             + "ORDER BY confirmed_at DESC, created_at DESC LIMIT 1",
                     projectId, env, System.currentTimeMillis())
-                    .map(SqliteEnvironmentStore::mapBinding));
+                    .map(DbEnvironmentStore::mapBinding));
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境绑定查询失败：" + e.getMessage(), e);
         }

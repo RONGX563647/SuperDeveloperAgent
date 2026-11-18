@@ -35,7 +35,7 @@ import top.rongx.agent.infra.persistence.PlatformDb;
  * <p>owner 过滤在 SQL 层完成：模型传入的 conversationId 不可信，越权必须在存储层挡住。
  */
 @Repository
-public class SqliteConversationStore
+public class DbConversationStore
         implements ConversationRepository, ConversationRunRepository, WorkspaceTaskRepository,
         ConversationTranscriptRepository, ConversationTimelineRepository {
 
@@ -58,12 +58,12 @@ public class SqliteConversationStore
     private final PlatformDb db;
 
     @Autowired
-    public SqliteConversationStore(PlatformDb db) {
+    public DbConversationStore(PlatformDb db) {
         this.db = db;
     }
 
     /** 测试/独立进程：按工作区根目录定位统一库文件。 */
-    public SqliteConversationStore(
+    public DbConversationStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this(platformDb(workspaceRoot));
     }
@@ -123,7 +123,7 @@ public class SqliteConversationStore
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT " + CONVERSATION_COLUMNS + " FROM conversations WHERE id = ?", id)
-                    .map(SqliteConversationStore::mapConversation));
+                    .map(DbConversationStore::mapConversation));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话查询失败：" + e.getMessage(), e);
         }
@@ -146,7 +146,7 @@ public class SqliteConversationStore
                 + " ORDER BY pinned DESC, last_activity_at DESC";
         try {
             return db.read(em -> PlatformDb.rows(em, sql, projectId, ownerUserId).stream()
-                    .map(SqliteConversationStore::mapConversation).toList());
+                    .map(DbConversationStore::mapConversation).toList());
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话列表查询失败：" + e.getMessage(), e);
         }
@@ -159,7 +159,7 @@ public class SqliteConversationStore
                 + "ORDER BY created_at LIMIT 1";
         try {
             return db.read(em -> PlatformDb.row(em, sql, projectId, ownerUserId,
-                    ConversationKind.SUPERVISOR.name()).map(SqliteConversationStore::mapConversation));
+                    ConversationKind.SUPERVISOR.name()).map(DbConversationStore::mapConversation));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "调度会话查询失败：" + e.getMessage(), e);
         }
@@ -181,7 +181,7 @@ public class SqliteConversationStore
             return db.inTx(em -> {
                 Optional<Conversation> existing = PlatformDb.row(em,
                         "SELECT " + CONVERSATION_COLUMNS + " FROM conversations WHERE id = ?", id)
-                        .map(SqliteConversationStore::mapConversation);
+                        .map(DbConversationStore::mapConversation);
                 if (existing.isEmpty() || !existing.get().ownerUserId().equals(ownerUserId)) {
                     return Optional.<Conversation>empty();
                 }
@@ -417,7 +417,7 @@ public class SqliteConversationStore
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT " + RUN_COLUMNS + " FROM conversation_runs WHERE id = ?", id)
-                    .map(SqliteConversationStore::mapRun));
+                    .map(DbConversationStore::mapRun));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行查询失败：" + e.getMessage(), e);
         }
@@ -431,7 +431,7 @@ public class SqliteConversationStore
         try {
             return db.read(em -> PlatformDb.row(em, sql, conversationId,
                     RunStatus.QUEUED.name(), RunStatus.RUNNING.name())
-                    .map(SqliteConversationStore::mapRun));
+                    .map(DbConversationStore::mapRun));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "活动运行查询失败：" + e.getMessage(), e);
         }
@@ -445,7 +445,7 @@ public class SqliteConversationStore
         try {
             return db.read(em -> PlatformDb.row(em, sql, projectId, goalKey,
                     RunStatus.QUEUED.name(), RunStatus.RUNNING.name())
-                    .map(SqliteConversationStore::mapRun));
+                    .map(DbConversationStore::mapRun));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "重复目标查询失败：" + e.getMessage(), e);
         }
@@ -472,7 +472,7 @@ public class SqliteConversationStore
         try {
             return db.read(em -> PlatformDb.rows(em, sql,
                             RunStatus.QUEUED.name(), RunStatus.RUNNING.name(), Math.max(1, limit))
-                    .stream().map(SqliteConversationStore::mapRun).toList());
+                    .stream().map(DbConversationStore::mapRun).toList());
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "活动运行扫描失败：" + e.getMessage(), e);
         }
@@ -481,7 +481,7 @@ public class SqliteConversationStore
     private List<ConversationRun> queryRuns(String sql, String key, int limit) {
         try {
             return db.read(em -> PlatformDb.rows(em, sql, key, limit).stream()
-                    .map(SqliteConversationStore::mapRun).toList());
+                    .map(DbConversationStore::mapRun).toList());
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行列表查询失败：" + e.getMessage(), e);
         }
@@ -561,7 +561,7 @@ public class SqliteConversationStore
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT " + TASK_COLUMNS + " FROM workspace_tasks WHERE id = ?", id)
-                    .map(SqliteConversationStore::mapTask));
+                    .map(DbConversationStore::mapTask));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务查询失败：" + e.getMessage(), e);
         }
@@ -586,7 +586,7 @@ public class SqliteConversationStore
     private List<WorkspaceTask> queryTasks(String sql, String key) {
         try {
             return db.read(em -> PlatformDb.rows(em, sql, key).stream()
-                    .map(SqliteConversationStore::mapTask).toList());
+                    .map(DbConversationStore::mapTask).toList());
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务列表查询失败：" + e.getMessage(), e);
         }
