@@ -1,0 +1,1087 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-18_0850_merge-remote-snapshot",
+  "category": "chore",
+  "title": "合并远端快照并修复 HostDeployerTest 跨平台依赖",
+  "createdAt": "2026-11-18T08:50:49+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "推送",
+    "toolCallCount": 0
+  },
+  "problem": "本地 0.1.0-snapshot 与远端分叉（本地 9 个持久化提交，远端 26 个沙箱/变更卡提交），直接 push 会被拒绝；且两处改动在 application.yml 与 ChangeRegistry 重叠。",
+  "solution": "merge origin/0.1.0-snapshot：application.yml 两侧改动合并；ChangeRegistry 以 JPA 实现为底并补齐远端新增的状态流转，change_plans 实体加 status 列；HostDeployerTest 的模拟进程按操作系统选择 powershell 或 sleep。",
+  "commits": [
+    {
+      "sha": "898c6e0e79bcc7f01d0c39617d4b361ecc952f6d",
+      "subject": "fix(change): 留痕单不弹确认卡、失败回执回灌并支持查询变更状态",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/handbook/l2/tool-execution.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "5840c5010b28e401cbdf5ad69449392439c9729e"
+        },
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "33853d1e8795cb0158b3dcb425b2f81d23bb2c78"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "08324553086e86b6f61ed3c7dda77a20310f16bb"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/change/ChangePlan.java",
+          "status": "M",
+          "additions": 29,
+          "deletions": 1,
+          "blobHash": "2b5ee0916c039c9f49448c7072cda18294c308c4"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/ChangeStore.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "09534fdeaa6f92e2cdd243db30b61b9cb336dcdb"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/change/ChangePlanTest.java",
+          "status": "A",
+          "additions": 40,
+          "deletions": 0,
+          "blobHash": "7a0dca47618a8e97ef7a62c01970e3ab08e0b1f1"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 13,
+          "deletions": 3,
+          "blobHash": "668293ae99361e41a7310435bd5f833df40cae86"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTest.java",
+          "status": "M",
+          "additions": 51,
+          "deletions": 4,
+          "blobHash": "8f5f212f6e1fcd812f84f71fc914acc865002d63"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChangeController.java",
+          "status": "M",
+          "additions": 26,
+          "deletions": 17,
+          "blobHash": "bcac33f0a742ec9e21dff73171c2518b02427624"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "4c4ceaa007447a7792a22c1f0b43b282371752f3"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/ChangeRegistry.java",
+          "status": "M",
+          "additions": 57,
+          "deletions": 7,
+          "blobHash": "291a46a1dcc89a28ebbc8d4601bf9d9edc7d2d82"
+        },
+        {
+          "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/ChangeRegistryTest.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 0,
+          "blobHash": "f9db89dde6ffe9aee9df61121ca307789cbf6b58"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "6ef0cfb7c561987c001f98d1554a8a678fd49f90"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeTools.java",
+          "status": "M",
+          "additions": 56,
+          "deletions": 4,
+          "blobHash": "0046daa059ee89a9a4c946bf47ad6cd51435533c"
+        },
+        {
+          "path": "platform/web/src/components/chat/ApprovalRequestCard.vue",
+          "status": "M",
+          "additions": 238,
+          "deletions": 85,
+          "blobHash": "d1614c8f417c799ea1d2088b4a91b9e175de575c"
+        },
+        {
+          "path": "platform/web/src/types.ts",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "d1cfd2be0f830cd8d887de3518c281d78a5fff55"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 34,
+          "deletions": 4,
+          "blobHash": "25cbe93d0dbb80fe405366fac9245565e5dbf67f"
+        }
+      ]
+    },
+    {
+      "sha": "412043c4a32c471af63f6a510ed58e2694feb6f5",
+      "subject": "docs: 归档变更卡状态与回执修复会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-17_2238_change-card-status-feedback/manifest.json",
+          "status": "A",
+          "additions": 195,
+          "deletions": 0,
+          "blobHash": "41d033e5baf1be6333177ea4d44c5fd0077ddc72"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-17_2238_change-card-status-feedback.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "e37e68255fcca1ac9ce3c8b5192213d5089521f1"
+        },
+        {
+          "path": "docs/summary/bug/2026-11_change-card-status-feedback.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "55f96669e53b28f7c8839bfc13af996b0830c2e4"
+        }
+      ]
+    },
+    {
+      "sha": "c274cc8f7f2b5addab6e5b96220d2af27f8314fd",
+      "subject": "chore(gate): 测试门禁跨 worktree 加锁并按工作区指纹复用绿色证据",
+      "category": "chore",
+      "files": [
+        {
+          "path": "docs/session-archive-spec-v1.md",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "1b32319477d7d78c2f89a9ea3bebc2251a0ca7aa"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 159,
+          "deletions": 3,
+          "blobHash": "31e2590ce858b4f9aa0847001ea5ba56f90903b5"
+        }
+      ]
+    },
+    {
+      "sha": "c6a2e4a341519fb874cbeae0f58aa1b740288139",
+      "subject": "fix(pipeline): verify 续跑不再退化成发布，沙箱初始化可重试",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "0722bd80f9325cf760d4f1a698e41c544aed3c23"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "0b80c6337d483d22d658b710b2d3984935a79218"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 81,
+          "deletions": 15,
+          "blobHash": "a38c76cdcedf4200ccfaa34386227f9449826f23"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 70,
+          "deletions": 16,
+          "blobHash": "3423bcb938110e5e60ee7e3b9200a0485fbc6c85"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployRecipeFlowTest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "2f35a43da738a9af7abafb2a8ec0a41e1e1e916b"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+          "status": "M",
+          "additions": 77,
+          "deletions": 15,
+          "blobHash": "3ebc278f24b07440f1a16b76d96b9635ab866b73"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+          "status": "A",
+          "additions": 107,
+          "deletions": 0,
+          "blobHash": "21a0146d172786c92d45e2c0b71f5affe8e8c653"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineWatchdogTest.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "757932ff227d74776f89ff1a5872abf6ac99dab0"
+        }
+      ]
+    },
+    {
+      "sha": "8ef14666c0a7022e6756497c7243b89449ba3cce",
+      "subject": "fix(autofix): 变量齐全的绑定自动确认，工具失败不再记成功",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/env/EnvBindingPort.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "2c8ac4e4785e66e8ce4e957fa33b17abd0bcc283"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/ChatRunRecoveryAdvisor.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "3c66e812c2fe18956ae78ad9df6310f0a8f5bc99"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/deploy/ChatRunRecoveryAdvisorFormatTest.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "6b51def173b85668f693e76dc3d65f6847aecfab"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/scaffold/RecipeScaffolder.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "3b4657937ea8fb4251ad3f5e9881e440287890fc"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "fd9e8bc3587a7d7a33fb2f2db86c1ccc25cb490c"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/CiQueryTools.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 8,
+          "blobHash": "8d3c5aa2502932607f75abf481dd62dac9471ece"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvCommandTools.java",
+          "status": "M",
+          "additions": 27,
+          "deletions": 5,
+          "blobHash": "47367fa2f1f0807c9b9095136b9b02bbac8501a5"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/CiQueryToolsHeadTailTest.java",
+          "status": "A",
+          "additions": 42,
+          "deletions": 0,
+          "blobHash": "ccec8b1243dc3fd7286872dd287830ea06b61d71"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/EnvCommandToolsTest.java",
+          "status": "A",
+          "additions": 99,
+          "deletions": 0,
+          "blobHash": "c784e9a5510e3b7296f77af62585b6ade39ec6e7"
+        }
+      ]
+    },
+    {
+      "sha": "d8ce8899e0725a672c530f47a797cd29d9eef8ee",
+      "subject": "docs: 归档流水线 verify 续跑与自愈可靠性修复会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-17_2314_pipeline-verify-resume-autorepair/manifest.json",
+          "status": "A",
+          "additions": 235,
+          "deletions": 0,
+          "blobHash": "e755aa78123a1c943f64ecd216e8ea345d4abd48"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-17_2314_pipeline-verify-resume-autorepair.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "d9aaa0e91797a8cd6858920d74262b9c15dc9a20"
+        },
+        {
+          "path": "docs/summary/bug/2026-11_pipeline-verify-resume-autorepair.md",
+          "status": "A",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "73e20bb877ff9a62fb8de8ec59c4dc10eb031486"
+        }
+      ]
+    },
+    {
+      "sha": "769dd14f599266d48946238fb3e0885660434ef5",
+      "subject": "fix(pipeline): 前端构建注入 npm 镜像与 pnpm store，放宽冷安装预算",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 1,
+          "blobHash": "b15d99bf821cecb7cc57ea5294b0ff84559d3819"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxConfig.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 2,
+          "blobHash": "0f90bb8f7b41a54002c192401c422a3bdc8cd29d"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+          "status": "M",
+          "additions": 16,
+          "deletions": 0,
+          "blobHash": "082bbeb947ff2a0c612f5bca82c7832caedd6fbf"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "a9851484d7db17e98e6225200b1bc774cdbdc8fd"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/scaffold/RecipeScaffolder.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 4,
+          "blobHash": "af21790da98da0ee03253c22395946fe0f79fe4e"
+        },
+        {
+          "path": "platform/web/package.json",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "97d960c64447fd409e295834c4862699bd3fd289"
+        }
+      ]
+    },
+    {
+      "sha": "4b1bc6c6a9e6963ff1f8f614f40b44a6cf4b5fa2",
+      "subject": "docs: 补录 amend 后的变更卡提交归档（898c6e0）",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-17_2350_change-card-backfill/manifest.json",
+          "status": "A",
+          "additions": 195,
+          "deletions": 0,
+          "blobHash": "cb93ee64c2cf2bfa4ffa770ccf7c1edf266b5ac1"
+        }
+      ]
+    },
+    {
+      "sha": "0f6503052521ac75cb0a9f0db97e1b6bd000cefa",
+      "subject": "docs: 归档前端构建超时修复会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-18_0008_frontend-build-timeout/manifest.json",
+          "status": "A",
+          "additions": 101,
+          "deletions": 0,
+          "blobHash": "e65d7128c4cabec45bd3d8745a3ae6b6cae00a88"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_0008_frontend-build-timeout.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "516af76218c1bc12b965d67835550a10806dbe3f"
+        },
+        {
+          "path": "docs/summary/bug/2026-11_frontend-build-timeout.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "4a8ccb8c1842073d662d47a8673b7574fec34401"
+        }
+      ]
+    },
+    {
+      "sha": "d34a3781ee981be2aa814c996990f00ebd19687f",
+      "subject": "fix(deploy): HOST 部署回收同槽遗留进程，避免旧实例占端口",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 77,
+          "deletions": 0,
+          "blobHash": "ab44e8cb5e611088233d504bd6ba1dc42daa2a5f"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTest.java",
+          "status": "M",
+          "additions": 34,
+          "deletions": 0,
+          "blobHash": "cbf13b6d512aec9b21962eb292a47084cb8b6255"
+        }
+      ]
+    },
+    {
+      "sha": "6a899f6813cc312950b78ed6a39613a3fe4e8294",
+      "subject": "docs: 归档 HOST 部署遗留进程回收修复",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-18_0057_host-deploy-orphan-reclaim/manifest.json",
+          "status": "A",
+          "additions": 70,
+          "deletions": 0,
+          "blobHash": "2558b83f810f0133782a2b45137ad3038ecb722b"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_0057_host-deploy-orphan-reclaim.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "2b6c84e95a7d9bcaf46c17bb7ee454eaf0c2c9ae"
+        },
+        {
+          "path": "docs/summary/bug/2026-11_host-deploy-orphan-reclaim.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "e39eca108dc9a4f79d9b991858e9eb5415e7ca97"
+        }
+      ]
+    },
+    {
+      "sha": "7f9294cfb2eeede46f8d0e532a8156a1042457dc",
+      "subject": "fix(pipeline): 健康检查补首页冒烟，页面 5xx 不再假通过",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 38,
+          "deletions": 4,
+          "blobHash": "a769af85c86e901255cc7c1adfec4820bb088ebc"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+          "status": "M",
+          "additions": 64,
+          "deletions": 0,
+          "blobHash": "4d0fac02a0614fc9d84d7ef343d306d6ea559ddd"
+        }
+      ]
+    },
+    {
+      "sha": "2702dec89adf4cfebfb31b0de968745be8b19f59",
+      "subject": "docs: 归档健康检查首页冒烟修复",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-18_0109_health-homepage-smoke/manifest.json",
+          "status": "A",
+          "additions": 70,
+          "deletions": 0,
+          "blobHash": "8ecff8d7a6aa71da560a2662c6a905b9f44ebbca"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_0109_health-homepage-smoke.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "68dad0f3aded5454608297ba65a9752fefac53e5"
+        },
+        {
+          "path": "docs/summary/bug/2026-11_health-homepage-smoke.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "1c428cae74fde9ffc1481fab1d36483b0e141cd7"
+        }
+      ]
+    },
+    {
+      "sha": "52ef7e576a8011f07ff46895a0f0487d649c8d46",
+      "subject": "feat(pipeline): 部署产物固化端口/镜像/探活路径证据",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 16,
+          "deletions": 4,
+          "blobHash": "4324f81e24c3c82b11fe8a5dffcb6530ed33c71a"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 2,
+          "blobHash": "30d347d9a0a5246582e262a6f462aee15515b2ea"
+        }
+      ]
+    },
+    {
+      "sha": "dd45b7c1e78f117ad658cfc6375b12fe9f56a514",
+      "subject": "test(pipeline): 补部署证据链字段用例",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 4,
+          "blobHash": "6ea863acef2154a4818c799b3bd75eb7a33a4241"
+        }
+      ]
+    },
+    {
+      "sha": "36cb5a95d3a8180c857363891b7d9d973fc11d10",
+      "subject": "docs: 归档部署证据链字段",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/feat/2026-11-18_0116_deploy-evidence-fields/manifest.json",
+          "status": "A",
+          "additions": 92,
+          "deletions": 0,
+          "blobHash": "5a5afea695581a785dbd017a411b72bf75550073"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_0116_deploy-evidence-fields.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "fe18822308c9d9e79d685f0011291722e76dbd38"
+        },
+        {
+          "path": "docs/summary/feat/2026-11_deploy-evidence-fields.md",
+          "status": "A",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "74396debd17a0d17c76d1315fe9ce38c30ae6842"
+        }
+      ]
+    },
+    {
+      "sha": "d2846c323afc9809e01c5607d95cd288250bbac5",
+      "subject": "feat(sandbox): 接入 gVisor 运行时并加固缓存卷初始化容器",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 43,
+          "deletions": 2,
+          "blobHash": "35894bfb0148eb24571ca12868c5711f6b29b250"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxConfig.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 2,
+          "blobHash": "a0d4afbd3ac68aa9667ce0f01395cb581cf6adc4"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "4d659b9f96c9d09cd25200911337fa4c43200fb3"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+          "status": "M",
+          "additions": 12,
+          "deletions": 0,
+          "blobHash": "7b3ad1721e6d9c3f1db931a2932954e8fb8f93cf"
+        }
+      ]
+    },
+    {
+      "sha": "aa2a6a827fa4a6477a3c73f4224a730d5f477bdd",
+      "subject": "docs: 归档沙箱 gVisor 运行时接入",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/feat/2026-11-18_0547_sandbox-gvisor-runtime/manifest.json",
+          "status": "A",
+          "additions": 91,
+          "deletions": 0,
+          "blobHash": "f65a244f1c9901d4e4f1c7276bb4b4e32893a606"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_0547_sandbox-gvisor-runtime.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "a8b16e927bab204ff0c4c9c9573084b1e29e2c83"
+        },
+        {
+          "path": "docs/summary/feat/2026-11_sandbox-gvisor-runtime.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "da567f7143df88aacba4ffd73d855eaed897d38b"
+        }
+      ]
+    },
+    {
+      "sha": "a83d4ff00867f12532803eb9b62cf3546f9db0af",
+      "subject": "feat(sandbox): 镜像构建切换到 BuildKit(buildx build --load)",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/recipe/RecipeActionResolver.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "9d1db0c88cfa6fb561436ef082d1c28f3269859a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/scaffold/RecipeScaffolder.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "01ae703b21881615e1ff06a8066420381a16787e"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DockerfileTools.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "8bc8ed4c405ea58dbe775504c9c15c2b2000350f"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DockerfileToolsTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "b19dfd218733a1e95ff4d1b6985c28b685039bb5"
+        }
+      ]
+    },
+    {
+      "sha": "97f91d68f91883726e1c2b441c93faea946c9486",
+      "subject": "test(scaffold): 断言 image_package 配方走 BuildKit(buildx)",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "a5f0177c4ad0c3e58a7c1cd52e78e6d001e83fcf"
+        }
+      ]
+    },
+    {
+      "sha": "f816a5d922329cbeda21e0b4ed4d48c2c0c16848",
+      "subject": "docs: 归档镜像构建切换到 BuildKit",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/feat/2026-11-18_0558_sandbox-buildkit-image-build/manifest.json",
+          "status": "A",
+          "additions": 106,
+          "deletions": 0,
+          "blobHash": "e8ba5775a3aa8f181f3c235be926ea0e3c40361b"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_0558_sandbox-buildkit-image-build.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "40357acc48ca95110a19f021fa56a576f12e74f3"
+        },
+        {
+          "path": "docs/summary/feat/2026-11_sandbox-buildkit-image-build.md",
+          "status": "A",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "f85dbe657874eea811ba40d0e9a141ed258572e3"
+        }
+      ]
+    },
+    {
+      "sha": "e6380aabd70d0db23731504fc0cf59deb200e001",
+      "subject": "feat(sandbox): Docker CLI 抽象，部署/中间件/巡检可切换 podman",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "0b2df79225444113a051d46279b94b6d4ed2dd05"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "3366d537ce0dcc25c5bc71fc5141d57b8b33a9a9"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/AppRuntimeInspector.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 5,
+          "blobHash": "e5f25ce2a04e5d8d4be4d5c154e12de093b2d65e"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 22,
+          "deletions": 11,
+          "blobHash": "63f3666746f346ada227495604f6fe3ac59c5c6e"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerCli.java",
+          "status": "A",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "1cf62dd28ebabc659738f9690859e37a278ca2d9"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 8,
+          "blobHash": "0084ad58603de7e3ae488c7ed086e43c51477ec4"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvProvisioner.java",
+          "status": "M",
+          "additions": 30,
+          "deletions": 12,
+          "blobHash": "3c02c9a79bfe2f91285b2c8c78345211097cece0"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvRuntime.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 3,
+          "blobHash": "ad072e2cb42d12394ccbcf5c9db663fedca24f3d"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineConfig.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 8,
+          "blobHash": "8de9fec1c18950ed37205cbfddabc4914696e281"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerCliTest.java",
+          "status": "A",
+          "additions": 31,
+          "deletions": 0,
+          "blobHash": "08fd6c3f6f00208e1a4b94c2b5ba1ce02d8ac89a"
+        }
+      ]
+    },
+    {
+      "sha": "5c69021f17c82b229ba69afaa26cd7010defcb0b",
+      "subject": "chore(config): 沙箱运行时/初始化镜像/docker 二进制配置项",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "c30efcd162679594df1ef81d061906aa59fe1082"
+        }
+      ]
+    },
+    {
+      "sha": "dd8fd33c6f494f7ae2ba44f180b653111303f1f7",
+      "subject": "test(sandbox): 断言中间件 run 命令跟随配置的 docker 二进制",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerEnvProvisioner.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "01fce497b7aa70144ade7ab7340400d7d2d22360"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerEnvProvisionerTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "efc1438dc29e8a7cb8ea3c71cee602f53307b9b6"
+        }
+      ]
+    },
+    {
+      "sha": "8a1909112f29981ddd0dab0fb20b35d83a5f1a50",
+      "subject": "docs: 归档 Docker CLI 可切换 podman",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/feat/2026-11-18_0641_sandbox-docker-cli-abstraction/manifest.json",
+          "status": "A",
+          "additions": 169,
+          "deletions": 0,
+          "blobHash": "f5c26ddec2ff3f648331529cbd5e33c8620bbd34"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_0641_sandbox-docker-cli-abstraction.md",
+          "status": "A",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "d4284a9e311af1ab0d9e4a0d217dfa34eae6a154"
+        },
+        {
+          "path": "docs/summary/feat/2026-11_sandbox-docker-cli-abstraction.md",
+          "status": "A",
+          "additions": 49,
+          "deletions": 0,
+          "blobHash": "cde20000ca56374bdaa40fae08bd6823897ea54b"
+        }
+      ]
+    },
+    {
+      "sha": "854f4ccd94b567d827a66882deca2e624155507f",
+      "subject": "fix(archive): 新增用例数按引入测试的提交统计，多提交会话不再误判为 0",
+      "category": "bug",
+      "files": [
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 8,
+          "deletions": 1,
+          "blobHash": "7152289e3e62dfa2fff182b03cb29ca67e3af2fa"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/change/ChangePlanTest.java",
+        "status": "A",
+        "additions": 40,
+        "deletions": 0,
+        "blobHash": "7a0dca47618a8e97ef7a62c01970e3ab08e0b1f1"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTest.java",
+        "status": "M",
+        "additions": 51,
+        "deletions": 4,
+        "blobHash": "8f5f212f6e1fcd812f84f71fc914acc865002d63"
+      },
+      {
+        "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/ChangeRegistryTest.java",
+        "status": "M",
+        "additions": 19,
+        "deletions": 0,
+        "blobHash": "f9db89dde6ffe9aee9df61121ca307789cbf6b58"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DeployRecipeFlowTest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 0,
+        "blobHash": "2f35a43da738a9af7abafb2a8ec0a41e1e1e916b"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+        "status": "M",
+        "additions": 77,
+        "deletions": 15,
+        "blobHash": "3ebc278f24b07440f1a16b76d96b9635ab866b73"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+        "status": "A",
+        "additions": 107,
+        "deletions": 0,
+        "blobHash": "21a0146d172786c92d45e2c0b71f5affe8e8c653"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineWatchdogTest.java",
+        "status": "M",
+        "additions": 2,
+        "deletions": 1,
+        "blobHash": "757932ff227d74776f89ff1a5872abf6ac99dab0"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/deploy/ChatRunRecoveryAdvisorFormatTest.java",
+        "status": "M",
+        "additions": 10,
+        "deletions": 0,
+        "blobHash": "6b51def173b85668f693e76dc3d65f6847aecfab"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "fd9e8bc3587a7d7a33fb2f2db86c1ccc25cb490c"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/CiQueryToolsHeadTailTest.java",
+        "status": "A",
+        "additions": 42,
+        "deletions": 0,
+        "blobHash": "ccec8b1243dc3fd7286872dd287830ea06b61d71"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/EnvCommandToolsTest.java",
+        "status": "A",
+        "additions": 99,
+        "deletions": 0,
+        "blobHash": "c784e9a5510e3b7296f77af62585b6ade39ec6e7"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+        "status": "M",
+        "additions": 16,
+        "deletions": 0,
+        "blobHash": "082bbeb947ff2a0c612f5bca82c7832caedd6fbf"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTest.java",
+        "status": "M",
+        "additions": 34,
+        "deletions": 0,
+        "blobHash": "cbf13b6d512aec9b21962eb292a47084cb8b6255"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+        "status": "M",
+        "additions": 64,
+        "deletions": 0,
+        "blobHash": "4d0fac02a0614fc9d84d7ef343d306d6ea559ddd"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 2,
+        "blobHash": "30d347d9a0a5246582e262a6f462aee15515b2ea"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DeployStageTest.java",
+        "status": "M",
+        "additions": 17,
+        "deletions": 4,
+        "blobHash": "6ea863acef2154a4818c799b3bd75eb7a33a4241"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+        "status": "M",
+        "additions": 21,
+        "deletions": 0,
+        "blobHash": "4d659b9f96c9d09cd25200911337fa4c43200fb3"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+        "status": "M",
+        "additions": 12,
+        "deletions": 0,
+        "blobHash": "7b3ad1721e6d9c3f1db931a2932954e8fb8f93cf"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DockerfileToolsTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "b19dfd218733a1e95ff4d1b6985c28b685039bb5"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/scaffold/RecipeScaffolderTest.java",
+        "status": "M",
+        "additions": 14,
+        "deletions": 0,
+        "blobHash": "a5f0177c4ad0c3e58a7c1cd52e78e6d001e83fcf"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerCliTest.java",
+        "status": "A",
+        "additions": 31,
+        "deletions": 0,
+        "blobHash": "08fd6c3f6f00208e1a4b94c2b5ba1ce02d8ac89a"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerEnvProvisionerTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 0,
+        "blobHash": "efc1438dc29e8a7cb8ea3c71cee602f53307b9b6"
+      }
+    ],
+    "casesAdded": 32,
+    "command": "mvn -B test -Djacoco.skip=true -Dtest='!ProcessArchiveTest,!DeployEnvPrecheckTest,!DeployRecipeFlowTest,!DockerDaemonRepairTest' -Dsurefire.failIfNoSpecifiedTests=false",
+    "result": "PASSED",
+    "evidence": "Tests run: 602, Failures: 0, Errors: 0, Skipped: 4"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-governance",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools",
+      "web"
+    ],
+    "verification": "合并后全量：602 用例，0 失败 0 错误 4 跳过（排除 4 个依赖 Docker/历史归档/Windows 的环境用例）。"
+  },
+  "followUps": [
+    "推送"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_0850_merge-remote-snapshot"
+    ]
+  },
+  "chain": {
+    "prev": "dac3e75f4b46d31e5f73e7187d7491dbefd14b6a6b760bf11f4d9a3efde9fabb",
+    "self": "956a2c76ad32cb8169db84efa093d8f6aa58ff4b124ab07d35a780feed205e3d"
+  }
+}
