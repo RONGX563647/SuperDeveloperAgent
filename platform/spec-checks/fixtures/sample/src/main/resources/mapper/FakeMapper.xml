@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 反例样例：MyBatis 用 ${} 拼接（R03）。只被 RuleFixtureSelfTest 扫描。 -->
+<mapper namespace="top.rongx.agent.sample.FakeMapper">
+    <select id="find" resultType="string">
+        SELECT name FROM users WHERE name = '${name}'
+    </select>
+</mapper>

@@ -1,0 +1,132 @@
+name: ci
+
+# 真实 CI：本地钩子可以被 --no-verify 绕过，远端这一层才是强制力。
+# 四个 job 与本地门禁共用同一组命令，避免"本地绿、CI 红"的分叉。
+#
+# 需要你在 GitHub 仓库设置里把这些 job 设为 required checks：
+#   Settings → Branches → Branch protection rules → Require status checks
+#   backend / frontend / docs / contract
+
+on:
+  push:
+    branches: [main, "0.1.0-snapshot"]
+  pull_request:
+    branches: [main, "0.1.0-snapshot"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 与 platform/pom.xml 的 java.release 对齐
+  JAVA_VERSION: "21"
+  NODE_VERSION: "20"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  backend:
+    name: backend (mvn verify)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 归档契约要读历史提交
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: mvn verify（编译 + 单测 + spec-checks）
+        working-directory: platform
+        run: mvn -B -ntp verify
+        env:
+          # CI 机器核数不固定：让 surefire 按可用核数走 pom 默认（2），
+          # 需要更快可在仓库变量里覆盖。
+          MAVEN_OPTS: -Xmx2g
+
+      - name: 上传测试与覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-and-jacoco
+          path: |
+            platform/*/target/surefire-reports/**
+            platform/*/target/site/jacoco/**
+          retention-days: 7
+
+  frontend:
+    name: frontend (typecheck + api contract + vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: platform/web/pnpm-lock.yaml
+
+      - name: 安装依赖
+        working-directory: platform/web
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        working-directory: platform/web
+        run: pnpm typecheck
+
+      - name: 前端契约（schema.d.ts 必须与 OpenAPI 一致）
+        working-directory: platform/web
+        run: pnpm check:api-types
+
+      - name: 单元测试
+        working-directory: platform/web
+        run: pnpm test
+
+  docs:
+    name: docs (doc-marshal + 会话归档)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 文档契约检查
+        run: |
+          pip install --quiet 'doc-marshal==0.6.1'
+          doc-marshal check --all
+
+      - name: 会话归档校验（不依赖本地钩子）
+        run: python tools/session-archive/gate.py validate
+
+      - name: Handbook 漂移
+        run: python tools/handbook/build.py check
+
+  contract:
+    name: contract (api-docs-mcp)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 工具自测
+        run: node --test tools/api-docs-mcp/audit.test.mjs tools/api-docs-mcp/mock.test.mjs
+
+      - name: 前端契约审计（严格模式）
+        run: node tools/api-docs-mcp/audit.mjs --strict

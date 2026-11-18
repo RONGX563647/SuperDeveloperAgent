@@ -4,8 +4,8 @@
  * 运行：node --experimental-strip-types src/state/agentEventReducer.test.ts
  * （Node 22+ 原生支持 TS 类型剥离；或用 tsx 运行）
  */
-import { emptyAgentProjection, reduceAgentEvent, toolDisplayName } from './agentEventReducer'
-import type { AgentEvent } from '../types'
+import { emptyAgentProjection, reduceAgentEvent, toolDisplayName } from './agentEventReducer.ts'
+import type { AgentEvent } from '../types.ts'
 
 let passed = 0
 let failed = 0

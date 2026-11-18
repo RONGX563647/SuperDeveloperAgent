@@ -12,7 +12,8 @@
     "typecheck": "vue-tsc --noEmit",
     "gen:api-types": "openapi-typescript ../agent-gateway/src/main/resources/api/openapi.json -o src/api/generated/schema.d.ts",
     "check:api-types": "npm run gen:api-types && git diff --exit-code -- src/api/generated/schema.d.ts",
-    "mock:gen": "node ../../tools/api-docs-mcp/mock.mjs"
+    "mock:gen": "node ../../tools/api-docs-mcp/mock.mjs",
+    "test": "node --experimental-strip-types --import ./tools/ts-resolve.mjs src/state/agentEventReducer.test.ts && node --experimental-strip-types --import ./tools/ts-resolve.mjs src/components/chat/capabilityOrder.test.ts && node --experimental-strip-types --import ./tools/ts-resolve.mjs src/views/pipelineLayout.test.ts"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

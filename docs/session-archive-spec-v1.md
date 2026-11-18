@@ -169,7 +169,24 @@ docs/
 | `gate.py install-hooks` | 设置 `core.hooksPath=.githooks`，并清掉旧版复制到 `.git/hooks` 的副本 |
 
 耗时预算：`pre-commit ≤ 60s`、`spec-checks ≤ 180s`、`full-test ≤ 600s`；超预算由
-`metrics` 标「超预算」。注意 `install-hooks` 清理旧副本时必须用
+`metrics` 标「超预算」。
+
+### 3.3.4 规则自测、覆盖率闸门与前端自检
+
+| 机制 | 位置 | 说明 |
+|---|---|---|
+| 禁令规则自测 | `platform/spec-checks/fixtures/` + `RuleFixtureSelfTest` | 每条 R 规则必须有"必命中"样例，另有一组"零误报"正例；规则正则写错会立刻红（此前 R05/R10 就是死规则） |
+| 覆盖率闸门 | 根 pom 的 jacoco `check`（verify 阶段）+ 各模块 `jacoco.line.minimum` | 逐模块棘轮，阈值取实测基线小幅下浮；`test` 阶段不付这个成本 |
+| ArchUnit 基线收紧 | `spec-checks/pom.xml` 的 `allowStoreCreation=false` | 新增规则时不会静默冻结既有违规；更新基线必须显式提交 |
+| 前端自检 | `platform/web/tools/ts-resolve.mjs` + 三个 `.test.ts` | 零依赖：Node 22 `--experimental-strip-types` 跑 TS，钩子补无扩展名导入；pre-push 自动执行（< 1s） |
+| 真实 CI | `.github/workflows/ci.yml` | backend / frontend / docs / contract 四个 job，与本地门禁共用同一组命令 |
+
+**整文件匹配**：禁令扫描按文件内容匹配后再把偏移换算成行号，而不是逐行匹配——
+"空 catch"「@Autowired 换行后是字段声明」这类规则天然跨行，逐行匹配会让规则永远不可能命中。
+
+**覆盖率闸门只吃 verify**：`mvn test`（pre-commit 用）不做覆盖率检查，避免为每次提交增加成本；
+CI 与手动 `mvn verify` 才执行 `jacoco:check`。
+注意 `install-hooks` 清理旧副本时必须用
 `git rev-parse --absolute-git-dir` 拼 `hooks/`，不能用 `--git-path hooks`
 ——设置 `core.hooksPath` 后后者返回 `.githooks` 本身，会把仓库里的钩子脚本删掉。
 

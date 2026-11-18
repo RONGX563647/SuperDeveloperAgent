@@ -1597,6 +1597,44 @@ def full_test_backstop() -> int:
     return 0
 
 
+
+def web_tests() -> int:
+    """前端零依赖自检（platform/web 下的三个 .test.ts 脚本）。
+
+    <p>这些脚本不依赖 vitest：Node 22 的 `--experimental-strip-types` 直接跑 TS，
+    `tools/ts-resolve.mjs` 负责把无扩展名的相对导入补成 .ts。整套跑完 < 1s，
+    所以不做"只在改动 web 时才跑"的判断——省下的逻辑成本比它省的时间更贵。
+
+    <p>没有 node 时跳过（与 PythonScripts 找不到 python 时的处理一致：不能因为
+    环境缺工具就把门禁判红）。
+    """
+    node = shutil.which("node")
+    if not node:
+        out("未找到 node，跳过前端自检")
+        return 0
+    web = ROOT / "platform" / "web"
+    if not web.is_dir():
+        return 0
+    scripts = [
+        "src/state/agentEventReducer.test.ts",
+        "src/components/chat/capabilityOrder.test.ts",
+        "src/views/pipelineLayout.test.ts",
+    ]
+    begun = time.time()
+    for script in scripts:
+        proc = subprocess.run(
+            [node, "--experimental-strip-types", "--import", "./tools/ts-resolve.mjs", script],
+            cwd=web, env=clean_env(), capture_output=True, text=True)
+        if proc.returncode != 0:
+            record_metric("web-test", time.time() - begun, result="FAILED")
+            out(proc.stdout)
+            out(proc.stderr)
+            return fail(f"前端自检失败：{script}")
+    record_metric("web-test", time.time() - begun, result="PASSED")
+    out(f"前端自检通过（{len(scripts)} 个脚本）")
+    return 0
+
+
 def cmd_gate_pre_push(args) -> int:
     session = active_session()
     if session:
@@ -1617,6 +1655,8 @@ def cmd_gate_pre_push(args) -> int:
         return result
     if handbook_check() != 0:
         return fail("Harness Handbook 已漂移：运行 python tools/handbook/build.py sync 并提交 docs/handbook")
+    if web_tests() != 0:
+        return fail("前端自检未通过（platform/web 下的自检脚本）；禁止推送")
     if spec_checks() != 0:
         return fail("spec-checks 规约检查未通过（架构 + 契约）；禁止推送")
     if full_test_backstop() != 0:

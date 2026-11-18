@@ -276,6 +276,18 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 踩坑记录：`install-hooks` 清理旧副本时必须用 `git rev-parse --absolute-git-dir` 拼 `hooks/`；
 用 `--git-path hooks` 在 `core.hooksPath` 生效后会返回 `.githooks` 本身，把仓库里的钩子脚本删掉。
 
+
+### 第四批落地（CI + 规则自测 + 覆盖率闸门 + 前端自检）
+
+| # | 能力 | 落点 | 验证 |
+|---|---|---|---|
+| O12 | 真实 CI | `.github/workflows/ci.yml`（backend/frontend/docs/contract） | 结构校验：4 job 均有 runs-on/steps，关键命令齐全 |
+| O13 | 规则 fixture 自测 | `spec-checks/fixtures/` + `RuleFixtureSelfTest` | 14/14 规则命中；正例零误报；**抓出 R05/R10 死规则** |
+| O14 | 整文件匹配 | `ForbiddenPatternScan.violations` | 跨行规则（空 catch、注解+字段）真正生效 |
+| O15 | 覆盖率闸门 | jacoco `check` + 逐模块 `jacoco.line.minimum` | 全量 verify 144.7s 全绿；阈值 99% 时构建失败（反证） |
+| O16 | ArchUnit 收紧 | `allowStoreCreation=false` | spec-checks 24 用例全绿 |
+| O17 | 前端自检 | `web/tools/ts-resolve.mjs` + `pnpm test` | 3 个脚本 38 条断言全绿，pre-push 自动跑（0.59s） |
+
 ## 验收契约
 
 ### 契约条款（此节是完成判定的唯一口径）
@@ -313,13 +325,13 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 | # | 阶段 | 状态 | 依据 |
 |---|---|---|---|
 | C0 | 契约 | 已完成 | 本文件已按 §4.6 建档（frontmatter + 双索引），`gate.py validate` 通过 |
-| C1 | 阶段一 | 未开始 | 待新增 `.github/workflows/ci.yml` |
+| C1 | 阶段一 | 已完成 | `.github/workflows/ci.yml` 四 job（backend/frontend/docs/contract），结构校验通过；远端还需手动开 required checks |
 | C2 | 阶段一 | 已完成 | `gate.py install-hooks` + `install-hooks.ps1` 设置 `core.hooksPath=.githooks`；`doctor` 显示钩子来源，旧 `.git/hooks` 副本自动清理 |
-| C3 | 阶段一 | 未开始 | 待补 `vitest` 依赖与 CI `frontend` job |
-| C4 | 阶段二 | 未开始 | 待加 jacoco `check` goal 与 patch 阈值 |
+| C3 | 阶段一 | 已完成 | 不引入 vitest：Node 22 `--experimental-strip-types` + `platform/web/tools/ts-resolve.mjs` 跑通 3 个 `.test.ts`（38 条断言），`pnpm test` 已接入 |
+| C4 | 阶段二 | 已完成 | jacoco `check`（verify）+ 逐模块棘轮：tools .18 / gateway .28 / domain .33 / executor .44 / infra .50 / runtime .51 / governance .70；反证：阈值 99% 时构建失败 |
 | C5 | 阶段二 | 未开始 | 待重定义 pre-push 契约 |
-| C6 | 阶段二 | 未开始 | 待 CI 剖面置 `allowStoreCreation=false` |
-| C7 | 阶段二 | 未开始 | 待建 `spec-checks/fixtures/` |
+| C6 | 阶段二 | 已完成 | `spec-checks/pom.xml` 置 false；基线存在（0 违规）故仍全绿 |
+| C7 | 阶段二 | 已完成 | `fixtures/sample` + `fixtures/clean` + `RuleFixtureSelfTest`：14 条规则全命中、正例零误报；顺带发现并修掉 R05/R10 两条死规则 |
 | C8 | 阶段二 | 已完成 | `gate.py doctor` 打印 python/git/JDK 实际版本、mvn、hooksPath、会话与缓存；JAVA_HOME=17 时仍能报出实际使用 jdk21 |
 | C9 | 阶段三 | 未开始 | 待加 gitleaks / osv-scanner job |
 | C10 | 阶段三 | 未开始 | 待引入 failsafe 与 integration tag |
@@ -330,6 +342,7 @@ P2-1/P2-2（安全与集成层，投入最大、见效最慢）
 
 ## 变更记录
 
+- 2026-11-18T22:50 第四批落地：CI 工作流、fixture 规则自测（抓出 R05/R10 死规则并改为整文件匹配）、覆盖率闸门（逐模块棘轮）、ArchUnit 收紧、前端零依赖自检；C1/C3/C4/C6/C7 置为已完成。
 - 2026-11-18T21:25 第三批落地：多会话并行（per-worktree 会话注册表）、`doctor`、`metrics`、`install-hooks` 走 `core.hooksPath`；C2/C8/C11 置为已完成。
 - 2026-11-18T20:40 第二批落地：慢测试 `@Tag("slow")`（gateway f=2 时 −12.4s）、模块级绿色证据（pre-push 兜底按闭包跳过）、`ApiDocsSnapshotTest` 并发敏感性说明；新增验收项 C14。
 - 2026-11-18T20:25 补「性能实测与已落地优化」：给出改前/改后实测（pre-commit 171s→13.3s、spec-checks 34.9s→20s 级、全 reactor 166.9s→90.1s），并新增验收项 C13（门禁耗时预算）。

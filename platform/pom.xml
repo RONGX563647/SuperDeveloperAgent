@@ -41,6 +41,10 @@
         <!-- springdoc 3.x 才支持 Spring Framework 7 / Boot 4；Knife4j 4.x 仍绑定 springdoc 2.x -->
         <springdoc.version>3.2.0</springdoc.version>
         <jacoco.version>0.8.12</jacoco.version>
+        <!-- 覆盖率闸门（棘轮）：阈值取各模块当前实测值小幅下浮，只升不降。
+             每模块在自身 pom 的 <properties> 里覆盖；默认 0 表示未设闸门（新模块不阻断构建）。
+             只有 verify 阶段（CI / 手动 mvn verify）才检查，test 阶段不付出这个成本。 -->
+        <jacoco.line.minimum>0.00</jacoco.line.minimum>
         <!-- surefire 并行 fork 数：测试类之间互不共享状态（各自 @TempDir），可安全并发。
              实测 16 核：forkCount=1 → 全 reactor 167s；=2 → 126s；=4 → 90s。
              默认取 2（小规格 CI 也不过载）；门禁在核数 ≥8 的机器上显式提到 4，
@@ -167,6 +171,25 @@
                         <id>report</id>
                         <phase>test</phase>
                         <goals><goal>report</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.line.minimum}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
