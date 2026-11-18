@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.charset.MalformedInputException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -83,7 +84,7 @@ class ForbiddenPatternScanTest {
                     continue;
                 }
                 scanned++;
-                List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+                List<String> lines = readAllLinesUtf8(root, file);
                 for (int i = 0; i < lines.size(); i++) {
                     if (!rule.pattern().matcher(lines.get(i)).find()) {
                         continue;
@@ -102,6 +103,16 @@ class ForbiddenPatternScanTest {
         assertTrue(violations.isEmpty(),
                 () -> String.format("发现 %d 处规约违规（扫描 %d 个文件实例）：%n%s",
                         violations.size(), scannedFiles, String.join(System.lineSeparator(), violations)));
+    }
+
+    /** UTF-8 读取；文件含非法字节时报出具体路径（MalformedInputException 默认不带路径，难定位）。 */
+    private static List<String> readAllLinesUtf8(Path root, Path file) throws IOException {
+        try {
+            return Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (MalformedInputException e) {
+            throw new IOException("文件不是合法 UTF-8（Input length = " + e.getInputLength()
+                    + "）：" + root.relativize(file) + "，请转码为 UTF-8 或登记豁免", e);
+        }
     }
 
     private static boolean isIgnored(Rule rule, List<String> lines, int index) {

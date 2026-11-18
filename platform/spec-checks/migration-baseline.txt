@@ -7,3 +7,8 @@
 #                ForEach-Object { "{0} {1}" -f $_.FullName.Replace((Get-Location).Path + '\','').Replace('\','/'),
 #                                            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() }
 #   bash       : find . -path '*/db/migration/V*.sql' -type f -exec sha256sum {} \;
+
+agent-infra/src/main/resources/db/migration/common/V1__platform_schema.sql 79bebf6d1b949022c43e877b2e332d7e00270ed7ccb2ce18a6f21431e4e01dfb
+agent-infra/src/main/resources/db/migration/common/V3__platform_indexes.sql f3eff7998fba2fdd7a0c6cd12287d7c4fee1c9f855af26c5c35988b83f278dbc
+agent-infra/src/main/resources/db/migration/postgresql/V2__identity_tables.sql e74cc85c1f5333d391c86e8178d247b13f86b8ba0406e295e34167d119d8a0df
+agent-infra/src/main/resources/db/migration/sqlite/V2__identity_tables.sql cd506205469d9a97b2e3f78c081dc4cbc03280795525e50478ff3f5f4f37e200
