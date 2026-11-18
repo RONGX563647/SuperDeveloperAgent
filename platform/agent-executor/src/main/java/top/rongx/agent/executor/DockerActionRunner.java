@@ -8,6 +8,7 @@ import java.util.function.Consumer;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.SandboxDeniedException;
 import top.rongx.agent.domain.run.StageResult;
 
 /**
@@ -53,6 +54,8 @@ public class DockerActionRunner extends AbstractActionRunner {
         String container = sandbox.beginContainer();
         try {
             long prepareStart = System.nanoTime();
+            // 隔离参数先落日志：出问题时第一句话永远是「这次到底隔离了什么」
+            sandbox.logIsolation(live);
             // 先确认工具链镜像在本机，再动缓存卷：缺镜像是配置问题，应在数秒内明确报出
             sandbox.ensureImageReady(cancelled, live);
             // tag 会被重新 pull 覆盖，同名 tag 在不同时间可能对应不同镜像；
@@ -88,6 +91,14 @@ public class DockerActionRunner extends AbstractActionRunner {
             ActionSpec withBudget = new ActionSpec(spec.action(), spec.steps(), spec.produce(),
                     Duration.ofMillis(budgetMs - spentMs), spec.source());
             return super.run(workspace, withBudget, cancelled, live);
+        } catch (SandboxDeniedException denied) {
+            // 策略拒绝是「状态冲突」而不是「命令失败」：结构化返回，交给页面与自愈分层处理
+            String why = denied.structured();
+            if (live != null) {
+                live.accept("[sandbox] ⛔ " + ErrorCode.ENV_POLICY_DENIED.code() + " " + why + "\n");
+            }
+            return new ActionResult(StageResult.failed(spec.action().wireName(), 126,
+                    ErrorCode.ENV_POLICY_DENIED.code(), why, 0), why);
         } catch (RuntimeException e) {
             String why = e.getMessage() == null ? e.toString() : e.getMessage();
             String code = why.contains(ErrorCode.TIMEOUT.code()) ? ErrorCode.TIMEOUT.code()

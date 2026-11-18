@@ -11,6 +11,7 @@ import java.util.function.LongPredicate;
 import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.error.SandboxDeniedException;
 
 /**
  * 容器沙箱：把一条业务命令包成 {@code docker run}。
@@ -720,5 +721,116 @@ public class DockerSandbox {
     public String describe() {
         return "docker image=" + image + " network=" + network
                 + " user=" + user + " mem=" + memory + " cpus=" + cpus;
+    }
+
+    /**
+     * 当前生效的隔离参数快照（结构化，供运行日志、拒绝信息与设置页展示）。
+     *
+     * <p>为什么要有快照：出问题时第一句话永远是「这次到底隔离了什么」。
+     * 散落在 {@link #wrap} 里的参数无法回答，用户只能去翻配置。
+     */
+    public List<String> isolationSnapshot() {
+        List<String> snapshot = new ArrayList<>();
+        snapshot.add("runtime=" + (runtime == null || runtime.isBlank() ? "runc" : runtime));
+        snapshot.add("network=" + network);
+        snapshot.add("user=" + user);
+        snapshot.add("memory=" + memory);
+        snapshot.add("cpus=" + cpus);
+        snapshot.add("pids=" + pidsLimit);
+        snapshot.add("cap-drop=ALL");
+        snapshot.add("no-new-privileges");
+        snapshot.add("read-only-rootfs");
+        snapshot.add("tmpfs=/tmp:rw,exec");
+        snapshot.add("mounts=/ws,+cache");
+        return List.copyOf(snapshot);
+    }
+
+    /** 一次性写入快照到运行日志（有 live 消费者时）。 */
+    public void logIsolation(Consumer<String> live) {
+        notify(live, "[sandbox] 隔离参数 " + String.join(" ", isolationSnapshot()) + "\n");
+    }
+
+    /**
+     * 网络档位校验：声明要外联但策略把网络关掉时必须拒绝，而不是静默让它失败。
+     *
+     * <p>典型误用：流水线定义里写了「需要下载依赖」，平台却配了
+     * {@code agent.sandbox.network=none}；不在这里拒绝的话，构建跑几十秒后死于
+     * 一句 {@code Could not resolve host}，没人知道是策略而不是代码的问题。
+     *
+     * @param needsNetwork 该动作是否声明需要外联
+     * @throws SandboxDeniedException 策略不允许外联但动作要求外联
+     */
+    public void requireNetworkFor(boolean needsNetwork, String stageName) {
+        if (!needsNetwork || !"none".equalsIgnoreCase(network)) {
+            return;
+        }
+        throw new SandboxDeniedException(SandboxDeniedException.Rule.NETWORK,
+                "阶段 " + stageName + " 需要外联，但沙箱网络档位是 none",
+                isolationSnapshot(),
+                "改用 agent.sandbox.network=bridge（或专用 build-net），"
+                        + "或把该阶段改成只用已预热缓存的动作");
+    }
+
+    /**
+     * 挂载校验：只允许工作区与缓存卷，其余宿主路径一律拒绝。
+     *
+     * <p>挂载是沙箱边界上最危险的一项（{@code -v /var/run/docker.sock} 等于交出宿主），
+     * 因此不允许任何来自流水线定义/模型的额外挂载。
+     *
+     * @param requestedMounts 调用方想追加的宿主路径
+     * @throws SandboxDeniedException 出现工作区/缓存卷之外的挂载
+     */
+    public void requireNoExtraMounts(List<String> requestedMounts) {
+        if (requestedMounts == null || requestedMounts.isEmpty()) {
+            return;
+        }
+        throw new SandboxDeniedException(SandboxDeniedException.Rule.MOUNT,
+                "不允许追加宿主挂载：" + String.join(", ", requestedMounts),
+                isolationSnapshot(),
+                "把需要的文件放进工作区（它已挂到 /ws），或用缓存卷 /cache；"
+                        + "宿主目录与 docker.sock 永不挂载");
+    }
+
+    /**
+     * 特权校验：特权模式、额外 capability、关闭 no-new-privileges 一律拒绝。
+     *
+     * @param requested 调用方请求的越权项（如 {@code --privileged}）
+     * @throws SandboxDeniedException 请求里出现任何提升权限的项
+     */
+    public void requireUnprivileged(List<String> requested) {
+        if (requested == null || requested.isEmpty()) {
+            return;
+        }
+        throw new SandboxDeniedException(SandboxDeniedException.Rule.PRIVILEGE,
+                "不允许提升容器权限：" + String.join(", ", requested),
+                isolationSnapshot(),
+                "构建与部署都不需要特权；确需特殊能力时改平台配置（需人工评审），"
+                        + "不要写在流水线定义里");
+    }
+
+    /**
+     * 运行时校验：配置了 gVisor 等运行时但守护进程不支持时必须明确拒绝。
+     *
+     * <p>静默回落到 runc 会让「以为跑在 gVisor 里」这种最危险的误判发生：
+     * 不可信代码其实仍然跑在普通 runc 上。
+     *
+     * @param availableRuntimes {@code docker info} 报告的可信运行时列表（空表示未知）
+     * @throws SandboxDeniedException 要求的运行时不可用
+     */
+    public void requireRuntimeAvailable(List<String> availableRuntimes) {
+        if (runtime == null || runtime.isBlank()) {
+            return;
+        }
+        if (availableRuntimes == null || availableRuntimes.isEmpty()) {
+            // 无法探测时不做断言：交给动作执行时的 docker run 显式失败，避免误拦
+            return;
+        }
+        if (availableRuntimes.stream().anyMatch(r -> r.equalsIgnoreCase(runtime))) {
+            return;
+        }
+        throw new SandboxDeniedException(SandboxDeniedException.Rule.RUNTIME,
+                "要求运行时 " + runtime + "，但守护进程只报告 " + String.join(", ", availableRuntimes),
+                isolationSnapshot(),
+                "安装并注册该运行时（如 gVisor 的 runsc），或把 agent.sandbox.runtime 置空以使用 runc");
     }
 }
