@@ -1,0 +1,86 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_0056_deploy-reuse-build",
+  "category": "feat",
+  "title": "部署支持复用已构建产物",
+  "createdAt": "2026-11-19T00:56:15+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "task-5fdf460ff6: 部署链路没有复用已构建产物的入口，每次都重建；补 build_run_id 与提交/版本一致性校验",
+    "toolCallCount": 0
+  },
+  "problem": "task-5fdf460ff6（为何不能复用前面产物部署）：部署链路没有「复用已构建产物」的入口，为改一个部署参数或验证同一份产物都要重新跑一遍完整构建；引擎里虽有内部 deployImage 通道，但没有任何校验能保证复用的就是同一份代码与同一个版本。",
+  "solution": "PipelineEngine 新增 reusableBuild(runId)：只有成功运行且真的产出镜像产物才算可复用，不可用时带回原因；deploy_run 工具新增 build_run_id，复用前校验提交（前缀互认）与版本一致，不一致明确拒绝并说明差异与下一步；触发参数写入 deployImage，复用走既有的「按版本部署」路径（跳检出、跳构建）；返回值新增 reusedBuild 标明本次是复用还是重建；默认实现返回不可用，避免引擎未实现时静默复用空产物。",
+  "commits": [
+    {
+      "sha": "d26309e294fceb4896301ce31967d6f5836756f1",
+      "subject": "feat(deploy): 支持按 build_run_id 复用已构建产物",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/PipelineEngine.java",
+          "status": "M",
+          "additions": 33,
+          "deletions": 0,
+          "blobHash": "0886bd38a6beda8ae14056ba2728086b5007cae9"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/port/ReusableBuildContractTest.java",
+          "status": "A",
+          "additions": 99,
+          "deletions": 0,
+          "blobHash": "7542dadadd7cb7cf75dc429b390b9e6c6498d226"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "083abffcbd49666ed5488c3731336afcfb3bfc32"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 34,
+          "deletions": 0,
+          "blobHash": "f6e691bda941ed082b71ae4470d841e2e92254b7"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/port/ReusableBuildContractTest.java",
+        "status": "A",
+        "additions": 99,
+        "deletions": 0,
+        "blobHash": "7542dadadd7cb7cf75dc429b390b9e6c6498d226"
+      }
+    ],
+    "casesAdded": 4,
+    "command": "mvn -B -nsu -pl agent-domain,agent-executor,agent-tools,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-executor,agent-tools test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 315, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-tools"
+    ],
+    "verification": "Tests run: 315, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_0056_deploy-reuse-build"
+    ]
+  },
+  "chain": {
+    "prev": "d76bb813d34baf3f6ffe6734f7dd49c9c37de908409e5b47d4a6d08b3f8ff3f9",
+    "self": "2f62ed78afe39ee363937499e40c9d84fc4b3dd3a54a0192264ec644b30a4427"
+  }
+}
