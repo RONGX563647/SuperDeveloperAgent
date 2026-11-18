@@ -67,8 +67,15 @@ public class DataSourceConfig {
         return PlatformDb.managed(dataSource, entityManagerFactory);
     }
 
-    /** 启动时把旧的多文件 SQLite 导入统一库（默认开启，可显式关闭）。 */
-    @Bean(initMethod = "run")
+    /**
+     * 旧库导入器：只装配，<b>启动时不执行</b>。
+     *
+     * <p>启动期静默改数据没有可观测性与可选择性（用户看不到导入了哪些表、也无法在导入前
+     * 核对源库），因此这里没有 {@code initMethod}：Bean 只提供给设置页「旧库导入」使用，
+     * 由用户在页面上显式点「开始导入」。启动链路仅保留 {@link SqliteWalCheckpointer}
+     * 这类不改数据的收尾动作。
+     */
+    @Bean
     public LegacySqliteImporter legacySqliteImporter(PlatformDb platformDb, AgentDbProperties props) {
         return new LegacySqliteImporter(platformDb, props);
     }

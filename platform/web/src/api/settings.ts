@@ -1214,6 +1214,8 @@ export interface DatabaseStatus {
   hasPassword: boolean
   /** 只有当前是 SQLite 才谈得上"迁移到 PG" */
   migratable: boolean
+  /** 配置是否允许设置页执行旧库导入 */
+  legacyImportEnabled: boolean
 }
 
 /** 目标 PostgreSQL 连接参数；password 留空 = 沿用已保存的密文。 */
@@ -1286,4 +1288,57 @@ export function resetDatabaseBackend(): Promise<{
   message: string
 }> {
   return apiFetch('/api/v1/settings/database', { method: 'DELETE' })
+}
+
+// ---------------------------------------------------------------- 旧库导入
+
+/** 单个历史分域库的巡检状态（只读，不产生副作用）。 */
+export interface LegacyDbFile {
+  file: string
+  sizeBytes: number
+  /** 是否已有 legacy-import 完成标记 */
+  imported: boolean
+  /** 标记里记录的导入行数 */
+  importedRows: number
+}
+
+export interface LegacyDbStatus {
+  directory: string
+  backend: 'SQLITE' | 'POSTGRES'
+  /** 还有未导入的旧库文件 */
+  pending: boolean
+  /** 配置是否允许导入（agent.db.import-legacy） */
+  enabled: boolean
+  files: LegacyDbFile[]
+}
+
+export interface LegacyImportFileResult {
+  file: string
+  copied: number
+  skipped: boolean
+  ok: boolean
+  error: string | null
+}
+
+export interface LegacyImportResult {
+  ok: boolean
+  directory: string
+  copiedRows: number
+  imported: number
+  skippedFiles: number
+  failedFiles: number
+  files: LegacyImportFileResult[]
+  message: string
+}
+
+export function getLegacyDbStatus(): Promise<LegacyDbStatus> {
+  return apiFetch('/api/v1/settings/database/legacy')
+}
+
+/** 显式触发旧库导入；force=true 忽略完成标记重放（仍幂等）。 */
+export function importLegacyDatabases(force = false): Promise<LegacyImportResult> {
+  return apiFetch('/api/v1/settings/database/legacy/import', {
+    method: 'POST',
+    body: JSON.stringify({ force })
+  })
 }

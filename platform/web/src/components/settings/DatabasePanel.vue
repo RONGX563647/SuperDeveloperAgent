@@ -1,20 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Coin, Connection, Refresh, Right, Upload } from '@element-plus/icons-vue'
+import { Coin, Connection, FolderOpened, Refresh, Right, Upload } from '@element-plus/icons-vue'
 import {
-  getDatabaseStatus, migrateSqliteToPostgres, resetDatabaseBackend,
-  savePostgresBackend, testPostgres,
-  type DatabaseStatus, type MigrationResult, type PostgresInput,
-  type PostgresTestResult
+  getDatabaseStatus, getLegacyDbStatus, importLegacyDatabases, migrateSqliteToPostgres,
+  resetDatabaseBackend, savePostgresBackend, testPostgres,
+  type DatabaseStatus, type LegacyDbStatus, type LegacyImportResult, type MigrationResult,
+  type PostgresInput, type PostgresTestResult
 } from '../../api/settings'
 
 /**
- * 数据库后端面板：当前后端 → PostgreSQL 连接表单 → 连通性测试 → 一键迁移 → 保存（重启生效）。
+ * 数据库后端面板：当前后端 → PostgreSQL 连接表单 → 连通性测试 → 一键迁移 → 保存（重启生效），
+ * 以及旧版分域 SQLite 的<b>显式</b>导入。
  *
- * 交互上的两个坑，UI 必须直说，否则用户会误判：
+ * 交互上的三个坑，UI 必须直说，否则用户会误判：
  * 1. **保存不等于生效**：连接池在启动时装配，保存只落 `db-backend.yml`，必须重启；
- * 2. **迁移与切换是两件事**：迁移只搬数据，先迁移再保存再重启，顺序写在步骤条里。
+ * 2. **迁移与切换是两件事**：迁移只搬数据，先迁移再保存再重启，顺序写在步骤条里；
+ * 3. **旧库导入不再自动跑**：以前启动就静默导入并打日志，现在必须点按钮，先看巡检结果。
  */
 const status = ref<DatabaseStatus | null>(null)
 const loading = ref(false)
@@ -25,6 +27,11 @@ const saving = ref(false)
 const testResult = ref<PostgresTestResult | null>(null)
 const migration = ref<MigrationResult | null>(null)
 
+const legacy = ref<LegacyDbStatus | null>(null)
+const legacyResult = ref<LegacyImportResult | null>(null)
+const legacyLoading = ref(false)
+const legacyImporting = ref(false)
+
 const form = ref<PostgresInput>({
   url: 'jdbc:postgresql://127.0.0.1:5432/agent',
   username: 'agent',
@@ -33,6 +40,19 @@ const form = ref<PostgresInput>({
 
 const isPostgres = computed(() => status.value?.backend === 'POSTGRES')
 const migratable = computed(() => status.value?.migratable === true)
+
+/** 旧库文件大小：页面上给个量级即可，不必精确到字节。 */
+function formatSize(bytes: number): string {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
+}
 
 async function load(): Promise<void> {
   loading.value = true
@@ -46,6 +66,46 @@ async function load(): Promise<void> {
     ElMessage.error(e instanceof Error ? e.message : '加载数据库状态失败')
   } finally {
     loading.value = false
+  }
+  await loadLegacy()
+}
+
+async function loadLegacy(): Promise<void> {
+  legacyLoading.value = true
+  try {
+    legacy.value = await getLegacyDbStatus()
+  } catch (e) {
+    // 旧库巡检失败不该拖垮整个面板：只在卡片里留空
+    legacy.value = null
+  } finally {
+    legacyLoading.value = false
+  }
+}
+
+async function importLegacy(force = false): Promise<void> {
+  const hint = force
+    ? '强制重放：忽略已完成标记，把旧库再读一遍（幂等，不会产生重复行）。继续？'
+    : `把旧库目录中的分域数据导入当前库？已有完成标记的文件会跳过，导入不覆盖现有行。\n\n目录：${legacy.value?.directory ?? ''}`
+  const ok = await ElMessageBox.confirm(hint, force ? '强制重放旧库' : '旧库导入确认', {
+    confirmButtonText: force ? '强制重放' : '开始导入',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(() => true).catch(() => false)
+  if (!ok) return
+  legacyImporting.value = true
+  legacyResult.value = null
+  try {
+    legacyResult.value = await importLegacyDatabases(force)
+    if (legacyResult.value.ok) {
+      ElMessage.success(legacyResult.value.message)
+    } else {
+      ElMessage.warning(legacyResult.value.message)
+    }
+    await loadLegacy()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '旧库导入失败')
+  } finally {
+    legacyImporting.value = false
   }
 }
 
@@ -222,6 +282,80 @@ defineExpose({ load })
         <li>重启后本页后端会显示 <code>POSTGRES</code>；SQLite 文件保留作为回退。</li>
       </ol>
       <p class="db-file">配置文件：<code>{{ status?.configFile }}</code></p>
+    </section>
+
+    <section class="db-card">
+      <h3 class="card-title"><el-icon><FolderOpened /></el-icon> 旧库导入（历史分域 SQLite）</h3>
+      <p class="db-sub">
+        改造前按域拆分的 <code>.db</code> 文件不再在启动时自动导入——启动只做只读巡检，
+        由你确认后再执行。目录：<code>{{ legacy?.directory || '—' }}</code>
+      </p>
+
+      <el-alert
+        v-if="legacy && legacy.enabled === false"
+        type="info"
+        :closable="false" show-icon
+        title="旧库导入已关闭"
+        description="agent.db.import-legacy=false，可改配置后重启再启用。"
+      />
+      <el-alert
+        v-else-if="legacy && legacy.files.length === 0"
+        type="info"
+        :closable="false" show-icon
+        title="未发现历史分域库"
+        description="该目录下没有 projects/automation/conversations 等旧库文件，无需导入。"
+      />
+
+      <template v-else-if="legacy">
+        <el-table :data="legacy.files" size="small" max-height="260" class="db-table">
+          <el-table-column prop="file" label="旧库文件" min-width="180" show-overflow-tooltip />
+          <el-table-column label="大小" width="100" align="right">
+            <template #default="{ row }">{{ formatSize(row.sizeBytes) }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="row.imported ? 'success' : 'warning'" size="small" effect="plain">
+                {{ row.imported ? '已导入' : '待导入' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="记录行数" width="110" align="right">
+            <template #default="{ row }">
+              {{ row.imported ? row.importedRows : '—' }}
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="db-actions">
+          <el-button
+            type="primary" :icon="Upload" :loading="legacyImporting"
+            :disabled="!legacy.enabled" @click="importLegacy(false)"
+          >开始导入</el-button>
+          <el-button
+            :loading="legacyImporting" :disabled="!legacy.enabled || !legacy.files.length"
+            @click="importLegacy(true)"
+          >强制重放</el-button>
+          <el-button :icon="Refresh" :loading="legacyLoading" @click="loadLegacy">重新巡检</el-button>
+        </div>
+      </template>
+
+      <el-table
+        v-if="legacyResult && legacyResult.files.length"
+        :data="legacyResult.files" size="small" max-height="240" class="db-table"
+      >
+        <el-table-column prop="file" label="文件" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="copied" label="新增行" width="90" align="right" />
+        <el-table-column label="结果" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.ok ? (row.skipped ? 'info' : 'success') : 'danger'"
+                    size="small" effect="plain">
+              {{ row.ok ? (row.skipped ? '跳过' : 'OK') : '失败' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="error" label="说明" min-width="200" show-overflow-tooltip />
+      </el-table>
+      <p v-if="legacyResult" class="db-summary">{{ legacyResult.message }}</p>
     </section>
   </div>
 </template>

@@ -18,7 +18,7 @@ class AgentDbPropertiesTest {
         assertEquals(DbBackend.SQLITE, props.backend());
         assertEquals("jdbc:sqlite:./data/workspaces/_platform/platform.db", props.jdbcUrl());
         assertEquals(8, props.poolSize());
-        // 迁移后旧库数据必须默认导入，否则"数据凭空消失"；显式 false 才能关闭。
+        // 导入只由设置页显式触发；这个开关决定设置页是否允许执行，默认放开。
         org.junit.jupiter.api.Assertions.assertTrue(props.importLegacy());
         org.junit.jupiter.api.Assertions.assertFalse(
                 new AgentDbProperties("", "", "", "", null, false).importLegacy());

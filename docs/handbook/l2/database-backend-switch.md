@@ -1,7 +1,8 @@
-# 数据库后端切换与 SQLite → PostgreSQL 迁移
+# 数据库后端切换、SQLite → PostgreSQL 迁移与旧库导入
 
 > 入口：**设置 → 数据库**（`/api/v1/settings/database`）。
-> 适用：单机 SQLite 想换成 PostgreSQL，或想在换库前先确认数据能完整搬过去。
+> 适用：单机 SQLite 想换成 PostgreSQL，或想在换库前先确认数据能完整搬过去；
+> 也用于把改造前的 8 个分域 `.db` 显式导入统一库。
 
 ---
 
@@ -56,6 +57,36 @@
 
 ---
 
+## 3.5 旧库导入（历史 8 个分域 `.db`）
+
+改造前平台按域拆成 8 个文件（`projects` / `automation` / `conversations` / `run_ledger` /
+`token_usage` / `users` / `governance` / `rate_limit`），统一到 `platform.db`（或 PostgreSQL）。
+
+**它曾经是启动期自动行为，现在不是了。** 旧实现用 `@Bean(initMethod = "run")`，每次启动都会
+静默比对并导入，日志里打"新增 N 行"——用户既没点过、也无法选择目标库、看不到逐表明细。
+现在拆成两件事：
+
+| 动作 | 接口 | 是否写数据 |
+|---|---|---|
+| 巡检 | `GET /api/v1/settings/database/legacy` | **只读**：列出文件、大小、是否已导入、上次导入行数 |
+| 导入 | `POST /api/v1/settings/database/legacy/import`（`{force:false}`） | 写数据 + 写完成标记 |
+
+启动链路只保留**不改数据**的收尾动作（`SqliteWalCheckpointer` 的 `wal_checkpoint`）。
+`DataSourceConfig` 里那个 Bean 没有 `initMethod`，并有单测把这一点钉死
+（`DataSourceConfigTest#legacyImporterHasNoInitMethod` / `#wiringAloneImportsNothing`）。
+
+**语义**：
+
+- 逐文件在 `platform_meta` 写 `legacy-import:<文件名>` 标记；有标记即跳过；
+- 幂等：`INSERT OR IGNORE`（SQLite 目标）/ `ON CONFLICT DO NOTHING`（PG 目标），
+  重放不产生重复行；
+- `force=true` 忽略标记重放，用于「导入后旧库又新增了数据、想补一遍」；
+- 单文件失败不写标记，下次触发自动重试；失败原因逐文件回传前端；
+- SQLite 目标走 `ATTACH` 原地复制；PG 目标走 SQLite JDBC 读 + 批量写；
+- `agent.db.import-legacy=false` 关闭设置页的导入入口（接口返回明确错误）。
+
+---
+
 ## 4. 已知边界
 
 - **只支持 SQLite → PostgreSQL**：反向（PG → SQLite）与 PG → PG 不在本次范围；
@@ -65,6 +96,8 @@
   建议在迁移完成到重启之间保持低写入，或迁移后重跑一次（幂等，只会补齐新行）；
 - **密码**：落盘只存密文；主密钥丢失（`platform.key` 被删）会导致解密失败，
   此时按空密码尝试连接，需重新填写。
+- **旧库导入不在启动时执行**：启动只做只读巡检，必须由设置页显式触发；
+  旧库目录随统一库位置推导（SQLite 取同目录，PG 取 `agent.db.sqlite-file` 所在目录）。
 
 ---
 
@@ -73,10 +106,12 @@
 | 件 | 位置 |
 |---|---|
 | 配置落盘与注入 | `platform/agent-infra/.../persistence/config/DbBackendConfig.java` |
-| 逐表复制 | `platform/agent-infra/.../persistence/SqliteToTargetCopier.java` |
+| 逐表复制（统一库 → PG） | `platform/agent-infra/.../persistence/SqliteToTargetCopier.java` |
+| 旧库巡检与导入 | `platform/agent-infra/.../persistence/LegacySqliteImporter.java` |
 | 迁移编排（Flyway） | `platform/agent-gateway/.../gateway/settings/SqliteToPostgresMigrator.java` |
 | REST 接口 | `platform/agent-gateway/.../gateway/web/DatabaseSettingsController.java` |
 | 设置页面板 | `platform/web/src/components/settings/DatabasePanel.vue` |
 | 启动期注入点 | `platform/agent-gateway/.../gateway/AgentApplication.java` |
 
-测试：`DbBackendConfigTest`（8 项）、`SqliteToTargetCopierTest`（4 项）。
+测试：`DbBackendConfigTest`（8 项）、`SqliteToTargetCopierTest`（4 项）、
+`LegacySqliteImporterTest`（7 项）、`DataSourceConfigTest`（3 项，含"启动不导入"回归）。

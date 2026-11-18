@@ -1017,6 +1017,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/database/legacy/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** legacy import */
+        post: operations["legacyImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/capabilities/market/install": {
         parameters: {
             query?: never;
@@ -2148,6 +2165,23 @@ export interface paths {
         };
         /** reveal var */
         get: operations["revealVar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/database/legacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** legacy status */
+        get: operations["legacyStatus"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5854,6 +5888,34 @@ export interface operations {
             };
         };
     };
+    legacyImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     install: {
         parameters: {
             query?: never;
@@ -7694,6 +7756,28 @@ export interface operations {
                 env: string;
                 key: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    legacyStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

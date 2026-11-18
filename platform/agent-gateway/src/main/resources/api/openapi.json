@@ -2733,6 +2733,36 @@
         }
       }
     },
+    "/api/v1/settings/database/legacy/import" : {
+      "post" : {
+        "tags" : [ "database-settings-controller" ],
+        "summary" : "legacy import",
+        "operationId" : "legacyImport",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/capabilities/market/install" : {
       "post" : {
         "tags" : [ "capability-market-controller" ],
@@ -5208,6 +5238,26 @@
             "type" : "string"
           }
         } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/database/legacy" : {
+      "get" : {
+        "tags" : [ "database-settings-controller" ],
+        "summary" : "legacy status",
+        "operationId" : "legacyStatus",
         "responses" : {
           "200" : {
             "description" : "OK",

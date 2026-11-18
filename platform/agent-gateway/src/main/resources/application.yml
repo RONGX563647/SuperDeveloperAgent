@@ -72,8 +72,9 @@ agent:
     password: ${AGENT_DB_PASSWORD:}
     sqlite-file: ${AGENT_SQLITE_FILE:./data/workspaces/_platform/platform.db}
     pool-size: ${AGENT_DB_POOL_SIZE:8}
-    # 启动时把改造前的 8 个分域 .db 导入统一库（INSERT OR IGNORE，不覆盖新库现有行）。
-    # 默认开启：迁移后应用只读统一库，旧库数据若不导入就会表现为"数据凭空消失"。
+    # 旧库导入：改造前的 8 个分域 .db 是否允许在设置页「旧库导入」执行。
+    # 导入<b>不在启动时自动跑</b>（启动静默改数据不可观测），只由用户显式触发；
+    # 这里设为 false 会关掉设置页的导入入口。
     import-legacy: ${AGENT_DB_IMPORT_LEGACY:true}
   # OpenAPI 快照与访问控制：
   # - snapshot：启动时刷新，供 api_search / api_get 与外部 MCP 读取；
