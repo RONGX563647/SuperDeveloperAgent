@@ -2033,7 +2033,18 @@ async function copyDigest(digest: string): Promise<void> {
   gap: var(--sp-5);
   min-height: 0;
   padding: var(--sp-6) var(--sp-6) var(--sp-8);
-  overflow: hidden;
+  /* 产物/镜像面板高度不固定：overflow:hidden 会把超出的日志区直接裁掉且无法滚动，
+     这里改成纵向滚动，日志区保底 320px 后再由自身滚动条滚动 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.run-detail :deep(.run-log) {
+  flex: 1 1 320px;
+  min-height: 320px;
+}
+/* 阶段时间线按内容高度占位，避免在可滚动容器里被压缩 */
+.run-detail :deep(.stage-timeline) {
+  flex: none;
 }
 
 /* 产物 */
