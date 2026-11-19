@@ -94,10 +94,12 @@ class PipelineRunModeTest {
     }
 
     @Test
-    @EnabledOnOs(OS.WINDOWS)
     @DisplayName("stage.workdir 越出检出目录 → 拒绝（不能把宿主任意目录挂进容器）")
     void workdirMustStayInsideCheckout() {
-        Path runDir = Path.of("E:/data/runs/run-1").toAbsolutePath().normalize();
+        // 用不依赖盘符的绝对目录：Windows 与 Linux 语义一致，
+        // 否则 "E:/data/runs/run-1" 在 Linux 上会被当成相对名，断言虽过但测的不是真东西。
+        Path runDir = Path.of(System.getProperty("java.io.tmpdir"), "agent-runs", "run-1")
+                .toAbsolutePath().normalize();
 
         assertEquals(runDir, BuiltInPipelineEngine.resolveWorkdir(runDir, null));
         assertEquals(runDir, BuiltInPipelineEngine.resolveWorkdir(runDir, "  "));
@@ -109,23 +111,26 @@ class PipelineRunModeTest {
 
         // 上跳到检出目录之外：会把宿主任意目录挂成容器的 /ws
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, ".."));
-        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "../../../../Windows"));
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "../../../../etc"));
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "backend/../../etc"));
     }
 
     @Test
     @DisplayName("绝对路径一律拒绝：Windows 盘符与 POSIX 绝对路径都要挡住")
     void absoluteWorkdirRejected() {
-        Path runDir = Path.of("E:/data/runs/run-1").toAbsolutePath().normalize();
+        Path runDir = Path.of(System.getProperty("java.io.tmpdir"), "agent-runs", "run-1")
+                .toAbsolutePath().normalize();
 
-        // 关键：这条断言在 Linux CI 上曾经失手过。
-        // "E:/Windows" 在 Windows 上是绝对路径，在 Linux 上却是一个普通相对路径，
-        // 会被拼成 <runDir>/E:/Windows 而"通过"越界检查——于是同一份测试在两个平台结论不同。
-        // 因此实现必须显式识别盘符形态，而不是只依赖 Path.isAbsolute()。
+        // 这条曾在 Linux CI 上失手：`E:/Windows` 在 Windows 上是绝对路径，
+        // 在 Linux 上只是普通相对名，会被拼成 <runDir>/E:/Windows 而"通过"越界检查。
+        // 同一份 .agent/pipeline.yml 在两种宿主机上结论不同，且 Linux 侧恰好放行——
+        // 所以实现必须显式识别盘符形态，而不是只依赖 Path.isAbsolute()。
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "E:/Windows"),
                 "Windows 盘符路径必须在任何平台都被判为越界");
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "C:\\Windows\\System32"),
                 "Windows 反斜杠盘符路径同样要拒绝");
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "E:relative"),
+                "盘符相对形式在 Windows 语义里也脱离当前目录");
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "/etc/passwd"),
                 "POSIX 绝对路径必须拒绝");
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "\\\\server\\share"),
