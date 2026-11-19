@@ -110,22 +110,45 @@ public class GiteeWebhookController {
             return Map.of("ignored", true, "event", event);
         }
         String projectId = projectIdOf(projectName(body));
-        String number = jsonString(body, "number");
+        // issue 用 number，Gitee MR 可能是 iid，兜底 id；数字未加引号也要能取到
+        String number = jsonScalar(body, "number");
+        if (number == null) {
+            number = jsonScalar(body, "iid");
+        }
+        if (number == null) {
+            number = jsonScalar(body, "id");
+        }
         String title = jsonString(body, "title");
         String sourceRef = projectId + ":" + event + ":" + (number == null ? "" : number)
                 + ":" + action;
+        // 内存集合挡热重复；任务表按 source_ref 兜底重启 / 多副本
+        if (seenEvents.contains(sourceRef) || alreadyRecorded(projectId, sourceRef)) {
+            return Map.of("duplicate", true, "sourceRef", sourceRef);
+        }
         if (!seenEvents.add(sourceRef)) {
             return Map.of("duplicate", true, "sourceRef", sourceRef);
         }
         long now = System.currentTimeMillis();
         String suffix = java.util.UUID.randomUUID().toString().substring(0, 8);
-        WorkspaceTask task = tasks.saveTask(new WorkspaceTask("task-" + suffix, projectId, null,
-                "[" + event + "] #" + (number == null ? "" : number) + " "
-                        + (title == null ? "" : title),
-                "由调度 Agent 判断：建工单 / 关联已有 / 忽略",
-                TaskStatus.TODO, 3, now, now, sourceRef, event));
+        WorkspaceTask task;
+        try {
+            task = tasks.saveTask(new WorkspaceTask("task-" + suffix, projectId, null,
+                    "[" + event + "] #" + (number == null ? "" : number) + " "
+                            + (title == null ? "" : title),
+                    "由调度 Agent 判断：建工单 / 关联已有 / 忽略",
+                    TaskStatus.TODO, 3, now, now, sourceRef, event));
+        } catch (RuntimeException e) {
+            seenEvents.remove(sourceRef);
+            throw e;
+        }
         return Map.of("taskId", task.id(), "projectId", projectId,
                 "triggerType", event, "sourceRef", sourceRef);
+    }
+
+    /** 任务表里已有同一 source_ref 即视为已受理（重启 / 多副本仍幂等）。 */
+    private boolean alreadyRecorded(String projectId, String sourceRef) {
+        return tasks.findTasksByProject(projectId).stream()
+                .anyMatch(t -> sourceRef.equals(t.sourceRef()));
     }
 
     /** 事件类型归一化：优先用 Gitee 请求头，退回 body 里的 hook_name。 */
@@ -208,6 +231,34 @@ public class GiteeWebhookController {
         }
         int last = body.indexOf('"', first + 1);
         return last < 0 ? null : body.substring(first + 1, last);
+    }
+
+    /** 取标量字段：带引号的字符串或未加引号的数字都支持（issue 的 number 两种写法都有）。 */
+    private static String jsonScalar(String body, String key) {
+        int i = body.indexOf("\"" + key + "\"");
+        if (i < 0) {
+            return null;
+        }
+        int colon = body.indexOf(':', i);
+        if (colon < 0) {
+            return null;
+        }
+        int start = colon + 1;
+        while (start < body.length() && Character.isWhitespace(body.charAt(start))) {
+            start++;
+        }
+        if (start >= body.length()) {
+            return null;
+        }
+        if (body.charAt(start) == '"') {
+            int end = body.indexOf('"', start + 1);
+            return end < 0 ? null : body.substring(start + 1, end);
+        }
+        int end = start;
+        while (end < body.length() && ",}] \n\r\t".indexOf(body.charAt(end)) < 0) {
+            end++;
+        }
+        return end == start ? null : body.substring(start, end);
     }
 
     private static String projectName(String body) {

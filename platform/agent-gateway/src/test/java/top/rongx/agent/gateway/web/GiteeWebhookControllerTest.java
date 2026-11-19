@@ -170,14 +170,29 @@ class GiteeWebhookControllerTest {
     }
 
     @Test
-    @DisplayName("同一 issue 同一动作重复投递 → 幂等，只建一个任务")
+    @DisplayName("同一 issue 同一动作重复投递（含重启后新实例）→ 幂等，只建一个任务")
     void deduplicatesEvents() {
+        StubTasks tasks = new StubTasks();
+        new GiteeWebhookController(new StubEngine(), repo(), tasks, "s3cr3t")
+                .event("s3cr3t", null, null, ISSUE_OPEN);
+        // 新实例模拟重启：内存去重集合清空，必须靠任务表的 source_ref 兜底
+        Map<String, Object> second = new GiteeWebhookController(new StubEngine(), repo(), tasks,
+                "s3cr3t").event("s3cr3t", null, null, ISSUE_OPEN);
+        assertEquals(true, second.get("duplicate"));
+        assertEquals(1, tasks.saved.size());
+    }
+
+    @Test
+    @DisplayName("未加引号的 issue number 也能作为去重键")
+    void readsUnquotedNumber() {
         StubTasks tasks = new StubTasks();
         GiteeWebhookController controller =
                 new GiteeWebhookController(new StubEngine(), repo(), tasks, "s3cr3t");
-        controller.event("s3cr3t", null, null, ISSUE_OPEN);
-        Map<String, Object> second = controller.event("s3cr3t", null, null, ISSUE_OPEN);
-        assertEquals(true, second.get("duplicate"));
+        Map<String, Object> result = controller.event("s3cr3t", null, null, """
+                {"hook_name":"issue_hook","action":"open","number":42,"title":"登录失败",
+                 "repository":{"path_with_namespace":"tester/RY"}}
+                """);
+        assertEquals("RY:issue_hook:42:open", result.get("sourceRef"));
         assertEquals(1, tasks.saved.size());
     }
 
