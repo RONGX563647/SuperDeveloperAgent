@@ -4700,16 +4700,51 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * {@code workdir: ../../..} 会把宿主任意目录暴露给容器内的构建脚本，
      * 沙箱隔离就被一个配置文件绕过了。因此越界（含符号链接解析前的上跳）一律拒绝。
      *
-     * @return 合法的工作目录；越界返回 {@code null}（由调用方记 E-201 并终止该阶段）
+     * <p><b>为什么额外拦绝对路径</b>：只看 {@code resolved.startsWith(base)} 会漏掉
+     * "当前平台不认为它是绝对路径"的写法。{@code "E:/Windows"} 在 Windows 上是绝对路径，
+     * 在 Linux 上却只是一个普通相对名——于是 {@code base.resolve("E:/Windows")} 得到
+     * {@code <base>/E:/Windows}，"通过"检查后被原样拼进挂载参数。同一份配置在两种宿主机上
+     * 行为不同是更危险的事，所以这里显式识别盘符 / UNC / POSIX 根路径，任何平台都拒绝。
+     *
+     * @return 合法的工作目录；越界或为绝对路径返回 {@code null}（由调用方记 E-201 并终止该阶段）
      */
     static Path resolveWorkdir(Path runDir, String workdir) {
         if (workdir == null || workdir.isBlank()) {
             return runDir;
         }
+        if (isAbsoluteAnyPlatform(workdir)) {
+            return null;
+        }
         Path base = runDir.toAbsolutePath().normalize();
         Path resolved = base.resolve(workdir).normalize();
         // startsWith 比较的是规范化后的路径段，`a/../..` 这类上跳已在此前被 normalize 消掉
         return resolved.startsWith(base) ? resolved : null;
+    }
+
+    /**
+     * 判断一个路径字符串是否在<b>任一</b>受支持平台上是绝对路径。
+     *
+     * <p>覆盖三种真实出现过的形态：
+     * <ul>
+     *   <li>POSIX / UNC 根：{@code /etc}、{@code \\server\share}；</li>
+     *   <li>Windows 盘符：{@code E:/Windows}、{@code C:\Windows}（反斜杠或正斜杠都算）；</li>
+     *   <li>盘符相对形式：{@code E:foo} 在 Windows 语义里同样脱离当前目录。</li>
+     * </ul>
+     */
+    private static boolean isAbsoluteAnyPlatform(String workdir) {
+        String raw = workdir.trim();
+        if (raw.isEmpty()) {
+            return false;
+        }
+        // 统一分隔符后再判断，避免反斜杠写法绕过
+        String normalized = raw.replace('\\', '/');
+        if (normalized.startsWith("/")) {
+            return true; // POSIX 根路径；UNC 经上一步变成 //server/share，同样命中
+        }
+        // 盘符：X: 或 X:/ 或 X:foo —— Windows 下都不是"相对当前目录"
+        return normalized.length() >= 2
+                && Character.isLetter(normalized.charAt(0))
+                && normalized.charAt(1) == ':';
     }
 
     /**
