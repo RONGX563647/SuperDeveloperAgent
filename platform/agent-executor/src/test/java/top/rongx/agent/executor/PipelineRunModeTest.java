@@ -116,6 +116,27 @@ class PipelineRunModeTest {
     }
 
     @Test
+    @DisplayName("相对路径不得因平台不同而被误判成绝对或反之")
+    void relativeWorkdirConsistentAcrossPlatforms() {
+        Path runDir = Path.of(System.getProperty("java.io.tmpdir"), "agent-runs", "run-1")
+                .toAbsolutePath().normalize();
+
+        // 这些写法在任何平台都必须被当成"检出目录内的相对路径"：
+        // 它们不含盘符、不以分隔符开头，规范化后仍在 base 之下。
+        assertEquals(runDir.resolve("sub"),
+                BuiltInPipelineEngine.resolveWorkdir(runDir, "sub"));
+        assertEquals(runDir.resolve("a").resolve("b"),
+                BuiltInPipelineEngine.resolveWorkdir(runDir, "a/b"));
+        assertEquals(runDir.resolve("b"),
+                BuiltInPipelineEngine.resolveWorkdir(runDir, "a/../b"));
+        // 中文目录名与点开头目录同样合法，不能被当成特殊形态误拦
+        assertEquals(runDir.resolve("中文目录"),
+                BuiltInPipelineEngine.resolveWorkdir(runDir, "中文目录"));
+        assertEquals(runDir.resolve(".agent"),
+                BuiltInPipelineEngine.resolveWorkdir(runDir, "./.agent"));
+    }
+
+    @Test
     @DisplayName("绝对路径一律拒绝：Windows 盘符与 POSIX 绝对路径都要挡住")
     void absoluteWorkdirRejected() {
         Path runDir = Path.of(System.getProperty("java.io.tmpdir"), "agent-runs", "run-1")
