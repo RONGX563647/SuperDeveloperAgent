@@ -1,0 +1,85 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_2123_feat-5-usage-cache-hit-rate",
+  "category": "feat",
+  "title": "FEAT-5 用量汇总返回各维度缓存命中率",
+  "createdAt": "2026-11-19T21:23:28+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "FEAT-5 第3项度量侧：命中率数据已有但汇总接口只回原始 token 数，前端会手算三套口径；统一在服务端算",
+    "toolCallCount": 0
+  },
+  "problem": "FEAT-5 第 3 项要「提升 KV cache 命中率」，但缺度量侧：命中率数据其实已经齐全（每次模型调用都记了 cachedTokens，UsageTotals.cacheHitRate() 也能算），可 /usage/summary 只回原始 token 数，会话接口倒是给了命中率。结果是设置页要看命中率只能前端自己用 cached/input 算，而三处（按天/按模型/按项目）各算一遍必然出现口径不一致——除零、四舍五入、百分比还是小数，谁也没统一。没有可信数字，「压缩 prompt 有没有省到钱」就无法验证。",
+  "solution": "在 /usage/summary 里统一算好命中率：顶层给总体 cacheHitRate，daily / byModel / byProject 的每一行都补 cacheHitRate，口径只有一份（cached/input 的整数百分比，四舍五入）。字段名保持不变（day / modelName / projectId），不破坏既有契约；输入 token 为 0 时返回 0 而不是异常——新会话第一条必然如此。用 Map 组装而不是给每个维度新建 record：这三个 record 是存储层契约，加字段会牵连 Sqlite 实现与前端类型生成，为一个派生值不值得。新增 UsageCacheHitRateTest 4 例：总体命中率与四舍五入、除零安全、三个维度都带命中率且保留原字段名、行内 token 字段齐全。同步重新生成 OpenAPI 快照与 API 文档基线。",
+  "commits": [
+    {
+      "sha": "3b3f463201c6f71814a819480aa310a716a7a24f",
+      "subject": "feat(usage): 用量汇总返回各维度缓存命中率",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/UsageController.java",
+          "status": "M",
+          "additions": 60,
+          "deletions": 2,
+          "blobHash": "c64f1db23b6f6f6fc78e23cae263eb7c2f39a8a0"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 144,
+          "blobHash": "75598690cf22bbb4847fde3c98fb47119e7e1963"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/UsageCacheHitRateTest.java",
+          "status": "A",
+          "additions": 103,
+          "deletions": 0,
+          "blobHash": "431e845f8f8dfd969519e52781bed8607425444d"
+        },
+        {
+          "path": "platform/spec-checks/api-doc-baseline.txt",
+          "status": "M",
+          "additions": 0,
+          "deletions": 1,
+          "blobHash": "a95d26d47316d686904afcc8bb8b9854f2991d11"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/UsageCacheHitRateTest.java",
+        "status": "A",
+        "additions": 103,
+        "deletions": 0,
+        "blobHash": "431e845f8f8dfd969519e52781bed8607425444d"
+      }
+    ],
+    "casesAdded": 4,
+    "command": "mvn -B -nsu -pl spec-checks test -Dsurefire.forkCount=4",
+    "result": "PASSED",
+    "evidence": "Tests run: 31, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "spec-checks"
+    ],
+    "verification": "mvn -pl agent-gateway test：163 用例通过（含新增 4 个）；spec-checks 31 用例通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2123_feat-5-usage-cache-hit-rate"
+    ]
+  },
+  "chain": {
+    "prev": "74b2785a3944f313db924a42688e385dfe6411ca5fbbbbb0ccd2945653cf4572",
+    "self": "8d8f13deff040ce24f2061ff8fd82132da18c51ddfbcd6a0ea59fe60a0e585c4"
+  }
+}
