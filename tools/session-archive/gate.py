@@ -894,6 +894,8 @@ def is_exempt(path: str) -> bool:
     return (
         path.startswith("docs/")
         or path.startswith("tools/session-archive/")
+        or path.startswith("tools/ci/")          # CI/钩子侧静态检查脚本：与 .github/ 同类，
+                                                 # 由 CI 自己执行，本地门禁不跑它
         or path.startswith(".githooks/")
         or path.startswith(".github/")          # CI 配置：本地不跑测试，由 CI 自己跑
         or path.startswith(".trae-html-share-packages/")  # 分享产物，非源码
@@ -1944,6 +1946,8 @@ def cmd_doctor(args) -> int:
     legacy_hook = (Path(git("rev-parse", "--git-path", "hooks").strip()) / "pre-commit")
     out(f"core.hooksPath: {hooks or '（未设置）'}")
     out(f"pre-commit 钩子: {'已安装 ' + str(legacy_hook) if legacy_hook.is_file() else '未安装'}")
+    encoding_hook = legacy_hook.parent / "commit-msg"
+    out(f"commit-msg 钩子: {'已安装 ' + str(encoding_hook) if encoding_hook.is_file() else '未安装（提交信息编码门禁不在位）'}")
     if hooks != ".githooks":
         out("  ↑ 建议执行 python tools/session-archive/gate.py install-hooks（钩子随仓库走）")
 
