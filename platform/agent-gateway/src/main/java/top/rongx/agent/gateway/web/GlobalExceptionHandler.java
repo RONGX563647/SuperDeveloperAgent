@@ -87,10 +87,10 @@ public class GlobalExceptionHandler {
     /**
      * 方法不支持 → 405。
      *
-     * <p><b>为什么要单独处理</b>：默认报文是空的（Spring 只给状态码），而它最常见的真实
-     * 原因是「进程没重启」——新加的接口映射在旧字节码里根本不存在，请求自然 405。
-     * 实测有人对着 {@code Request method 'POST' is not supported} 翻代码，其实是产物
-     * 在进程启动之后才编译。所以把健康度结论直接拼进 message。
+     * <p><b>为什么要单独处理</b>：这条报文默认是空的（Spring 只给状态码），而它最常见的
+     * 真实原因是「进程没重启」——新加的接口映射在旧字节码里根本不存在，请求自然 405。
+     * 实测有人对着 {@code Request method 'POST' is not supported} 去翻代码，其实是
+     * 产物在进程启动后才编译。所以这里把健康度结论直接拼进 message。
      */
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<?> methodNotSupported(HttpRequestMethodNotSupportedException e,

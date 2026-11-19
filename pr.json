@@ -1,0 +1,42 @@
+## 一、导出带上正文、评论、配图
+
+之前导出只有元数据，看不到任务到底写了什么。现在三张表：
+
+| 工作表 | 内容 |
+|---|---|
+| 任务 | 原元数据 + **描述正文**（自动换行）+ 评论数 + 图片数 |
+| 评论 | 任务编码 / 标题 / 作者 / 来源 / 评论内容 / 时间 |
+| 图片 | 任务编码 / 标题 / 文件名 / 说明 + **真实嵌入的图片**（等比缩到 140px 框内） |
+
+实现要点：
+
+- 图片从正文的 Markdown 引用（`![](/api/v1/git-issue-images/xxx)`）解析，按**文件头**判类型（png/jpeg/gif），不信后缀
+- 图片单独成表而不是塞进任务行：塞进去会把行高撑爆、列宽失衡
+- 只允许配图目录下的裸文件名：`../`、绝对路径一律拒绝（越权读取）
+- 缺失文件、webp 等 Excel 不支持的格式**只登记文件名并注明原因**，不让整份导出失败
+- 单元格 32000 字符截断（Excel 单格 32767，超了整份文件判损坏）、控制字符剔除、CRLF 归一
+
+## 二、修掉两个会让 Excel 打不开的真问题
+
+1. **`[Content_Types].xml` 缺 workbook 部件的 Override** —— 读取器靠内容类型定位工作簿，少了它直接报 `no valid workbook part`，**openpyxl 与 Excel 都拒绝打开**。这是用 openpyxl 交叉校验抓到的，只跑「解压看字符串」的单测发现不了。
+2. **没有可嵌入图片时仍写 `<drawing r:id>`** —— sheet 引用了不存在的部件，Excel 提示"内容有问题"。改成以「是否真有可嵌入图片」为条件。
+
+另补 `cellStyles`（Normal 样式），消掉读取器 "contains no default style" 警告。
+
+## 三、顺带修：405 的报文指向「没重启」
+
+线上反馈 `Request method 'POST' is not supported`，排查发现是**进程比产物旧**（进程 21:27 启动，含新映射的 class 21:44 才编译），代码本身没问题。
+
+- `BuildFreshnessCheck` 增加运行期检测：`staleRuntimeHint()` 给出「产物比进程新，请重启网关」，并加 `@Scheduled` 每分钟巡检（同一提示不重复刷屏）
+- `GlobalExceptionHandler` 新增 405 处理：报文指名方法与路径，进程过期时把结论直接拼上——默认报文是空的，只能靠状态码猜
+
+## 验证
+
+| 测试 | 结果 |
+|---|---|
+| `IssueExcelExporterTest` | 14 例（三张表 / 正文 / 评论 / 嵌入图片 / webp 跳过 / 越权拒绝 / 缺文件 / 转义 / 截断 / 列号进位 / 类型判定 / 空任务） |
+| `GitIssueControllerExportTest` | 4 例 |
+| `BuildFreshnessCheckTest` | 9 例 |
+| `GlobalExceptionHandlerTest` | 4 例 |
+| `agent-gateway` 全量 | **208 用例通过**（6 skipped） |
+| openpyxl 交叉校验 | 三张表读通、正文含换行、评论内容正确、嵌入图片 1 个（png）、无警告 |

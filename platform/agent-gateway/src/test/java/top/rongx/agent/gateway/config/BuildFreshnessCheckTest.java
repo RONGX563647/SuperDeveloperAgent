@@ -153,8 +153,10 @@ class BuildFreshnessCheckTest {
     @Test
     @DisplayName("运行期过期提示：产物晚于进程启动就给出「请重启网关」")
     void runtimeHintWhenArtifactsAreNewerThanProcess() {
-        String hint = BuildFreshnessCheck.staleHint(
-                Instant.ofEpochMilli(5_000_000L), Instant.ofEpochMilli(1_000_000L));
+        Instant started = Instant.ofEpochMilli(1_000_000L);
+        Instant compiled = Instant.ofEpochMilli(5_000_000L);
+
+        String hint = BuildFreshnessCheck.staleHint(compiled, started);
 
         assertNotNull(hint, "产物比进程新时必须给提示");
         assertTrue(hint.contains("旧字节码"), hint);

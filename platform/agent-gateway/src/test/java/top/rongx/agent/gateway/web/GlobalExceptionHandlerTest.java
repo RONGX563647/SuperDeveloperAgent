@@ -50,17 +50,6 @@ class GlobalExceptionHandlerTest {
         assertInstanceOf(Map.class, response.getBody());
     }
 
-    private MockHttpServletRequest request(String accept) {
-        MockHttpServletRequest request = new MockHttpServletRequest(
-                "GET", "/api/v1/workspaces/A/dev/events");
-        request.addHeader(HttpHeaders.ACCEPT, accept);
-        return request;
-    }
-
-    private NotLoginException notLogin() {
-        return new NotLoginException("token 无效", "login", "stale-token");
-    }
-
     @Test
     @DisplayName("方法不支持：405 并在报文里指名方法与路径")
     void methodNotSupportedExplainsWhatFailed() {
@@ -78,5 +67,16 @@ class GlobalExceptionHandlerTest {
         assertTrue(message.contains("POST"), message);
         assertTrue(message.contains("/api/v1/git-issues/export"), message);
         assertEquals(405, body.get("code"));
+    }
+
+    private MockHttpServletRequest request(String accept) {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/v1/workspaces/A/dev/events");
+        request.addHeader(HttpHeaders.ACCEPT, accept);
+        return request;
+    }
+
+    private NotLoginException notLogin() {
+        return new NotLoginException("token 无效", "login", "stale-token");
     }
 }
