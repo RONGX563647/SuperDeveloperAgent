@@ -126,6 +126,7 @@ docs/
 
 | 层 | 范围 | 实测（16 核 / 热态） |
 |---|---|---|
+| commit-msg | 提交信息编码：U+FFFD 与连续 `?` 直接拒收（`tools/ci/check-commit-messages.py`） | <1s |
 | pre-commit | 受影响模块全部 `test-compile`（含下游，抓编译期破坏）+ **只跑变更模块自己的测试** | domain 改动 13s；gateway 改动 47s |
 | pre-push | 归档契约 + handbook 漂移 + `spec-checks` 全量（ArchUnit 架构/契约） | ~20s（tree 未变则命中缓存） |
 | CI（`mvn verify`） | 全 reactor 测试 + spec-checks | 90s（4 fork） |
