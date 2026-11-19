@@ -13,8 +13,8 @@
   "solution": "﻿fix(agent): 开启悬挂工具调用恢复，堵住会话永久中断",
   "commits": [
     {
-      "sha": "5fc1ab1f6d800f6106b9efc874d59f24eb8b8d2d",
-      "subject": "﻿fix(agent): 开启悬挂工具调用恢复，堵住会话永久中断",
+      "sha": "1b01d77c5c3f126954de6194356ecab953de213d",
+      "subject": "fix(agent): 开启悬挂工具调用恢复，堵住会话永久中断",
       "category": "chore",
       "files": [
         {
@@ -79,6 +79,6 @@
   },
   "chain": {
     "prev": "4f45f1f9acd40bb9a77fb4f3cd1a961680924cf2920bfd0f687c0a6a25759933",
-    "self": "448fafb8312b31acf5b08c609a587949e9c1d173ef7e0f833a89fd08d8c3b732"
+    "self": "abbf1392421c74c70a9ca962147e66040c36c4ed04a025870de362169e0c4ac4"
   }
 }
