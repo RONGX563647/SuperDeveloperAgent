@@ -247,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--allow",
+        "--allow-file",
+        dest="allow",
         action="append",
         default=[],
         help=f"历史遗留坏提交的 sha 前缀文件（可重复；默认读 {DEFAULT_ALLOW_FILE}）",
