@@ -29,6 +29,22 @@ jobs:
     name: backend (mvn verify)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # 真 PG 让 hot-switch 与 identity 序列的端到端用例在 CI 上也跑起来，而不是只 skip。
+    # 这些用例靠 AGENT_TEST_PG_URL 判断是否启用：没配置就 skip，不会把主干卡红。
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: verify123
+          POSTGRES_DB: agent_platform
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,6 +66,14 @@ jobs:
           # CI 机器核数不固定：让 surefire 按可用核数走 pom 默认（2），
           # 需要更快可在仓库变量里覆盖。
           MAVEN_OPTS: -Xmx2g
+          # 端到端用例的目标库；不设则自动 skip（本地默认即如此）。
+          #
+          # 凭据必须写在 URL 里：IdentitySequenceSyncTest 用 DriverManager.getConnection(url)
+          # 直连、不带单独的用户名密码参数，URL 缺凭据就会撞 SCRAM 认证失败。
+          # 同时保留独立的 USER/PASSWORD 变量，供按参数连接的热切换用例使用。
+          AGENT_TEST_PG_URL: jdbc:postgresql://127.0.0.1:55432/agent_platform?user=agent&password=verify123
+          AGENT_TEST_PG_USER: agent
+          AGENT_TEST_PG_PASSWORD: verify123
 
       - name: 上传测试与覆盖率报告
         if: always()
