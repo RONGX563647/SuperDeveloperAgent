@@ -11,6 +11,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -20,6 +21,7 @@ import cn.dev33.satoken.exception.NotPermissionException;
 import cn.dev33.satoken.exception.NotRoleException;
 import top.rongx.agent.domain.error.PlatformException;
 import top.rongx.agent.domain.policy.ConfirmationRequiredException;
+import top.rongx.agent.gateway.config.BuildFreshnessCheck;
 
 /** 统一错误响应：含 traceId，不含堆栈与内部细节（规约 §3）。 */
 @RestControllerAdvice
@@ -80,6 +82,23 @@ public class GlobalExceptionHandler {
         HttpStatus status = HttpStatus.valueOf(e.getStatusCode().value());
         return error(request, status,
                 e.getReason() == null ? status.getReasonPhrase() : e.getReason());
+    }
+
+    /**
+     * 方法不支持 → 405。
+     *
+     * <p><b>为什么要单独处理</b>：这条报文默认是空的（Spring 只给状态码），而它最常见的
+     * 真实原因是「进程没重启」——新加的接口映射在旧字节码里根本不存在，请求自然 405。
+     * 实测有人对着 {@code Request method 'POST' is not supported} 去翻代码，其实是
+     * 产物在进程启动后才编译。所以这里把健康度结论直接拼进 message。
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<?> methodNotSupported(HttpRequestMethodNotSupportedException e,
+            HttpServletRequest request) {
+        String message = "该接口不支持 " + e.getMethod() + " 请求：" + request.getRequestURI();
+        String hint = BuildFreshnessCheck.staleRuntimeHint();
+        return error(request, HttpStatus.METHOD_NOT_ALLOWED,
+                hint == null ? message : message + "。注意：" + hint);
     }
 
     /** 兜底：记录堆栈，返回泛化文案。 */
