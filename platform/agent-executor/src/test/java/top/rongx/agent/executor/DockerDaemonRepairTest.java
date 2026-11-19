@@ -7,12 +7,22 @@ import java.util.List;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Docker 守护进程修复：先探测、再启动、最后由平台 docker version 复核。 */
+/**
+ * Docker 守护进程修复：先探测、再启动、最后由平台 docker version 复核。
+ *
+ * <p><b>平台约束</b>：涉及"自动启动守护进程"的用例只在 Windows 上有意义——那条启动命令
+ * 本身就是 {@code docker desktop start}，而 {@link DockerDaemonRepair#startCommand} 在 Linux
+ * 上按设计返回空（不猜 systemd 用法）。Linux CI 上跑它们必然是 fail 而非 skip，曾让主干 CI
+ * 长期变红。因此注入/复核类用例标 {@code @EnabledOnOs(OS.WINDOWS)}；
+ * "不猜启动命令"这条契约本身仍全平台执行（见 {@link #safeOnOtherPlatformsAndCancel()}）。
+ */
 class DockerDaemonRepairTest {
 
     private static final List<String> INSPECT = List.of("docker", "image", "inspect", "maven:cfg");
@@ -53,6 +63,7 @@ class DockerDaemonRepairTest {
     }
 
     @Test
+    @EnabledOnOs(OS.WINDOWS)
     @DisplayName("守护进程已经可用时不自作主张启动")
     void alreadyRunningHandsOff() {
         Recorder recorder = new Recorder(); // 默认第一条命令成功
@@ -65,6 +76,7 @@ class DockerDaemonRepairTest {
     }
 
     @Test
+    @EnabledOnOs(OS.WINDOWS)
     @DisplayName("启动 Docker 后由 docker version 复核通过才允许续跑")
     void startsThenVerified() {
         Recorder recorder = new Recorder();
@@ -84,6 +96,7 @@ class DockerDaemonRepairTest {
     }
 
     @Test
+    @EnabledOnOs(OS.WINDOWS)
     @DisplayName("启动命令本身失败时立即给出下一步，不空等 100 秒")
     void startFailureFailsFast() {
         Recorder recorder = new Recorder();

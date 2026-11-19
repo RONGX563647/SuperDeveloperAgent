@@ -15,6 +15,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 /**
  * 运行模式裁剪：触发与自动续跑必须得到同一份阶段计划。
@@ -92,6 +94,7 @@ class PipelineRunModeTest {
     }
 
     @Test
+    @EnabledOnOs(OS.WINDOWS)
     @DisplayName("stage.workdir 越出检出目录 → 拒绝（不能把宿主任意目录挂进容器）")
     void workdirMustStayInsideCheckout() {
         Path runDir = Path.of("E:/data/runs/run-1").toAbsolutePath().normalize();
@@ -108,7 +111,25 @@ class PipelineRunModeTest {
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, ".."));
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "../../../../Windows"));
         assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "backend/../../etc"));
-        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "E:/Windows"));
+    }
+
+    @Test
+    @DisplayName("绝对路径一律拒绝：Windows 盘符与 POSIX 绝对路径都要挡住")
+    void absoluteWorkdirRejected() {
+        Path runDir = Path.of("E:/data/runs/run-1").toAbsolutePath().normalize();
+
+        // 关键：这条断言在 Linux CI 上曾经失手过。
+        // "E:/Windows" 在 Windows 上是绝对路径，在 Linux 上却是一个普通相对路径，
+        // 会被拼成 <runDir>/E:/Windows 而"通过"越界检查——于是同一份测试在两个平台结论不同。
+        // 因此实现必须显式识别盘符形态，而不是只依赖 Path.isAbsolute()。
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "E:/Windows"),
+                "Windows 盘符路径必须在任何平台都被判为越界");
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "C:\\Windows\\System32"),
+                "Windows 反斜杠盘符路径同样要拒绝");
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "/etc/passwd"),
+                "POSIX 绝对路径必须拒绝");
+        assertNull(BuiltInPipelineEngine.resolveWorkdir(runDir, "\\\\server\\share"),
+                "UNC 路径必须拒绝");
     }
 
     @Test

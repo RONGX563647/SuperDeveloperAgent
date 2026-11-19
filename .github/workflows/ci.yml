@@ -106,7 +106,8 @@ jobs:
       - name: 文档契约检查
         run: |
           pip install --quiet 'doc-marshal==0.6.1'
-          doc-marshal check --all
+          # 仓库未提交 .doc-marshal/config.toml，显式指定文档树（工具要求二选一）
+          doc-marshal check --all --docs-tree docs
 
       - name: 会话归档校验（不依赖本地钩子）
         run: python tools/session-archive/gate.py validate
@@ -124,6 +125,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: 安装工具依赖（audit.mjs 依赖 typescript）
+        run: npm ci --prefix tools/api-docs-mcp
 
       - name: 工具自测
         run: node --test tools/api-docs-mcp/audit.test.mjs tools/api-docs-mcp/mock.test.mjs
