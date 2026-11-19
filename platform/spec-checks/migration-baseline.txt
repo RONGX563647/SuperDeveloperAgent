@@ -5,14 +5,16 @@
 #       所以 Windows（CRLF 检出）与 Linux CI（LF 检出）算出同一个值。
 #       ——不要用 Get-FileHash / sha256sum 手算，那是原始字节口径，必然误报。
 #
-# 规则（项目规约 §5.2）：出现在本文件里的迁移 = 已发布、不可原地修改。
-#       改内容会让 Flyway 校验和变化，线上已执行过的库下次启动直接失败；
-#       演进只能新增 V(n+1)__xxx.sql，用 ALTER TABLE / CREATE TABLE IF NOT EXISTS / DO 块。
+# 锚点：最近一次发布 tag（x.y.z）决定「哪些迁移算已发布」。tag 树里的迁移 = 已发布、
+#       不可原地修改；tag 之后新增的迁移 = 未发布，可以改，但发布切点必须重算基线。
+#       CI 的 backend job 需 fetch-depth: 0，否则浅克隆没有 tag，会把未发布迁移误判成已发布。
 #
-# 重算（唯一正确姿势）：
+# 规则（项目规约 §5.2）：已发布迁移改内容会让 Flyway 校验和变化，线上已执行过的库
+#       下次启动直接失败；演进只能新增 V(n+1)__xxx.sql，用 ALTER TABLE /
+#       CREATE TABLE IF NOT EXISTS / DO 块。
+#
+# 重算（唯一正确姿势；发布切点或改未发布迁移时执行）：
 #   cd platform && mvn -pl spec-checks -Dtest=MigrationGuardTest -Dmigration.baseline.update=true test
-#
-# 什么时候该重算：发布切点；或确实要修改「尚未发布」的迁移时。已发布的只能新增。
 agent-infra/src/main/resources/db/migration/common/V1__platform_schema.sql dd3a4b61685679a387eb4f2af178bc7363190d0db801be18f46b7c87f595102f
 agent-infra/src/main/resources/db/migration/common/V3__platform_indexes.sql f3eff7998fba2fdd7a0c6cd12287d7c4fee1c9f855af26c5c35988b83f278dbc
 agent-infra/src/main/resources/db/migration/postgresql/V2__identity_tables.sql d0a75ab31a0781f93232b5673f9243ddfd8ba4c0c7d7ea93e3a1db9389be6ae4

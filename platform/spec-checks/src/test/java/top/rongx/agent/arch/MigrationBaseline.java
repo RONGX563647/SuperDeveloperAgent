@@ -9,25 +9,32 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
  * 迁移基线（{@code spec-checks/migration-baseline.txt}）的读写口径。
  *
- * <p>本类只做四件事，把它们从测试里拆出来是为了能对临时目录做自测：
+ * <p>把口径从测试里拆出来是为了能对临时目录做自测：
  * <ul>
- *   <li>{@link #hash(Path)}：<b>LF 归一化</b>后的 sha256 —— 与 Flyway 的 checksum 同口径，
- *       行尾差异（Windows 的 CRLF / Linux 的 LF）不算改动；</li>
- *   <li>{@link #check(Path)}：校验当前迁移是否与基线一致，分出「内容被改」与「未登记」两类问题；</li>
+ *   <li>{@link #hash(Path)}：<b>LF 归一化</b>后的 sha256 —— 与 Flyway 的 checksum 同口径；</li>
+ *   <li>{@link #releaseTag(Path)}：最近一次发布 tag（{@code x.y.z}，仓库约定不带 {@code v}），
+ *       它是「哪些迁移算已发布」的真相源；</li>
+ *   <li>{@link #check(Path)}：以 tag 为锚把当前迁移分成三类——被改 / 已发布未登记 / 未发布；</li>
  *   <li>{@link #rewrite(Path)}：按当前内容重算整份基线（生成物，禁止手改哈希）；</li>
  *   <li>{@link #prescription()}：失败时给出的处方文本。</li>
  * </ul>
  *
- * <p><b>为什么基线是生成物</b>：上一轮事故就是人手 {@code Get-FileHash} 算哈希——
- * 算的是工作区原始字节，于是 Windows 上生成的基线在 Linux CI 上必然对不上。
+ * <p><b>为什么基线是生成物</b>：曾有人手算 {@code Get-FileHash}——算的是工作区原始字节，
+ * Windows（CRLF）上生成的基线在 Linux CI（LF）上必然对不上，三个迁移被误报。
  * 口径只能由代码定义，人只负责决定「什么时候重算」。
+ *
+ * <p><b>为什么要 tag 锚点</b>：没有锚点时只能"未登记即失败"，等于连还没发布的迁移
+ * 也被提前冻结。有了 release tag，未发布迁移可以自由演进（只要在发布切点重算基线），
+ * 已发布的迁移仍然一律新增。
  */
 final class MigrationBaseline {
 
@@ -37,6 +44,9 @@ final class MigrationBaseline {
     /** 重算开关（与 {@code -Derror.code.baseline.update=true} 同款用法）。 */
     static final String UPDATE_PROPERTY = "migration.baseline.update";
 
+    /** 发布 tag 形态：仓库约定 {@code x.y.z}，不带 {@code v}（见 domain/release/ReleaseVersion）。 */
+    static final String RELEASE_TAG_GLOB = "[0-9]*.[0-9]*.[0-9]*";
+
     private static final String HEADER = """
             # 迁移基线（生成物，不要手改哈希）：已发布迁移的 LF 归一化 sha256
             #
@@ -45,14 +55,16 @@ final class MigrationBaseline {
             #       所以 Windows（CRLF 检出）与 Linux CI（LF 检出）算出同一个值。
             #       ——不要用 Get-FileHash / sha256sum 手算，那是原始字节口径，必然误报。
             #
-            # 规则（项目规约 §5.2）：出现在本文件里的迁移 = 已发布、不可原地修改。
-            #       改内容会让 Flyway 校验和变化，线上已执行过的库下次启动直接失败；
-            #       演进只能新增 V(n+1)__xxx.sql，用 ALTER TABLE / CREATE TABLE IF NOT EXISTS / DO 块。
+            # 锚点：最近一次发布 tag（x.y.z）决定「哪些迁移算已发布」。tag 树里的迁移 = 已发布、
+            #       不可原地修改；tag 之后新增的迁移 = 未发布，可以改，但发布切点必须重算基线。
+            #       CI 的 backend job 需 fetch-depth: 0，否则浅克隆没有 tag，会把未发布迁移误判成已发布。
             #
-            # 重算（唯一正确姿势）：
+            # 规则（项目规约 §5.2）：已发布迁移改内容会让 Flyway 校验和变化，线上已执行过的库
+            #       下次启动直接失败；演进只能新增 V(n+1)__xxx.sql，用 ALTER TABLE /
+            #       CREATE TABLE IF NOT EXISTS / DO 块。
+            #
+            # 重算（唯一正确姿势；发布切点或改未发布迁移时执行）：
             #   cd platform && mvn -pl spec-checks -Dtest=MigrationGuardTest -Dmigration.baseline.update=true test
-            #
-            # 什么时候该重算：发布切点；或确实要修改「尚未发布」的迁移时。已发布的只能新增。
             """;
 
     private MigrationBaseline() {
@@ -61,10 +73,13 @@ final class MigrationBaseline {
     /**
      * 校验结果。
      *
-     * @param violations 内容被改的迁移（已登记但哈希不符）
-     * @param unrecorded 未登记的迁移（基线里没有 → 等于没守住）
+     * @param violations 已发布且已登记，但内容被改
+     * @param unrecorded 已发布但基线里没有（守不住的缺口）
+     * @param unreleased 未发布（允许改动，发布切点再补录）
+     * @param anchor     本次判定用的发布 tag；无法解析时为 {@code null}
      */
-    record Snapshot(List<String> violations, List<String> unrecorded) {
+    record Snapshot(List<String> violations, List<String> unrecorded,
+                    List<String> unreleased, String anchor) {
 
         boolean ok() {
             return violations.isEmpty() && unrecorded.isEmpty();
@@ -72,6 +87,10 @@ final class MigrationBaseline {
 
         int total() {
             return violations.size() + unrecorded.size();
+        }
+
+        String anchorLabel() {
+            return anchor == null ? "无（按全部已发布处理）" : anchor;
         }
     }
 
@@ -89,18 +108,44 @@ final class MigrationBaseline {
         return files;
     }
 
-    /** 按当前内容校验基线；基线文件不存在时返回全空的快照（首次接入不判失败）。 */
+    /**
+     * 以发布 tag 为锚校验基线；基线文件不存在时返回全空的快照（首次接入不判失败）。
+     *
+     * <p>解析不到 tag（浅克隆、或仓库还没发过版）时退化成"全部按已发布处理"：
+     * 宁可让未发布迁移也要求登记，也不能让已发布迁移的改动漏过去。
+     */
     static Snapshot check(Path root) throws Exception {
         Path file = root.resolve(FILE);
+        if (!Files.exists(file)) {
+            return new Snapshot(List.of(), List.of(), List.of(), releaseTag(root));
+        }
+        String anchor = releaseTag(root);
+        Set<String> released = anchor == null ? Set.of() : releasedMigrations(root, anchor);
+        return check(root, released, anchor);
+    }
+
+    /**
+     * 纯逻辑校验：{@code released} 为空集表示"无法解析 tag，全部按已发布处理"。
+     *
+     * <p>拆出这一层是为了让三条分支（被改 / 已发布未登记 / 未发布）能用临时目录直接自测，
+     * 不必在测试里造 git 仓库和 tag。
+     */
+    static Snapshot check(Path root, Set<String> released, String anchor) throws Exception {
+        Path file = root.resolve(FILE);
+        Map<String, String> recorded = Files.exists(file)
+                ? parse(Files.readAllLines(file, StandardCharsets.UTF_8))
+                : Map.of();
         List<String> violations = new ArrayList<>();
         List<String> unrecorded = new ArrayList<>();
-        if (!Files.exists(file)) {
-            return new Snapshot(violations, unrecorded);
-        }
-        Map<String, String> recorded = parse(Files.readAllLines(file, StandardCharsets.UTF_8));
+        List<String> unreleased = new ArrayList<>();
         for (Path migration : migrations(root)) {
             String rel = relative(root, migration);
             String expected = recorded.get(rel);
+            boolean isReleased = released.isEmpty() || released.contains(rel);
+            if (!isReleased) {
+                unreleased.add(rel);
+                continue;
+            }
             if (expected == null) {
                 unrecorded.add(rel);
             } else if (!expected.equals(hash(migration))) {
@@ -109,7 +154,38 @@ final class MigrationBaseline {
                         hash(migration).substring(0, 12)));
             }
         }
-        return new Snapshot(violations, unrecorded);
+        return new Snapshot(violations, unrecorded, unreleased, anchor);
+    }
+
+    /** 最近一次发布 tag；没有 tag 或 git 不可用时返回 {@code null}。 */
+    static String releaseTag(Path root) {
+        Path repo = repoRoot(root);
+        if (repo == null) {
+            return null;
+        }
+        String tag = git(repo, "describe", "--tags", "--abbrev=0", "--match", RELEASE_TAG_GLOB);
+        return tag == null || tag.isBlank() ? null : tag.trim();
+    }
+
+    /** 某次发布 tag 树里的迁移文件（相对 {@code platform/}，与基线写法一致）。 */
+    static Set<String> releasedMigrations(Path root, String tag) {
+        Path repo = repoRoot(root);
+        if (repo == null) {
+            return Set.of();
+        }
+        String listing = git(repo, "ls-tree", "-r", "--name-only", tag, "--", "platform");
+        if (listing == null) {
+            return Set.of();
+        }
+        Set<String> released = new LinkedHashSet<>();
+        for (String line : listing.split("\\R")) {
+            String path = line.trim().replace('\\', '/');
+            if (!path.contains("/db/migration/") || !path.endsWith(".sql")) {
+                continue;
+            }
+            released.add(path.startsWith("platform/") ? path.substring("platform/".length()) : path);
+        }
+        return released;
     }
 
     /**
@@ -135,18 +211,21 @@ final class MigrationBaseline {
         return diff(before, after);
     }
 
-    /** 失败处方：口径 + 两条修复路径 + 重算命令。 */
+    /** 失败处方：口径 + 三条修复路径 + 重算命令。 */
     static String prescription() {
         return String.join(System.lineSeparator(), List.of(
                 "处方：",
-                "  1) 这是【已发布】迁移 → 恢复原文件，改动落成新迁移：",
+                "  1) 【已发布】迁移被改 → 恢复原文件，改动落成新迁移：",
                 "     git log --oneline -- <路径>    # 找到含旧内容的提交",
                 "     git checkout <sha> -- <路径>",
                 "     新增 V<n+1>__<slug>.sql，用 ALTER TABLE / CREATE TABLE IF NOT EXISTS / DO $$ … $$",
-                "  2) 这是【尚未发布】迁移，或确认要接受现状 → 重算基线（生成物，别手改哈希）：",
+                "  2) 【已发布】但没登记 → 说明发布切点漏了补录：确认文件内容与 tag 一致后重算基线。",
+                "  3) 【未发布】迁移要改 → 直接改，发布切点重算基线即可（未发布的不受冻结约束）。",
+                "  重算（生成物，别手改哈希）：",
                 "     cd platform && mvn -pl spec-checks -Dtest=MigrationGuardTest "
                         + "-D" + UPDATE_PROPERTY + "=true test",
-                "口径：LF 归一化后的 sha256（与 Flyway checksum 一致，行尾差异不算改动）。"));
+                "口径：LF 归一化后的 sha256（与 Flyway checksum 一致，行尾差异不算改动）。",
+                "锚点：最近一次发布 tag（x.y.z）；CI 需 fetch-depth: 0 才能看到 tag。"));
     }
 
     /** 计算迁移文件的 LF 归一化 sha256。 */
@@ -177,6 +256,36 @@ final class MigrationBaseline {
             }
         }
         return out.toByteArray();
+    }
+
+    /** 从 {@code platform} 往上找含 {@code .git} 的仓库根；找不到返回 {@code null}。 */
+    private static Path repoRoot(Path root) {
+        for (Path dir = root.toAbsolutePath().normalize(); dir != null; dir = dir.getParent()) {
+            if (Files.isDirectory(dir.resolve(".git")) || Files.isRegularFile(dir.resolve(".git"))) {
+                return dir;
+            }
+        }
+        return null;
+    }
+
+    /** 跑一条 git 子命令；git 不存在或非 0 退出时返回 {@code null}（调用方按"无锚点"降级）。 */
+    private static String git(Path repo, String... args) {
+        List<String> command = new ArrayList<>();
+        command.add("git");
+        command.add("-C");
+        command.add(repo.toString());
+        command.addAll(List.of(args));
+        try {
+            ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+            Process process = builder.start();
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            return process.waitFor() == 0 ? output : null;
+        } catch (IOException e) {
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 
     private static String relative(Path root, Path file) {
