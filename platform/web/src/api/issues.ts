@@ -1,4 +1,4 @@
-import { apiFetch } from './http'
+import { apiBlob, apiFetch } from './http'
 import { getToken } from './auth'
 
 /** 平台任务页的 Issue 任务（与 Git 双向同步）。 */
@@ -212,5 +212,18 @@ export function saveGitIssueIntegration(
 export function deleteGitIssueIntegration(provider: string): Promise<{ deleted: boolean }> {
   return apiFetch(`/api/v1/settings/git-integration/${encodeURIComponent(provider)}`, {
     method: 'DELETE',
+  })
+}
+
+/**
+ * 把「当前筛选出的任务」导出为 xlsx。
+ *
+ * <p>传 id 而不是筛选条件：类型 / 优先级 / 版本 / 排序都在前端过滤，后端重算会把
+ * 同一套规则写两份，迟早出现"界面 20 条、导出 23 条"。只认 id 才能保证所见即所得。
+ */
+export function exportGitIssues(ids: string[]): Promise<Blob> {
+  return apiBlob('/api/v1/git-issues/export', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
   })
 }

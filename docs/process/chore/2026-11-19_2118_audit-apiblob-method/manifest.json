@@ -1,0 +1,60 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_2118_audit-apiblob-method",
+  "category": "chore",
+  "title": "契约审计识别 apiBlob 的 POST 下载",
+  "createdAt": "2026-11-19T21:18:34+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "apiBlob 被硬编码为 GET，POST 下载导出接口被误报 METHOD_NOT_FOUND",
+    "toolCallCount": 0
+  },
+  "problem": "契约审计 extractCalls 把 apiBlob 硬编码成 GET，而 apiBlob 早已与 apiFetch 同签名、二进制下载可以走 POST。任务导出 POST /api/v1/git-issues/export 因此被误判成 GET，CI 的 contract 作业报 METHOD_NOT_FOUND——代码与规范其实都对。",
+  "solution": "apiBlob 与 apiFetch 共用 parseMethodAlternatives，三元表达式/变量引用/缺省 GET 全部复用；新增单测覆盖 apiBlob 的 POST 与缺省 GET 两种形态。",
+  "commits": [
+    {
+      "sha": "0f6b8f6867ffed5b68b07a2e467a68cc66b2339f",
+      "subject": "fix(audit): 契约审计按声明解析 apiBlob 的方法，不再一律当 GET",
+      "category": "bug",
+      "files": [
+        {
+          "path": "tools/api-docs-mcp/audit.mjs",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "184d156c030b0757918eb1c7539ba8880ff2cba3"
+        },
+        {
+          "path": "tools/api-docs-mcp/audit.test.mjs",
+          "status": "M",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "3c94b3ef4adbea36a3b28674c0dfb40b797d7362"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "(无需后端测试：本次改动不涉及 Maven 模块)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "audit 单测 12 通过（原 11）；真实仓库审计 200 处调用 / 187 paths，0 error / 0 warning。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2118_audit-apiblob-method"
+    ]
+  },
+  "chain": {
+    "prev": "a5f07bb867c40c9d7fd6239ee2da0733d69303dfea593bfa2e5c4ad95d467a01",
+    "self": "01fdadd69176f0a6c69556d1ecb7a45cc9c24a783a3cbf62b94e537cbcdaaa9c"
+  }
+}

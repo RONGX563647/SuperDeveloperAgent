@@ -2,11 +2,12 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ChatDotRound, Close, Delete, Edit, Link, Picture, Plus, Refresh, RefreshRight, Search,
-  Tickets,
+  ChatDotRound, Close, Delete, Download, Edit, Link, Picture, Plus, Refresh, RefreshRight,
+  Search, Tickets,
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
+  exportGitIssues,
   getGitIssueVersions,
   listGitIssueComments, listGitIssues, reopenGitIssue, syncGitIssue, updateGitIssue,
   uploadIssueImage,
@@ -106,6 +107,99 @@ const visibleItems = computed(() => {
 
 /** 版本筛选项基于**全部已加载任务**，不随其它筛选变化：否则选完就消失、无法回退。 */
 const versionOptionsForFilter = computed(() => versionFilterOptions(items.value))
+
+/**
+ * 生效中的筛选条件。
+ *
+ * <p>有了这排 chips，用户不用回头逐个数「刚才到底勾了什么」就能看出当前视图是怎么收窄的，
+ * 并且能只撤掉某一条——这比一排无标签小按钮靠反复试更好用。
+ */
+const activeFilters = computed(() => {
+  const list: { key: string; label: string; clear: () => void }[] = []
+  if (keyword.value.trim()) {
+    const text = keyword.value.trim()
+    list.push({
+      key: 'keyword',
+      label: `搜索：${text.length > 12 ? `${text.slice(0, 12)}…` : text}`,
+      clear: () => { keyword.value = '' },
+    })
+  }
+  if (stateFilter.value) {
+    const label = stateOptions.find((o) => o.value === stateFilter.value)?.label ?? stateFilter.value
+    list.push({ key: 'state', label: `状态：${label}`, clear: () => { stateFilter.value = '' } })
+  }
+  if (kindFilter.value) {
+    const label = kindOptions.find((o) => o.value === kindFilter.value)?.label ?? kindFilter.value
+    list.push({ key: 'kind', label: `类型：${label}`, clear: () => { kindFilter.value = '' } })
+  }
+  if (priorityFilter.value) {
+    list.push({
+      key: 'priority', label: `优先级：${priorityFilter.value}`,
+      clear: () => { priorityFilter.value = '' },
+    })
+  }
+  if (versionFilter.value) {
+    const label = versionOptionsForFilter.value
+      .find((o) => o.value === versionFilter.value)?.label ?? versionFilter.value
+    list.push({
+      key: 'version', label: `版本：${label}`,
+      clear: () => { versionFilter.value = '' },
+    })
+  }
+  return list
+})
+
+/** 一键回到全部（排序不属于筛选，保持用户选择）。 */
+function resetFilters(): void {
+  keyword.value = ''
+  stateFilter.value = ''
+  kindFilter.value = ''
+  priorityFilter.value = ''
+  versionFilter.value = ''
+}
+
+/** 导出中：按钮 loading，避免连点重复下载。 */
+const exporting = ref(false)
+
+/** 导出文件名：带时间戳，多次导出不会互相覆盖。 */
+function exportFileName(now = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+    + `-${pad(now.getHours())}${pad(now.getMinutes())}`
+  return `tasks-${stamp}.xlsx`
+}
+
+/**
+ * 导出**当前筛选出的**任务为 Excel。
+ *
+ * <p>只把 id 交给后端：界面上的过滤（类型/优先级/版本/排序）都在前端，后端若按自己的一套
+ * 规则重算，导出结果迟早和界面对不上。
+ */
+async function exportExcel(): Promise<void> {
+  const ids = visibleItems.value.map((row) => row.id)
+  if (!ids.length) {
+    ElMessage.warning('当前没有可导出的任务')
+    return
+  }
+  exporting.value = true
+  try {
+    const blob = await exportGitIssues(ids)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = exportFileName()
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    // 延后释放：立刻 revoke 会让部分浏览器拿不到数据
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+    ElMessage.success(`已导出 ${ids.length} 条任务`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
 
 /** 看板量化：完成率、优先级分布、类型构成。 */
 const stats = computed(() => {
@@ -1191,56 +1285,86 @@ defineExpose({ openCreate, focus })
             >
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
-            <div class="filter-row">
-              <div class="state-tabs">
-                <button
-                  v-for="opt in stateOptions" :key="opt.value" type="button"
-                  class="state-tab" :class="{ active: stateFilter === opt.value }"
-                  @click="stateFilter = opt.value"
+
+            <!-- 筛选条：每项都有标签，避免"一排小按钮猜含义" -->
+            <div class="filter-bar">
+              <label class="filter-item">
+                <span class="filter-label">状态</span>
+                <el-select v-model="stateFilter" size="small" class="filter-select">
+                  <el-option
+                    v-for="opt in stateOptions" :key="opt.value"
+                    :label="opt.label" :value="opt.value"
+                  />
+                </el-select>
+              </label>
+              <label class="filter-item">
+                <span class="filter-label">类型</span>
+                <el-select v-model="kindFilter" size="small" class="filter-select">
+                  <el-option
+                    v-for="opt in kindOptions" :key="opt.value"
+                    :label="opt.label" :value="opt.value"
+                  />
+                </el-select>
+              </label>
+              <label class="filter-item">
+                <span class="filter-label">优先级</span>
+                <el-select v-model="priorityFilter" size="small" class="filter-select">
+                  <el-option
+                    v-for="opt in priorityTabs" :key="opt.value"
+                    :label="opt.value || '全部'" :value="opt.value"
+                  />
+                </el-select>
+              </label>
+              <label class="filter-item">
+                <span class="filter-label">版本</span>
+                <el-select
+                  v-model="versionFilter" size="small" class="filter-select"
+                  :disabled="versionOptionsForFilter.length <= 1"
+                  :title="versionOptionsForFilter.length <= 1
+                    ? '当前任务都没有关联版本号' : '按关联版本号筛选'"
                 >
-                  {{ opt.label }}
-                </button>
-              </div>
-              <el-select v-model="kindFilter" size="small" class="kind-select">
-                <el-option
-                  v-for="opt in kindOptions" :key="opt.value"
-                  :label="opt.label" :value="opt.value"
-                />
-              </el-select>
+                  <el-option
+                    v-for="opt in versionOptionsForFilter" :key="opt.value"
+                    :label="opt.label" :value="opt.value"
+                  />
+                </el-select>
+              </label>
+              <label class="filter-item">
+                <span class="filter-label">排序</span>
+                <el-select v-model="sortBy" size="small" class="filter-select">
+                  <el-option label="最近更新" value="updated" />
+                  <el-option label="优先级" value="priority" />
+                  <el-option label="最新创建" value="created" />
+                  <el-option label="按标题" value="title" />
+                </el-select>
+              </label>
             </div>
-            <div class="filter-row">
-              <div class="prio-tabs">
-                <button
-                  v-for="opt in priorityTabs" :key="opt.value" type="button"
-                  class="prio-tab" :class="[opt.value.toLowerCase() || 'all', { active: priorityFilter === opt.value }]"
-                  @click="priorityFilter = opt.value"
-                >
-                  {{ opt.label }}
-                </button>
-              </div>
-              <el-select v-model="sortBy" size="small" class="sort-select">
-                <el-option label="最近更新" value="updated" />
-                <el-option label="优先级" value="priority" />
-                <el-option label="最新创建" value="created" />
-                <el-option label="按标题" value="title" />
-              </el-select>
-            </div>
-            <div class="filter-row">
-              <el-select
-                v-model="versionFilter" size="small" class="version-select"
-                :disabled="versionOptionsForFilter.length <= 1"
-                :title="versionOptionsForFilter.length <= 1
-                  ? '当前任务都没有关联版本号' : '按关联版本号筛选'"
+
+            <!-- 生效中的条件：单条可去掉，也可一键清空 -->
+            <div v-if="activeFilters.length" class="filter-chips">
+              <span class="filter-chips-label">已筛选</span>
+              <button
+                v-for="f in activeFilters" :key="f.key" type="button"
+                class="filter-chip" :title="`清除「${f.label}」`"
+                @click="f.clear()"
               >
-                <el-option
-                  v-for="opt in versionOptionsForFilter" :key="opt.value"
-                  :label="opt.label" :value="opt.value"
-                />
-              </el-select>
+                {{ f.label }}
+                <el-icon class="chip-close"><Close /></el-icon>
+              </button>
+              <button type="button" class="filter-clear" @click="resetFilters">清空全部</button>
             </div>
+
             <div class="toolbar-count-row">
               <span class="toolbar-count mono">{{ visibleItems.length }} 个任务</span>
-              <span class="toolbar-hint">点击任务查看详情；支持粘贴 / 拖拽图片</span>
+              <el-button
+                size="small" :icon="Download" :loading="exporting"
+                :disabled="!visibleItems.length"
+                :title="visibleItems.length
+                  ? `导出当前筛选出的 ${visibleItems.length} 条任务` : '没有可导出的任务'"
+                @click="exportExcel"
+              >
+                导出 Excel
+              </el-button>
             </div>
           </div>
 
@@ -2095,25 +2219,6 @@ defineExpose({ openCreate, focus })
 .search {
   width: 100%;
 }
-/* 一行筛选：状态分段 + 类型 + 排序，避免两排按钮占满左栏 */
-.filter-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.filter-row .state-tabs {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.kind-select { flex: none; width: 92px; }
-/* 版本号可能带多段（0.1.10），比类型选择器宽一些；独占一行避免挤压优先级 tabs */
-.version-select { flex: none; width: 132px; }
-.sort-select { flex: none; width: 96px; }
-.filter-row :deep(.el-select__wrapper) {
-  padding: 2px 8px;
-  font-size: 11px;
-  min-height: 26px;
-}
 .toolbar-count-row {
   display: flex;
   gap: 8px;
@@ -2127,70 +2232,80 @@ defineExpose({ openCreate, focus })
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.state-tabs {
+/* 筛选条：每项带标签，两列自适应；比"一排无标签小按钮"更容易看懂当前条件 */
+.filter-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  gap: 6px 8px;
+}
+.filter-item {
   display: flex;
-  gap: 3px;
-  padding: 3px;
-  background: var(--surface-sunken);
-  border-radius: 8px;
-}
-.state-tab {
-  flex: 1;
-  padding: 5px 10px;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: 6px;
-  transition: background-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-.state-tab:hover {
-  color: var(--ink);
-}
-.state-tab.active {
-  font-weight: 600;
-  color: var(--ink);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-1);
-}
-/* 优先级快捷筛选：P0 / P1 / P2 各自配色，选中时整颗点亮 */
-.prio-tabs {
-  display: flex;
-  flex: 1;
-  gap: 3px;
+  gap: 5px;
+  align-items: center;
   min-width: 0;
-  padding: 3px;
-  background: var(--surface-sunken);
-  border-radius: 8px;
 }
-.prio-tab {
-  flex: 1;
-  padding: 4px 6px;
+.filter-label {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.filter-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.filter-bar :deep(.el-select__wrapper) {
+  padding: 2px 8px;
+  font-size: 11px;
+  min-height: 26px;
+}
+/* 生效中的条件：单条可撤销，也可整排清空 */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.filter-chips-label {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.filter-chip {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  padding: 2px 7px;
   font-family: inherit;
   font-size: 10px;
-  font-weight: 600;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+.filter-chip:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.chip-close {
+  font-size: 10px;
+  opacity: 0.6;
+}
+.filter-chip:hover .chip-close {
+  opacity: 1;
+}
+.filter-clear {
+  padding: 2px 4px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--ink-faint);
   cursor: pointer;
   background: none;
   border: 0;
-  border-radius: 6px;
-  transition: background-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+  text-decoration: underline;
 }
-.prio-tab:hover {
+.filter-clear:hover {
   color: var(--ink);
 }
-.prio-tab.active {
-  color: var(--ink);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-1);
-}
-.prio-tab.active.p0 { color: var(--danger); }
-.prio-tab.active.p1 { color: var(--warn); }
-.prio-tab.active.p2 { color: var(--accent); }
 .toolbar-count {
   font-size: 10px;
   color: var(--ink-faint);
