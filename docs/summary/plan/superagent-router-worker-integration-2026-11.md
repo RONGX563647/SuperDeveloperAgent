@@ -5,7 +5,7 @@ kind: plan
 slug: superagent-router-worker-integration
 period: 2026-11
 createdAt: 2026-11-19T10:00:00+08:00
-updatedAt: 2026-11-19T10:00:00+08:00
+updatedAt: 2026-11-19T15:30:00+08:00
 status: reviewing
 owner: TBD
 verdict: null
@@ -13,179 +13,190 @@ supersedes: null
 supersededBy: null
 refs:
   - https://github.com/deepseek-ai/dsh-superagent-prototype
-  - https://developer.aliyun.com/article/1779111
+  - https://openai.github.io/openai-agents-python/multi_agent/
+  - https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/swarm.html
+  - https://docs.langchain.com/oss/python/langchain/multi-agent/index
+  - https://github.com/superagent-ai/superagent
+  - https://superagi.com/designing-multi-agent-systems/
+  - https://datarekha.com/blog/sub-agents-vs-handoffs-vs-supervisors/
 ---
 
-# 工作区调度 Agent 接入 DeepSeek Super-agent 架构的功能需求方案
+# 工作区调度 Agent 接入开源 Super-agent 架构方案（v2）
 
-> 研究目标：把 DeepSeek 开源的 Super-agent（`dsh-superagent-prototype`，MIT）架构思想接入本系统
-> 现有的「工作区调度 Agent」，让它从"每次对话临时派发一次 DAG 子会话"升级为"持续在线、
-> 多任务并发、事件驱动、能主动接活的长期任务协调层"。
-> 结论先行：**Super-agent 不是可 `import` 的库，而是一套 Router/Worker 协调架构**；本系统已用
-> AgentScope 自建了其中的约六成机制（DAG 派发、异步执行、看门狗、票据持久化）。真正的缺口是
-> **常驻 Router、事件接入与过滤、Thread 订阅直通、上下文管理（Inline & Spill / Chain of Recall）、
-> 主动模式**这五块。方案是"补缺口"，不是"换框架"。
-
----
-
-## 1. 研究结论：DeepSeek Super-agent 是什么
-
-`dsh-superagent-prototype`（2026-10-31 发布，基于 DeepSeek Harness，MIT）是一套面向**长期运行、
-多任务并发、主动协作**的 Agent 协调架构，目标四要素：
-
-| 目标 | 含义 |
-|---|---|
-| Continuous | 持续在线接收事件，不靠人逐条派活 |
-| Productive | 多任务并发，互不阻塞 |
-| Proactive | 主动发现工作（但受确定性规则约束） |
-| Persistent | 长期稳定运行，异常可恢复 |
-
-核心是 **Router / Worker 双层结构**：
-
-- **Router**：常驻的全局协调节点，负责接收事件、任务识别、任务分派、对外沟通与结果汇总；**不执行耗时工作**。
-- **Worker**：独立 Session + 工具环境，执行具体任务，可并发，必要时内部再起 Subagent。
-
-配套机制（本方案要"串起来"的关键点）：
-
-| 机制 | 作用 |
-|---|---|
-| Trigger / Thread / Ticket / Assignment / Session | 事件、议题、任务、执行安排、会话五类对象的持久化模型 |
-| Fast Path / Slow Path | 确定性规则过滤噪声 → 语义判断是否建任务 |
-| Thread Subscription | 同一议题的后续事件直通负责它的 Worker，绕开 Router 重复决策 |
-| Inline & Spill | 上下文当高速缓存：热点入上下文，全量落外存 |
-| Chain of Recall | Trigger→Thread→Ticket→Session 关联链，按引用逐步回溯历史 |
-| 异步执行 | 长任务后台跑，完成后结果回注上下文 |
-| Watchdog | 系统外独立监督：既查基础设施，也评估 Worker 是否"有效进展" |
-
-**重要边界（官方明示）**：公开原型是**研究原型，非生产级产品**；`danger-full-access`，Session 隔离
-≠ 文件系统/权限隔离；跨设备 BYOM、独立智能 Watchdog 尚未完整公开实现。因此"接入"应理解为
-**采纳其架构思想，在本系统已有的安全边界上自建**，而非直接引包。
+> 一句话结论：**不要引任何包**。本方案从 6 类开源 Super-agent / 多智能体方案里抽象出
+> **三种正交拓扑**，选定一种主拓扑，把缺的能力用"最小改动"补进现有工作区调度 Agent，
+> 并让每一处设计都**受本项目 L0–L3 治理、变更单闭环、受限补丁、ArchUnit 分层**约束。
 
 ---
 
-## 2. 现状盘点（本系统已具备，无需重写）
+## 0. 上一版错在哪（先说清，避免重蹈）
 
-| Super-agent 概念 | 本系统现状 | 位置 |
+上一版是"名词映射"：把 DeepSeek Super-agent 的 Router/Worker/Ticket/Thread 一个个对齐到现有类，
+但没有做**架构决策**，也没有回答"本项目的治理模型能不能被这套架构穿透"。结果读起来像翻译，不像方案。
+
+本次的修正是三条：
+
+1. **抽象拓扑，而不是翻译名词**。多智能体系统在 2026 年收敛成三种互不相同的拓扑：Sub-agents、
+   Handoffs、Supervisor。三者的失败模式不同，混用会毁掉可调试性（见 §1）。
+2. **把项目特性当硬约束，而不是"背景介绍"**。L0–L3 分级、变更单人工确认、受限补丁、ArchUnit 分层
+   是方案的地基，每一条功能需求都必须"过一遍"这些约束。
+3. **给出唯一决策 + 数据模型 + 落地文件**，而不是功能清单。方案落到"新增哪两张表、改哪个 Bean"。
+
+---
+
+## 1. 开源方案调研（6 类，各取一个可借鉴点）
+
+| 方案 | 拓扑类型 | 核心机制 | 对本项目可借鉴 | 不采纳的部分 |
+|---|---|---|---|---|
+| **DeepSeek dsh-superagent-prototype** | Supervisor（常驻 Router/Worker） | 事件→Ticket→Worker、Fast/Slow Path、Thread Subscription、Inline&Spill、Watchdog | **事件驱动 + 常驻协调的骨架**，是最接近本项目诉求的参考 | 引包（TS/研究原型）、`danger-full-access` |
+| **OpenAI Agents SDK（Swarm 后继）** | Handoff / agents-as-tools | triage→specialist 接力、guardrails、session | **"三选一拓扑"的清晰心智**；handoff=上下文接力不返回 | 引 OpenAI SDK，脱离本项目模型与治理 |
+| **Microsoft AutoGen（Swarm 模式）** | Handoff（群聊+接力） | HandoffMessage 决定下一发言者 | 确认 handoff 是"上下文移交"而非"返回父级" | 群聊模型与 DevOps 单线程派单不匹配 |
+| **LangChain multi-agent** | Handoff/Skills/Supervisor 三模式 | 用 token 成本对比三模式 | **用 KV 缓存成本选拓扑**（本项目对 token 敏感） | 引 LangChain 运行时 |
+| **superagent.sh（SuperAgent）** | Agent-as-API | 把 agent 暴露成 API、RAG、workflow | "统一入口"思想（本项目已由 `/chat` + `/workspaces` 承担） | 偏通用助手，无 DevOps 治理、无分级 |
+| **SuperAGI** | 自治多智能体 | 多 agent 编排 + Action Console（关键动作前人工确认） | **关键动作前人工确认**——本项目已有变更单闭环，无需另造 | 自治度过高，无 L0–L3 分级 |
+
+### 1.1 三种拓扑（本方案的地基）
+
+| 拓扑 | 语义 | 控制权 | 适合 |
+|---|---|---|---|
+| **Sub-agents** | 编排者拆解目标，委派给子智能体，**子智能体把结果返回父级** | 父级回收并汇总 | 并行、可拆解的独立子任务 |
+| **Handoffs** | 接力棒：triage 路由到 specialist，**specialist 接管对话，不返回** | 控制权移交 | 需要专员直接面对用户、切换指令集 |
+| **Supervisor** | 显式中心路由器，持续收事件、派单、汇总 | 中心常驻 | 多个长期并存、持续到来的任务 |
+
+**关键决策（本项目）**：主拓扑选 **Supervisor + Sub-agents**——现有 `workspace_dispatch`（DAG）就是
+Sub-agents，缺的只是给它上面加一个"常驻 Supervisor"。**Handoff 只在唯一一处使用**：同一 Ticket 的
+后续事件直通已负责它的 Worker（即 Thread Subscription），其余一律不引入 handoff，避免"混用拓扑"。
+
+---
+
+## 2. 本项目特性（方案必须遵守的硬约束）
+
+这些不是背景，是每条功能需求都要回踩的锚点：
+
+1. **L0–L3 四级工具分级** + 环境策略矩阵（dev/test/prod × L0–L3）。→ Router 必须**只有 L0 只读 + 派发**，
+   绝不给写工具（现状已由 `supervisorToolkit` 保证）；Worker 继承环境策略（现状 `AgentFactory` 已按环境装配）。
+2. **变更单人工确认闭环**（`request → confirm → apply`，一次性令牌）。→ 这是本项目自带的
+   human-in-the-loop，**不再造 Action Console / guardrails**；Worker 的写操作继续走它。
+3. **受限补丁 `propose_patch`**。→ Worker 改代码唯一通道，Router 不能绕过。
+4. **环境注入 + `secret://` + 部署回滚**。→ 事件接入与主动模式不得引入新的凭据通道。
+5. **ArchUnit 分层 + 禁令扫描**（gateway→runtime→tools/governance→domain←executor/infra）。→ 新增代码必须
+   落在既有分层内，domain 零框架、executor 无 LLM、tools 无 ProcessBuilder。
+6. **SQLite 单机 → PostgreSQL 多副本；Flyway 迁移**。→ 新增表走 Flyway V4，不靠 `ddl-auto`。
+7. **单机内存事件总线** `WorkspaceEventBus`。→ 常驻 Router 状态必须落库，不能只存内存（多副本会丢）。
+
+---
+
+## 3. 目标态架构
+
+```
+                 ┌──────────────────────────────────────────────────────────┐
+                 │  Supervisor / Router（常驻，每个工作区 × 用户）            │
+                 │  工具面 = L0 只读 + 派发（现状 supervisorToolkit）          │
+                 └───────▲──────────────────────────┬───────────────────────┘
+                         │ Trigger（事件）           │ 派发（现有 DAG）
+                 ┌───────┴───────┐                  │
+   Gitee webhook │  CI 状态      │  对话消息          ▼
+                 └───────┬───────┘         ┌─────────────────────────────────┐
+                         │ Fast Path       │ Worker 子会话（Sub-agents）      │
+                    确定性规则过滤           │ 继承环境策略 + 变更单 + 受限补丁   │
+                     （零 LLM 成本）         │ 由 WorkspaceDispatchScheduler 跑 │
+                         │                 └─────────────────────────────────┘
+                         │ Slow Path（仅放行项，模型判断）
+                         ▼
+                 建 Ticket / 关联已有 Ticket / 忽略  ──► 回写 Thread 关联
+```
+
+### 3.1 数据模型（复用为主，仅新增两张表）
+
+| 对象 | 现有承载 | 变更 |
 |---|---|---|
-| Worker 独立 Session | 子会话 `Conversation` + `ConversationRun`，按项目/用户隔离 | `ConversationManager` |
-| Assignment 调度 | **DAG 并行派发**：就绪即派发、依赖、熔断、重试、超时、提前终止 | `WorkspaceDispatchScheduler` |
-| 异步执行 | 每工作区虚拟线程池 + 取消 + SSE 事件流 | `WorkspaceRunExecutor` |
-| Watchdog（基础） | 卡死运行超时收敛 + 进程重启兜底 | `WorkspaceRunWatchdog` |
-| Ticket | 任务板 `WorkspaceTask` + 派发票据 openTicket/closeTicket | `ConversationManager` |
-| 持久化 | 全部落 SQLite（可切 PostgreSQL），重启可恢复 | `agent-infra` |
-| 事件通道 | 工作区 SSE 事件总线（内存单实例） | `WorkspaceEventBus` |
-| 安全边界 | 环境策略（生产只读）、变更单人工确认、受限补丁、沙箱 | 现有门禁体系 |
+| Trigger（事件） | 无 | **新增 `trigger` 表** |
+| Thread（议题） | 无 | **新增 `thread` 表** |
+| Ticket（任务） | `WorkspaceTask` / `GitIssue` | 加 `thread_id` 列（可空） |
+| Assignment（执行） | `DispatchNode` / `ConversationRun` | 复用，不改 |
+| Session（会话） | `Conversation` | 复用，不改 |
+| Router 状态 | 无 | 复用 `Conversation`(SUPERVISOR) + 新增关联表，见 §5 |
 
-结论：**执行面（Worker 怎么跑）已经很强**，缺的是 **协调面（Router 怎么长期在线、事件怎么进来、
-上下文怎么管）**。
+Flyway 新增 **V4__superagent_thread_trigger.sql**：
+
+- `thread(id, project_id, subject, status, created_at, updated_at)`
+- `trigger(id, project_id, source, type, external_ref, dedup_key, thread_id, ticket_id, status, created_at)`
+- `workspace_task` 加 `thread_id` 可空列（或 `trigger` 表里挂 `ticket_id`，二选一，见 §5 步骤 1）
+
+`trigger.dedup_key` 承接现有 Gitee webhook 的「同 commit 幂等」思路，保证重复事件不重复建 Ticket。
 
 ---
 
-## 3. 概念映射与缺口
+## 4. 功能需求（每条绑定项目约束）
 
-| Super-agent 概念 | 映射到本系统 | 现状 |
+### P0 — 常驻 Supervisor + 事件接入（Continuous 的入口）
+
+- **R1 常驻 Router 状态**：每个工作区（project × user）一个持久化的 Supervisor 状态，跨多轮交互记住
+  「活跃 Ticket → 归属 Worker → 状态」。落在 `Conversation`(SUPERVISOR) + `workspace_task.thread_id`，
+  **不依赖内存**（约束 7）。Router 工具面**保持 L0 只读 + 派发**，绝不下放写工具（约束 1）。
+- **R2 统一 Trigger 模型**：Gitee webhook、CI 状态、对话消息三类来源收敛为 `trigger` 记录（约束 3/4：
+  事件载荷不进命令、secret 只以 `secret://` 引用）。
+- **R3 Fast Path（确定性过滤，零 LLM）**：来源白名单、事件类型、授权范围、`dedup_key` 幂等、项目归属，
+  命中即丢弃。承接现有 Gitee webhook 幂等逻辑（约束 1：Router 是 L0，过滤不产生任何写副作用）。
+- **R4 Slow Path（仅放行项）**：Router 用模型判断「建 Ticket / 关联已有 / 忽略」。**建 Ticket 不直接执行**，
+  写操作仍走子会话 + 变更单（约束 2/3）。
+
+### P1 — Thread 直通（唯一用 Handoff 的地方）+ 上下文管理 + 主动模式
+
+- **R5 Thread Subscription（Handoff）**：同一 `thread` 的后续事件，若已有 Worker 负责，**直接投递给该
+  Worker 会话**（复用 `conversation_send`），Router 不二次语义判断。仅当 Worker 已结束或归属不明才回 Router。
+  这是全方案**唯一**引入 handoff 语义处（约束：避免混用拓扑）。
+- **R6 Inline & Spill**：Router 上下文只放「活跃 Ticket 摘要 + 近期 Thread + 反馈」，全量落库、上下文中只留
+  引用 id。缓解多独立 Session 抬升的 KV 缓存成本（§1 LangChain 的成本视角）。
+- **R7 Chain of Recall 关联链**：`workspace_recall` 从关键词搜索升级为沿 `trigger→thread→ticket→run→session`
+  关联链回溯（复用 §3.1 的关联表，不新起检索系统）。
+- **R8 主动模式 off/observe/auto**：默认 `observe`。`auto` 仅对满足**确定性启用规则**的事件自动建 Ticket
+  并派发；**生产环境写操作仍需人工确认**（约束 2）。`observe` 只给建议不接活。
+
+### P2 — 有效性监督（后续观察）
+
+- **R9 Watchdog 有效性信号**：在现有 `WorkspaceRunWatchdog`（超时收敛）之上，观察「连续 N 轮无工具产出 /
+  重复调用同一工具 / 偏离目标」，标记疑似无效并提示人工。**只观察，不自动杀**。
+
+### 贯穿性要求
+
+- **R10 安全红线不变**：Router 无写工具；Worker 严格环境策略 + 变更单 + 受限补丁（约束 1/2/3）。Super-agent
+  官方明示"Session 隔离 ≠ 权限隔离"，本方案**不为 Router 开任何特权通道**。
+- **R11 归属不可伪造**：Trigger 的 `projectId`/`ownerUserId` 由服务端注入（对齐现有 `ProjectContext`）。
+
+---
+
+## 5. 落地路径（具体到文件 + 分层合规）
+
+| 步骤 | 改动 | 分层合规 |
 |---|---|---|
-| Router | `workspace-supervisor`（`AgentFactory.createSupervisor`） | 部分：有，但**非长期常驻**，靠人触发 |
-| Worker | 子会话（NORMAL kind） | ✅ 已有 |
-| Trigger | Gitee webhook / CI 失败 / 对话消息 | 部分：Gitee webhook 目前只触发 `verify`，未转 Ticket |
-| Thread | 无对应 | ❌ 缺 |
-| Ticket | `WorkspaceTask` / `GitIssue` | 部分：有，但无事件→Ticket 的自动接纳 |
-| Assignment | `DispatchNode` / `workspace_dispatch` | ✅ 已有 |
-| Fast/Slow Path | 无对应 | ❌ 缺 |
-| Thread Subscription | 无对应 | ❌ 缺 |
-| Inline & Spill | 单会话状态存储（无外溢分层） | ❌ 缺 |
-| Chain of Recall | `workspace_recall`（关键词搜索） | 部分：无对象关联图 |
-| Proactive 模式 | 无（完全被动） | ❌ 缺 |
-| Watchdog（有效性） | 只做超时收敛 | 部分 |
+| 1 | `agent-domain`：新增 `Trigger`/`Thread` 实体 + `TriggerRepository`/`ThreadRepository` 端口；`WorkspaceTask` 加 `threadId` | domain 零框架 ✅ |
+| 2 | `agent-infra`：Flyway **V4** 建 `trigger`/`thread` 表 + 索引；SQLite/PostgreSQL 双实现 | infra 持久化 ✅ |
+| 3 | `agent-runtime`：新增 `RouterState`（常驻协调态，落库）+ `TriggerRouter`（Fast/Slow Path 分两阶段）+ `ThreadForwarder`（R5 直通） | runtime 编排层 ✅ |
+| 4 | `agent-gateway`：Gitee webhook 在 `verify` 之外按规则把 issue/PR/push/CI 事件转成 `trigger` 入库 | gateway 入口 ✅ |
+| 5 | `agent-tools`：`workspace_recall` 走关联链；新增 `thread_list`/`trigger_accept` 工具；`supervisorSystemPrompt` 增补 Router 职责段 | tools 无 ProcessBuilder ✅ |
+| 6 | 前端：工作区首页暴露 Router 状态面板 + 主动模式开关（`observe`/`off`/`auto`） | Vue3 组件 ✅ |
+| 7 | `spec-checks`：补一条 ArchUnit 断言"Router 工具面不含任何 L1+ 写工具"（防回退） | 规约检查 ✅ |
+
+> 步骤 3/4/5 是核心，1/2 是数据底座，6/7 是可见性与护栏。
 
 ---
 
-## 4. 功能需求
+## 6. 验收契约（可测，回踩项目约束）
 
-> 优先级：P0 = 首期必做，P1 = 二期，P2 = 后续/仅观察。
-
-### P0 — 让 Router 变成"常驻协调节点"（Continuous）
-
-- **R1** 每个工作区维护一个**常驻 Router 状态**（与用户/项目绑定），不再"每次对话临时构造、派发完即弃"。
-  Router 持有全局任务关系表（有哪些 Ticket、各自状态、归属 Worker），可跨多次用户交互连续决策。
-- **R2** Router 支持**异步收尾**：派发 DAG 后不阻塞，Worker 完成通过事件回调把结果回注 Router 上下文
-  （复用 `WorkspaceEventBus` 的 `run.status` 事件 + 落库状态），Router 据此更新任务关系。
-- **R3** 复用现有 `WorkspaceDispatchScheduler` 作为 Router 的派发执行器（不改），仅把"派发一次即结束"
-  改为"派发是 Router 生命周期中的一个动作"。
-
-### P0 — 事件接入 + 快慢路径过滤（Continuous / Proactive 的入口）
-
-- **R4** 统一 **Trigger 模型**：把三类来源收敛为 Trigger（`source`、`type`、`ref`、`payload`、`authScope`）：
-  1. Gitee webhook（issue / PR / push / CI 状态）；2. 对话消息（人发）；3. CI 失败事件。
-- **R5** **Fast Path**（确定性规则，零 LLM 成本）：按来源白名单、事件类型、授权范围、项目归属、重复事件幂等
-  过滤，命中即丢弃。重复事件去重沿用现有 Gitee webhook 的「同 commit 幂等」思路。
-- **R6** **Slow Path**（仅对 Fast Path 放行的候选事件）：由 Router 用模型判断"建新 Ticket / 关联已有 Ticket / 忽略"。
-  关联判断依赖 R12 的关联图。
-
-### P1 — Thread 与订阅直通（减少重复路由成本）
-
-- **R7** 引入 **Thread**：把同一工作事项的相关事件（原始 issue、后续评论、CI 结果、对话追问）归到同一 Thread。
-- **R8** **Thread Subscription**：某 Worker 已负责的 Ticket 后续事件，直接投递给该 Worker 会话（复用
-  `conversation_send`），不再每次经 Router 语义判断；仅当 Worker 已结束或归属不明时才回 Router。
-
-### P1 — 上下文管理：Inline & Spill + Chain of Recall（Persistent 的前提）
-
-- **R9** **Inline & Spill**：Router 上下文只保留"当前活跃 Ticket 摘要 + 近期 Thread + 反馈"（Inline）；
-  完整历史、低频信息落外存，上下文中只留摘要与引用 id（Spill）。
-- **R10** **Chain of Recall 关联图**：持久化 Trigger→Thread→Ticket→Assignment→Session 的外键关系，
-  `workspace_recall` 从"关键词全文搜索"升级为"沿关联链回溯"（先命中对象，再沿引用取历史）。
-- **R11** 关联图与现有 `WorkspaceTask` / `Conversation` / `ConversationRun` 复用同一存储，新增一张
-  `thread` + `trigger` 关联表（Flyway 迁移），不另起炉灶。
-
-### P1 — 主动模式（Proactive，受规则约束）
-
-- **R12** 引入推断式任务接纳模式 `off / observe / auto`（对齐 Super-agent），默认 `observe`：
-  - `off`：完全被动；`observe`：评估事件但不自动接活，只给出建议；`auto`：仅满足**确定性启用规则**的事件才自动建 Ticket 并派发。
-- **R13** 主动触发**必须有明确边界**：生产环境默认 `off`（或 `observe`），写操作仍需人工确认（沿用现有门禁）。
-
-### P2 — Watchdog 有效性评估（后续观察）
-
-- **R14** 在现有 `WorkspaceRunWatchdog`（超时收敛）之上，增加"进展有效性"信号：连续 N 轮无工具产出 /
-  偏离目标 / 重复调用同一工具，标记为疑似无效并提示人工介入。**仅观察，不自动杀**。
-
-### 贯穿性要求（安全边界，不因架构升级而放宽）
-
-- **R15** Worker 仍严格走**环境策略 + 人工确认**：生产只读、写操作变更单确认、受限补丁、沙箱——Super-agent
-  官方明确"Session 隔离 ≠ 权限隔离"，本系统的既有门禁必须原样保留，不得为 Router 开特权通道。
-- **R16** 模型无法伪造归属：Trigger 的 `projectId`/`ownerUserId` 由服务端注入（对齐现有 `ProjectContext` 注入方式）。
-
----
-
-## 5. 落地路径（按现有模块，最小改动）
-
-| 步骤 | 改动点 | 依赖需求 |
-|---|---|---|
-| 1 | `agent-domain`：新增 `Thread` / `Trigger` 实体与 Repository 端口；`Ticket` 关联 `threadId` | R4/R7/R10 |
-| 2 | `agent-infra`：Flyway 新增 `thread` / `trigger` 表 + 索引；实现 Repository | R4/R7/R10/R11 |
-| 3 | `agent-runtime`：新增 `RouterState`（常驻协调态）+ `TriggerRouter`（Fast/Slow Path）+ `ThreadSubscription` 投递 | R1/R2/R5/R6/R8 |
-| 4 | `agent-gateway`：Gitee webhook 在 `verify` 之外，按规则把事件转成 Trigger 入 Router | R4/R5 |
-| 5 | `agent-tools`：`workspace_recall` 升级为关联链回溯；新增 `thread_*` / `trigger_accept` 工具；调度 Agent 提示词增补 Router 职责 | R6/R9/R10/R12 |
-| 6 | 前端：工作区首页暴露 Router 状态（活跃 Ticket / Thread / 主动模式开关） | R1/R12 |
-
----
-
-## 6. 验收契约
-
-- 工作区 Router 能跨多轮对话记住并更新"活跃 Ticket → Worker → 状态"关系，Worker 完成后结果能回注，不靠人追问。
-- 一条 Gitee issue/PR 事件经 Fast Path（确定性规则）与 Slow Path（语义）后，能正确落到"建 Ticket / 关联 / 忽略"三态之一；无关事件零 LLM 调用。
-- 同一 Ticket 的后续事件直接投递给已负责的 Worker，Router 不重复语义决策（可用调用日志验证 Router 未二次路由）。
-- Router 上下文在长任务、多 Ticket 场景下不随历史线性膨胀（有 Spill 分层与上限）。
-- 主动模式默认 `observe`，`auto` 仅对满足启用规则的事件生效；生产环境写操作仍需人工确认。
-- 现有能力不回归：DAG 派发、看门狗、环境策略、变更单确认行为不变。
+- 同一工作区跨多轮对话，Router 能持续更新「活跃 Ticket → Worker → 状态」，Worker 完成后结果回注，**重启后状态不丢**（落库，非内存）。
+- 一条 Gitee 事件经 Fast Path 后，无关事件**零 LLM 调用**（用调用日志验证）；放行项经 Slow Path 落到「建/关联/忽略」三态之一。
+- 同一 `thread` 后续事件直通已负责的 Worker，Router 不二次路由（调用日志验证无重复语义决策）。
+- Router 上下文在多 Ticket 长任务下不随历史线性膨胀（有 Spill 上限）。
+- `mvn verify` 通过（含新增 ArchUnit 断言 + Flyway 迁移 + 现有单测不回归）。
+- 主动模式默认 `observe`；`auto` 仅对启用规则生效；**生产写操作仍必须人工确认**（约束 2 不破）。
 
 ---
 
 ## 7. 风险与边界
 
-1. **Super-agent 是研究原型**：不可直接引包/照搬实现，本方案只采纳其架构思想，落地全部基于现有 AgentScope/Java 栈。
-2. **常驻 Router 的成本**：多独立 Session 会抬升 token 与 KV 缓存读取（官方实验 cache-read 23.2M vs 单 Session 6.1M），
-   需用 R9 Inline & Spill 与 R6 Fast Path 控制。
-3. **单机内存事件总线**：`WorkspaceEventBus` 是单实例内存实现，多副本部署时 Router 常驻态需落到 PostgreSQL
-   （沿用现有 `agent.db.url` 切换路径），否则跨实例丢事件。
-4. **安全隔离红线**：Router 常驻 + 主动模式会放大误触发面，R15/R16 是硬约束，首期主动模式默认 `observe`。
-5. **范围收窄**：本方案不引入跨设备 BYOM、不重写 Worker 执行面（现有 DAG/执行器已足够），避免过度工程。
+1. **多独立 Session 抬升 token/KV 成本**：常驻 Router 会放大缓存读取，靠 R3 Fast Path（零 LLM 过滤）+ R6 Spill 控制；不做则成本失控。
+2. **单机事件总线 + 内存 Router 态**：多副本部署必须走 PostgreSQL（`agent.db.url`），Router 状态与事件都得落库，否则跨实例丢事件。
+3. **主动模式的误触发面**：`auto` 会放大风险，首期**默认 `observe`**，且生产环境写操作仍人工确认。
+4. **拓扑纪律**：全方案只在 R5 用 handoff，其余一律 Supervisor+Sub-agents；新增能力若想"顺手加个 handoff"要显式评审。
+5. **范围收窄（刻意不做）**：不引入跨设备 BYOM、不重写 Worker 执行面（现有 DAG/执行器已足够）、不另造 human-in-the-loop（复用变更单）。
