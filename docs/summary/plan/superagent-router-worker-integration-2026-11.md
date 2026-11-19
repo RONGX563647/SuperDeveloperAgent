@@ -88,7 +88,7 @@ Super-agent 的「Router + Worker」思想对本项目真正有价值的只有�
 4. 防回退护栏 —— 已完成：`SupervisorToolkitWiringTest`。
 5. 验证 —— 相关模块单测与 `mvn verify` 已执行；agent-executor 的 Docker 依赖用例在无 Docker
    沙箱中失败，已在干净 HEAD 上复现，属环境问题而非本方案回归。
-6. 提交与归档 —— 本会话 feat 归档，提交见归档 manifest。
+6. 提交与归档 —— 本会话 feat 归档 `feat/2026-11-19_1527_superagent-role-workers`，代码提交 `19bd56e`。
 
 ## 变更记录
 
