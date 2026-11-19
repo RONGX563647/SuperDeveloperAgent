@@ -3,6 +3,7 @@ package top.rongx.agent.gateway.config;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -50,7 +51,15 @@ public class BuildFreshnessCheck {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
-        Verdict verdict = inspect(Path.of("").toAbsolutePath(), Path.of("target", "classes"));
+        Path moduleRoot = Path.of("").toAbsolutePath();
+        Path classesRoot = Path.of("target", "classes");
+        // 两件事都要比：
+        // 1) 源码 vs 产物 —— 产物过期（改了没编译）；
+        // 2) 进程 vs 产物 —— 进程启动后又编译过（编译了没重启）。
+        // 第 2 类正是本次会话实测到的形态：进程启动于 23:13，产物 12:12 又被重新编译，
+        // 进程继续用旧字节码服务，表现为「改了不生效 / 请求挂住」。
+        Verdict verdict = inspect(moduleRoot, classesRoot,
+                ProcessHandle.current().info().startInstant().orElse(null));
         if (!verdict.checked()) {
             log.debug("构建产物新鲜度自检跳过：{}", verdict.detail());
             return;
@@ -73,12 +82,30 @@ public class BuildFreshnessCheck {
      * @param classesRoot 相对 {@code moduleRoot} 的 class 输出目录
      */
     public static Verdict inspect(Path moduleRoot, Path classesRoot) {
+        return inspect(moduleRoot, classesRoot, null);
+    }
+
+    /**
+     * 同上，并额外判断「进程启动之后产物是否又被编译过」。
+     *
+     * @param processStartedAt 本进程启动时间；null 表示无法取得（跳过这一项比较）
+     */
+    public static Verdict inspect(Path moduleRoot, Path classesRoot,
+                                  Instant processStartedAt) {
         if (moduleRoot == null || classesRoot == null) {
             return Verdict.skipped("缺少路径");
         }
         Path classes = moduleRoot.resolve(classesRoot).normalize();
         if (!Files.isDirectory(classes)) {
             return Verdict.skipped("没有编译产物目录：" + classes);
+        }
+        // 进程比产物旧：这是"编译了但没重启"，比源码过期更隐蔽（源码可能已经一致）
+        if (processStartedAt != null) {
+            Instant newest = newestClassTime(classes);
+            if (newest != null && newest.isAfter(processStartedAt)) {
+                return Verdict.stale("编译产物在进程启动之后又被更新（产物 " + newest
+                        + "，进程启动于 " + processStartedAt + "）");
+            }
         }
         Path sources = moduleRoot.resolve("src/main/java").normalize();
         if (!Files.isDirectory(sources)) {
@@ -121,5 +148,27 @@ public class BuildFreshnessCheck {
         return Verdict.stale("源码比编译产物新（" + stale.size() + "/" + compared
                 + " 个类，例如 " + String.join(", ", stale.stream().limit(3).toList())
                 + "）");
+    }
+
+    /** 产物目录里最新的一个 .class 时间；目录为空或读不到返回 null。 */
+    private static Instant newestClassTime(Path classes) {
+        try (Stream<Path> walk = Files.walk(classes)) {
+            return walk.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".class"))
+                    .map(BuildFreshnessCheck::modifiedOrNull)
+                    .filter(java.util.Objects::nonNull)
+                    .max(Comparator.naturalOrder())
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static Instant modifiedOrNull(Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toInstant();
+        } catch (IOException e) {
+            return null;
+        }
     }
 }

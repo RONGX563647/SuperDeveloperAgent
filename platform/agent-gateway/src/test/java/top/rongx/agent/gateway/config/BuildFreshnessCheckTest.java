@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -89,7 +90,7 @@ class BuildFreshnessCheckTest {
     }
 
     @Test
-    @DisplayName("内部类映射回同一个源文件，不会因为 $ 后缀而漏判")
+    @DisplayName("构造的模型映射回同一个源文件，不会因为 $ 后缀而漏判")
     void innerClassesMapToSameSource() throws Exception {
         Path classes = module.resolve("target/classes/demo");
         Files.createDirectories(classes);
@@ -103,5 +104,37 @@ class BuildFreshnessCheckTest {
                 BuildFreshnessCheck.inspect(module, Path.of("target/classes"));
 
         assertTrue(verdict.stale(), "内部类也要参与比对：" + verdict.detail());
+    }
+
+    @Test
+    @DisplayName("进程启动后产物又被编译：判为过期（编译了没重启）")
+    void staleWhenProcessPredatesArtifacts() throws Exception {
+        Path cls = classFile();
+        Path src = sourceFile();
+        Files.setLastModifiedTime(src, FileTime.fromMillis(1_000_000L));
+        Files.setLastModifiedTime(cls, FileTime.fromMillis(5_000_000L));
+
+        // 进程启动时间早于产物时间：源码与产物本身是一致的，但进程里是旧字节码
+        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspect(
+                module, Path.of("target/classes"), Instant.ofEpochMilli(2_000_000L));
+
+        assertTrue(verdict.checked());
+        assertTrue(verdict.stale(), verdict.detail());
+        assertTrue(verdict.detail().contains("进程启动之后"), verdict.detail());
+    }
+
+    @Test
+    @DisplayName("进程晚于产物：源码与产物一致时判为新鲜")
+    void freshWhenProcessIsNewest() throws Exception {
+        Path cls = classFile();
+        Path src = sourceFile();
+        Files.setLastModifiedTime(src, FileTime.fromMillis(1_000_000L));
+        Files.setLastModifiedTime(cls, FileTime.fromMillis(2_000_000L));
+
+        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspect(
+                module, Path.of("target/classes"), Instant.ofEpochMilli(9_000_000L));
+
+        assertTrue(verdict.checked());
+        assertFalse(verdict.stale(), verdict.detail());
     }
 }
