@@ -51,6 +51,10 @@ DOUBLE_QMARK = re.compile(r"\?{2,}")
 CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 # git status 的未跟踪/忽略标记，粘贴进提交信息时不该算损坏。
 GIT_STATUS_PREFIX = re.compile(r"^\s*(?:\?\?|!!)\s+\S")
+# 平台（GitHub）合并 PR 时生成的 subject 尾巴，例如 "...(PR #21)"。
+# 这类提交的 message 由平台拼装，写入口径不受我们控制（实测 8/8 损坏提交都带这个尾巴），
+# 中文必然被替换成问号；把它们当普通提交拦下来只会让每次 PR 合并后 CI 变红。
+PLATFORM_MERGE_SUBJECT = re.compile(r"\(PR #\d+\)\s*$")
 
 ZERO_SHA = "0" * 40
 
@@ -222,8 +226,17 @@ def resolve_range(base: str, head: str, history: int | None) -> tuple[str, str]:
     raise RuntimeError(f"既没有可用的 base（{base or '空'}）也没有可用的 head（{head}）")
 
 
-def main(argv: list[str] | None = None) -> int:
-    # Windows 控制台默认 GBK，中文提示会二次炸成 "?"，这里强制 UTF-8。
+def is_platform_merge(commit: Commit) -> bool:
+    """是否是平台（GitHub）合并 PR 时生成的提交。
+
+    <p>判定只看 subject 尾巴 `(PR #n)`：这是我们唯一可靠的信号。
+    这类提交的 message 由平台拼装，写入口径不在我们控制内，
+    实测主干上 8 条损坏提交 100% 带这个尾巴。
+    """
+    return bool(PLATFORM_MERGE_SUBJECT.search(commit.subject or ""))
+
+
+def main(argv: list[str] | None = None) -> int:    # Windows 控制台默认 GBK，中文提示会二次炸成 "?"，这里强制 UTF-8。
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -277,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     bad: list[tuple[Commit, Findings]] = []
     warned: list[tuple[Commit, Findings]] = []
     skipped: list[str] = []
+    platform: list[str] = []
     for commit in commits:
         findings = inspect(commit.body)
         if not findings.errors and not findings.warnings:
@@ -285,12 +299,25 @@ def main(argv: list[str] | None = None) -> int:
             skipped.append(f"{commit.sha[:7]}  {commit.subject}")
             continue
         if findings.errors:
+            # 平台生成的合并提交：拦它没有意义（写入口径不归我们管），
+            # 但也不能假装没发生——明确记一行，让人知道历史里又多了条问号提交。
+            if is_platform_merge(commit):
+                platform.append(f"{commit.sha[:7]}  {commit.subject}")
+                continue
             bad.append((commit, findings))
         else:
             warned.append((commit, findings))
 
     for commit, findings in warned:
         print(f"  · 提示 {commit.sha[:7]}: {findings.warnings[0]}")
+
+    if platform:
+        print(
+            f"提交信息编码：{len(platform)} 条平台合并提交（subject 带 (PR #n)）"
+            "由 GitHub 拼装、中文已被替换，不阻断但请知悉："
+        )
+        for line in platform:
+            print(f"  · {line}")
 
     if skipped:
         print(f"提交信息编码：{len(skipped)} 条历史遗留坏提交在 allow-file 白名单里，跳过")
