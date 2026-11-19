@@ -8721,6 +8721,10 @@
             "items" : {
               "$ref" : "#/components/schemas/ProjectUsageSummary"
             }
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
