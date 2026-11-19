@@ -5,7 +5,7 @@ kind: plan
 slug: superagent-router-worker-integration
 period: 2026-11
 createdAt: 2026-11-19T10:00:00+08:00
-updatedAt: 2026-11-19T15:30:00+08:00
+updatedAt: 2026-11-19T16:20:00+08:00
 status: reviewing
 owner: TBD
 verdict: null
@@ -13,190 +13,222 @@ supersedes: null
 supersededBy: null
 refs:
   - https://github.com/deepseek-ai/dsh-superagent-prototype
-  - https://openai.github.io/openai-agents-python/multi_agent/
-  - https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/swarm.html
-  - https://docs.langchain.com/oss/python/langchain/multi-agent/index
-  - https://github.com/superagent-ai/superagent
-  - https://superagi.com/designing-multi-agent-systems/
+  - https://developer.aliyun.com/article/1779111
   - https://datarekha.com/blog/sub-agents-vs-handoffs-vs-supervisors/
 ---
 
-# 工作区调度 Agent 接入开源 Super-agent 架构方案（v2）
+# 工作区调度 Agent 升级为「虚拟研发部操作系统」方案（v3）
 
-> 一句话结论：**不要引任何包**。本方案从 6 类开源 Super-agent / 多智能体方案里抽象出
-> **三种正交拓扑**，选定一种主拓扑，把缺的能力用"最小改动"补进现有工作区调度 Agent，
-> 并让每一处设计都**受本项目 L0–L3 治理、变更单闭环、受限补丁、ArchUnit 分层**约束。
-
----
-
-## 0. 上一版错在哪（先说清，避免重蹈）
-
-上一版是"名词映射"：把 DeepSeek Super-agent 的 Router/Worker/Ticket/Thread 一个个对齐到现有类，
-但没有做**架构决策**，也没有回答"本项目的治理模型能不能被这套架构穿透"。结果读起来像翻译，不像方案。
-
-本次的修正是三条：
-
-1. **抽象拓扑，而不是翻译名词**。多智能体系统在 2026 年收敛成三种互不相同的拓扑：Sub-agents、
-   Handoffs、Supervisor。三者的失败模式不同，混用会毁掉可调试性（见 §1）。
-2. **把项目特性当硬约束，而不是"背景介绍"**。L0–L3 分级、变更单人工确认、受限补丁、ArchUnit 分层
-   是方案的地基，每一条功能需求都必须"过一遍"这些约束。
-3. **给出唯一决策 + 数据模型 + 落地文件**，而不是功能清单。方案落到"新增哪两张表、改哪个 Bean"。
+> 一句话结论：**Super-agent（Router+Worker）是调度层，不是"一个万能 Agent"，更不是替代多 Agent**。
+> 本方案把它架在已有的执行层（AgentScope 工具 + CI/部署/环境）之上，落地成一个面向 99 人以下小团队的
+> **虚拟研发部**：用户只面对一个入口，背后是 Router 调度 Product/Dev/Test/Ops 四类角色 Worker，
+> **Worker 有写工具，但每一处写操作都绑定角色权限 + 环境门禁 + 全链路追踪**。
 
 ---
 
-## 1. 开源方案调研（6 类，各取一个可借鉴点）
+## 0. 定位重述（这一版改了什么）
 
-| 方案 | 拓扑类型 | 核心机制 | 对本项目可借鉴 | 不采纳的部分 |
+前两版讲的是"调度层长什么样"，这版回答"业务怎么跑通、谁能写、写了的每一笔怎么追"。
+
+三个不可省的判断：
+
+1. **Super-agent 是调度层，不替代多 Agent**。它解决的是"多个 Agent 同时跑时，谁调度、谁隔离、谁负责上下文、谁兜底"，
+   不解决"测试 Agent 会不会写用例、部署 Agent 会不会安全回滚"——这些是执行层的能力，得自己做。
+2. **Worker 必须有写工具**，否则虚拟研发部是假的；但写工具的代价是**完整权限 + 追踪体系**，两者缺一不可。
+3. **默认策略 = Agent 执行、人工确认；高风险强制审批**。小团队最怕的是"AI 改坏线上"，所以权限模型必须是
+   保守默认（fail-closed），而不是"能写就放行"。
+
+最终形态是三层：
+
+```
+调度层（本方案新增/增强）  Router：常驻、统一入口、任务分派、上下文、对外回复
+执行层（现有，按角色裁剪）  Product / Dev / Test / Ops 四类 Worker，各持写工具
+基础设施层（现有，复用）    CI/构建 · 部署/回滚 · 环境/secret · Gitee · 沙箱
+```
+
+---
+
+## 1. 业务场景（虚拟研发部）
+
+用户只看到**一个"虚拟研发同事"**（Router 统一入口），不需要理解背后有几个 Agent。
+主链路：**需求 → 任务卡 → 改代码 → PR → 测试 → 部署 → 回滚**，可拆成多个 Worker 接力。
+
+| 场景 | 触发事件 | 角色 Worker | 产出 | 门禁 |
 |---|---|---|---|---|
-| **DeepSeek dsh-superagent-prototype** | Supervisor（常驻 Router/Worker） | 事件→Ticket→Worker、Fast/Slow Path、Thread Subscription、Inline&Spill、Watchdog | **事件驱动 + 常驻协调的骨架**，是最接近本项目诉求的参考 | 引包（TS/研究原型）、`danger-full-access` |
-| **OpenAI Agents SDK（Swarm 后继）** | Handoff / agents-as-tools | triage→specialist 接力、guardrails、session | **"三选一拓扑"的清晰心智**；handoff=上下文接力不返回 | 引 OpenAI SDK，脱离本项目模型与治理 |
-| **Microsoft AutoGen（Swarm 模式）** | Handoff（群聊+接力） | HandoffMessage 决定下一发言者 | 确认 handoff 是"上下文移交"而非"返回父级" | 群聊模型与 DevOps 单线程派单不匹配 |
-| **LangChain multi-agent** | Handoff/Skills/Supervisor 三模式 | 用 token 成本对比三模式 | **用 KV 缓存成本选拓扑**（本项目对 token 敏感） | 引 LangChain 运行时 |
-| **superagent.sh（SuperAgent）** | Agent-as-API | 把 agent 暴露成 API、RAG、workflow | "统一入口"思想（本项目已由 `/chat` + `/workspaces` 承担） | 偏通用助手，无 DevOps 治理、无分级 |
-| **SuperAGI** | 自治多智能体 | 多 agent 编排 + Action Console（关键动作前人工确认） | **关键动作前人工确认**——本项目已有变更单闭环，无需另造 | 自治度过高，无 L0–L3 分级 |
+| 新需求落地 | 对话/任务卡 | Product → Dev → Test → Ops | 验收标准 + PR + 测试证据 + 部署 | 需求范围需用户确认 |
+| Bug 修复 | Gitee issue/评论 | Dev → Test | 补丁 + 回写评论 | `propose_patch` 人工确认 |
+| CI 失败自愈 | CI 状态事件 | Dev(诊断) / Ops(环境) | 根因 + 补丁/配置修正 | 修改仍需确认 |
+| 发布/回滚 | 对话/合并事件 | Ops | 发布说明 + 部署/回滚 | dev/test 自动，prod 强制审批 |
+| 线上问题排查 | 对话/告警 | 只读 Worker(取证) | 结论 + 证据定位 | 只读，无写 |
 
-### 1.1 三种拓扑（本方案的地基）
-
-| 拓扑 | 语义 | 控制权 | 适合 |
-|---|---|---|---|
-| **Sub-agents** | 编排者拆解目标，委派给子智能体，**子智能体把结果返回父级** | 父级回收并汇总 | 并行、可拆解的独立子任务 |
-| **Handoffs** | 接力棒：triage 路由到 specialist，**specialist 接管对话，不返回** | 控制权移交 | 需要专员直接面对用户、切换指令集 |
-| **Supervisor** | 显式中心路由器，持续收事件、派单、汇总 | 中心常驻 | 多个长期并存、持续到来的任务 |
-
-**关键决策（本项目）**：主拓扑选 **Supervisor + Sub-agents**——现有 `workspace_dispatch`（DAG）就是
-Sub-agents，缺的只是给它上面加一个"常驻 Supervisor"。**Handoff 只在唯一一处使用**：同一 Ticket 的
-后续事件直通已负责它的 Worker（即 Thread Subscription），其余一律不引入 handoff，避免"混用拓扑"。
+这些场景不是新造的 Agent，而是把**现有 61 个 `@Tool` 按角色裁剪 + 现有 CI/部署/环境能力编排**起来。
 
 ---
 
-## 2. 本项目特性（方案必须遵守的硬约束）
+## 2. 角色 Worker 定义（带写工具 + 权限 + 验收标准）
 
-这些不是背景，是每条功能需求都要回踩的锚点：
+核心原则：**不为角色造新工具**，用现有工具按角色裁剪成四个 Worker。每个 Worker = 独立 Session + 独立上下文 +
+受限工具面 + 明确验收标准 + 独立追踪。
 
-1. **L0–L3 四级工具分级** + 环境策略矩阵（dev/test/prod × L0–L3）。→ Router 必须**只有 L0 只读 + 派发**，
-   绝不给写工具（现状已由 `supervisorToolkit` 保证）；Worker 继承环境策略（现状 `AgentFactory` 已按环境装配）。
-2. **变更单人工确认闭环**（`request → confirm → apply`，一次性令牌）。→ 这是本项目自带的
-   human-in-the-loop，**不再造 Action Console / guardrails**；Worker 的写操作继续走它。
-3. **受限补丁 `propose_patch`**。→ Worker 改代码唯一通道，Router 不能绕过。
-4. **环境注入 + `secret://` + 部署回滚**。→ 事件接入与主动模式不得引入新的凭据通道。
-5. **ArchUnit 分层 + 禁令扫描**（gateway→runtime→tools/governance→domain←executor/infra）。→ 新增代码必须
-   落在既有分层内，domain 零框架、executor 无 LLM、tools 无 ProcessBuilder。
-6. **SQLite 单机 → PostgreSQL 多副本；Flyway 迁移**。→ 新增表走 Flyway V4，不靠 `ddl-auto`。
-7. **单机内存事件总线** `WorkspaceEventBus`。→ 常驻 Router 状态必须落库，不能只存内存（多副本会丢）。
+| 角色 | 职责 | 工具面（复用现有） | 写能力 | 环境权限 | 验收标准 |
+|---|---|---|---|---|---|
+| **Product** | 需求→任务卡+验收标准 | `workspace_plan` / `task_*` / `comment_git_issue` + 只读查询 | 只写任务卡/工单/评论，**无代码写权限** | 全环境只读+任务卡 | 验收标准可执行、可判定 |
+| **Dev** | 改代码、提 PR | `EditorTools` + `propose_patch`（唯一改代码通道）+ git 操作 | 代码走受限补丁→独立分支，**永不 push** | dev/test 可改，prod 只读 | 补丁过测试、PR 可评审 |
+| **Test** | 生成用例、跑关键测试 | `ci_run` / `run_action` / `read_run_log` + `propose_patch`(写用例) | 写用例走补丁，跑测试可自动 | dev/test 跑测试，prod 只读 | 关键测试通过、证据留痕 |
+| **Ops** | 部署预览、发布说明、回滚 | `DeployTools` + `env_*` + `deploy_run` + `deploy_save_recipe` + 回滚 | 部署/回滚/环境供给 | dev 本机自动；test 自动；**prod 强制审批** | 健康检查 2xx、回滚点留存 |
+
+> 说明：现有 `AgentFactory.createDeploy` 已经是"Ops 单角色"的雏形，`createSupervisor` 是 Router 的雏形；
+> 本方案是把"单角色"推广为"四角色 Worker + 常驻 Router"，并统一权限与追踪，而非从零重写。
 
 ---
 
-## 3. 目标态架构
+## 3. 权限体系（完整，不是单一"变更单"）
+
+三层叠加，任一不满足即拒绝（fail-closed）：
+
+**① 角色 × 环境 × L 级矩阵**（复用现有 `PolicyPort` + `ToolLevel` L0–L3）
+
+| 环境 | Product | Dev | Test | Ops |
+|---|---|---|---|---|
+| dev | 只读+任务卡 | L0–L2（改代码需确认） | L0–L2 | L0–L3（本机自动） |
+| test | 只读+任务卡 | L0–L2（改代码需确认） | L0–L2 | L0–L3（自动，L3 需确认） |
+| prod | 只读 | L0 只读 | L0 只读 | L0–L1 只读；部署/回滚 L3 强制审批 |
+
+**② 写操作门禁分级**（复用现有变更单闭环 `request→confirm→apply` + 一次性令牌）
+
+| 风险级 | 动作 | 门禁 |
+|---|---|---|
+| 低 | 只读/查询/状态 | 自动 |
+| 中 | 改代码（`propose_patch`）、改配置 | 人工确认后应用 |
+| 高 | prod 部署/回滚/数据库变更/secret 轮换 | 强制审批，不可自动 |
+
+**③ 默认策略**：**Agent 执行，人工确认；高风险强制审批**。Router 与 Worker 都无特权通道，
+  写工具本身拒绝 prod（`DEFAULT` 权限模式），部署要 `binding_id`（人确认的环境绑定）。
+
+---
+
+## 4. 追踪/审计体系（完整）
+
+每个 Worker 的每一次活动都要能回答：**是谁、为什么、改了什么、花了多少、怎么回滚**。
+
+| 追踪维度 | 现有承载 | 本方案增强 |
+|---|---|---|
+| 输入/输出 | `ConversationRun` + 时间线 | 角色 Worker 标注 + 决策理由摘要 |
+| 工具调用序列 | AgentScope 事件 + `WorkspaceEventBus` | 稳定事件枚举（README 已知边界 #5） |
+| 文件变更 | `ChangeWire` 变更单 + 受限补丁登记 | 关联到 Worker + 触发事件 |
+| 回滚点 | `_platform/deploy/<p>-<env>/releases/<sha>` + `current`/`previous` | 每次部署/回滚写审计行 |
+| Token 成本 | `TokenUsageRecorder` + 前端 `UsagePanel` | **按 Worker 维度聚合的成本看板** |
+| 运行账本 | `RunLedger`（`RunRecord`） | 补 `workerRole` 字段 + 关联 `threadId` |
+
+新增一表 `audit_trace`（Flyway V4，与 §5 数据模型合并）统一记录：`runId → workerRole → triggerId → toolCalls → tokenCost → changeIds → rollbackPoint`。
+审计查询走现有 `/api/v1` 统一错误契约，权限 `settings:reveal` 之上新增只读 `audit:read` 码。
+
+---
+
+## 5. 目标态架构（三层）
 
 ```
                  ┌──────────────────────────────────────────────────────────┐
-                 │  Supervisor / Router（常驻，每个工作区 × 用户）            │
-                 │  工具面 = L0 只读 + 派发（现状 supervisorToolkit）          │
-                 └───────▲──────────────────────────┬───────────────────────┘
-                         │ Trigger（事件）           │ 派发（现有 DAG）
-                 ┌───────┴───────┐                  │
-   Gitee webhook │  CI 状态      │  对话消息          ▼
-                 └───────┬───────┘         ┌─────────────────────────────────┐
-                         │ Fast Path       │ Worker 子会话（Sub-agents）      │
-                    确定性规则过滤           │ 继承环境策略 + 变更单 + 受限补丁   │
-                     （零 LLM 成本）         │ 由 WorkspaceDispatchScheduler 跑 │
-                         │                 └─────────────────────────────────┘
-                         │ Slow Path（仅放行项，模型判断）
-                         ▼
-                 建 Ticket / 关联已有 Ticket / 忽略  ──► 回写 Thread 关联
+                 │  调度层 Router（常驻，工作区 × 用户一个）                    │
+                 │  工具面 = L0 只读 + 派发（无写工具，无特权）                  │
+                 │  职责：统一入口 · 事件分类 · 任务分派 · 上下文 · 对外回复      │
+                 └───────▲───────────────────────────┬──────────────────────┘
+                 Trigger（Gitee/CI/对话）            │ 派发（现有 DAG）
+                 Fast Path 规则过滤 → Slow Path 语义   ▼
+                 ┌──────────────────────────────────────────────────────────┐
+                 │  执行层（四类角色 Worker，独立 Session/上下文）              │
+                 │  Product / Dev / Test / Ops，各持裁剪后的写工具            │
+                 │  写操作 → 角色权限 × 环境门禁 × 人工确认（§3）               │
+                 └──────────────────────────────────────────────────────────┘
+                 ┌──────────────────────────────────────────────────────────┐
+                 │  基础设施层（复用现有）CI/构建 · 部署回滚 · 环境/secret ·      │
+                 │  Gitee · 沙箱 · SQLite/PostgreSQL                          │
+                 └──────────────────────────────────────────────────────────┘
+                        ▲ 贯穿：Watchdog（超时/死循环/跑偏）+ 审计追踪（§4）
 ```
 
-### 3.1 数据模型（复用为主，仅新增两张表）
+### 数据模型（新增最小集）
 
-| 对象 | 现有承载 | 变更 |
-|---|---|---|
-| Trigger（事件） | 无 | **新增 `trigger` 表** |
-| Thread（议题） | 无 | **新增 `thread` 表** |
-| Ticket（任务） | `WorkspaceTask` / `GitIssue` | 加 `thread_id` 列（可空） |
-| Assignment（执行） | `DispatchNode` / `ConversationRun` | 复用，不改 |
-| Session（会话） | `Conversation` | 复用，不改 |
-| Router 状态 | 无 | 复用 `Conversation`(SUPERVISOR) + 新增关联表，见 §5 |
+Flyway **V4__superagent_router_worker.sql**：
 
-Flyway 新增 **V4__superagent_thread_trigger.sql**：
-
+- `trigger(id, project_id, source, type, external_ref, dedup_key, thread_id, status, created_at)`
 - `thread(id, project_id, subject, status, created_at, updated_at)`
-- `trigger(id, project_id, source, type, external_ref, dedup_key, thread_id, ticket_id, status, created_at)`
-- `workspace_task` 加 `thread_id` 可空列（或 `trigger` 表里挂 `ticket_id`，二选一，见 §5 步骤 1）
+- `workspace_task` 加 `thread_id` 可空列
+- `run_record` 加 `worker_role` 可空列（Product/Dev/Test/Ops）
+- `audit_trace(id, run_id, worker_role, trigger_id, tool_calls_json, token_cost, change_ids, rollback_point, created_at)`
 
-`trigger.dedup_key` 承接现有 Gitee webhook 的「同 commit 幂等」思路，保证重复事件不重复建 Ticket。
-
----
-
-## 4. 功能需求（每条绑定项目约束）
-
-### P0 — 常驻 Supervisor + 事件接入（Continuous 的入口）
-
-- **R1 常驻 Router 状态**：每个工作区（project × user）一个持久化的 Supervisor 状态，跨多轮交互记住
-  「活跃 Ticket → 归属 Worker → 状态」。落在 `Conversation`(SUPERVISOR) + `workspace_task.thread_id`，
-  **不依赖内存**（约束 7）。Router 工具面**保持 L0 只读 + 派发**，绝不下放写工具（约束 1）。
-- **R2 统一 Trigger 模型**：Gitee webhook、CI 状态、对话消息三类来源收敛为 `trigger` 记录（约束 3/4：
-  事件载荷不进命令、secret 只以 `secret://` 引用）。
-- **R3 Fast Path（确定性过滤，零 LLM）**：来源白名单、事件类型、授权范围、`dedup_key` 幂等、项目归属，
-  命中即丢弃。承接现有 Gitee webhook 幂等逻辑（约束 1：Router 是 L0，过滤不产生任何写副作用）。
-- **R4 Slow Path（仅放行项）**：Router 用模型判断「建 Ticket / 关联已有 / 忽略」。**建 Ticket 不直接执行**，
-  写操作仍走子会话 + 变更单（约束 2/3）。
-
-### P1 — Thread 直通（唯一用 Handoff 的地方）+ 上下文管理 + 主动模式
-
-- **R5 Thread Subscription（Handoff）**：同一 `thread` 的后续事件，若已有 Worker 负责，**直接投递给该
-  Worker 会话**（复用 `conversation_send`），Router 不二次语义判断。仅当 Worker 已结束或归属不明才回 Router。
-  这是全方案**唯一**引入 handoff 语义处（约束：避免混用拓扑）。
-- **R6 Inline & Spill**：Router 上下文只放「活跃 Ticket 摘要 + 近期 Thread + 反馈」，全量落库、上下文中只留
-  引用 id。缓解多独立 Session 抬升的 KV 缓存成本（§1 LangChain 的成本视角）。
-- **R7 Chain of Recall 关联链**：`workspace_recall` 从关键词搜索升级为沿 `trigger→thread→ticket→run→session`
-  关联链回溯（复用 §3.1 的关联表，不新起检索系统）。
-- **R8 主动模式 off/observe/auto**：默认 `observe`。`auto` 仅对满足**确定性启用规则**的事件自动建 Ticket
-  并派发；**生产环境写操作仍需人工确认**（约束 2）。`observe` 只给建议不接活。
-
-### P2 — 有效性监督（后续观察）
-
-- **R9 Watchdog 有效性信号**：在现有 `WorkspaceRunWatchdog`（超时收敛）之上，观察「连续 N 轮无工具产出 /
-  重复调用同一工具 / 偏离目标」，标记疑似无效并提示人工。**只观察，不自动杀**。
-
-### 贯穿性要求
-
-- **R10 安全红线不变**：Router 无写工具；Worker 严格环境策略 + 变更单 + 受限补丁（约束 1/2/3）。Super-agent
-  官方明示"Session 隔离 ≠ 权限隔离"，本方案**不为 Router 开任何特权通道**。
-- **R11 归属不可伪造**：Trigger 的 `projectId`/`ownerUserId` 由服务端注入（对齐现有 `ProjectContext`）。
+复用：`Conversation`(Session)、`ConversationRun`(Assignment)、`WorkspaceTask`(Ticket)、`RunLedger`、`ChangeWire`。
 
 ---
 
-## 5. 落地路径（具体到文件 + 分层合规）
+## 6. 功能需求（每条绑定「场景 + 权限 + 追踪」）
 
-| 步骤 | 改动 | 分层合规 |
+### P0 — 角色 Worker 落地 + 常驻 Router
+
+- **R1 四类角色 Worker**：`AgentFactory` 从"单 deploy 角色"推广为 `createWorker(ctx, Role)`，
+  按 §2 裁剪工具面与系统提示，每个角色绑定 §3 权限。**这是写工具存在的唯一形态**。
+- **R2 常驻 Router 状态**：工作区（project × user）一个持久化 Supervisor，跨轮记住
+  「活跃 Ticket → 归属 Worker(角色) → 状态」；落库不靠内存。
+- **R3 Trigger 统一接入 + Fast/Slow Path**：Gitee issue/PR/CI、对话消息收敛为 `trigger`；
+  确定性规则先过滤（零 LLM），放行项由 Router 语义判断「建 Ticket / 关联 / 忽略」。
+
+### P1 — 场景编排 + 订阅直通 + 主动模式
+
+- **R4 主链路编排**：需求→任务卡→改代码→PR→测试→部署→回滚，由 Router 把 §1 五类场景
+  映射为「角色 Worker 接力」（DAG 依赖 + `depends_on`），每棒产出与证据交给下一棒。
+- **R5 Thread 订阅直通**：同一 `thread` 后续事件直接投递到已负责的 Worker（唯一 handoff 处），
+  Router 不二次决策。
+- **R6 主动模式 off/observe/auto**：默认 `observe`；`auto` 仅对确定性启用规则的事件自动建 Ticket；
+  **生产写操作始终人工确认**。
+
+### P1 — 追踪体系
+
+- **R7 审计追踪**：`audit_trace` 记录 §4 六维（谁/为什么/改了什么/花了多少/怎么回滚），
+  Worker 维度成本进看板。
+- **R8 可观测**：稳定事件枚举替代反射（README 边界 #5），Worker 输入/输出/工具调用/Tx成本单独可查。
+
+### P2 — 有效性监督
+
+- **R9 Watchdog 有效性信号**：现有超时收敛之上，观察「连续无产出 / 重复调用 / 偏离目标」，标记疑似无效，**只观察不自动杀**。
+
+### 贯穿性硬约束
+
+- **R10 安全红线不变**：Router 无写工具、无特权；Worker 写操作过 §3 三层门禁；
+  `propose_patch` 仍是改代码唯一通道、永不 push；prod 写操作不可自动。
+- **R11 归属不可伪造**：Trigger/Worker 的 `projectId`/`ownerUserId` 由服务端注入。
+
+---
+
+## 7. 落地路径（MVP 优先，逐层解锁写权限）
+
+| 阶段 | 改动 | 交付物 |
 |---|---|---|
-| 1 | `agent-domain`：新增 `Trigger`/`Thread` 实体 + `TriggerRepository`/`ThreadRepository` 端口；`WorkspaceTask` 加 `threadId` | domain 零框架 ✅ |
-| 2 | `agent-infra`：Flyway **V4** 建 `trigger`/`thread` 表 + 索引；SQLite/PostgreSQL 双实现 | infra 持久化 ✅ |
-| 3 | `agent-runtime`：新增 `RouterState`（常驻协调态，落库）+ `TriggerRouter`（Fast/Slow Path 分两阶段）+ `ThreadForwarder`（R5 直通） | runtime 编排层 ✅ |
-| 4 | `agent-gateway`：Gitee webhook 在 `verify` 之外按规则把 issue/PR/push/CI 事件转成 `trigger` 入库 | gateway 入口 ✅ |
-| 5 | `agent-tools`：`workspace_recall` 走关联链；新增 `thread_list`/`trigger_accept` 工具；`supervisorSystemPrompt` 增补 Router 职责段 | tools 无 ProcessBuilder ✅ |
-| 6 | 前端：工作区首页暴露 Router 状态面板 + 主动模式开关（`observe`/`off`/`auto`） | Vue3 组件 ✅ |
-| 7 | `spec-checks`：补一条 ArchUnit 断言"Router 工具面不含任何 L1+ 写工具"（防回退） | 规约检查 ✅ |
+| M1 底座 | `agent-domain` 加 `Trigger/Thread` 实体+端口；`agent-infra` Flyway V4；`run_record` 加 `worker_role` | 数据模型可迁移 |
+| M2 角色 Worker | `agent-runtime` 的 `AgentFactory.createWorker(ctx, Role)`，四角色工具面/提示/权限裁剪；`PolicyPort` 扩展角色维度 | 四角色可构造、权限生效 |
+| M3 常驻 Router | `RouterState` + `TriggerRouter`(Fast/Slow) + `ThreadForwarder`；`agent-tools` 加 `thread_*`/`trigger_accept`，`workspace_recall` 走关联链 | 事件→Ticket→派发闭环 |
+| M4 追踪 | `audit_trace` 落库 + 成本看板 + 审计查询接口；事件映射稳定化 | 六维追踪可查 |
+| M5 前端 | 工作区首页：虚拟研发同事入口 + 角色/任务/成本/审计面板 + 主动模式开关 | 用户只面对一个入口 |
 
-> 步骤 3/4/5 是核心，1/2 是数据底座，6/7 是可见性与护栏。
+> 安全顺序：**先 M2 的权限裁剪，再给 Worker 解锁写工具**；权限没落地前，写工具保持默认拒绝。
 
 ---
 
-## 6. 验收契约（可测，回踩项目约束）
+## 8. 验收契约（可测）
 
-- 同一工作区跨多轮对话，Router 能持续更新「活跃 Ticket → Worker → 状态」，Worker 完成后结果回注，**重启后状态不丢**（落库，非内存）。
-- 一条 Gitee 事件经 Fast Path 后，无关事件**零 LLM 调用**（用调用日志验证）；放行项经 Slow Path 落到「建/关联/忽略」三态之一。
-- 同一 `thread` 后续事件直通已负责的 Worker，Router 不二次路由（调用日志验证无重复语义决策）。
-- Router 上下文在多 Ticket 长任务下不随历史线性膨胀（有 Spill 上限）。
-- `mvn verify` 通过（含新增 ArchUnit 断言 + Flyway 迁移 + 现有单测不回归）。
-- 主动模式默认 `observe`；`auto` 仅对启用规则生效；**生产写操作仍必须人工确认**（约束 2 不破）。
+- 一个需求从任务卡走到部署回滚，全程由 Router 调度四角色 Worker 接力完成，每棒有产出与证据。
+- Worker 写操作：dev/test 中风险需人工确认、prod 高风险强制审批；无任何路径绕过门禁。
+- 一次 Gitee 事件经 Fast Path 后无关事件零 LLM 调用；放行项落到「建/关联/忽略」三态。
+- 任意一次 Worker 活动，可经 `audit_trace` 查回「谁、为什么、改了什么、token 成本、回滚点」。
+- `mvn verify` 通过（ArchUnit 断言 Router 工具面无 L1+ 写工具 + Flyway + 现有单测不回归）。
+- 主动模式默认 `observe`，`auto` 仅对启用规则生效；prod 写操作不可自动。
 
 ---
 
-## 7. 风险与边界
+## 9. 风险与边界（含"研究原型不能当生产基建"）
 
-1. **多独立 Session 抬升 token/KV 成本**：常驻 Router 会放大缓存读取，靠 R3 Fast Path（零 LLM 过滤）+ R6 Spill 控制；不做则成本失控。
-2. **单机事件总线 + 内存 Router 态**：多副本部署必须走 PostgreSQL（`agent.db.url`），Router 状态与事件都得落库，否则跨实例丢事件。
-3. **主动模式的误触发面**：`auto` 会放大风险，首期**默认 `observe`**，且生产环境写操作仍人工确认。
-4. **拓扑纪律**：全方案只在 R5 用 handoff，其余一律 Supervisor+Sub-agents；新增能力若想"顺手加个 handoff"要显式评审。
-5. **范围收窄（刻意不做）**：不引入跨设备 BYOM、不重写 Worker 执行面（现有 DAG/执行器已足够）、不另造 human-in-the-loop（复用变更单）。
+1. **Super-agent 是研究原型**：只采纳 Router+Worker 架构思想，全部在 AgentScope/Java 栈自建，不引包、不照搬 `danger-full-access`。
+2. **Worker 能力要自己做**：调度层不解决"测试会不会写用例、部署会不会安全回滚"——这些靠现有 61 个工具 + 验收标准约束，需持续补工具能力。
+3. **成本更高**：Router + 多 Worker + Watchdog + 事件过滤会抬升 token；靠 Fast Path 零 LLM + Spill 上下文裁剪 + 模型路由控制，看板必须可见。
+4. **权限与审批不可省**：小团队最怕"AI 改坏线上"，默认「Agent 执行、人工确认」是底线，不为效率破例。
+5. **单机事件总线 + 内存 Router 态**：多副本前必须先落库 + PostgreSQL，否则跨实例丢事件。
+6. **刻意不做**：跨设备 BYOM、通用企业级多租户、重写 CI/部署基础设施（复用现有）、另造 human-in-the-loop（复用变更单）。
