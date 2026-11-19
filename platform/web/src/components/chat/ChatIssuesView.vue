@@ -15,6 +15,9 @@ import {
 import MarkdownView from './MarkdownView.vue'
 import { appStore } from '../../stores/app'
 import { listProjects, type ProjectRow } from '../../api/project'
+import {
+  filterByVersion, versionFilterOptions,
+} from '../../utils/taskVersionFilter'
 import VisXYContainer from '@unovis/vue/containers/xy-container'
 import VisSingleContainer from '@unovis/vue/containers/single-container'
 import VisStackedBar, { VisStackedBarSelectors } from '@unovis/vue/components/stacked-bar'
@@ -42,6 +45,8 @@ const keyword = ref('')
 const stateFilter = ref('')
 const kindFilter = ref('')
 const priorityFilter = ref<GitIssuePriority | ''>('')
+/** 版本号筛选：空串=全部；`__none__`=未关联；其它=版本号精确匹配。 */
+const versionFilter = ref('')
 const selectedId = ref('')
 const comments = ref<GitIssueCommentRow[]>([])
 const commentsLoading = ref(false)
@@ -78,13 +83,14 @@ const priorityTabs: { label: string; value: GitIssuePriority | '' }[] = [
 /** 列表排序：默认最近更新优先；任务多时按状态/标题更好找。 */
 const sortBy = ref<'updated' | 'created' | 'title' | 'priority'>('updated')
 
-/** 分类、优先级与排序在前端处理：数据量小，切换无需再请求。 */
+/** 分类、优先级、版本与排序在前端处理：数据量小，切换无需再请求。 */
 const visibleItems = computed(() => {
   let rows = [...items.value]
   if (kindFilter.value) rows = rows.filter((i) => (i.kind ?? 'BUG') === kindFilter.value)
   if (priorityFilter.value) {
     rows = rows.filter((i) => (i.priority ?? 'P2') === priorityFilter.value)
   }
+  rows = filterByVersion(rows, versionFilter.value)
   return rows.sort((a, b) => {
     if (sortBy.value === 'priority') {
       const diff = (PRIORITY_RANK[a.priority ?? 'P2'] ?? 2)
@@ -97,6 +103,9 @@ const visibleItems = computed(() => {
     return b.updatedAt - a.updatedAt
   })
 })
+
+/** 版本筛选项基于**全部已加载任务**，不随其它筛选变化：否则选完就消失、无法回退。 */
+const versionOptionsForFilter = computed(() => versionFilterOptions(items.value))
 
 /** 看板量化：完成率、优先级分布、类型构成。 */
 const stats = computed(() => {
@@ -329,6 +338,8 @@ const focusTasks = computed(() => items.value
 /** 看板点优先级：带筛选切回列表，形成「看板 → 明细」闭环。 */
 function focusPriority(priority: GitIssuePriority | '') {
   priorityFilter.value = priority
+  // 清掉版本筛选：否则看板统计（不分版本）点进来却是空列表
+  versionFilter.value = ''
   taskView.value = 'list'
 }
 
@@ -336,6 +347,7 @@ function focusPriority(priority: GitIssuePriority | '') {
 function focusState(state: '' | 'OPEN' | 'CLOSED') {
   stateFilter.value = state
   priorityFilter.value = ''
+  versionFilter.value = ''
   taskView.value = 'list'
 }
 
@@ -469,6 +481,11 @@ watch(kindFilter, () => {
   }
 })
 watch(priorityFilter, () => {
+  if (selectedId.value && !visibleItems.value.some((i) => i.id === selectedId.value)) {
+    selectedId.value = ''
+  }
+})
+watch(versionFilter, () => {
   if (selectedId.value && !visibleItems.value.some((i) => i.id === selectedId.value)) {
     selectedId.value = ''
   }
@@ -1206,6 +1223,19 @@ defineExpose({ openCreate, focus })
                 <el-option label="优先级" value="priority" />
                 <el-option label="最新创建" value="created" />
                 <el-option label="按标题" value="title" />
+              </el-select>
+            </div>
+            <div class="filter-row">
+              <el-select
+                v-model="versionFilter" size="small" class="version-select"
+                :disabled="versionOptionsForFilter.length <= 1"
+                :title="versionOptionsForFilter.length <= 1
+                  ? '当前任务都没有关联版本号' : '按关联版本号筛选'"
+              >
+                <el-option
+                  v-for="opt in versionOptionsForFilter" :key="opt.value"
+                  :label="opt.label" :value="opt.value"
+                />
               </el-select>
             </div>
             <div class="toolbar-count-row">
@@ -2076,6 +2106,8 @@ defineExpose({ openCreate, focus })
   min-width: 0;
 }
 .kind-select { flex: none; width: 92px; }
+/* 版本号可能带多段（0.1.10），比类型选择器宽一些；独占一行避免挤压优先级 tabs */
+.version-select { flex: none; width: 132px; }
 .sort-select { flex: none; width: 96px; }
 .filter-row :deep(.el-select__wrapper) {
   padding: 2px 8px;
