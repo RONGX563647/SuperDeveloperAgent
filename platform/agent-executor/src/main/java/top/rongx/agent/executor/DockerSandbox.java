@@ -430,6 +430,7 @@ public class DockerSandbox {
             try {
                 runInit(volume, cancelled, live, "mkdir", "-p",
                         "/cache/m2", "/cache/npm", "/cache/pnpm", "/cache/corepack");
+                chmodWorldWritable(volume, cancelled, live);
                 chownBestEffort(volume, cancelled, live);
                 runInit(volume, cancelled, live, "touch", READY_MARKER);
                 return;
@@ -441,6 +442,26 @@ public class DockerSandbox {
                 notify(live, "[sandbox] 缓存卷初始化失败，自动重试（"
                         + (attempt + 1) + "/" + CACHE_INIT_ATTEMPTS + "）\n");
             }
+        }
+    }
+
+    /**
+     * 目录放权（root 执行）：确保构建用户（1000）可写。
+     *
+     * <p>为什么不能只靠 chown：Windows 的 Docker Desktop 卷（WSL2/9p）不支持 chown，
+     * root 建出的目录属主停在 root:root 0755，uid 1000 写 {@code /cache/m2} 直接
+     * Permission denied（Docker 29 实测，构建阶段 E-101 秒败）。chmod 不走 9p 属主
+     * 语义，root 对自属目录放权 777 稳定生效；构建进程以 1000 运行，能写即可。
+     */
+    private void chmodWorldWritable(String volume, BooleanSupplier cancelled, Consumer<String> live) {
+        List<String> cmd = initCommand(volume, "0:0", "chmod", "777",
+                "/cache", "/cache/m2", "/cache/npm", "/cache/pnpm", "/cache/corepack");
+        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, CACHE_INIT_TIMEOUT_MS,
+                cancelled == null ? () -> false : cancelled, live);
+        if (outcome.exitCode() != 0) {
+            notify(live, "[sandbox] 目录放权未生效（exit " + outcome.exitCode()
+                    + "），继续初始化（若构建仍报 Permission denied 需检查卷驱动）\n");
         }
     }
 

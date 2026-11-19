@@ -92,8 +92,12 @@ class DockerSandboxPrepareTest {
         sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, live::append);
         sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, live::append);
 
-        assertEquals(4, recorder.commands.size(), "探测 + mkdir + chown + 标记，第二次应跳过");
-        assertEquals(List.of(CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT),
+        // 探测 + mkdir + chmod + chown + 标记，第二次应跳过
+        // （chmod 是 Windows 卷的放权兜底：chown 在 WSL2/9p 卷上不生效，
+        //   没有 777 时构建用户 1000 写 /cache/m2 直接 AccessDenied）
+        assertEquals(5, recorder.commands.size(), "探测 + mkdir + chmod + chown + 标记，第二次应跳过");
+        assertEquals(List.of(CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT,
+                        CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT),
                 recorder.timeouts);
         assertTrue(recorder.commands.get(0).contains("test"));
         assertTrue(recorder.commands.get(1).contains("mkdir"));
@@ -101,8 +105,10 @@ class DockerSandboxPrepareTest {
                 "corepack 下载缓存必须是可写卷目录：" + recorder.commands.get(1));
         assertTrue(recorder.commands.get(1).contains("/cache/pnpm"),
                 "pnpm store 必须在缓存卷里，否则每次全量重下：" + recorder.commands.get(1));
-        assertTrue(recorder.commands.get(2).contains("chown"));
-        assertTrue(recorder.commands.get(3).contains("touch"));
+        assertTrue(recorder.commands.get(2).contains("chmod"),
+                "chmod 777 是 Windows 卷的可用放权手段：" + recorder.commands.get(2));
+        assertTrue(recorder.commands.get(3).contains("chown"));
+        assertTrue(recorder.commands.get(4).contains("touch"));
         assertTrue(live.toString().contains("[sandbox] $ "), "准备命令要写进实时日志");
     }
 
@@ -232,7 +238,9 @@ class DockerSandboxPrepareTest {
 
         recorder.handler = freshVolume();
         sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, null);
-        assertEquals(7, recorder.commands.size(),
+        // 3（失败轮：探测 + mkdir as1000 超时即抛）
+        // + 5（成功轮：探测 + mkdir + chmod + chown + 标记）= 8
+        assertEquals(8, recorder.commands.size(),
                 "失败后不能把卷标记为已初始化，否则后续构建会误用 root 属主的缓存");
     }
 

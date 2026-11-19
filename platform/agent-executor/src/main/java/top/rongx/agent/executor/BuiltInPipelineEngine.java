@@ -128,8 +128,15 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     /** 镜像版本账本（按 (项目, 环境) 持久化；回滚锚点与按版本部署都以它为准）。 */
     private final ImageVersionStore imageVersions;
 
-    /** 有界队列：全局并发上限 4；同一项目同一环境串行由 TriggerScheduler 保证。 */
-    private final ExecutorService workers = Executors.newFixedThreadPool(4, Thread.ofVirtual().factory());
+    /** 有界队列：全局并发上限 pipelineWorkers()（默认 8）；部署槽互斥由 TriggerScheduler 保证。 */
+    private final ExecutorService workers =
+            Executors.newFixedThreadPool(pipelineWorkers(), Thread.ofVirtual().factory());
+    /**
+     * 环境存储（envStore/envVars/imageVersions）读写的串行锁：
+     * 并行构建下多个运行可能同时读写端口租约/模板，这里统一串行；
+     * 同时是 callStore 清中断标志的临界区边界。
+     */
+    private final Object envStoreLock = new Object();
     /**
      * 运行看护：单线程周期扫描所有 RUNNING 的运行，负责
      * ① 运行中定期落盘 ② 长时间无输出时写心跳 ③ 超预算请求取消 ④ 仍不收敛时强制终态。
@@ -458,6 +465,55 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         return chain;
     }
 
+    /**
+     * 全局执行并发上限：默认 8，可用系统属性 {@code agent.pipeline.workers}
+     * 或环境变量 {@code AGENT_PIPELINE_WORKERS} 覆盖，最小 2。
+     *
+     * <p>为什么是 8：与 PG 连接池（Hikari 默认 10）同量级；并行构建每次运行独占
+     * 独立 worktree、按 sha 命名镜像 tag，互不争抢，真正的瓶颈只剩数据库与
+     * Docker 守护进程。线程本身是虚拟线程，等待部署槽/IO 时不占平台线程。
+     */
+    private static int pipelineWorkers() {
+        String v = System.getProperty("agent.pipeline.workers",
+                System.getenv().getOrDefault("AGENT_PIPELINE_WORKERS", "8"));
+        try {
+            return Math.max(2, Integer.parseInt(v.trim()));
+        } catch (NumberFormatException e) {
+            return 8;
+        }
+    }
+
+    /**
+     * 环境存储读写的串行点 + 中断标志清理。
+     *
+     * <p>事故链（为何存在此方法）：健康检查循环的 sleep 收到 interrupt 后，
+     * 旧代码重置了中断标志（"礼貌"恢复），标志一路泄漏到回滚路径的
+     * {@code imageVersions.current} 数据库读取——Hikari 在获取连接时检测到
+     * 中断标志，直接抛「Unable to acquire JDBC Connection [Interrupted during
+     * connection acquisition]」，on-failure 回滚必挂。本方法统一做三件事：
+     * ① 进临界区前用 {@code Thread.interrupted()} 清掉可能残留的标志；
+     * ② {@code envStoreLock} 串行化环境存储访问，避免并行构建同时读写租约；
+     * ③ 读失败（RuntimeException）先清标志再补一次带 300ms 延迟的重试。
+     */
+    private <T> T callStore(String what, java.util.function.Supplier<T> call) {
+        synchronized (envStoreLock) {
+            Thread.interrupted(); // 清掉可能残留的中断标志（见方法注释的事故链）
+            try {
+                return call.get();
+            } catch (RuntimeException e) {
+                ProcessExecutor.warn("[env] " + what + " 失败，300ms 后重试一次："
+                        + e.getMessage());
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException ie) {
+                    // 吞掉：重试前必须保证标志干净，否则 Hikari 再次拒绝发连接
+                }
+                Thread.interrupted();
+                return call.get();
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- PipelineEngine
 
     @Override
@@ -592,7 +648,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         List<StageDryRun> stages = new ArrayList<>();
 
         top.rongx.agent.domain.env.EffectiveEnvironment effective =
-                envStore.effective(projectId, normalized);
+                callStore("读取环境模板（dryRun 预检）",
+                        () -> envStore.effective(projectId, normalized));
         if (!effective.missingSecrets().isEmpty()) {
             blockers.add(ErrorCode.SECRET_UNRESOLVED.code() + " 密钥引用无法解析：" + String.join("、", effective.missingSecrets()));
         }
@@ -1703,7 +1760,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         if (envStore != null) {
             try {
-                EffectiveEnvironment effective = envStore.effective(projectId, env);
+                EffectiveEnvironment effective = callStore("读取环境模板（触发预检）",
+                        () -> envStore.effective(projectId, env));
                 if (!effective.missingSecrets().isEmpty()) {
                     blockers.add(ErrorCode.SECRET_UNRESOLVED.code() + " 密钥引用无法解析：" + String.join("、", effective.missingSecrets())
                             + "。请先在「设置 → 项目环境 → 密钥」创建或轮换对应密钥");
@@ -1916,7 +1974,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             s.stages.add(StageResult.failed("watchdog", 124, ErrorCode.TIMEOUT.code(), reason, 0));
             history.save(s.snapshot());
             recordLedger(s);
-            scheduler.complete(s.projectId, s.env);
+            // 部署槽不在这里释放：公平锁由持锁线程在自己的收尾里释放（releaseDeploySlot）。
+            // 强杀线程不持锁，直接解锁会抛 IllegalMonitorStateException；持锁线程被强杀后
+            // 会在自己的 finally 感知 forceTerminated 并释放。
         }
     }
 
@@ -1944,11 +2004,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     syncGitTag(state);
                 }
                 // 每次运行结束（含异常）都落盘，保证重启后可查询历史。
-                // 看护已强制终态时跳过，避免重复 complete 或把 TIMEOUT 覆盖回 RUNNING。
+                // 看护已强制终态时跳过，避免重复落盘或把 TIMEOUT 覆盖回 RUNNING。
                 history.save(state.snapshot());
                 recordLedger(state);
-                scheduler.complete(state.projectId, state.env);
             }
+            // 部署槽无条件释放（幂等；未持有时是无操作）：
+            // 成功、失败、取消、被强杀都走到这里——持有者本人释放，公平锁语义安全。
+            releaseDeploySlot(state);
         }
     }
 
@@ -2636,6 +2698,17 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             PipelineDefinition.StageDef stage = all.get(i);
             // 记下该阶段开始前的产物数量：重试时把本阶段及之后产生的产物一起回收，避免重复
             state.artifactMark.put(stage.id(), state.artifacts.size());
+            // 并行构建的核心互斥点：deploy 阶段独占该环境的「默认部署槽」。
+            // 锁空闲 → 立即持有继续；被占用 → 当前虚拟线程阻塞等待（FIFO 公平），
+            // 拿到后在本线程继续执行 deploy 及后续阶段。
+            if ("deploy".equals(stage.type()) && !state.deployTagged && state.deploySlotToken == null) {
+                if (!awaitDeploySlot(state)) {
+                    // 等待被打断：视为取消，不再继续后续阶段
+                    state.status = StageStatus.CANCELLED;
+                    return;
+                }
+                // 已持有部署槽：本轮循环正常走 deploy（deploySlotToken 非 null）
+            }
             boolean ok = runStage(state, stage, runDir, vars);
             if (!ok) {
                 // 先跑完 on-failure，再置终态：否则查询方会在补救动作结束前看到"已完成"
@@ -2648,6 +2721,58 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // 只有"真的部署过"的运行才更新回滚锚点、固化成环境脚本。
         // verify（只构建）成功不代表这个环境被跑通过——过去它也会冻结脚本，
         // 导致环境状态带显示"已跑通"、甚至让生产晋升拿到假证据。
+        deployedBookkeeping(state);
+        if (state.forceTerminated) {
+            return;
+        }
+        state.status = StageStatus.SUCCEEDED;
+        // worktree 马上会被清理：先把文件产物搬出来，否则历史里的 ref 会立刻失效
+        preserveArtifacts(state, runDir);
+    }
+
+    /**
+     * 进入部署阶段前拿「默认部署槽」（同一项目同一环境 FIFO 公平）。
+     *
+     * <p>构建已并行（独立 worktree / 按 sha 的镜像 tag），这里只串行「切换默认部署」：
+     * 旧容器移除、端口租约、默认槽容器命名。锁空闲立即持有；被占用时当前虚拟线程
+     * 原地等待（不占平台线程），拿到后在本线程继续跑 deploy 及后续阶段——
+     * 终态落盘、产物保留都还在原调用栈，没有跨线程状态交接。
+     *
+     * @return true = 已持有（state.deploySlotToken 已记录）；false = 等待被打断，
+     *         视为本运行被取消
+     */
+    private boolean awaitDeploySlot(RunState state) {
+        // 打 tag 的版本部署完全隔离（独立容器名/端口），无需互斥
+        if (state.deployTagged) {
+            return true;
+        }
+        boolean wasContended = scheduler.isRunning(state.projectId, state.env);
+        TriggerScheduler.DeploySlotToken token =
+                scheduler.acquireDeploySlot(state.projectId, state.env);
+        if (token == null) {
+            state.log.append("[deploy] 等待部署槽时被中断，本运行放弃部署（视为取消）\n");
+            return false;
+        }
+        state.deploySlotToken = token;
+        if (wasContended) {
+            state.log.append("[deploy] 已获得默认部署槽（同环境前序部署已完成，本运行开始切换）\n");
+        }
+        return true;
+    }
+
+    /** 释放部署槽（幂等）：只有持有者本人会调用；未持有时是无操作。 */
+    private void releaseDeploySlot(RunState state) {
+        TriggerScheduler.DeploySlotToken token = state.deploySlotToken;
+        if (token != null) {
+            state.deploySlotToken = null; // 先置空再释放：并发收尾也只释放一次
+            token.release();
+        }
+    }
+
+    /**
+     * 部署成功后的回滚锚点 / 脚本固化 / 镜像清理（runStagesFrom 收尾共用）。
+     */
+    private void deployedBookkeeping(RunState state) {
         boolean deployed = deployedIn(state);
         if (deployed) {
             // 只有真的产出了镜像才更新锚点：host 部署没有镜像，不该污染回滚目标
@@ -2666,18 +2791,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
             // 按版本部署只切运行态：脚本仍是该版本验证过的那份，不重新固化（避免用旧提交覆盖环境脚本）
             if (state.deployImage == null) {
-                freezeRecipe(state, runDir);
+                freezeRecipe(state, state.recipeRoot);
             }
             pruneOldImages(state);
         } else {
             state.log.append("[recipe] 本次是检查构建（未部署），不固化环境脚本、不更新回滚锚点\n");
         }
-        if (state.forceTerminated) {
-            return;
-        }
-        state.status = StageStatus.SUCCEEDED;
-        // worktree 马上会被清理：先把文件产物搬出来，否则历史里的 ref 会立刻失效
-        preserveArtifacts(state, runDir);
     }
 
     /**
@@ -2772,9 +2891,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 state.keptBare = null;
             }
             history.save(state.snapshot());
-            if (!state.forceTerminated) {
-                scheduler.complete(state.projectId, state.env);
-            }
+            // 部署槽无条件释放（幂等；未持有时是无操作）——持有者本人释放，公平锁语义安全。
+            releaseDeploySlot(state);
         }
     }
 
@@ -3170,7 +3288,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
         Map<String, String> deployEnv = envStore == null
                 ? loadDeployEnv(state)
-                : localHostEnv(envStore.effective(state.projectId, state.env).values(), state.env);
+                : localHostEnv(callStore("读取环境模板（本机部署）",
+                        () -> envStore.effective(state.projectId, state.env)).values(), state.env);
 
         int backendPort = allocateHostPort(state, DeployTarget.HOST, 8688, 8688);
         int frontendPort = dist == null ? 0
@@ -3236,7 +3355,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         String name = host.trim();
         EnvResource matched = null;
-        for (EnvResource resource : envStore.resources(env)) {
+        // 资源列表读取同样走 callStore：清标志 + 串行，理由与回滚锚点一致
+        for (EnvResource resource : callStore("读取环境中间件资源",
+                () -> envStore.resources(env))) {
             if (resource == null || !kind.equals(resource.kind())) {
                 continue;
             }
@@ -3330,7 +3451,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                // 吞掉中断标志：本地探活循环被取消时，重置标志会让标志泄漏到
+                // 后续数据库读取（Hikari 拒绝发连接），回滚/收尾必挂。按未就绪返回即可。
                 return false;
             }
         }
@@ -3519,7 +3641,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             try {
                 Thread.sleep(400L * (attempt + 1));
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                // 吞掉中断标志：worktree 删除被取消时，重置标志会泄漏到后续数据库
+                // 读取（Hikari 拒绝发连接）。退出重试循环即可，残留目录由下次清理。
                 break;
             }
         }
@@ -3962,8 +4085,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 .reduce((first, second) -> second)
                 .map(ArtifactRef::ref)
                 .orElse(null);
-        String previous = imageVersions.current(state.projectId, state.env)
-                .map(ImageVersion::tag).orElse(null);
+        // 读回滚锚点必须走 callStore：健康检查 sleep 曾把中断标志留在
+        // 当前线程上，Hikari 拿连接时读到标志直接抛
+        // 「Interrupted during connection acquisition」，导致回滚必挂。
+        String previous = callStore("读取回滚锚点镜像",
+                () -> imageVersions.current(state.projectId, state.env)
+                        .map(ImageVersion::tag).orElse(null));
         String image = rollback ? previous : currentImage;
         if (rollback && (image == null || image.isBlank())) {
             // 首次发布失败时会走到回滚：没有上一版不是错误，跳过即可，
@@ -3979,14 +4106,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
 
         EffectiveEnvironment effective = envStore == null
-                ? null : envStore.effective(state.projectId, state.env);
+                ? null : callStore("读取环境模板（部署注入）",
+                        () -> envStore.effective(state.projectId, state.env));
         state.sensitiveValues = secretValues(effective);
         Map<String, String> deployEnv = effective != null
                 ? effective.values() : loadDeployEnv(state);
         String network = effective == null ? null : effective.network();
         // 环境模板绑定：运行形态 / 命名空间 / 服务器，部署语义以模板为准。
         top.rongx.agent.domain.env.EnvTemplate template = envStore == null
-                ? null : envStore.template(state.env).orElse(null);
+                ? null : callStore("读取环境模板定义",
+                        () -> envStore.template(state.env).orElse(null));
         String serverId = spec.serverId() != null
                 ? spec.serverId() : (template == null ? null : template.serverId());
 
@@ -4047,7 +4176,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                         elapsed(start)));
                 return false;
             }
-            effective = envStore.effective(state.projectId, state.env);
+            effective = callStore("重读环境模板（provisioner 之后）",
+                    () -> envStore.effective(state.projectId, state.env));
             state.sensitiveValues = secretValues(effective);
             deployEnv = effective.values();
             network = effective.network();
@@ -4145,7 +4275,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 try {
                     Thread.sleep(150);
                 } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                    // 吞掉中断标志：端口等待被打断时，重置标志会泄漏到部署收尾的
+                    // 租约落库（Hikari 拒绝发连接）。直接跳出循环，用当前探测结果。
                     break;
                 }
             }
@@ -4233,8 +4364,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.log.append("[port] 部署器实际使用 ").append(actualPort)
                     .append("（期望 ").append(hostPort).append("），已更新租约\n");
             state.deployHostPort = actualPort;
-            envStore.saveLease(new PortLease(state.projectId, state.env, spec.containerPort(),
-                    actualPort, state.runId, System.currentTimeMillis()));
+            callStore("保存端口租约（多服务）", () -> {
+                envStore.saveLease(new PortLease(state.projectId, state.env,
+                        spec.containerPort(), actualPort, state.runId,
+                        System.currentTimeMillis()));
+                return true; // Supplier 适配：saveLease 是 void
+            });
         }
         // 证据链：产物里固化实际端口/容器端口/探活路径/镜像，排障时不必再从日志里反推
         int evidencePort = actualPort > 0 ? actualPort : hostPort;
@@ -4427,7 +4562,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (envVars == null) {
             return Map.of();
         }
-        return envVars.resolve(state.projectId, state.env);
+        return callStore("解析项目环境变量",
+                () -> envVars.resolve(state.projectId, state.env));
     }
 
     /**
@@ -4439,7 +4575,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (envStore == null) {
             return desired;
         }
-        PortLease lease = envStore.lease(state.projectId, state.env, containerPort).orElse(null);
+        PortLease lease = callStore("读取端口租约",
+                () -> envStore.lease(state.projectId, state.env, containerPort).orElse(null));
         int candidate = lease == null ? desired : lease.hostPort();
         boolean free = target == DeployTarget.SERVER || portFree(candidate);
         if (!free) {
@@ -4466,8 +4603,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     .append("；如需改回请重置端口租约）\n");
         }
         state.deployHostPort = candidate;
-        envStore.saveLease(new PortLease(state.projectId, state.env, containerPort,
-                candidate, state.runId, System.currentTimeMillis()));
+        // 捕获为有效 final：callStore 的 lambda 不能引用会变的局部变量
+        int portToSave = candidate;
+        callStore("保存端口租约", () -> {
+            envStore.saveLease(new PortLease(state.projectId, state.env,
+                    containerPort, portToSave, state.runId, System.currentTimeMillis()));
+            return true; // Supplier 适配：saveLease 是 void
+        });
         return candidate;
     }
 
@@ -4690,7 +4832,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             try {
                 Thread.sleep(sleepMs);
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                // 吞掉中断标志（不重置）：这是本类中断策略的核心。健康检查被取消时
+                // 如果把标志置回去，标志会泄漏到紧随其后的回滚锚点/租约数据库读取，
+                // Hikari 在拿连接时检测到标志直接抛「Interrupted during connection
+                // acquisition」——on-failure 回滚必挂（生产事故链）。取消语义由
+                // state.cancelled 表达，不必靠线程标志传递。
                 break;
             }
         }
@@ -4925,8 +5071,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 continue;
             }
             Map<String, String> merged = new java.util.HashMap<>(vars);
-            String good = imageVersions.current(state.projectId, state.env)
-                    .map(ImageVersion::tag).orElse(null);
+            // on-failure 同样在读库（回滚锚点）：与 deploy 路径共用 callStore 清标志，
+            // 否则健康检查留下的中断标志会让补救动作的数据库读取也挂掉。
+            String good = callStore("读取回滚锚点镜像（on-failure）",
+                    () -> imageVersions.current(state.projectId, state.env)
+                            .map(ImageVersion::tag).orElse(null));
             if (good != null) {
                 merged.put("tag", good);
             }
@@ -5187,6 +5336,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile String autoRepairLastResult;
         /** 每个阶段开始前的产物数量：重试时回收该阶段及之后产生的产物，避免重复。 */
         final Map<String, Integer> artifactMark = new java.util.concurrent.ConcurrentHashMap<>();
+        /**
+         * 部署槽令牌：进入 deploy 前从 TriggerScheduler 拿到的锁身份。
+         * 非 null = 持有该环境的默认部署槽；execute/executeRetry 的 finally 用它释放
+         * （releaseDeploySlot）。watchdog 线程只读不写。
+         */
+        volatile TriggerScheduler.DeploySlotToken deploySlotToken;
 
         // ---- 运行看护 / 进度（由 watchdog 线程与执行线程共享，全部 volatile）----
         /** 上次落盘时间：运行中每 10s 保存一次，崩溃后不会只剩 PENDING 空日志。 */

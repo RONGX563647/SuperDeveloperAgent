@@ -274,11 +274,12 @@ public class LocalDevHostDeployer {
         List<String> argv;
         if (isWindows()) {
             // spec-ignore: R02 Windows 的 mvn/mvnw 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
-            argv = List.of("cmd", "/c", (wrapper ? "mvnw.cmd" : "mvn") + " -q -DskipTests package");
+            argv = List.of("cmd", "/c", (wrapper ? "mvnw.cmd" : "mvn") + " -q -T 1C -DskipTests package");
         } else {
+            // -T 1C：每核 1 线程并行构建，聚合工程（多模块）耗时显著下降；单模块行为不变
             argv = wrapper
-                    ? List.of("./mvnw", "-q", "-DskipTests", "package")
-                    : List.of("mvn", "-q", "-DskipTests", "package");
+                    ? List.of("./mvnw", "-q", "-T", "1C", "-DskipTests", "package")
+                    : List.of("mvn", "-q", "-T", "1C", "-DskipTests", "package");
         }
         return exec(argv, backendRoot, logFile, null, 15);
     }

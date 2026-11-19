@@ -75,8 +75,10 @@ class RecipeActionResolverTest {
 
         ActionSpec spec = resolver.resolve(root, ActionId.BACKEND_BUILD).orElseThrow();
         assertEquals(ActionSource.Kind.BUILTIN, spec.source().kind());
-        // 内置默认：build 只打包（测试由 test 阶段/verify 负责），避免两遍编译
-        assertEquals(List.of("mvn", "-B", "-q", "-DskipTests", "package"), spec.steps().get(0));
+        // 内置默认：build 只打包（测试由 test 阶段/verify 负责），避免两遍编译；
+        // -T 1C = 每核 1 线程并行构建（多模块聚合工程提速，单模块行为不变）
+        assertEquals(List.of("mvn", "-B", "-q", "-T", "1C", "-DskipTests", "package"),
+                spec.steps().get(0));
     }
 
     @Test

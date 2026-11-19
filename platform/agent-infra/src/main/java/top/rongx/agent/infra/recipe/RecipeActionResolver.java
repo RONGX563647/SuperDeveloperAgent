@@ -58,9 +58,11 @@ public class RecipeActionResolver implements ActionResolver {
     /** 内置默认配方（仓库没有覆盖时使用）。 */
     private static final Map<ActionId, List<List<String>>> BUILTIN_STEPS = Map.of(
             // 构建只负责编译打包：测试交给 backend_test 阶段（10m 预算跑全量测试必然 E-302，
-            // 且与 test 阶段重复执行两遍；聚合工程也要先 package 才有子模块 target/*.jar）
-            ActionId.BACKEND_BUILD, List.of(List.of("mvn", "-B", "-q", "-DskipTests", "package")),
-            ActionId.BACKEND_TEST, List.of(List.of("mvn", "-B", "-q", "test")),
+            // 且与 test 阶段重复执行两遍；聚合工程也要先 package 才有子模块 target/*.jar）。
+            // -T 1C = 每核 1 线程的并行构建：多模块工程（如 RuoYi 聚合）耗时大幅下降；
+            // 单模块工程没有可并行的 reactor，行为与串行一致，无副作用。
+            ActionId.BACKEND_BUILD, List.of(List.of("mvn", "-B", "-q", "-T", "1C", "-DskipTests", "package")),
+            ActionId.BACKEND_TEST, List.of(List.of("mvn", "-B", "-q", "-T", "1C", "test")),
             ActionId.FRONTEND_BUILD, List.of(
                     List.of("pnpm", "install", "--frozen-lockfile", "--ignore-scripts"),
                     List.of("pnpm", "build")),
