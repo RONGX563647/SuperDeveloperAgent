@@ -85,7 +85,6 @@ WorkspaceController#list
 WorkspaceController#run
 WorkspaceController#runs
 WorkspaceController#saveTranscript
-WorkspaceController#send
 WorkspaceController#tasks
 WorkspaceController#update
 WorkspaceController#updateTask
