@@ -75,7 +75,6 @@ SettingsController#updateServer
 SkillSettingsController#delete
 SkillSettingsController#list
 UsageController#session
-UsageController#summary
 WorkspaceController#cancel
 WorkspaceController#conversationRuns
 WorkspaceController#create

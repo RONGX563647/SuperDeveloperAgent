@@ -4757,7 +4757,8 @@
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/UsageSummary"
+                  "type" : "object",
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -8576,149 +8577,6 @@
           },
           "note" : {
             "type" : "string"
-          }
-        }
-      },
-      "DailyUsage" : {
-        "type" : "object",
-        "properties" : {
-          "day" : {
-            "type" : "string"
-          },
-          "calls" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "inputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "cachedTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "outputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "totalTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          }
-        }
-      },
-      "ModelUsageSummary" : {
-        "type" : "object",
-        "properties" : {
-          "modelName" : {
-            "type" : "string"
-          },
-          "calls" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "inputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "cachedTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "outputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "totalTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          }
-        }
-      },
-      "ProjectUsageSummary" : {
-        "type" : "object",
-        "properties" : {
-          "projectId" : {
-            "type" : "string"
-          },
-          "calls" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "inputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "cachedTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "outputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "totalTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          }
-        }
-      },
-      "UsageSummary" : {
-        "type" : "object",
-        "properties" : {
-          "days" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "totals" : {
-            "$ref" : "#/components/schemas/UsageTotals"
-          },
-          "daily" : {
-            "type" : "array",
-            "items" : {
-              "$ref" : "#/components/schemas/DailyUsage"
-            }
-          },
-          "byModel" : {
-            "type" : "array",
-            "items" : {
-              "$ref" : "#/components/schemas/ModelUsageSummary"
-            }
-          },
-          "byProject" : {
-            "type" : "array",
-            "items" : {
-              "$ref" : "#/components/schemas/ProjectUsageSummary"
-            }
-          }
-        }
-      },
-      "UsageTotals" : {
-        "type" : "object",
-        "properties" : {
-          "calls" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "inputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "cachedTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "outputTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "totalTokens" : {
-            "type" : "integer",
-            "format" : "int64"
-          },
-          "lastAt" : {
-            "type" : "integer",
-            "format" : "int64"
           }
         }
       },

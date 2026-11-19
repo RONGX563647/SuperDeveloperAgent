@@ -50,9 +50,67 @@ public class UsageController {
         return out;
     }
 
+    /**
+     * 全局用量汇总。
+     *
+     * <p>除原始 token 数外，额外给每个维度算好缓存命中率：前端各自用
+     * {@code cachedTokens / inputTokens} 手算容易出现口径不一致（除零、四舍五入、
+     * 有的算百分比有的算小数），而命中率恰恰是判断「压缩有没有省到钱」的关键指标
+     * （FEAT-5 第 3 项）。统一在服务端算，口径只有一份。
+     */
     @GetMapping("/summary")
-    public UsageSummary summary(@RequestParam(defaultValue = "30") int days) {
+    public Map<String, Object> summary(@RequestParam(defaultValue = "30") int days) {
         currentUser.requireUserId();
-        return usage.summary(days);
+        UsageSummary raw = usage.summary(days);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("days", raw.days());
+        out.put("totals", raw.totals());
+        // 总体命中率：设置页顶部那个数字
+        out.put("cacheHitRate", raw.totals().cacheHitRate());
+        out.put("daily", raw.daily().stream().map(row -> withHitRate(
+                Map.of("day", row.day()), row)).toList());
+        out.put("byModel", raw.byModel().stream().map(row -> withHitRate(
+                Map.of("modelName", row.modelName()), row)).toList());
+        out.put("byProject", raw.byProject().stream().map(row -> withHitRate(
+                Map.of("projectId", row.projectId()), row)).toList());
+        return out;
+    }
+
+    /** 一行用量 + 该行的缓存命中率（0–100 整数；无输入时为 0）。 */
+    private static Map<String, Object> withHitRate(Map<String, Object> label, Object row) {
+        long calls;
+        long input;
+        long cached;
+        long output;
+        long total;
+        if (row instanceof TokenUsageRepository.DailyUsage d) {
+            calls = d.calls();
+            input = d.inputTokens();
+            cached = d.cachedTokens();
+            output = d.outputTokens();
+            total = d.totalTokens();
+        } else if (row instanceof TokenUsageRepository.ModelUsageSummary m) {
+            calls = m.calls();
+            input = m.inputTokens();
+            cached = m.cachedTokens();
+            output = m.outputTokens();
+            total = m.totalTokens();
+        } else if (row instanceof TokenUsageRepository.ProjectUsageSummary p) {
+            calls = p.calls();
+            input = p.inputTokens();
+            cached = p.cachedTokens();
+            output = p.outputTokens();
+            total = p.totalTokens();
+        } else {
+            throw new RunException(ErrorCode.RUN_INVALID_STATE, "未知的用量行类型：" + row);
+        }
+        Map<String, Object> out = new LinkedHashMap<>(label);
+        out.put("calls", calls);
+        out.put("inputTokens", input);
+        out.put("cachedTokens", cached);
+        out.put("outputTokens", output);
+        out.put("totalTokens", total);
+        out.put("cacheHitRate", input <= 0 ? 0 : (int) Math.round(cached * 100.0 / input));
+        return out;
     }
 }
