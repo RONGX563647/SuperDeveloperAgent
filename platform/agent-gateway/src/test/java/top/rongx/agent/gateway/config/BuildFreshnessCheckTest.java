@@ -1,6 +1,8 @@
 package top.rongx.agent.gateway.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
@@ -16,17 +18,22 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>事故形态：网关进程长时间不重启，target/classes 被反复编译替换，
  * JVM 里新旧字节码混用 → 请求挂住、既不返回也不报错。这类问题日志里完全看不出来，
- * 所以必须在启动时主动比一次时间戳。
+ * 所以必须在启动时主动比时间戳；而比对必须<b>真的执行到</b>——写死相对路径时
+ * 在另一种工作目录下会静默跳过，等于没有自检（本次实测踩到过）。
  */
 class BuildFreshnessCheckTest {
 
     @TempDir
     Path module;
 
-    private Path classFile() throws Exception {
+    private Path classesDir() throws Exception {
         Path classes = module.resolve("target/classes/demo");
         Files.createDirectories(classes);
-        Path file = classes.resolve("App.class");
+        return classes.getParent();
+    }
+
+    private Path classFile() throws Exception {
+        Path file = classesDir().resolve("demo/App.class");
         Files.writeString(file, "binary");
         return file;
     }
@@ -47,8 +54,7 @@ class BuildFreshnessCheckTest {
         Files.setLastModifiedTime(src, FileTime.fromMillis(2_000_000L));
         Files.setLastModifiedTime(cls, FileTime.fromMillis(1_000_000L));
 
-        BuildFreshnessCheck.Verdict verdict =
-                BuildFreshnessCheck.inspect(module, Path.of("target/classes"));
+        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspectClasses(classesDir(), null);
 
         assertTrue(verdict.checked());
         assertTrue(verdict.stale());
@@ -63,8 +69,7 @@ class BuildFreshnessCheckTest {
         Files.setLastModifiedTime(src, FileTime.fromMillis(1_000_000L));
         Files.setLastModifiedTime(cls, FileTime.fromMillis(2_000_000L));
 
-        BuildFreshnessCheck.Verdict verdict =
-                BuildFreshnessCheck.inspect(module, Path.of("target/classes"));
+        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspectClasses(classesDir(), null);
 
         assertTrue(verdict.checked());
         assertFalse(verdict.stale());
@@ -74,34 +79,29 @@ class BuildFreshnessCheckTest {
     @Test
     @DisplayName("镜像里没有源码 / 没有产物：跳过而不是报错")
     void skipsWithoutSourcesOrClasses() throws Exception {
-        BuildFreshnessCheck.Verdict noClasses =
-                BuildFreshnessCheck.inspect(module, Path.of("target/classes"));
+        BuildFreshnessCheck.Verdict noClasses = BuildFreshnessCheck.inspectClasses(
+                module.resolve("target/classes"), null);
         assertFalse(noClasses.checked(), noClasses.detail());
         assertTrue(noClasses.detail().contains("没有编译产物"), noClasses.detail());
 
         classFile();
-        BuildFreshnessCheck.Verdict noSources =
-                BuildFreshnessCheck.inspect(module, Path.of("target/classes"));
+        BuildFreshnessCheck.Verdict noSources = BuildFreshnessCheck.inspectClasses(classesDir(), null);
         assertFalse(noSources.checked(), noSources.detail());
         assertTrue(noSources.detail().contains("没有源码"), noSources.detail());
 
-        assertFalse(BuildFreshnessCheck.inspect(null, Path.of("target/classes")).checked());
-        assertFalse(BuildFreshnessCheck.inspect(module, null).checked());
+        assertFalse(BuildFreshnessCheck.inspectClasses(null, null).checked());
     }
 
     @Test
-    @DisplayName("构造的模型映射回同一个源文件，不会因为 $ 后缀而漏判")
+    @DisplayName("内部类映射回同一个源文件，不会因为 $ 后缀而漏判")
     void innerClassesMapToSameSource() throws Exception {
-        Path classes = module.resolve("target/classes/demo");
-        Files.createDirectories(classes);
-        Path inner = classes.resolve("App$Inner.class");
+        Path inner = classesDir().resolve("demo/App$Inner.class");
         Files.writeString(inner, "binary");
         Path src = sourceFile();
         Files.setLastModifiedTime(src, FileTime.fromMillis(2_000_000L));
         Files.setLastModifiedTime(inner, FileTime.fromMillis(1_000_000L));
 
-        BuildFreshnessCheck.Verdict verdict =
-                BuildFreshnessCheck.inspect(module, Path.of("target/classes"));
+        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspectClasses(classesDir(), null);
 
         assertTrue(verdict.stale(), "内部类也要参与比对：" + verdict.detail());
     }
@@ -114,9 +114,9 @@ class BuildFreshnessCheckTest {
         Files.setLastModifiedTime(src, FileTime.fromMillis(1_000_000L));
         Files.setLastModifiedTime(cls, FileTime.fromMillis(5_000_000L));
 
-        // 进程启动时间早于产物时间：源码与产物本身是一致的，但进程里是旧字节码
-        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspect(
-                module, Path.of("target/classes"), Instant.ofEpochMilli(2_000_000L));
+        // 进程启动时间早于产物时间：源码与产物本身一致，但进程里是旧字节码
+        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspectClasses(
+                classesDir(), Instant.ofEpochMilli(2_000_000L));
 
         assertTrue(verdict.checked());
         assertTrue(verdict.stale(), verdict.detail());
@@ -131,10 +131,21 @@ class BuildFreshnessCheckTest {
         Files.setLastModifiedTime(src, FileTime.fromMillis(1_000_000L));
         Files.setLastModifiedTime(cls, FileTime.fromMillis(2_000_000L));
 
-        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspect(
-                module, Path.of("target/classes"), Instant.ofEpochMilli(9_000_000L));
+        BuildFreshnessCheck.Verdict verdict = BuildFreshnessCheck.inspectClasses(
+                classesDir(), Instant.ofEpochMilli(9_000_000L));
 
         assertTrue(verdict.checked());
         assertFalse(verdict.stale(), verdict.detail());
+    }
+
+    @Test
+    @DisplayName("产物目录反推源码目录：target/classes → src/main/java")
+    void sourceRootIsDerivedFromClasses() {
+        Path moduleRoot = Path.of("X:/demo/agent-gateway");
+        Path classes = moduleRoot.resolve("target/classes");
+        assertEquals(moduleRoot.resolve("src/main/java").normalize(),
+                BuildFreshnessCheck.sourceRootOf(classes).normalize());
+        // 不是 target 布局（例如以 jar 解包运行）时不猜
+        assertNull(BuildFreshnessCheck.sourceRootOf(Path.of("X:/demo/classes")));
     }
 }
