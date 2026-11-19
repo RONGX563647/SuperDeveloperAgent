@@ -1,0 +1,261 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-18_1751_sqlite-wal-data-loss",
+  "category": "bug",
+  "title": "SQLite 数据丢失：WAL 未落盘与旧库导入默认关闭",
+  "createdAt": "2026-11-18T17:51:21+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "SQLite 数据丢失：WAL 未落盘与旧库导入默认关闭",
+    "toolCallCount": 0
+  },
+  "problem": "SQLite 切库后旧库 WAL 未 checkpoint 落盘、且 importLegacy 默认关闭，导致历史数据（run_ledger/token_usage/conversations 等）在迁移后不可见，表现为数据丢失",
+  "solution": "新增 SqliteWalCheckpointer 启动即对统一库执行 wal_checkpoint(TRUNCATE)；LegacySqliteImporter 导入后 checkpoint 并对跳过表显式告警计数、保留 INSERT OR IGNORE 防覆盖；AgentDbProperties.importLegacy 默认改为 true；DataSourceConfig 注册 Bean；application.yml 支持 AGENT_DB_IMPORT_LEGACY 覆盖",
+  "commits": [
+    {
+      "sha": "b3bbbeaaaa69c887974fbb46b3600949658f03c4",
+      "subject": "test(harness): pre-commit 改增量测试，ArchUnit 冻结基线并启用并行",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/spec-checks/archunit_store/19fc382c-b1ef-4e3c-b816-25c58b426d43",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/6fea9481-6e8e-48c3-8e49-bf2b4180e8e2",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/7349bd7e-b399-4ff8-a275-fd3448a54924",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/8ca4d52a-2ed0-47c4-8fb9-d26e875ca1bd",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/959b6514-b8d1-45bc-95cf-74878d1d4723",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/f0e15fd0-8b8f-4008-b331-db0e45e9e2c3",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/f65993eb-4bd2-4331-98cd-dcabd4c49121",
+          "status": "A",
+          "additions": 0,
+          "deletions": 0,
+          "blobHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        },
+        {
+          "path": "platform/spec-checks/archunit_store/stored.rules",
+          "status": "A",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "06acbc2306041155691a59a96258c393dd679c61"
+        },
+        {
+          "path": "platform/spec-checks/pom.xml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "7e0a75b6eb0657acb1bba2bc72c914d0a2a5bcd4"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ArchitectureRulesTest.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 14,
+          "blobHash": "3b4dea40183b9d6babdaa4266cfd4f6900fb7076"
+        },
+        {
+          "path": "platform/spec-checks/src/test/resources/junit-platform.properties",
+          "status": "A",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "a371dcaa6aaa52b96ea8389ce7de2226cc632afd"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 71,
+          "deletions": 25,
+          "blobHash": "5a4f3b210b33b4f11167d61ff017f56b224708a9"
+        }
+      ]
+    },
+    {
+      "sha": "de813e7ef0e7e156f1d21dcb5d4e9f0050d71c89",
+      "subject": "docs(process): 归档测试门禁优化会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-18_1828_test-harness-incremental/manifest.json",
+          "status": "A",
+          "additions": 147,
+          "deletions": 0,
+          "blobHash": "75d477ccbed92ba4ba764269b642e87ee437b38f"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_1828_test-harness-incremental.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "04749cb4c751222f894c21659c5e78bd11cc2932"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_test-harness-incremental.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "1608700ec2a44118cbf1d725de7fd6bc229ef80b"
+        }
+      ]
+    },
+    {
+      "sha": "319ac714ad795a8998ec1990aec4d0955c5b25fd",
+      "subject": "fix(infra): 修复 SQLite 数据丢失：WAL 落盘检查点与旧库导入默认开启",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "86cdb2caf6e68c947c9cc94d8acd1fa92c33fafe"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/LegacySqliteImporter.java",
+          "status": "M",
+          "additions": 23,
+          "deletions": 4,
+          "blobHash": "831639cd0a133aa9cd2ed622a79c02fc4b2501e4"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/SqliteWalCheckpointer.java",
+          "status": "A",
+          "additions": 78,
+          "deletions": 0,
+          "blobHash": "93e81981bfc6c2f4640fc68035aa60d27d7457ae"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/AgentDbProperties.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "14ed6c81231dde6e3ff274ba6e649f8237addead"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DataSourceConfig.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 1,
+          "blobHash": "f890f6e917bd195e41fd8121b03dd0940cbc9289"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+          "status": "M",
+          "additions": 32,
+          "deletions": 0,
+          "blobHash": "2f16cdddf90364a69bc673d0bec2767e2b48f58e"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/SqliteWalCheckpointerTest.java",
+          "status": "A",
+          "additions": 79,
+          "deletions": 0,
+          "blobHash": "734c47eb5090bbaa64e13edb124a62041bf0b4ba"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "2b782bbabfa4e7c3a5c04b27357e75c4ae0f9803"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ArchitectureRulesTest.java",
+        "status": "M",
+        "additions": 21,
+        "deletions": 14,
+        "blobHash": "3b4dea40183b9d6babdaa4266cfd4f6900fb7076"
+      },
+      {
+        "path": "platform/spec-checks/src/test/resources/junit-platform.properties",
+        "status": "A",
+        "additions": 3,
+        "deletions": 0,
+        "blobHash": "a371dcaa6aaa52b96ea8389ce7de2226cc632afd"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+        "status": "M",
+        "additions": 32,
+        "deletions": 0,
+        "blobHash": "2f16cdddf90364a69bc673d0bec2767e2b48f58e"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/SqliteWalCheckpointerTest.java",
+        "status": "A",
+        "additions": 79,
+        "deletions": 0,
+        "blobHash": "734c47eb5090bbaa64e13edb124a62041bf0b4ba"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+        "status": "M",
+        "additions": 4,
+        "deletions": 0,
+        "blobHash": "2b782bbabfa4e7c3a5c04b27357e75c4ae0f9803"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -pl agent-infra -am -Dtest=SqliteWalCheckpointerTest,LegacySqliteImporterTest,AgentDbPropertiesTest -Dsurefire.failIfNoSpecifiedTests=false test",
+    "result": "PASSED",
+    "evidence": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "agent-infra",
+      "spec-checks"
+    ],
+    "verification": "增量测试 8 用例全绿（SqliteWalCheckpointerTest/LegacySqliteImporterTest/AgentDbPropertiesTest）；命令 mvn -B -pl agent-infra -am -Dtest=... ; 另有备份库 integrity_check=ok 与迁移前后行数对比证据"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_1751_sqlite-wal-data-loss"
+    ]
+  },
+  "chain": {
+    "prev": "9fb98cfd807e96192cbbca4acef4de43bcb7189bd01b15ea5181b57290e83c29",
+    "self": "580c2c450684e75c4a3f0a98254a26f4acb22dd7e7bbe9aaab7be39073c28cb6"
+  }
+}

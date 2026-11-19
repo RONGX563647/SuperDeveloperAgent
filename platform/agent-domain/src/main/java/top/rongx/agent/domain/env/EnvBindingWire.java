@@ -4,6 +4,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.tool.ToolResultText;
 
 /**
  * 工具输出与网关之间的环境绑定「线格式」。
@@ -42,13 +43,16 @@ public final class EnvBindingWire {
     /**
      * 消费端：从工具返回文本里取绑定 id。
      *
+     * <p>工具结果到网关时会被再 JSON 序列化一次（换行变成字面量 {@code \n}），
+     * 必须先还原，否则绑定确认卡不会出现。
+     *
      * @return 绑定 id；未按约定输出时返回 {@code null}
      */
     public static String extract(String text) {
         if (text == null || text.isEmpty()) {
             return null;
         }
-        Matcher matcher = LINE.matcher(text);
+        Matcher matcher = LINE.matcher(ToolResultText.unwrap(text));
         return matcher.find() ? matcher.group(1) : null;
     }
 }

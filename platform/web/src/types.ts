@@ -61,6 +61,9 @@ export interface ChatMessage {
   at: number
 }
 
+/** 变更单状态：人工确认与执行结果的唯一口径。 */
+export type ChangeStatus = 'PENDING' | 'CONFIRMED' | 'APPLIED' | 'FAILED'
+
 /** 确认卡片（GET /api/v1/changes/{id}）。 */
 export interface ChangeView {
   changeId: string
@@ -72,6 +75,7 @@ export interface ChangeView {
   highRisk: boolean
   planHash: string
   gate: 'CONFIRM_TOKEN' | 'SECOND_PASSWORD'
+  status: ChangeStatus
 }
 
 /** 确认结果（POST /api/v1/changes/{id}/confirm）。 */
@@ -130,6 +134,13 @@ export interface ToolActivity {
   toolCallId: string
   toolName: string
   arguments?: string
+  /**
+   * 入参不可用：后端明确告知拿不到参数（上游没带 / 被裁剪）。
+   *
+   * <p>必须与「该工具本来就没有参数」区分开：否则轨迹里两者长得一样，
+   * 调试时分不清是工具无参还是映射漏了。
+   */
+  argsUnavailable?: boolean
   status: 'RUNNING' | 'COMPLETED' | 'FAILED'
   code?: string
   /** 工具返回的文本（流式累积；用于展示"这一步实际拿到了什么"） */

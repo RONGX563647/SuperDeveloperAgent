@@ -27,7 +27,14 @@ public interface WorkspaceSupervisorPort {
 
     boolean setArchived(String conversationId, String ownerUserId, boolean archived);
 
-    /** 异步发送一条消息；返回 runId。目标重复且仍在运行时直接返回已有 runId。 */
+    /**
+     * 异步发送一条消息；返回 runId。
+     *
+     * <p><b>契约</b>：要么返回合法 runId，要么抛业务异常（会话无权访问、调度会话
+     * 不能再被派发、同会话已有相同/并发运行）。
+     * <b>绝不</b>返回 {@code "err: ..."} 之类的错误文案——调用方（HTTP 层与 DAG 派发器）
+     * 会把它当成 runId 去轮询，表现为「派发成功但永远不动」，且错误原因彻底丢失。
+     */
     String send(String conversationId, String ownerUserId, String text);
 
     /**
@@ -47,6 +54,18 @@ public interface WorkspaceSupervisorPort {
 
     /** 汇总某个会话的最近运行结果（供调度 Agent 汇报）。 */
     String summarize(String conversationId, String ownerUserId);
+
+    /**
+     * 子会话结论汇总：一次拿到「派发出去的那些会话各做完了什么」。
+     *
+     * <p>为什么不让上层逐个 {@link #summarize}：调度 Agent 汇报一次要覆盖多个子会话，
+     * 逐个查既慢又容易漏；这里按最近更新时间倒序给一份带结论的列表。
+     *
+     * @param projectId 当前项目（只看本项目、当前 owner 的子会话）
+     * @param ownerUserId 当前操作人（实现必须按 owner 过滤）
+     * @param limit     最多返回几条（1-50）
+     */
+    List<ChildDigest> childDigests(String projectId, String ownerUserId, int limit);
 
     /**
      * 跨会话记忆检索：在当前项目的历史运行里按关键词匹配目标 / 结论 / 错误，

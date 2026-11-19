@@ -16,6 +16,7 @@ import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.infra.recipe.RecipeActionResolver;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -133,12 +134,18 @@ class IntakeE2ETest {
         assertTrue(engine.logTail(runId).contains("worktree " + newHead)
                         || engine.stages(runId).stream().anyMatch(s -> "checkout".equals(s.stageId())),
                 "应有 checkout stage");
-        // 构建成功后 worktree 保留（产物可访问）
+        // 构建成功后 worktree 会被清理（产物归档到工作区，避免 wt-build-* 无限堆积）；
+        // 清理在终态之后异步执行，这里等它完成，再断言归档产物可访问。
         Path buildWt = ws.resolve("E2E/worktrees/wt-build-" + runId);
-        org.junit.jupiter.api.Assertions.assertTrue(Files.exists(buildWt),
-                "成功构建的 worktree 应保留（产物可访问）");
-        // 且产物就在其中
-        org.junit.jupiter.api.Assertions.assertTrue(
-                Files.exists(buildWt.resolve("built.txt")), "构建产物应存在于保留的 worktree");
+        long cleanupDeadline = System.currentTimeMillis() + 15_000;
+        while (Files.exists(buildWt) && System.currentTimeMillis() < cleanupDeadline) {
+            Thread.sleep(100);
+        }
+        assertFalse(Files.exists(buildWt), "成功构建后应清理 worktree：" + buildWt);
+
+        // verify 只检查构建、不归档产物（见 preserveArtifacts），所以只断言产物已登记
+        assertTrue(engine.artifacts(runId).stream()
+                        .anyMatch(a -> a.ref().replace('\\', '/').endsWith("built.txt")),
+                "构建产物应登记：" + engine.artifacts(runId));
     }
 }

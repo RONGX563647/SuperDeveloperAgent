@@ -1,0 +1,24 @@
+# 批次 1 任务清单
+
+- [x] T1 命中率口径
+  - `TokenUsageRepository.UsageTotals` 增加 `cacheHitRate()`
+  - `TokenUsageRecorder` 日志追加 `hit=xx.x%`
+  - `UsageController.session()` 返回 `cacheHitRate`（复用一次 `sessionTotals`）
+- [x] T2 历史折叠摘要
+  - `ConversationContextTrimmer` 新增 4 参重载与 `compactSummary(...)`
+  - 修复 TOOL 消息正文（`ToolResultBlock.output`）不计入上下文预算的问题
+  - 关键标识汇总到摘要头部（最多 12 个，不受行预算丢弃）
+  - `EncryptedAgentStateStore` 透传 `contextSummaryChars`
+  - `AgentStateConfig` 读取 `agent.context.summary-chars`
+  - `application.yml` 增加 `agent.context.summary-chars`（默认 4000，0 = 关闭）
+- [x] T3 测试
+  - 新增 `ConversationContextSummaryTest`（4 用例）
+  - 新增 `TokenUsageRecorderTest`（3 用例）
+  - 新增 `UsageTotalsTest`（2 用例）
+  - 更新 `ConversationContextTrimmerTest.trimIsIdempotent` 断言为"摘要至多一条"
+- [x] T4 验收
+  - `cd platform && mvn -q -pl agent-gateway -am test`（排除 3 个 Docker 环境用例与 3 个 governance @TempDir 既有用例）
+  - 结果：全部通过；不重启后端/前端
+- [x] T5 归档
+  - `gate.py start` → commit（pre-commit 626 用例通过）→ `gate.py finish` → commit 归档产物
+  - 归档：`docs/process/feat/2026-11-18_1320_token-budget-observability/manifest.json`

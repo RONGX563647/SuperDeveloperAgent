@@ -20,7 +20,7 @@ class IntakeProjectStoreTest {
     Path ws;
 
     private IntakeProjectStore newStore() {
-        return new IntakeProjectStore(ws.resolve("_platform/projects.db"));
+        return new IntakeProjectStore(ws.resolve("_platform/platform.db"));
     }
 
     private IntakeProjectStore.IntakeProject shop() {

@@ -25,6 +25,12 @@ public class PipelineConfig {
         return new ProcessActionRunner();
     }
 
+    /** Docker CLI 可执行文件（与构建沙箱共用同一配置，可指向 podman）。 */
+    @Bean
+    public DockerCli dockerCli(@Value("${agent.sandbox.docker-binary:docker}") String binary) {
+        return new DockerCli(binary);
+    }
+
     /**
      * 平台部署器组合（方案 C）：DOCKER（本机容器）/ HOST（本机 jar）/ SERVER（设置页配置的服务器）。
      *
@@ -35,13 +41,14 @@ public class PipelineConfig {
     public top.rongx.agent.domain.port.Deployer deployers(
             top.rongx.agent.domain.settings.DeployServerRepository servers,
             top.rongx.agent.domain.settings.SshAccess sshAccess,
+            DockerCli dockerCli,
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         // HOST 部署状态放在平台数据目录（跨运行稳定）：工作树随每次运行重建，
         // 状态目录若落在里面，日志会消失、previous 指针永远为空（回滚 E-507）。
         Path deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("deploy");
         return new Deployers(java.util.List.of(
-                new DockerDeployer(), new HostDeployer(deployRoot),
+                new DockerDeployer(dockerCli), new HostDeployer(deployRoot),
                 new ServerDeployer(servers, sshAccess)));
     }
 
@@ -56,8 +63,8 @@ public class PipelineConfig {
 
     /** 应用容器只读巡检：env_runtime_status / app_logs 的运行时事实来源。 */
     @Bean
-    public AppRuntimeInspector appRuntimeInspector() {
-        return new AppRuntimeInspector();
+    public AppRuntimeInspector appRuntimeInspector(DockerCli dockerCli) {
+        return new AppRuntimeInspector(dockerCli);
     }
 
     /** 中间件运行时：部署前自动启动项目引用的 docker 中间件（设置页也可手动启停）。 */
@@ -65,8 +72,9 @@ public class PipelineConfig {
     public top.rongx.agent.domain.env.EnvRuntime envRuntime(
             top.rongx.agent.domain.env.EnvironmentStore envStore,
             top.rongx.agent.domain.settings.DeployServerRepository servers,
-            top.rongx.agent.domain.settings.SshAccess sshAccess) {
-        return new DockerEnvRuntime(envStore, servers, sshAccess);
+            top.rongx.agent.domain.settings.SshAccess sshAccess,
+            DockerCli dockerCli) {
+        return new DockerEnvRuntime(envStore, servers, sshAccess, dockerCli);
     }
 
     /** 环境容器自愈：项目在该环境缺中间件时按需创建隔离容器，并注入连接信息。 */
@@ -75,9 +83,11 @@ public class PipelineConfig {
             top.rongx.agent.domain.env.EnvironmentStore envStore,
             top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
             @Value("${agent.env.middleware-images:}") String middlewareImages,
-            @Value("${agent.env.precheck-images:true}") boolean precheckImages) {
+            @Value("${agent.env.precheck-images:true}") boolean precheckImages,
+            DockerCli dockerCli) {
         return new DockerEnvProvisioner(envStore, repoLocator,
-                DockerEnvProvisioner.parseImageOverrides(middlewareImages), precheckImages);
+                DockerEnvProvisioner.parseImageOverrides(middlewareImages), precheckImages,
+                dockerCli);
     }
 
     /** 开发环境本机托管（后端 jar + 前端 dist）；登记 ServiceLease 并共用 dev 日志目录。 */
@@ -118,7 +128,8 @@ public class PipelineConfig {
                                          @Value("${agent.pipeline.auto-repair.max-attempts:2}") int autoRepairAttempts,
                                          @Value("${agent.pipeline.auto-repair.pull-timeout-seconds:180}") long pullTimeoutSeconds,
                                          @Value("${agent.pipeline.auto-repair.agent-fallback:true}") boolean agentFallback,
-                                         @Value("${agent.pipeline.auto-repair.auto-resume:true}") boolean autoResume) {
+                                         @Value("${agent.pipeline.auto-repair.auto-resume:true}") boolean autoResume,
+                                         DockerCli dockerCli) {
         Path root = Path.of(workspaceRoot);
         RunHistoryStore store = persist ? RunHistoryStore.file(root) : RunHistoryStore.disabled();
         // 启动时把历史序号归一化为 1..N：修掉旧数据跳号导致的"构建顺序乱"
@@ -148,6 +159,7 @@ public class PipelineConfig {
         // 失败自动修复策略由配置注入；修复链传 null = 用默认链（镜像自愈 → 发布 Agent 兜底）。
         engine.withAutoRepair(AutoRepairPolicy.of(autoRepairEnabled, autoRepairAttempts,
                 pullTimeoutSeconds, agentFallback, autoResume), null);
+        engine.withDockerCli(dockerCli);
         // 应用关闭时中断执行线程，避免悬挂构建进程。
         // 用虚拟线程工厂创建钩子线程（规约 R04 禁止 new Thread）；
         // 虚拟线程必须为 daemon，而 JVM 退出本身会回收这些轻量线程，关闭语义不受影响。

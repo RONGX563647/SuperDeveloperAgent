@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.conversation.ConversationRun;
@@ -53,6 +54,15 @@ public final class WorkspaceDispatchScheduler {
     private static final int MAX_SUMMARY_CHARS = 800;
     private static final int MAX_ERROR_CHARS = 400;
 
+    /**
+     * runId 的形状：以 {@code run-} 开头且后面还有内容。
+     *
+     * <p>用它代替"以 err: 开头就当失败"的文本猜测。只校验前缀而不是更严的字符集，
+     * 是因为这是一道"别把错误文案当 runId"的护栏，不是 id 生成规则的复制品：
+     * 规则收紧时不应该连带把合法派发判成失败。
+     */
+    private static final Pattern RUN_ID_SHAPE = Pattern.compile("run-.+");
+
     /** 调度器需要的最小会话能力（由 ConversationManager 绑定 owner 后传入）。 */
     public interface Backend {
         String createConversation(String title, String env, String worktree);
@@ -62,6 +72,21 @@ public final class WorkspaceDispatchScheduler {
         ConversationRun waitForRun(String runId, long timeoutMillis);
 
         boolean cancel(String runId);
+
+        /**
+         * 派发前登记票据（任务规格）：目标、验收依据、关联会话与状态。
+         *
+         * <p>默认空实现：单元测试与不落库的调用方不需要票据。
+         *
+         * @return 票据 id；null 表示不登记
+         */
+        default String openTicket(DispatchNode node, String conversationId) {
+            return null;
+        }
+
+        /** 节点终态回写票据（成功/失败/取消），默认忽略。 */
+        default void closeTicket(String ticketId, DispatchNodeResult result) {
+        }
     }
 
     /** 在跑节点：runId 可变，重试时切换到新的运行，让取消操作始终命中当前运行。 */
@@ -255,21 +280,43 @@ public final class WorkspaceDispatchScheduler {
         } catch (RuntimeException e) {
             return completedFailure(node, conversationId, "", safeMessage(e), start);
         }
-        if (runId == null || runId.isBlank() || runId.startsWith("err:")) {
-            String message = runId == null || runId.isBlank() ? "派发失败：没有返回 runId" : runId;
-            return completedFailure(node, conversationId, "", message, start);
+        // send 的契约是「要么返回 runId，要么抛异常」。这里不再靠 "err:" 前缀猜错误：
+        // 前缀判断曾经掩盖了一个真实缺陷（send 返回错误文案被当成 runId 用），
+        // 现在只校验形状，形状不对就当作契约被破坏并明确指出。
+        if (runId == null || runId.isBlank()) {
+            return completedFailure(node, conversationId, "", "派发失败：没有返回 runId", start);
         }
+        if (!RUN_ID_SHAPE.matcher(runId).matches()) {
+            return completedFailure(node, conversationId, "",
+                    "派发失败：send 返回值不是合法 runId（" + truncate(runId, 120)
+                            + "）；这是一个契约缺陷，请报告", start);
+        }
+        // 派发成功即开票据：即使等待侧崩溃/进程重启，也能从任务列表看到「派给了谁、什么规格」
+        String ticketId = backend.openTicket(node, conversationId);
         Active active = new Active(conversationId, runId, new CompletableFuture<>());
         waiters.submit(() -> {
+            DispatchNodeResult result;
             try {
-                active.future().complete(await(node, active, backend, start));
+                result = await(node, active, backend, start);
             } catch (RuntimeException e) {
-                active.future().complete(new DispatchNodeResult(node.id(), conversationId,
+                result = new DispatchNodeResult(node.id(), conversationId,
                         active.runId(), "FAILED", false, "", truncate(safeMessage(e), MAX_ERROR_CHARS),
-                        System.currentTimeMillis() - start));
+                        System.currentTimeMillis() - start);
             }
+            DispatchNodeResult tagged = result.withTicket(ticketId);
+            closeTicketQuietly(backend, ticketId, tagged);
+            active.future().complete(tagged);
         });
         return active;
+    }
+
+    private static void closeTicketQuietly(Backend backend, String ticketId,
+                                           DispatchNodeResult result) {
+        try {
+            backend.closeTicket(ticketId, result);
+        } catch (RuntimeException e) {
+            log.warn("票据回写失败 ticket={}：{}", ticketId, safeMessage(e));
+        }
     }
 
     /**

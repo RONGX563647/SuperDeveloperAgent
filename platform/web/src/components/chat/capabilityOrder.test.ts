@@ -1,4 +1,4 @@
-import { orderCapabilities } from './capabilityOrder'
+import { orderCapabilities } from './capabilityOrder.ts'
 
 let passed = 0
 let failed = 0

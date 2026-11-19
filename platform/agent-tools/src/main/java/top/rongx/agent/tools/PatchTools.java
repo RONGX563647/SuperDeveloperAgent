@@ -13,6 +13,7 @@ import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.PatchStore;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.PatchPathDeniedException;
 import top.rongx.agent.domain.error.RunException;
 import top.rongx.agent.domain.error.PlatformException;
 
@@ -23,8 +24,9 @@ import top.rongx.agent.domain.error.PlatformException;
  * {@code POST /api/v1/changes/{id}/apply} 提交到新分支。Agent 没有确认令牌，
  * 因此不可能自确认、自应用。
  *
- * <p>能改什么由 {@link CodePatcher#allowedPatterns()} 决定（ci/、构建配置、测试代码），
- * 业务代码与凭证不在范围内。
+ * <p>能改什么由 {@link CodePatcher#allowedPatterns()} 决定（业务源码 src/main、测试代码、
+ * ci/ 与构建/部署配置），再由 {@link CodePatcher#deniedPatterns()} 硬性排除编译产物、
+ * 依赖目录、git 元数据与凭证文件；被拒时返回结构化 {@code PATH_DENIED} + 允许清单。
  */
 @Component
 public class PatchTools {
@@ -73,6 +75,9 @@ public class PatchTools {
         CodePatcher.Staged staged;
         try {
             staged = patcher.stage(ctx.projectId(), baseSha == null ? "" : baseSha.trim(), files);
+        } catch (PatchPathDeniedException denied) {
+            // 结构化拒绝：把允许清单一起回给模型，否则它会反复重试同一个路径
+            return "err: " + denied.structured();
         } catch (PlatformException | IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }

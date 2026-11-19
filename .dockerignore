@@ -1,0 +1,14 @@
+# 镜像构建上下文只需要构建产物与源码，排除运行时数据与依赖目录
+.git
+.idea
+.trae
+.workbuddy
+.workflow
+.uploads
+.screenshots
+.trae-html-share-packages
+build
+data
+logs
+docs
+**/node_modules

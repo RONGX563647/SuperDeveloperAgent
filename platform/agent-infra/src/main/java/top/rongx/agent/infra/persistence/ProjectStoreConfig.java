@@ -21,11 +21,10 @@ public class ProjectStoreConfig {
         return new InMemoryProjectRepository(props);
     }
 
-    /** 接入项目存储（SQLite）。应用关闭时释放连接（Windows 下未关连接会锁住 db 文件）。 */
-    @Bean(destroyMethod = "close")
-    public IntakeProjectStore intakeProjectStore(
-            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        return new IntakeProjectStore(Path.of(workspaceRoot).resolve("_platform").resolve("projects.db"));
+    /** 接入项目存储：复用统一 PlatformDb（SQLite 单库 / PostgreSQL）。 */
+    @Bean
+    public IntakeProjectStore intakeProjectStore(PlatformDb platformDb) {
+        return new IntakeProjectStore(platformDb);
     }
 
     /** 对外唯一视图：预置 ∪ 接入。 */

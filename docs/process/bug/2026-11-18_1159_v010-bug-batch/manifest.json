@@ -1,0 +1,361 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-18_1159_v010-bug-batch",
+  "category": "bug",
+  "title": "0.1.0 遗留缺陷分批修复",
+  "createdAt": "2026-11-18T11:59:18+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "0.1.0 遗留缺陷分批修复",
+    "toolCallCount": 0
+  },
+  "problem": "0.1.0 遗留缺陷：面板选择 docker 部署，重放/生产提升时 deployTarget 未透传，实际按固化脚本 host 执行；镜像名与 workdir 缺注入校验；Node 默认镜像版本与前端 engine 不一致",
+  "solution": "deployTarget 从前端→网关→引擎全链路下发并校验白名单，固化脚本写回实际目标；镜像名/workdir 注入校验、容器只读根加固；Node 默认镜像升级到 22；补 5 个测试类 18 个用例",
+  "commits": [
+    {
+      "sha": "134fbe757d28a95ae8ec08c5e12f2de3101842cf",
+      "subject": "fix(executor): 固化脚本写回实际部署目标，沙箱补齐 workdir 与镜像名边界",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/handbook/l1/execution-model.md",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "8d0762ec678ea1557327ba788f25bf7d8375ea4b"
+        },
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "ee6afb0c430ae048db8a48ca267ca6bd814ff9d0"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 112,
+          "deletions": 2,
+          "blobHash": "0a6813ad0c3209c79ab0a7879460850473a973a1"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerActionRunner.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 0,
+          "blobHash": "dba3c17822e592e31d1de8214ac36da6a831d476"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java",
+          "status": "M",
+          "additions": 29,
+          "deletions": 1,
+          "blobHash": "20972ae99681859f0fce70975f807ba107d69181"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 176,
+          "deletions": 4,
+          "blobHash": "138aa15b9037e6c5da37b0507011138dfc5d76e8"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ImageRef.java",
+          "status": "A",
+          "additions": 74,
+          "deletions": 0,
+          "blobHash": "c2ba8e63b4fc810da9017ece82e9c46bc262d9f5"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxConfig.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 0,
+          "blobHash": "ae788f3492e43558c6e867f14cb8b0b65ef75ec5"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+          "status": "M",
+          "additions": 37,
+          "deletions": 0,
+          "blobHash": "e0f1ae40d5c9ce0ff3bee9a5a581347f0c6121db"
+        },
+        {
+          "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/SqlitePoolCleanupExtension.java",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "51ef079320c0286922a979cafbbfbff68361f0ac"
+        },
+        {
+          "path": "platform/agent-governance/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "d1b5e62cd71e8978177a39d0dca0521217af6d0f"
+        },
+        {
+          "path": "platform/agent-governance/src/test/resources/junit-platform.properties",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "6efc0d5e85ce07247175d3addc1f6e82865a198d"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeQueryTools.java",
+          "status": "A",
+          "additions": 62,
+          "deletions": 0,
+          "blobHash": "b982c642c0325b67e779b485c76bdde18d7d193a"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeTools.java",
+          "status": "M",
+          "additions": 41,
+          "deletions": 40,
+          "blobHash": "63ea36172c6fee7a70376c221a27d63d9578ebed"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalog.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 2,
+          "blobHash": "67ecf2c9af66fb2ad0b368259685618d7629bb25"
+        },
+        {
+          "path": "platform/web/src/components/chat/ApprovalRequestCard.vue",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "a4a0f005944b13092584f426ca2ba1014e52a9e2"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "3ff4fc7f06fcc3bd3dd9ee1f8552afafafc868e0"
+        },
+        {
+          "path": "tools/session-archive/sweep.py",
+          "status": "M",
+          "additions": 11,
+          "deletions": 2,
+          "blobHash": "e6f0c2cf208786201de66dbf4de8f922602e83eb"
+        }
+      ]
+    },
+    {
+      "sha": "20f1457fdccbf207826c563e896c7836c95d068d",
+      "subject": "fix(0.1.0): 部署目标全链路透传并补齐安全加固回归",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "58093527b76356f139261db2f2decb6215ccb26b"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "e25a3d1103523628b3b721db5de4e819d695a7d8"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDeployerTest.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 0,
+          "blobHash": "4d51f4c29d76e9faa471ac6141196dc63e41743f"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+          "status": "M",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "8a5f3d17d34ac06b93fcb9bcfe6197d1b60e7146"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImageRefTest.java",
+          "status": "A",
+          "additions": 87,
+          "deletions": 0,
+          "blobHash": "14d0dd9bdf2154de25db17d44a5e4d968822fd07"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineFreezeTargetTest.java",
+          "status": "A",
+          "additions": 68,
+          "deletions": 0,
+          "blobHash": "3c3c9f8b17753e54e840ffa36696c32c9e83e98c"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "fb9c53f763350cc1b4c2b8c2733a93c17d0cfc40"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/DeployController.java",
+          "status": "M",
+          "additions": 28,
+          "deletions": 3,
+          "blobHash": "a18f43d7f56c44156769f94f299496d20d2e6eea"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "5ee7010628adf1aaf9e714cd7b45d6a161438d1d"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "7d24bfaabda9429ea020088be9074bb97b2c0802"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "f63b707538dfa31ad3e4a265adee4f8648e20a6e"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeployControllerReplayTargetTest.java",
+          "status": "A",
+          "additions": 108,
+          "deletions": 0,
+          "blobHash": "1aaf620f34fbc921b7d71e99a7c330305576a8f6"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "9723b9118b268f175298940b946699046ee26717"
+        },
+        {
+          "path": "platform/web/src/api/deploy.ts",
+          "status": "M",
+          "additions": 5,
+          "deletions": 2,
+          "blobHash": "a6ada13beb771dca420327f6ede9d0e02ce1c72c"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 31,
+          "deletions": 6,
+          "blobHash": "17df4c3a6b495de5d660adf400b6fe189662fa1c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+        "status": "M",
+        "additions": 37,
+        "deletions": 0,
+        "blobHash": "e0f1ae40d5c9ce0ff3bee9a5a581347f0c6121db"
+      },
+      {
+        "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/SqlitePoolCleanupExtension.java",
+        "status": "A",
+        "additions": 20,
+        "deletions": 0,
+        "blobHash": "51ef079320c0286922a979cafbbfbff68361f0ac"
+      },
+      {
+        "path": "platform/agent-governance/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension",
+        "status": "A",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "d1b5e62cd71e8978177a39d0dca0521217af6d0f"
+      },
+      {
+        "path": "platform/agent-governance/src/test/resources/junit-platform.properties",
+        "status": "A",
+        "additions": 1,
+        "deletions": 0,
+        "blobHash": "6efc0d5e85ce07247175d3addc1f6e82865a198d"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDeployerTest.java",
+        "status": "M",
+        "additions": 11,
+        "deletions": 0,
+        "blobHash": "4d51f4c29d76e9faa471ac6141196dc63e41743f"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxTest.java",
+        "status": "M",
+        "additions": 55,
+        "deletions": 0,
+        "blobHash": "8a5f3d17d34ac06b93fcb9bcfe6197d1b60e7146"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImageRefTest.java",
+        "status": "A",
+        "additions": 87,
+        "deletions": 0,
+        "blobHash": "14d0dd9bdf2154de25db17d44a5e4d968822fd07"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineFreezeTargetTest.java",
+        "status": "A",
+        "additions": 68,
+        "deletions": 0,
+        "blobHash": "3c3c9f8b17753e54e840ffa36696c32c9e83e98c"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+        "status": "M",
+        "additions": 21,
+        "deletions": 0,
+        "blobHash": "fb9c53f763350cc1b4c2b8c2733a93c17d0cfc40"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeployControllerReplayTargetTest.java",
+        "status": "A",
+        "additions": 108,
+        "deletions": 0,
+        "blobHash": "1aaf620f34fbc921b7d71e99a7c330305576a8f6"
+      }
+    ],
+    "casesAdded": 19,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 647, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "agent-gateway",
+      "agent-governance",
+      "agent-tools",
+      "web"
+    ],
+    "verification": "Tests run: 647, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_1159_v010-bug-batch"
+    ]
+  },
+  "chain": {
+    "prev": "149e2d1d904d0a786516c2dfba20f96f91925cca95756846f88cd82de5d18cf8",
+    "self": "052a9a86a0bb4cb2ab4403bec23ae5b40a859fb9a865d8bf366d334fac274a18"
+  }
+}

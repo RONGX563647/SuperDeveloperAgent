@@ -138,6 +138,11 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
                     ? toolNames.get(end.getToolCallId()) : end.getToolCallName());
             String state = end.getState() == null ? "" : end.getState().name();
             String summary = oneLine(toolResults.remove(end.getToolCallId()), MAX_RESULT_LINE);
+            // 工具内部失败常以错误文本返回，事件状态仍是 SUCCESS（例如"路径不存在"）。
+            // 不按文本前缀纠正的话，自愈记录会把失败写成成功，误导后续判断与审计。
+            if (!"FAILED".equalsIgnoreCase(state) && isErrorText(summary)) {
+                state = "FAILED";
+            }
             lines.add("工具结果 " + name + (state.isEmpty() ? "" : " [" + state + "]")
                     + (summary.isEmpty() ? "" : "：" + summary));
         } else if (event instanceof TextBlockDeltaEvent delta) {
@@ -179,6 +184,16 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         }
         String one = value.toString().replaceAll("\\s+", " ").trim();
         return one.length() > max ? one.substring(0, max) + "…" : one;
+    }
+
+    /** 工具把失败当文本返回（事件状态仍是 SUCCESS）：按约定前缀识别。 */
+    static boolean isErrorText(String summary) {
+        if (summary == null || summary.isEmpty()) {
+            return false;
+        }
+        return summary.startsWith("Error:")
+                || summary.startsWith("err:")
+                || summary.contains("Tool execution failed");
     }
 
     /** 超长时保留开头与结尾：结尾通常是 Agent 的最终结论，不能丢。 */
@@ -237,9 +252,10 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
                    - DOCKER 目标缺 Dockerfile / 缺 image_package（E-501、E-708）→ 直接调用
                      ensure_dockerfile（base_sha 用本次运行的提交），不要手写 Dockerfile、不要让用户补；
                      它会按仓库结构生成镜像定义并补齐镜像阶段与配方，返回的 changeId 仍需用户确认；
-                   - 其它配置问题 → 用 propose_patch 提交受限补丁（可改 ci/**、Jenkinsfile、
-                     pom/build.gradle、src/test/**、Dockerfile、deploy/**、docker-compose*.yml、
-                     nginx*.conf、application*.yml、package.json），base_sha 用本次运行的提交；
+                   - 其它配置/代码问题 → 用 propose_patch 提交受限补丁（可改 src/main/**、src/test/**、
+                     ci/**、Jenkinsfile、pom/build.gradle、Dockerfile、deploy/**、docker-compose*.yml、
+                     nginx*.conf、application*.yml、package.json；.git/target/node_modules 与密钥文件
+                     一律拒绝并返回 PATH_DENIED + 允许清单），base_sha 用本次运行的提交；
                      工具会返回 changeId，把它写进结论，让用户到确认卡片确认。
                 5. 需要其它人工确认的动作，用 request_confirmation 登记变更，同样把 changeId 写进结论；
                    不要假设任何人已经确认，也不要空等确认结果。

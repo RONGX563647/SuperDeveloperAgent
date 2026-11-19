@@ -9,6 +9,12 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
     <artifactId>agent-infra</artifactId>
+
+    <properties>
+        <!-- 覆盖率棘轮：当前实测基线小幅下浮，只升不降（见根 pom 说明） -->
+        <jacoco.line.minimum>0.50</jacoco.line.minimum>
+    </properties>
+
     <name>agent-infra</name>
 
     <dependencies>
@@ -23,6 +29,21 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <!-- 统一持久化：JPA/Hibernate 负责 CRUD 与 SQLite 建表，Hikari 负责连接池 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <!-- Hibernate 官方社区方言：SQLite -->
+        <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-community-dialects</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
         </dependency>
         <!-- 能力市场解析远端 JSON（与网关的 Jackson 2 保持同一套注解） -->
         <dependency>

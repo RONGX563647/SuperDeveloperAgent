@@ -67,6 +67,11 @@
                     <systemPropertyVariables>
                         <!-- 扫描根 = platform/（即本模块的上一级） -->
                         <spec.root>${project.basedir}/..</spec.root>
+                        <!-- ArchUnit freeze 基线：冻结存量违规，只对新增违规报错。
+                             allowStoreCreation=false：基线文件缺失/新增规则时不再静默创建并冻结
+                             （否则新规则自带违规会自动通过，等于没加）。更新基线必须显式提交。 -->
+                        <archunit.freeze.store.default.path>${project.basedir}/archunit_store</archunit.freeze.store.default.path>
+                        <archunit.freeze.store.default.allowStoreCreation>false</archunit.freeze.store.default.allowStoreCreation>
                     </systemPropertyVariables>
                     <trimStackTrace>false</trimStackTrace>
                 </configuration>

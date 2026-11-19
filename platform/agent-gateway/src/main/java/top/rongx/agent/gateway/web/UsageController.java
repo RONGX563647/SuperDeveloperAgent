@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.settings.TokenUsageRepository;
 import top.rongx.agent.domain.settings.TokenUsageRepository.UsageSummary;
+import top.rongx.agent.domain.settings.TokenUsageRepository.UsageTotals;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.runtime.workspace.ConversationManager;
 import top.rongx.agent.domain.error.ErrorCode;
@@ -42,7 +43,9 @@ public class UsageController {
                 () -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + sessionId));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("sessionId", sessionId);
-        out.put("totals", usage.sessionTotals(sessionId));
+        UsageTotals totals = usage.sessionTotals(sessionId);
+        out.put("totals", totals);
+        out.put("cacheHitRate", totals.cacheHitRate());
         out.put("calls", usage.findBySession(sessionId, 200));
         return out;
     }

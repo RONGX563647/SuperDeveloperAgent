@@ -100,8 +100,10 @@ final class ProcessExecutor {
                 killTree(process);
             }
             joinQuietly(reader);
+            // 预算可能是秒级碎片（多步配方里前一步吃掉大半预算），按整秒显示会变成
+            // "执行超时（0s）"，读日志的人无法判断到底是超时还是命令本身有问题。
             return StepOutcome.failed(124, ErrorCode.TIMEOUT.code(),
-                    "执行超时（" + (budgetMillis / 1000) + "s），已终止：" + String.join(" ", argv));
+                    "执行超时（" + human(budgetMillis) + "），已终止：" + String.join(" ", argv));
         }
 
         joinQuietly(reader);
@@ -146,6 +148,15 @@ final class ProcessExecutor {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /** 预算的人类可读形式：不足 1s 时显示毫秒，避免"超时（0s）"这种没有信息量的摘要。 */
+    static String human(long millis) {
+        if (millis < 1000) {
+            return millis + "ms";
+        }
+        long seconds = millis / 1000;
+        return seconds < 60 ? seconds + "s" : (seconds / 60) + "m" + (seconds % 60) + "s";
     }
 
     /**

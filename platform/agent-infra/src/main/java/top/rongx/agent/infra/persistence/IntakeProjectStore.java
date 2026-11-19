@@ -1,146 +1,90 @@
 package top.rongx.agent.infra.persistence;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
 
 /**
- * 接入项目的 SQLite 存储（v2 P1：接入的项目重启不丢）。
+ * 接入项目的存储（v2 P1：接入的项目重启不丢）。
  *
  * <p>与 {@link InMemoryProjectRepository}（yml 预置，只读）合并使用（见 {@link CompositeProjectRepository}）。
- * 数据库文件：{@code <workspaceRoot>/_platform/projects.db}（data/ 已 gitignore）。
- *
- * <p><b>短连接模式</b>：每次操作打开-用-关连接。SQLite 是单文件库，长连接会在 Windows 上
- * 锁住文件（测试 TempDir 清理失败、项目工作区删除失败都源于此）；短连接 + WAL 不必要——
- * 平台写入频率极低（只在接入/下线时写），性能无影响。
+ * 表结构由 {@code ProjectEntity} / {@code ProjectEnvEntity} 生成，连接与事务交给 {@link PlatformDb}。
  */
 public class IntakeProjectStore implements AutoCloseable {
 
-    private static final Logger log = LoggerFactory.getLogger(IntakeProjectStore.class);
+    private static final String PROJECT_COLUMNS = """
+            id, name, repo_url, repo_type, type, port_start, port_end, source, local_path,
+            storage_mode
+            """;
 
-    private final Path dbFile;
+    private static final String PROJECT_UPSERT_SQL = """
+            INSERT INTO projects (id, name, repo_url, repo_type, type,
+                                  port_start, port_end, source, local_path, storage_mode, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name, repo_url=excluded.repo_url, repo_type=excluded.repo_type,
+                type=excluded.type, port_start=excluded.port_start, port_end=excluded.port_end,
+                source=excluded.source, local_path=excluded.local_path, storage_mode=excluded.storage_mode
+            """;
 
+    private final PlatformDb db;
+
+    @Autowired
+    public IntakeProjectStore(PlatformDb db) {
+        this.db = db;
+    }
+
+    /** 测试/独立进程：按库文件定位统一 PlatformDb。 */
     public IntakeProjectStore(Path dbFile) {
-        this.dbFile = dbFile.toAbsolutePath().normalize();
+        this(platformDb(dbFile));
+    }
+
+    private static PlatformDb platformDb(Path dbFile) {
+        Path file = dbFile.toAbsolutePath().normalize();
         try {
-            Files.createDirectories(dbFile.getParent());
-        } catch (java.io.IOException e) {
+            Path parent = file.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+        } catch (IOException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "无法创建项目存储目录：" + e.getMessage(), e);
         }
-        initSchema();
-    }
-
-    private Connection open() throws SQLException {
-        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
-    }
-
-    private void initSchema() {
-        try (Connection conn = open()) {
-            try (PreparedStatement st = conn.prepareStatement("""
-                    CREATE TABLE IF NOT EXISTS projects (
-                        id          TEXT PRIMARY KEY,
-                        name        TEXT NOT NULL,
-                        repo_url    TEXT,
-                        repo_type   TEXT,
-                        type        TEXT,
-                        port_start  INTEGER,
-                        port_end    INTEGER,
-                        source      TEXT NOT NULL,
-                        local_path  TEXT,
-                        created_at  INTEGER NOT NULL
-                    )
-                    """)) {
-                st.executeUpdate();
-            }
-            try (PreparedStatement st = conn.prepareStatement("""
-                    CREATE TABLE IF NOT EXISTS project_envs (
-                        project_id  TEXT NOT NULL,
-                        env         TEXT NOT NULL,
-                        app_url     TEXT,
-                        compose_dir TEXT,
-                        PRIMARY KEY (project_id, env)
-                    )
-                    """)) {
-                st.executeUpdate();
-            }
-            // 旧库迁移：补齐 dev 环境（历史接入只写了 test/prod，对话页因此没有「开发环境」）；
-            // dev 走本地服务、端口动态分配，故 app_url / compose_dir 留空。已存在则忽略（幂等）。
-            try (PreparedStatement st = conn.prepareStatement("""
-                    INSERT OR IGNORE INTO project_envs (project_id, env, app_url, compose_dir)
-                    SELECT id, 'dev', '', '' FROM projects
-                    """)) {
-                st.executeUpdate();
-            }
-            try (PreparedStatement st = conn.prepareStatement(
-                    "ALTER TABLE projects ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'MANAGED'")) {
-                st.executeUpdate();
-            } catch (SQLException duplicate) {
-                // 列已存在（旧库刚迁移过），忽略
-            }
-        } catch (SQLException e) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "无法初始化项目存储 " + dbFile + "：" + e.getMessage(), e);
-        }
+        return PlatformDb.sqlite(file);
     }
 
     // ---------------------------------------------------------------- 写
 
     /** 登记一个接入完成的项目（含环境）。已存在则覆盖（重接入语义）。 */
     public void upsert(IntakeProject p, List<ProjectEnv> envs) {
-        try (Connection conn = open()) {
-            conn.setAutoCommit(false);
-            try (PreparedStatement st = conn.prepareStatement("""
-                    INSERT INTO projects (id, name, repo_url, repo_type, type,
-                                          port_start, port_end, source, local_path, storage_mode, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        name=excluded.name, repo_url=excluded.repo_url, repo_type=excluded.repo_type,
-                        type=excluded.type, port_start=excluded.port_start, port_end=excluded.port_end,
-                        source=excluded.source, local_path=excluded.local_path, storage_mode=excluded.storage_mode
-                    """)) {
-                st.setString(1, p.id());
-                st.setString(2, p.name());
-                st.setString(3, p.repoUrl());
-                st.setString(4, p.repoType());
-                st.setString(5, p.type());
-                st.setInt(6, p.portRangeStart());
-                st.setInt(7, p.portRangeEnd());
-                st.setString(8, p.source());
-                st.setString(9, p.localPath());
-                st.setString(10, p.storageMode());
-                st.setLong(11, System.currentTimeMillis());
-                st.executeUpdate();
-            }
-            try (PreparedStatement del = conn.prepareStatement(
-                    "DELETE FROM project_envs WHERE project_id = ?")) {
-                del.setString(1, p.id());
-                del.executeUpdate();
-            }
-            try (PreparedStatement ins = conn.prepareStatement("""
-                    INSERT INTO project_envs (project_id, env, app_url, compose_dir) VALUES (?,?,?,?)
-                    """)) {
+        try {
+            db.run(em -> {
+                PlatformDb.update(em, PROJECT_UPSERT_SQL,
+                        p.id(),
+                        p.name(),
+                        p.repoUrl(),
+                        p.repoType(),
+                        p.type(),
+                        p.portRangeStart(),
+                        p.portRangeEnd(),
+                        p.source(),
+                        p.localPath(),
+                        p.storageMode(),
+                        System.currentTimeMillis());
+                PlatformDb.update(em, "DELETE FROM project_envs WHERE project_id = ?", p.id());
                 for (ProjectEnv e : envs) {
-                    ins.setString(1, p.id());
-                    ins.setString(2, e.env());
-                    ins.setString(3, e.appUrl());
-                    ins.setString(4, e.composeDir());
-                    ins.addBatch();
+                    PlatformDb.update(em, """
+                            INSERT INTO project_envs (project_id, env, app_url, compose_dir)
+                            VALUES (?,?,?,?)
+                            """, p.id(), e.env(), e.appUrl(), e.composeDir());
                 }
-                ins.executeBatch();
-            }
-            conn.commit();
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目登记失败：" + e.getMessage(), e);
         }
     }
@@ -152,34 +96,27 @@ public class IntakeProjectStore implements AutoCloseable {
      * 避免用户为了一个空环境再走一遍接入流程。
      */
     public boolean ensureEnv(String projectId, String env) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("""
-                     INSERT OR IGNORE INTO project_envs (project_id, env, app_url, compose_dir)
-                     VALUES (?, ?, '', '')
-                     """)) {
-            st.setString(1, projectId);
-            st.setString(2, env);
-            return st.executeUpdate() > 0;
-        } catch (SQLException e) {
+        String sql = """
+                INSERT INTO project_envs (project_id, env, app_url, compose_dir)
+                VALUES (?, ?, '', '')
+                ON CONFLICT(project_id, env) DO NOTHING
+                """;
+        try {
+            return db.inTx(em -> PlatformDb.update(em, sql, projectId, env) > 0);
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "环境登记失败：" + e.getMessage(), e);
         }
     }
 
     /** 删除项目（解除托管）。 */
     public boolean delete(String projectId) {
-        try (Connection conn = open()) {
-            boolean removed;
-            try (PreparedStatement st = conn.prepareStatement("DELETE FROM projects WHERE id = ?")) {
-                st.setString(1, projectId);
-                removed = st.executeUpdate() > 0;
-            }
-            try (PreparedStatement de = conn.prepareStatement(
-                    "DELETE FROM project_envs WHERE project_id = ?")) {
-                de.setString(1, projectId);
-                de.executeUpdate();
-            }
-            return removed;
-        } catch (SQLException e) {
+        try {
+            return db.inTx(em -> {
+                int removed = PlatformDb.update(em, "DELETE FROM projects WHERE id = ?", projectId);
+                PlatformDb.update(em, "DELETE FROM project_envs WHERE project_id = ?", projectId);
+                return removed > 0;
+            });
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目删除失败：" + e.getMessage(), e);
         }
     }
@@ -187,65 +124,51 @@ public class IntakeProjectStore implements AutoCloseable {
     // ---------------------------------------------------------------- 读
 
     public Optional<IntakeProject> find(String projectId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("SELECT id, name, repo_url, repo_type, type, port_start, port_end, source, local_path, storage_mode FROM projects WHERE id = ?")) {
-            st.setString(1, projectId);
-            try (ResultSet rs = st.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(map(rs));
-                }
-                return Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + PROJECT_COLUMNS + " FROM projects WHERE id = ?", projectId)
+                    .map(IntakeProjectStore::map));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目查询失败：" + e.getMessage(), e);
         }
     }
 
     public List<IntakeProject> findAll() {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("SELECT id, name, repo_url, repo_type, type, port_start, port_end, source, local_path, storage_mode FROM projects ORDER BY id")) {
-            try (ResultSet rs = st.executeQuery()) {
-                List<IntakeProject> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(map(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                    "SELECT " + PROJECT_COLUMNS + " FROM projects ORDER BY id").stream()
+                    .map(IntakeProjectStore::map).toList());
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "项目查询失败：" + e.getMessage(), e);
         }
     }
 
     public List<ProjectEnv> findEnvs(String projectId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT project_id, env, app_url, compose_dir FROM project_envs WHERE project_id = ? ORDER BY env")) {
-            st.setString(1, projectId);
-            try (ResultSet rs = st.executeQuery()) {
-                List<ProjectEnv> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(new ProjectEnv(rs.getString("project_id"), rs.getString("env"),
-                            rs.getString("app_url"), rs.getString("compose_dir")));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                    "SELECT project_id, env, app_url, compose_dir FROM project_envs"
+                            + " WHERE project_id = ? ORDER BY env", projectId).stream()
+                    .map(row -> new ProjectEnv((String) row[0], (String) row[1],
+                            (String) row[2], (String) row[3]))
+                    .toList());
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "环境查询失败：" + e.getMessage(), e);
         }
     }
 
-    private IntakeProject map(ResultSet rs) throws SQLException {
+    private static IntakeProject map(Object[] row) {
         return new IntakeProject(
-                rs.getString("id"), rs.getString("name"), rs.getString("repo_url"),
-                rs.getString("repo_type"), rs.getString("type"),
-                rs.getInt("port_start"), rs.getInt("port_end"),
-                rs.getString("source"), rs.getString("local_path"), rs.getString("storage_mode"));
+                (String) row[0], (String) row[1], (String) row[2],
+                (String) row[3], (String) row[4],
+                row[5] == null ? 0 : ((Number) row[5]).intValue(),
+                row[6] == null ? 0 : ((Number) row[6]).intValue(),
+                (String) row[7], (String) row[8], (String) row[9]);
     }
 
-    /** 兼容 AutoCloseable（短连接模式下无长资源）；no-op。 */
+    /** 共享库由 PlatformDb 持有，Store 不再负责关闭；保留 AutoCloseable 兼容调用方。 */
     @Override
     public void close() {
-        // 短连接模式：无长持有资源
+        // no-op
     }
 
     /** 接入项目记录（source: LOCAL / REMOTE）。 */

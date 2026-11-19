@@ -85,6 +85,10 @@ public class ChangeTools {
         String apply = manual
                 ? "不支持（该动作在 dev/test 可自动放行，登记仅用于留痕；确认卡不会执行它）"
                 : "确认后在变更卡片上执行";
+        // 留痕单不会被推成确认卡（推了也必然 apply 400），提示模型别等用户确认
+        String next = manual
+                ? "该动作仅留痕，无需人工确认，不会推送确认卡；请直接继续后续步骤。"
+                : "确认卡已推到当前对话（确认令牌 5 分钟内有效）；确认前不会执行任何操作。";
         return """
                 %s
                 planHash: %s
@@ -92,21 +96,23 @@ public class ChangeTools {
                 env: %s
                 apply: %s
                 highRisk: %s
-                next: 确认卡已推到当前对话（确认令牌 5 分钟内有效）；确认前不会执行任何操作。
+                next: %s
                 evidence: change:%s
                 """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), wire, plan.env(), apply,
-                highRisk, plan.changeId());
+                highRisk, next, plan.changeId());
     }
 
     /**
      * 向<b>当前操作人</b>发起确认（不是模型自我批准）。
      *
-     * <p>安全边界：本方法只读变更单并返回 {@code PENDING_USER_CONFIRMATION}；
-     * 不调用 {@code ConfirmTokenService}，不触发任何执行。真正的确认仍由用户在平台
-     * 确认卡片上完成（令牌只由已登录的 HTTP 请求签发）。
+     * <p>安全边界：本方法只读变更单；不调用 {@code ConfirmTokenService}，不触发任何执行。
+     * 真正的确认仍由用户在平台确认卡片上完成（令牌只由已登录的 HTTP 请求签发）。
      *
      * <p>之所以提供这个工具：模型在长流程里需要"明确地把单号推到用户面前"，
      * 而不是只在正文里写一句"请确认"——后者无法驱动确认卡片，用户容易漏掉。
+     *
+     * <p>返回的 status 一律取自 {@link ChangePlan#status()}：已经确认/执行过的单
+     * 直接回报真实状态，避免模型看到硬编码的 PENDING 而反复推卡。
      */
     @Tool(name = "confirm", description = "Resend the approval card for a change.",
             readOnly = false, concurrencySafe = false)
@@ -131,8 +137,55 @@ public class ChangeTools {
                     + ctx.env() + " 不一致，拒绝确认";
         }
         boolean manual = MANUAL_KINDS.contains(plan.kind());
-        String gate = manual ? "NO_TOKEN（仅留痕，确认卡不执行）"
-                : plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN";
+        if (manual) {
+            // 留痕单没有 /apply 闭环：明确告知模型不需要也不能等确认，避免反复推卡
+            return """
+                    status: RECORDED
+                    %s
+                    kind: %s
+                    env: %s
+                    gate: NO_TOKEN
+                    summary: %s
+                    next: 该变更仅用于留痕，无需确认，也不会推送确认卡；请直接继续后续步骤。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.kind(), plan.env(), plan.summary());
+        }
+        String gate = plan.highRisk() ? "SECOND_PASSWORD" : "CONFIRM_TOKEN";
+        if (plan.status() == ChangePlan.Status.APPLIED) {
+            return """
+                    status: APPLIED
+                    %s
+                    planHash: %s
+                    kind: %s
+                    env: %s
+                    summary: %s
+                    next: 该变更已执行完成，无需再次确认或推卡；直接汇报结果即可。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(), plan.env(),
+                    plan.summary());
+        }
+        if (plan.status() == ChangePlan.Status.CONFIRMED) {
+            return """
+                    status: CONFIRMED
+                    %s
+                    planHash: %s
+                    kind: %s
+                    env: %s
+                    summary: %s
+                    next: 操作人已确认，可直接调用 apply 执行；不要再推送确认卡片。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(), plan.env(),
+                    plan.summary());
+        }
+        if (plan.status() == ChangePlan.Status.FAILED) {
+            return """
+                    status: FAILED
+                    %s
+                    planHash: %s
+                    kind: %s
+                    env: %s
+                    summary: %s
+                    next: 上次执行失败；先向操作人说明失败原因，需要重试时再登记新的变更。
+                    """.formatted(ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(), plan.env(),
+                    plan.summary());
+        }
         return """
                 status: PENDING_USER_CONFIRMATION
                 %s

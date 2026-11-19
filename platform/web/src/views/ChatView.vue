@@ -278,17 +278,36 @@ function openApprovalCard(): void {
 
 /**
  * 确认卡点完就不再需要用户手打「继续」：把结果直接回灌给 Agent，让它接着跑下一步。
- * 仍在流式输出时只提示（不抢占当前流），避免同一会话并发两条请求。
+ *
+ * <p>仍在流式输出时无法并发再发一条消息，先把回执排队，等本轮结束自动回灌；
+ * 失败回执同样走这里（原来只弹 toast，Agent 永远等不到结果）。
  */
-function continueAfterUserAction(prompt: string): void {
+const queuedFeedback = ref('')
+
+function continueAfterUserAction(
+  prompt: string,
+  done = '已确认，Agent 继续执行',
+  level: 'success' | 'warning' = 'success',
+): void {
   if (streaming.value) {
-    ElMessage.info('确认已生效；当前回复还在生成，结束后让 Agent 继续即可')
+    queuedFeedback.value = prompt
+    ElMessage.info('当前回复还在生成，结束后会自动把结果回传给 Agent')
     return
   }
   approvalCardOpen.value = false
-  ElMessage.success('已确认，Agent 继续执行')
+  ElMessage[level](done)
   void sendChat(prompt)
 }
+
+// 流式输出结束后补发排队中的确认结果（成功/失败都适用）
+watch(streaming, (busy) => {
+  if (busy || !queuedFeedback.value) return
+  const prompt = queuedFeedback.value
+  queuedFeedback.value = ''
+  approvalCardOpen.value = false
+  ElMessage.success('已将确认结果回传给 Agent')
+  void sendChat(prompt)
+})
 
 /** 变更单应用成功（补丁已提交到分支）：让 Agent 接着按新提交重新部署。 */
 function onApprovalApplied(result: {
@@ -299,6 +318,16 @@ function onApprovalApplied(result: {
   continueAfterUserAction(
     `用户已在对话里确认并应用变更 ${result.changeId}（${result.action} → ${result.status}）。`
     + '请继续后续步骤：需要时用 git_status / git_commits 查看最新提交 sha，并用该 sha 重新运行部署。',
+  )
+}
+
+/** 变更单执行失败：把原因回灌给 Agent，避免"卡片点了没反应"的静默失败。 */
+function onApprovalFailed(result: { changeId: string; reason: string }): void {
+  continueAfterUserAction(
+    `用户在该变更卡（${result.changeId}）上的操作失败了：${result.reason}。`
+    + '请不要假设变更已生效或已确认；判断是重新登记（核对 kind / 参数）还是停止，并向用户说明。',
+    '变更卡操作失败，已回传给 Agent',
+    'warning',
   )
 }
 
@@ -552,9 +581,9 @@ watch(
   },
 )
 
-// 出现待确认变更单时按执行策略处理：自动展开 / 仅提示 / 只读不展开
+// 出现待确认变更单时按执行策略处理：confirm/auto 直接展开卡片；只读模式只提示
 watch(pendingChangeId, (id) => {
-  if (id && permission.value === 'auto') openApprovalCard()
+  if (id && permission.value !== 'readonly') openApprovalCard()
 })
 
 // 错误不弹 toast：reducer 已把 error 事件写进时间线（内联色块），双提示会重复。
@@ -863,6 +892,7 @@ onBeforeUnmount(() => {
         :change-id="pendingChangeId"
         class="chat-approval"
         @applied="onApprovalApplied"
+        @failed="onApprovalFailed"
         @dismiss="approvalCardOpen = false"
       />
 

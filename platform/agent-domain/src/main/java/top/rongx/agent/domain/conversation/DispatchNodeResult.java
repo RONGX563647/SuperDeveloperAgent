@@ -14,7 +14,8 @@ public record DispatchNodeResult(
         boolean skipped,
         String summary,
         String error,
-        long elapsedMillis) {
+        long elapsedMillis,
+        String ticketId) {
 
     public DispatchNodeResult {
         nodeId = nodeId == null ? "" : nodeId;
@@ -23,6 +24,18 @@ public record DispatchNodeResult(
         status = status == null || status.isBlank() ? "FAILED" : status;
         summary = summary == null ? "" : summary;
         error = error == null ? "" : error;
+        ticketId = ticketId == null ? "" : ticketId;
+    }
+
+    /** 兼容旧调用点：没有票据时 ticketId 为空。 */
+    public DispatchNodeResult(String nodeId, String conversationId, String runId, String status,
+                              boolean skipped, String summary, String error, long elapsedMillis) {
+        this(nodeId, conversationId, runId, status, skipped, summary, error, elapsedMillis, "");
+    }
+
+    public DispatchNodeResult withTicket(String ticket) {
+        return new DispatchNodeResult(nodeId, conversationId, runId, status, skipped, summary,
+                error, elapsedMillis, ticket);
     }
 
     public boolean succeeded() {

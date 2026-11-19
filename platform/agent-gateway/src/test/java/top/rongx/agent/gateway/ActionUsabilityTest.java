@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import top.rongx.agent.domain.error.PlatformException;
+import org.junit.jupiter.api.Tag;
 
 /**
  * 可用性测试：从 HTTP 控制器入口（真实 Spring 上下文）把「列动作 → 看计划 → 构建 → L3 审批闭环」走一遍。
@@ -30,6 +31,8 @@ import top.rongx.agent.domain.error.PlatformException;
  * 这部分是历史上最容易出错的地方。配方与"构建脚本"都放在临时工作区，不依赖 Docker、不依赖模型。
  */
 @SpringBootTest
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class ActionUsabilityTest {
 
     @TempDir

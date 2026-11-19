@@ -17,8 +17,11 @@ import top.rongx.agent.domain.run.StageStatus;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Tag;
 
 /** 执行器行为：成功 / 用户失败 / 命令不存在 / 产物识别 / 超时。 */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class ProcessActionRunnerTest {
 
     private final ProcessActionRunner runner = new ProcessActionRunner();

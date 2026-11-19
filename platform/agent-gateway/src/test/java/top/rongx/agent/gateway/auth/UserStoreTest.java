@@ -12,10 +12,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import top.rongx.agent.infra.sqlite.SqliteConnections;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.infra.persistence.PlatformDb;
+import org.junit.jupiter.api.Tag;
 
 /** 种子密码固定化 + 设置页改密 + 旧版随机密码迁移。 */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class UserStoreTest {
 
     @TempDir
@@ -24,7 +27,7 @@ class UserStoreTest {
     /** Windows 上连接池持有 SQLite 句柄会让 @TempDir 删除失败，收尾时显式释放。 */
     @AfterEach
     void releaseConnections() {
-        SqliteConnections.closePool(tempDir.resolve("_platform/users.db"));
+        PlatformDb.closeAll();
     }
 
     @Test

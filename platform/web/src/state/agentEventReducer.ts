@@ -359,6 +359,9 @@ export function reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent)
         arguments: existing?.arguments
           || stringData(event, 'args')
           || stringData(event, 'arguments'),
+        // 后端明确告知"入参拿不到"时如实标记，别让轨迹里显示成"该工具无参数"
+        argsUnavailable: event.payload.argsUnavailable === true
+          && !(existing?.arguments || stringData(event, 'args') || stringData(event, 'arguments')),
         status: failed ? 'FAILED' : 'COMPLETED',
         code: stringData(event, 'code'),
         resultText: existing?.resultText,

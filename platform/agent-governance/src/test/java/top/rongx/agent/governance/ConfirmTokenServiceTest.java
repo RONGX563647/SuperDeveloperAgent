@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +45,12 @@ class ConfirmTokenServiceTest {
 
     private final MutableClock clock = new MutableClock();
     private final ConfirmTokenService service = new ConfirmTokenService(clock);
+
+    /** 关闭缓存的独立库，否则 Windows 上 @TempDir 删除会因 SQLite 文件占用失败。 */
+    @AfterEach
+    void releaseDb() {
+        GovernanceDb.closeAll();
+    }
 
     @Test
     @DisplayName("正常签发并消费")
@@ -101,7 +108,7 @@ class ConfirmTokenServiceTest {
     @Test
     @DisplayName("令牌落库：重启（新实例）后仍可消费，且仍是一次性")
     void tokenSurvivesRestart(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) {
-        java.nio.file.Path db = dir.resolve("governance.db");
+        java.nio.file.Path db = dir.resolve("platform.db");
         ConfirmTokenService before = new ConfirmTokenService(clock, db);
         ConfirmToken token = before.issue("u1", "chg-1", "hash-a");
 
@@ -115,7 +122,7 @@ class ConfirmTokenServiceTest {
     @Test
     @DisplayName("过期令牌可被清理")
     void purgeExpired(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) {
-        ConfirmTokenService persisted = new ConfirmTokenService(clock, dir.resolve("governance.db"));
+        ConfirmTokenService persisted = new ConfirmTokenService(clock, dir.resolve("platform.db"));
         persisted.issue("u1", "chg-1", "hash-a");
         clock.advance(Duration.ofMinutes(6));
         assertEquals(1, persisted.purgeExpired());

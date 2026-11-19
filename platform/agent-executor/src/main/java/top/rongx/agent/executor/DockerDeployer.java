@@ -11,6 +11,7 @@ import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RecipeException;
 import top.rongx.agent.domain.port.Deployer;
 
 /**
@@ -37,6 +38,15 @@ public class DockerDeployer implements Deployer {
     private static final long DOCKER_TIMEOUT_MS = 120_000;
 
     private final ProcessExecutor executor = new ProcessExecutor();
+    private final DockerCli docker;
+
+    public DockerDeployer() {
+        this(DockerCli.defaults());
+    }
+
+    public DockerDeployer(DockerCli docker) {
+        this.docker = docker == null ? DockerCli.defaults() : docker;
+    }
 
     @Override
     public boolean supports(DeployTarget target) {
@@ -117,13 +127,13 @@ public class DockerDeployer implements Deployer {
     public boolean ensureNetwork(Path dir, String network, StringBuilder log) {
         BooleanSupplier never = () -> false;
         ProcessExecutor.StepOutcome inspect =
-                executor.exec(dir, List.of("docker", "network", "inspect", network), 15_000,
+                executor.exec(dir, docker.cmd("network", "inspect", network), 15_000,
                         log, never);
         if (inspect.exitCode() == 0) {
             return true;
         }
         ProcessExecutor.StepOutcome created =
-                executor.exec(dir, List.of("docker", "network", "create", network), 30_000,
+                executor.exec(dir, docker.cmd("network", "create", network), 30_000,
                         log, never);
         if (created.exitCode() == 0) {
             log.append("[deploy] 已创建环境网络 ").append(network).append('\n');
@@ -147,7 +157,7 @@ public class DockerDeployer implements Deployer {
         for (String name : names) {
             StringBuilder rmLog = new StringBuilder();
             ProcessExecutor.StepOutcome rm =
-                    executor.exec(dir, List.of("docker", "rm", "-f", name), 30_000, rmLog, never);
+                    executor.exec(dir, docker.cmd("rm", "-f", name), 30_000, rmLog, never);
             if (rm.exitCode() == 0) {
                 removed.add(name);
                 log.append("[dev] 已清理遗留 dev 容器 ").append(name).append('\n');
@@ -169,7 +179,7 @@ public class DockerDeployer implements Deployer {
             return false;
         }
         BooleanSupplier never = () -> false;
-        return executor.exec(dir, List.of("docker", "image", "inspect", image), 15_000,
+        return executor.exec(dir, docker.cmd("image", "inspect", image), 15_000,
                 new StringBuilder(), never).exitCode() == 0;
     }
 
@@ -178,12 +188,23 @@ public class DockerDeployer implements Deployer {
                              List<String> extraArgs, StringBuilder log, String endpointHost) {
         BooleanSupplier never = () -> false;
 
-        // 0. 镜像必须在本地：docker run 找不到镜像时会先去 registry 拉，
+        // 0. 镜像名是 docker run 的位置参数，以 - 开头会被当成选项（参数注入）：
+        //    镜像 tag 来自流水线 image_package 的产物命名，属于外部可控输入，必须校验。
+        String imageRef;
+        try {
+            imageRef = ImageRef.require(image, "deploy.image");
+        } catch (RecipeException e) {
+            return DeployResult.failed(DeployTarget.DOCKER, e.code(),
+                    e.getMessage(), ProcessExecutor.redact(log.toString()));
+        }
+        image = imageRef;
+
+        // 1. 镜像必须在本地：docker run 找不到镜像时会先去 registry 拉，
         //    被镜像源白名单拦下后只留下 "exit 125 … not in the allowlist"，
         //    把"本机没这个镜像"伪装成容器启动失败。回滚场景更糟：下面会先删掉在跑的容器。
         StringBuilder inspectLog = new StringBuilder();
         ProcessExecutor.StepOutcome inspect = executor.exec(dir,
-                List.of("docker", "image", "inspect", image), 15_000, inspectLog, never);
+                docker.cmd("image", "inspect", image), 15_000, inspectLog, never);
         if (inspect.exitCode() != 0) {
             return DeployResult.failed(DeployTarget.DOCKER,
                     ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
@@ -197,7 +218,7 @@ public class DockerDeployer implements Deployer {
         //    曾把真实失败（应用配置校验不过、容器自行退出）掩盖成"部署报错"。
         StringBuilder rmLog = new StringBuilder();
         ProcessExecutor.StepOutcome rm =
-                executor.exec(dir, List.of("docker", "rm", "-f", name), 30_000, rmLog, never);
+                executor.exec(dir, docker.cmd("rm", "-f", name), 30_000, rmLog, never);
         if (rm.exitCode() != 0) {
             String rmText = rmLog.toString();
             if (rmText.contains("No such container")) {
@@ -208,13 +229,29 @@ public class DockerDeployer implements Deployer {
         }
 
         // 2. 起新（环境变量按 key 排序，保证同样输入产生同样的 docker 参数）
-        List<String> argv = new ArrayList<>(List.of(
-                "docker", "run", "-d",
+        //
+        // 默认加固：应用容器不需要额外 Linux capabilities（nginx 绑 80 除外，见下），
+        // 也不需要 setuid 提权。这两项对正常应用无感，但能挡住"容器内提权后横向移动"。
+        // 不设 --read-only：应用要写临时文件、上传目录、日志，只读会直接打断业务。
+        List<String> argv = new ArrayList<>(docker.cmd(
+                "run", "-d",
                 "--name", name,
                 "--restart", "unless-stopped",
+                "--security-opt", "no-new-privileges",
                 "--label", "com.docker.compose.project=" + composeProject(network, null),
                 "--label", "com.docker.compose.service=" + name,
                 "-p", hostPort + ":" + containerPort));
+        if (containerPort <= 1024) {
+            // 绑 <1024 需要 CAP_NET_BIND_SERVICE（镜像以非 root 运行时丢了就起不来）；
+            // 只补回这一项，不给 NET_RAW / SETUID 等其它能力
+            argv.add("--cap-drop");
+            argv.add("ALL");
+            argv.add("--cap-add");
+            argv.add("NET_BIND_SERVICE");
+        } else {
+            argv.add("--cap-drop");
+            argv.add("ALL");
+        }
         argv.addAll(extraArgs);
         if (network != null && !network.isBlank()) {
             argv.add("--network");

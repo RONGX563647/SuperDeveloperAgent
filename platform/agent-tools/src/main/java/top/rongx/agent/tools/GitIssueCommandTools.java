@@ -38,11 +38,14 @@ public class GitIssueCommandTools {
                     required = false) String priority,
             @ToolParam(name = "labels", description = "标签，逗号分隔，可空", required = false)
             String labels,
+            @ToolParam(name = "version",
+                    description = "关联版本号（如 0.1.2），可空：默认取当前分支版本",
+                    required = false) String version,
             ProjectContext ctx) {
         GitIssue issue = issues.create(ctx.userId(), new GitIssue.Draft(ctx.projectId(),
-                provider, repo, title, body, "OPEN", kind, priority, labels, ""));
-        return "已创建任务 %s（%s，同步状态 %s%s）。evidence: task:%s".formatted(
-                issue.id(), issue.title(), issue.syncStatus(),
+                provider, repo, title, body, "OPEN", kind, priority, labels, "", version));
+        return "已创建任务 %s（编码 %s，版本 %s，标签 %s，同步状态 %s%s）。evidence: task:%s".formatted(
+                issue.id(), codeOf(issue), versionOf(issue), labelsOf(issue), issue.syncStatus(),
                 issue.syncError().isBlank() ? "" : "：" + issue.syncError(), issue.id());
     }
 
@@ -57,6 +60,9 @@ public class GitIssueCommandTools {
             @ToolParam(name = "priority", description = "新优先级 P0 / P1 / P2，可空", required = false)
             String priority,
             @ToolParam(name = "labels", description = "新标签，可空", required = false) String labels,
+            @ToolParam(name = "version",
+                    description = "新关联版本号（如 0.1.2），可空 = 保持原值",
+                    required = false) String version,
             ProjectContext ctx) {
         GitIssue current = issues.get(ctx.userId(), issueId);
         GitIssue updated = issues.update(ctx.userId(), issueId, new GitIssue.Draft(
@@ -67,9 +73,11 @@ public class GitIssueCommandTools {
                 blank(kind) ? current.kind() : kind,
                 blank(priority) ? current.priority() : priority,
                 blank(labels) ? current.labels() : labels,
-                current.assignee()));
-        return "已更新任务 %s（同步状态 %s）。evidence: task:%s"
-                .formatted(updated.id(), updated.syncStatus(), updated.id());
+                current.assignee(),
+                blank(version) ? current.version() : version));
+        return "已更新任务 %s（编码 %s，版本 %s，标签 %s，同步状态 %s）。evidence: task:%s"
+                .formatted(updated.id(), codeOf(updated), versionOf(updated), labelsOf(updated),
+                        updated.syncStatus(), updated.id());
     }
 
     @Tool(name = "comment_git_issue", description = "Add a comment to an issue.",
@@ -116,5 +124,19 @@ public class GitIssueCommandTools {
 
     private static boolean blank(String value) {
         return value == null || value.isBlank();
+    }
+
+    /** 回显用：编码缺失（老任务未回填）时给占位，避免模型以为工具没返回。 */
+    private static String codeOf(GitIssue issue) {
+        return issue.code().isBlank() ? "-" : issue.code();
+    }
+
+    /** 回显用：版本号缺失时明确指出「未关联」，而不是静默省略。 */
+    private static String versionOf(GitIssue issue) {
+        return issue.version().isBlank() ? "未关联" : issue.version();
+    }
+
+    private static String labelsOf(GitIssue issue) {
+        return issue.labels().isBlank() ? "-" : issue.labels();
     }
 }

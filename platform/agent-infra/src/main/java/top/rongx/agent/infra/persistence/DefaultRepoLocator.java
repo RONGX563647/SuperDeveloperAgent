@@ -117,6 +117,11 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
     }
 
     @Override
+    public String currentBranch(String projectId) {
+        return repoDir(projectId).map(git::currentBranch).orElse("");
+    }
+
+    @Override
     public boolean isCommitOnBranch(String projectId, String branch, String sha) {
         var repo = repoDir(projectId);
         return repo.map(dir -> git.isAncestor(dir, sha, "refs/heads/" + branch)).orElse(false);

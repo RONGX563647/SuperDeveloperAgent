@@ -3,16 +3,11 @@ package top.rongx.agent.infra.settings;
 import java.net.URI;
 import java.nio.file.Path;
 import java.security.SecureRandom;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.GitHostingAccount;
@@ -21,9 +16,10 @@ import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
- * 代码托管账号（SQLite）：token AES-GCM 加密，接口只回掩码。
+ * 代码托管账号（JPA）：token AES-GCM 加密，接口只回掩码。
  *
  * <p>表按「用户 + provider + host」唯一：同一台 GitHub / GitLab / 自建服务只保留一份凭据，
  * 重复保存即覆盖。clone/fetch 时按仓库 URL 的 host 自动匹配。
@@ -31,76 +27,58 @@ import top.rongx.agent.domain.error.PlatformException;
 @Repository
 public class SqliteGitHostingAccountStore implements GitHostingAccountRepository {
 
-    private static final String SCHEMA = """
-            CREATE TABLE IF NOT EXISTS git_hosting_accounts (
-                id          TEXT PRIMARY KEY,
-                user_id     TEXT NOT NULL,
-                provider    TEXT NOT NULL,
-                host        TEXT NOT NULL,
-                username    TEXT,
-                token_enc   TEXT NOT NULL,
-                token_iv    TEXT NOT NULL,
-                updated_at  INTEGER NOT NULL,
-                UNIQUE (user_id, provider, host)
-            )
-            """;
-
     private static final String COLUMNS = "id, provider, host, username, token_enc, token_iv, updated_at";
 
-    private final Path dbFile;
+    private static final String INSERT_SQL = """
+            INSERT INTO git_hosting_accounts
+                (id, user_id, provider, host, username, token_enc, token_iv, updated_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            """;
+
+    private static final String UPDATE_WITH_TOKEN_SQL = """
+            UPDATE git_hosting_accounts SET username=?, token_enc=?, token_iv=?, updated_at=?
+            WHERE id=?
+            """;
+
+    private static final String UPDATE_KEEP_TOKEN_SQL =
+            "UPDATE git_hosting_accounts SET username = ?, updated_at = ? WHERE id = ?";
+
+    private final PlatformDb db;
     private final SecretBox secretBox;
 
+    @Autowired
+    public SqliteGitHostingAccountStore(PlatformDb db, SecretBox secretBox) {
+        this.db = db;
+        this.secretBox = secretBox;
+    }
+
+    /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public SqliteGitHostingAccountStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
-        this.secretBox = secretBox;
-        initSchema();
-    }
-
-    private void initSchema() {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
-            st.executeUpdate();
-        } catch (SQLException e) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "git_hosting_accounts 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
+        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db")), secretBox);
     }
 
     @Override
     public List<GitHostingAccount> findAll(String userId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + COLUMNS + " FROM git_hosting_accounts WHERE user_id = ? "
-                             + "ORDER BY provider, updated_at DESC")) {
-            st.setString(1, userId);
-            try (ResultSet rs = st.executeQuery()) {
-                List<GitHostingAccount> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(map(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                    "SELECT " + COLUMNS + " FROM git_hosting_accounts WHERE user_id = ? "
+                            + "ORDER BY provider, updated_at DESC", userId).stream()
+                    .map(this::map).toList());
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<GitHostingAccount> find(String id, String userId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + COLUMNS + " FROM git_hosting_accounts WHERE id = ? AND user_id = ?")) {
-            st.setString(1, id);
-            st.setString(2, userId);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(map(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + COLUMNS + " FROM git_hosting_accounts WHERE id = ? AND user_id = ?",
+                    id, userId).map(this::map));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号查询失败：" + e.getMessage(), e);
         }
     }
@@ -110,109 +88,66 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
         String provider = normalizeProvider(view.provider());
         String host = normalizeHost(view.host());
         long now = System.currentTimeMillis();
-        try (Connection conn = open()) {
-            String existingId = existingId(conn, userId, provider, host, view.id());
+        try {
+            String existingId = existingId(userId, provider, host, view.id());
             String id = existingId == null ? newId() : existingId;
             String username = view.username() == null || view.username().isBlank()
                     ? defaultUsername(provider) : view.username().trim();
             if (token != null && !token.isBlank()) {
                 SecretBox.Sealed sealed = secretBox.encrypt(token.trim());
                 if (existingId == null) {
-                    try (PreparedStatement st = conn.prepareStatement("""
-                            INSERT INTO git_hosting_accounts
-                                (id, user_id, provider, host, username, token_enc, token_iv, updated_at)
-                            VALUES (?,?,?,?,?,?,?,?)
-                            """)) {
-                        st.setString(1, id);
-                        st.setString(2, userId);
-                        st.setString(3, provider);
-                        st.setString(4, host);
-                        st.setString(5, username);
-                        st.setString(6, sealed.cipherB64());
-                        st.setString(7, sealed.ivB64());
-                        st.setLong(8, now);
-                        st.executeUpdate();
-                    }
+                    db.run(em -> PlatformDb.update(em, INSERT_SQL,
+                            id, userId, provider, host, username,
+                            sealed.cipherB64(), sealed.ivB64(), now));
                 } else {
-                    update(conn, id, username, sealed, now);
+                    db.run(em -> PlatformDb.update(em, UPDATE_WITH_TOKEN_SQL,
+                            username, sealed.cipherB64(), sealed.ivB64(), now, id));
                 }
             } else if (existingId == null) {
                 throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "首次接入必须填写 Token");
             } else {
                 // token 留空 = 只改用户名等非敏感字段
-                try (PreparedStatement st = conn.prepareStatement(
-                        "UPDATE git_hosting_accounts SET username = ?, updated_at = ? WHERE id = ?")) {
-                    st.setString(1, username);
-                    st.setLong(2, now);
-                    st.setString(3, id);
-                    st.executeUpdate();
-                }
+                db.run(em -> PlatformDb.update(em, UPDATE_KEEP_TOKEN_SQL, username, now, id));
             }
             return find(id, userId).orElseThrow();
-        } catch (SQLException e) {
+        } catch (PlatformException e) {
+            throw e;
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号保存失败：" + e.getMessage(), e);
         }
     }
 
-    private void update(Connection conn, String id, String username, SecretBox.Sealed sealed,
-                        long now) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement("""
-                UPDATE git_hosting_accounts SET username=?, token_enc=?, token_iv=?, updated_at=?
-                WHERE id=?
-                """)) {
-            st.setString(1, username);
-            st.setString(2, sealed.cipherB64());
-            st.setString(3, sealed.ivB64());
-            st.setLong(4, now);
-            st.setString(5, id);
-            st.executeUpdate();
-        }
-    }
-
     /** 同用户同 provider 同 host 已存在时复用其 id（保存即覆盖）。 */
-    private String existingId(Connection conn, String userId, String provider, String host,
-                              String requestedId) throws SQLException {
+    private String existingId(String userId, String provider, String host, String requestedId) {
         if (requestedId != null && !requestedId.isBlank()) {
             return requestedId;
         }
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT id FROM git_hosting_accounts WHERE user_id=? AND provider=? AND host=?")) {
-            st.setString(1, userId);
-            st.setString(2, provider);
-            st.setString(3, host);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? rs.getString("id") : null;
-            }
+        try {
+            return db.read(em -> PlatformDb.<String>first(em,
+                    "SELECT id FROM git_hosting_accounts WHERE user_id=? AND provider=? AND host=?",
+                    userId, provider, host).orElse(null));
+        } catch (RuntimeException e) {
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public void delete(String id, String userId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM git_hosting_accounts WHERE id = ? AND user_id = ?")) {
-            st.setString(1, id);
-            st.setString(2, userId);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM git_hosting_accounts WHERE id = ? AND user_id = ?", id, userId));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "代码托管账号删除失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<String> tokenOf(String id, String userId) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT token_enc, token_iv FROM git_hosting_accounts WHERE id=? AND user_id=?")) {
-            st.setString(1, id);
-            st.setString(2, userId);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(secretBox.decrypt(rs.getString("token_enc"), rs.getString("token_iv")));
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT token_enc, token_iv FROM git_hosting_accounts WHERE id=? AND user_id=?",
+                    id, userId).map(row -> secretBox.decrypt((String) row[0], (String) row[1])));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Token 读取失败：" + e.getMessage(), e);
         }
     }
@@ -294,17 +229,17 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
         };
     }
 
-    private GitHostingAccount map(ResultSet rs) throws SQLException {
-        String plain = secretBox.decrypt(rs.getString("token_enc"), rs.getString("token_iv"));
+    private GitHostingAccount map(Object[] row) {
+        String plain = secretBox.decrypt((String) row[4], (String) row[5]);
         String masked = plain.length() <= 6 ? "***" : plain.substring(0, 6) + "***";
         return new GitHostingAccount(
-                rs.getString("id"),
-                rs.getString("provider"),
-                rs.getString("host"),
-                rs.getString("username"),
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
                 true,
                 masked,
-                rs.getLong("updated_at"));
+                ((Number) row[6]).longValue());
     }
 
     private String newId() {

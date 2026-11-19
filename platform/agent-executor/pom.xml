@@ -9,6 +9,12 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
     <artifactId>agent-executor</artifactId>
+
+    <properties>
+        <!-- 覆盖率棘轮：当前实测基线小幅下浮，只升不降（见根 pom 说明） -->
+        <jacoco.line.minimum>0.44</jacoco.line.minimum>
+    </properties>
+
     <name>agent-executor</name>
     <!-- 规约 §1.1 A3：执行面不得依赖任何模型 SDK -->
 

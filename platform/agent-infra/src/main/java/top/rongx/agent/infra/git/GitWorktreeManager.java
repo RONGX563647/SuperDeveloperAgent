@@ -801,6 +801,65 @@ public class GitWorktreeManager {
         return revParse(repoDir, "HEAD");
     }
 
+    /**
+     * 用独立 index 提交当前工作区的全部改动，不锁共享 {@code .git/index}、不触发仓库 hook。
+     *
+     * <p>并行场景：多个会话 worktree 共享同一 bare 仓库时，普通 {@code git add -A} 会争用
+     * 共享的 {@code .git/index.lock}，且仓库的 pre-commit hook（如会话归档门禁）会在每个
+     * worktree 上跑全量测试、互相排队。这里把 index 指到临时文件：{@code read-tree HEAD}
+     * 铺底 → {@code add -A} 收进本 worktree 全部改动（含未跟踪新文件）→
+     * {@code commit --no-verify} 提交。提交内容 = HEAD tree + 本 worktree 改动；
+     * 提交后把真实 index 对齐到新 HEAD（短暂锁，仅写 tree 不扫工作区），
+     * 避免 {@code git status} 把刚提交的文件误报为 D/MM。
+     */
+    public String commitOnly(Path repoDir, String message) {
+        String text = message == null || message.isBlank() ? "agent: workspace update" : message.trim();
+        Path index;
+        try {
+            index = Files.createTempFile("agent-index-", ".idx");
+        } catch (IOException e) {
+            throw new GitIntakeException("无法创建临时 index：" + e.getMessage());
+        }
+        try {
+            run(repoDir, List.of("git", "read-tree", "HEAD"), "git read-tree HEAD",
+                    GIT_TIMEOUT_SECONDS, index);
+            run(repoDir, List.of("git", "add", "-A"), "git add -A",
+                    GIT_TIMEOUT_SECONDS, index);
+            run(repoDir, List.of("git", "-c", "user.name=agent", "-c", "user.email=agent@local",
+                    "commit", "--no-verify", "--quiet", "-m", text), "git commit",
+                    GIT_TIMEOUT_SECONDS, index);
+            String sha = revParse(repoDir, "HEAD");
+            // 独立 index 提交不更新真实 index，需对齐到新 HEAD，否则 status 误报 D/MM
+            run(repoDir, List.of("git", "read-tree", "HEAD"), "git read-tree HEAD");
+            return sha;
+        } finally {
+            try {
+                Files.deleteIfExists(index);
+            } catch (IOException ignored) {
+                // 临时 index 清理失败不影响提交结果
+            }
+        }
+    }
+
+    /**
+     * 工作区未提交改动的 {@code --stat} 摘要（相对 HEAD）。
+     *
+     * <p>仓库还没有任何提交时 git 会报 unknown revision，这是正常状态，返回空列表。
+     */
+    public List<String> diffStatWorking(Path repoDir) {
+        Raw raw = exec(repoDir, List.of("git", "diff", "--stat", "HEAD"),
+                "git diff --stat HEAD", GIT_TIMEOUT_SECONDS, null);
+        if (raw.exit() != 0) {
+            String detail = raw.output();
+            if (detail.contains("unknown revision") || detail.contains("ambiguous argument")
+                    || detail.contains("does not have any commits")) {
+                return List.of();
+            }
+            throw new GitIntakeException("git diff --stat HEAD 失败：\n" + detail);
+        }
+        return raw.output().lines().filter(l -> !l.isBlank()).map(String::trim).toList();
+    }
+
     /** 把 --no-index 产出的 a/a/x、b/b/x 头改写为 a/x、b/x（供人工阅读）。 */
     private static String rewriteDiffHeaders(String diff, String relPath) {
         StringBuilder out = new StringBuilder();
@@ -860,7 +919,18 @@ public class GitWorktreeManager {
 
     private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds,
                              boolean quiet, GitAuth auth) {
-        Raw raw = exec(dir, argv, what, timeoutSeconds, auth);
+        return run(dir, argv, what, timeoutSeconds, quiet, auth, null);
+    }
+
+    /** 带独立 index 的运行变体：并行提交用临时 index，避免争用共享 .git/index.lock。 */
+    private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds,
+                             Path indexFile) {
+        return run(dir, argv, what, timeoutSeconds, false, null, indexFile);
+    }
+
+    private ActionResult run(Path dir, List<String> argv, String what, long timeoutSeconds,
+                             boolean quiet, GitAuth auth, Path indexFile) {
+        Raw raw = exec(dir, argv, what, timeoutSeconds, auth, indexFile);
         if (raw.exit() != 0) {
             String detail = raw.output().isBlank() ? ("exit " + raw.exit()) : raw.output();
             if (!quiet) {
@@ -915,6 +985,11 @@ public class GitWorktreeManager {
     }
 
     private Raw exec(Path dir, List<String> argv, String what, long timeoutSeconds, GitAuth auth) {
+        return exec(dir, argv, what, timeoutSeconds, auth, null);
+    }
+
+    private Raw exec(Path dir, List<String> argv, String what, long timeoutSeconds, GitAuth auth,
+                     Path indexFile) {
         // 目录必须先存在：ProcessBuilder 对无效目录抛 CreateProcess error=267（目录名称无效），
         // 这种 OS 码对用户毫无意义——转成"先接入项目"的可读指引。
         if (dir == null || !Files.isDirectory(dir)) {
@@ -925,6 +1000,10 @@ public class GitWorktreeManager {
         Map<String, String> env = new HashMap<>();
         // 远端不可达时 git 可能会等待凭据输入：禁止交互，让它尽快失败而不是挂住
         env.put("GIT_TERMINAL_PROMPT", "0");
+        // 独立 index：并行提交时把 read-tree/add/commit 作用到临时 index，绕开共享 .git/index.lock
+        if (indexFile != null) {
+            env.put("GIT_INDEX_FILE", indexFile.toAbsolutePath().toString());
+        }
         if (auth != null && auth.usable()) {
             env.put("GIT_ASKPASS", askpassFile().toString());
             env.put("AGENT_GIT_USERNAME",

@@ -1,0 +1,100 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_0044_release-first-and-tag-state",
+  "category": "feat",
+  "title": "首次发布标记与 tag 仅本地原因码",
+  "createdAt": "2026-11-19T00:44:23+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "task-6f3620f8f8/task-bdaf4497fa: 首次发布无上一版时回滚预检要显式 firstRelease；tag 推送失败要返回 local-only 原因码而不是当成成功",
+    "toolCallCount": 0
+  },
+  "problem": "task-6f3620f8f8（首次发布这里不对）与 task-bdaf4497fa（打 tag 未生效）：首次发布没有上一版时回滚预检把它当成故障（E-507），用户看到一次失败却不知道该改什么；打 tag 时本地创建成功但推送失败被当成成功，历史里显示版本号、远端却查不到标签。版本号与目标分支不一致时也没有前置拒绝。",
+  "solution": "新增 ReleaseMode：首次发布是可显式标记的正常分支，回滚预检据此跳过并说明原因；新增 versionBranchConflict，版本线与目标分支不一致时前置拒绝并给出可读原因；新增 TagState 枚举，只有 PUSHED 算远端可见，LOCAL 携带 TAG_PUSH_CREDENTIAL_MISSING 原因码与「补齐凭据后重推标签」建议，REJECTED 表示前置拒绝；引擎 syncGitTag 走枚举并写入 tagReason，运行详情通过 releaseFacts 下发 release{firstRelease,tagState,tagReason,remoteVisible,hint}。",
+  "commits": [
+    {
+      "sha": "9930e82dcf6b2249ed447cc56161ba68f7367211",
+      "subject": "feat(release): 首次发布显式标记，tag 仅本地返回原因码",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/pipeline/ReleaseMode.java",
+          "status": "A",
+          "additions": 60,
+          "deletions": 0,
+          "blobHash": "71d25ff33bb639bfdd5e1406fc8b8a79fb041c9d"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/pipeline/TagState.java",
+          "status": "A",
+          "additions": 82,
+          "deletions": 0,
+          "blobHash": "4ba692ce17aac5d556f67547a4c23c879f09b860"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/PipelineEngine.java",
+          "status": "M",
+          "additions": 24,
+          "deletions": 0,
+          "blobHash": "b160504f9b17761a8ca742e08795ff4f6e6f4607"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/pipeline/ReleaseSemanticsTest.java",
+          "status": "A",
+          "additions": 90,
+          "deletions": 0,
+          "blobHash": "b679ec928df2ea3df3a2550f1babd9b6f7050fd3"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 59,
+          "deletions": 10,
+          "blobHash": "9fd4f3add7aae990aac2ed3ca9de4b060f0fdad3"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "fef490d0cf471413ada41228934703bf0cc89eec"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/pipeline/ReleaseSemanticsTest.java",
+        "status": "A",
+        "additions": 90,
+        "deletions": 0,
+        "blobHash": "b679ec928df2ea3df3a2550f1babd9b6f7050fd3"
+      }
+    ],
+    "casesAdded": 6,
+    "command": "mvn -B -nsu -pl agent-domain,agent-executor,agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-executor,agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 398, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway"
+    ],
+    "verification": "Tests run: 398, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_0044_release-first-and-tag-state"
+    ]
+  },
+  "chain": {
+    "prev": "780983636fc30bbebb9ee620bcb67ac29c15fd5fb4bb330ae3a4ffb8671b4bba",
+    "self": "d76bb813d34baf3f6ffe6734f7dd49c9c37de908409e5b47d4a6d08b3f8ff3f9"
+  }
+}

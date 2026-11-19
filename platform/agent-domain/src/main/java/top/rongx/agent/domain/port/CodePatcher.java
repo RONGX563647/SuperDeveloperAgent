@@ -23,7 +23,8 @@ public interface CodePatcher {
     /**
      * 在 {@code baseSha} 之上预演改动。
      *
-     * @throws IllegalArgumentException 路径不在白名单内、基于的提交不存在或内容为空
+     * @throws top.rongx.agent.domain.error.PatchPathDeniedException 路径命中拒绝规则或不在允许清单
+     * @throws IllegalArgumentException 基于的提交不存在或内容为空
      */
     Staged stage(String projectId, String baseSha, List<CodePatch.FileEdit> edits);
 
@@ -36,4 +37,12 @@ public interface CodePatcher {
 
     /** 允许改动的路径规则（给模型与用户看的说明）。 */
     List<String> allowedPatterns();
+
+    /**
+     * 明确拒绝的路径规则（优先级高于允许清单）。
+     *
+     * <p>即使某条允许规则命中了，只要同时命中这里也必须拒绝：编译产物、依赖目录、
+     * git 元数据与密钥文件永远不该被 Agent 写入。
+     */
+    List<String> deniedPatterns();
 }

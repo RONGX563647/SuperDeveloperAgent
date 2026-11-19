@@ -111,9 +111,115 @@ public interface PipelineEngine {
     record LogSlice(int offset, int end, String text) {
     }
 
+    /**
+     * 行分页日志：一次只返回 {@code limit} 行，并告知总行数与是否还有更多。
+     *
+     * <p>为什么字节 offset 不够：前端要做虚拟滚动就必须知道「一共多少行、我现在在第几行」。
+     * 只给 {@code text} 时页面只能把整包日志塞进 DOM——几十万行的构建日志会直接卡死，
+     * 右侧滚动条也因此永远算不对高度。
+     *
+     * @param offset 起始行号（0 基）
+     * @param limit  最多返回行数（实现方需做上限保护）
+     */
+    default LogLinePage logLines(String runId, int offset, int limit) {
+        String full = logTail(runId);
+        return LogLinePage.of(full == null ? "" : full, offset, limit);
+    }
+
+    /**
+     * 行分页结果。
+     *
+     * @param offset    起始行号（已按实际日志长度夹紧）
+     * @param limit     请求的行数上限（实际生效值）
+     * @param total     日志总行数
+     * @param lines     本次返回的行（不含行尾换行符）
+     * @param truncated 是否因为 limit 而截断（还有更多行）
+     */
+    record LogLinePage(int offset, int limit, int total, List<String> lines, boolean truncated) {
+
+        /** 行分页的公共实现：按 {@code \\R} 切行，越界返回空页，limit 夹到 [1, MAX]。 */
+        public static LogLinePage of(String text, int offset, int limit) {
+            int size = Math.max(1, Math.min(limit, MAX_LINES));
+            // split 保留尾部空串会让「最后一行换行」多算一行，先按行尾换行裁剪
+            String body = text == null ? "" : text;
+            List<String> all = body.isEmpty()
+                    ? List.of()
+                    : List.of(body.split("\\R", -1));
+            // 文本以换行结尾时最后一个是空串，不算一行
+            if (!all.isEmpty() && all.get(all.size() - 1).isEmpty()) {
+                all = all.subList(0, all.size() - 1);
+            }
+            int total = all.size();
+            int from = Math.min(Math.max(0, offset), total);
+            int to = Math.min(from + size, total);
+            return new LogLinePage(from, size, total,
+                    List.copyOf(all.subList(from, to)), to < total);
+        }
+
+        /** 单次返回的行数上限：太大就失去分页的意义，也会把响应体撑爆。 */
+        public static final int MAX_LINES = 5_000;
+    }
+
+    /**
+     * 某次运行可用于「复用构建」的产物（默认无）。
+     *
+     * <p>为什么需要：部署链路原来是「每次都重建」。一次 8 分钟的构建只为了改一次部署参数，
+     * 或者验证阶段想部署刚构建好的同一份产物，都得重新跑一遍构建。有了这条查询，
+     * 部署可以直接复用已有镜像，但必须先自证「同一份代码、同一个版本」。
+     */
+    default ReusableBuild reusableBuild(String runId) {
+        return ReusableBuild.unavailable("当前引擎不支持复用构建产物");
+    }
+
+    /**
+     * 可复用的构建产物。
+     *
+     * @param available 是否可复用（运行成功 + 存在镜像产物）
+     * @param image     镜像引用
+     * @param version   该次运行的版本号
+     * @param gitSha    该次运行的提交
+     * @param reason    不可复用的原因（可复用时为空）
+     */
+    record ReusableBuild(boolean available, String image, String version, String gitSha,
+                         String reason) {
+
+        public static ReusableBuild unavailable(String reason) {
+            return new ReusableBuild(false, "", "", "", reason);
+        }
+
+        public static ReusableBuild of(String image, String version, String gitSha) {
+            return new ReusableBuild(true, image, version == null ? "" : version,
+                    gitSha == null ? "" : gitSha, "");
+        }
+    }
+
     /** 最近构建历史（含重启前落盘的运行）；默认无。 */
     default List<RunSummary> history() {
         return List.of();
+    }
+
+    /**
+     * 一次发布的形态事实：是否首次发布、标签是否真的在远端可见、为什么没生效。
+     *
+     * <p>为什么单独拿出来：这三件事散在日志里时，页面只能显示「版本号」这一个
+     * 看起来成功的字段，用户到远端才发现没有标签。把它们做成结构化事实，
+     * 历史行、详情页与自愈 Agent 才有一致的判定依据。
+     *
+     * @param runId 运行 id
+     */
+    default ReleaseFacts releaseFacts(String runId) {
+        return new ReleaseFacts(false, "", "", "");
+    }
+
+    /**
+     * 发布形态事实。
+     *
+     * @param firstRelease 本次是否首次发布（该环境没有上一版）
+     * @param tagState     标签状态线值（PUSHED / LOCAL / FAILED / REJECTED / SNAPSHOT）
+     * @param tagReason    稳定原因码（LOCAL → TAG_PUSH_CREDENTIAL_MISSING）
+     * @param hint         面向用户的处理建议
+     */
+    record ReleaseFacts(boolean firstRelease, String tagState, String tagReason, String hint) {
     }
 
     /**

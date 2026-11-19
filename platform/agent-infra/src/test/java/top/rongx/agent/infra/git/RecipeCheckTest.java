@@ -30,7 +30,7 @@ class RecipeCheckTest {
     private Map<String, Object> runCheck() {
         ProjectIntakeService svc = new ProjectIntakeService(
                 new GitWorktreeManager(repo.getParent()),
-                new IntakeProjectStore(repo.getParent().resolve("_platform/projects.db")),
+                new IntakeProjectStore(repo.getParent().resolve("_platform/platform.db")),
                 repo.getParent().toString());
         return svc.recipeCheck(repo);
     }
@@ -151,5 +151,87 @@ class RecipeCheckTest {
         assertEquals("/actuator/health", summary.get("healthPath"));
         assertTrue(String.valueOf(summary.get("portSource")).contains("application.yml"));
         assertEquals(Boolean.TRUE, summary.get("deployable"));
+    }
+
+    @Test
+    @DisplayName("C6 定义含 image 阶段（target=host 的 inline 写法）且无 Dockerfile → 与预检一致地阻塞")
+    void imageStageOnHostTargetBlocks() throws Exception {
+        writePipelineAndActions("""
+                name: release
+                deploy: {target: host, port: 8182, containerPort: 8090, healthPath: /actuator/health}
+                stages:
+                - {id: build, type: action, action: backend_build, runner: container, workdir: platform}
+                - {id: image, type: action, action: image_package, runner: host}
+                - {id: deploy, type: deploy}
+                """);
+
+        Map<String, Object> report = runCheck();
+
+        assertFalse((Boolean) report.get("ready"), "镜像阶段缺 Dockerfile 时不应显示就绪");
+        assertFalse((Boolean) report.get("deployable"));
+        assertEquals(Boolean.FALSE, report.get("dockerfile"));
+        assertTrue(blockersOf(report).stream().anyMatch(b -> "DOCKERFILE_MISSING".equals(b.get("code"))),
+                String.valueOf(blockersOf(report)));
+    }
+
+    @Test
+    @DisplayName("C7 inline deploy map 的 docker 目标能识别（原来只认整行 target:）")
+    void inlineDockerTargetIsDetected() throws Exception {
+        writePipelineAndActions("""
+                name: release
+                deploy: {target: docker, port: 8182, containerPort: 8090}
+                stages:
+                - {id: build, type: action, action: backend_build, runner: container, workdir: platform}
+                - {id: deploy, type: deploy}
+                """);
+
+        Map<String, Object> report = runCheck();
+
+        assertFalse((Boolean) report.get("ready"));
+        assertTrue(blockersOf(report).stream().anyMatch(b -> "DOCKERFILE_MISSING".equals(b.get("code"))),
+                String.valueOf(blockersOf(report)));
+    }
+
+    @Test
+    @DisplayName("C8 Dockerfile 在 deploy/ 也算有：不阻塞；host 目标的 image 阶段给建议")
+    void dockerfileInSubdirectoryIsAccepted() throws Exception {
+        Files.createDirectories(repo.resolve("deploy"));
+        Files.writeString(repo.resolve("deploy/Dockerfile"), "FROM scratch\n");
+        writePipelineAndActions("""
+                name: release
+                deploy: {target: host, port: 8182, containerPort: 8090}
+                stages:
+                - {id: build, type: action, action: backend_build, runner: container, workdir: platform}
+                - {id: image, type: action, action: image_package, runner: host}
+                - {id: deploy, type: deploy}
+                """);
+
+        Map<String, Object> report = runCheck();
+
+        assertTrue((Boolean) report.get("ready"), String.valueOf(report.get("warnings")));
+        assertEquals("deploy/Dockerfile", report.get("dockerfilePath"));
+        assertTrue(blockersOf(report).isEmpty(), String.valueOf(blockersOf(report)));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> suggestions = (List<Map<String, Object>>) report.get("suggestions");
+        assertTrue(suggestions.stream().anyMatch(s -> "IMAGE_STAGE_UNUSED".equals(s.get("code"))),
+                String.valueOf(suggestions));
+    }
+
+    /** 写入仓库 ci/pipeline.yml + 覆盖定义引用动作的 ci/actions.yml。 */
+    private void writePipelineAndActions(String pipeline) throws Exception {
+        Files.createDirectories(repo.resolve("ci"));
+        Files.writeString(repo.resolve("ci/pipeline.yml"), pipeline);
+        Files.writeString(repo.resolve("ci/actions.yml"), """
+                actions:
+                  backend_build:
+                    run: ["mvn", "package"]
+                  image_package:
+                    run: ["docker", "build", "-f", "Dockerfile", "-t", "${tag}", "."]
+                """);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> blockersOf(Map<String, Object> report) {
+        return (List<Map<String, Object>>) report.get("blockers");
     }
 }

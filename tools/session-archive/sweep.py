@@ -16,6 +16,8 @@
 
 可用环境变量 TRAE_MEMORY_ROOT 覆盖记忆根目录；定时任务默认每天跑一次。
 """
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json
@@ -111,6 +113,16 @@ def title_of(text: str) -> str:
     return (first or text).strip()[:60]
 
 
+def docs_chain_tail() -> str:
+    """docs 类归档链的末端哈希；链本身按 createdAt 排序（见 gate.reseal_chain）。"""
+    rows = [manifest for _, manifest in gate.manifests()
+            if manifest.get("category") == "docs"]
+    if not rows:
+        return "GENESIS"
+    rows.sort(key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
+    return (rows[-1].get("chain") or {}).get("self") or "GENESIS"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="session-archive-sweep")
     parser.add_argument("--memory-dir", default=None)
@@ -131,8 +143,7 @@ def main() -> int:
     recorded = archived_commits()
     owner = archive_by_commit()
     known = known_sessions()
-    chain = gate.category_chain("docs")
-    prev = chain[-1]["chain"]["self"] if chain else "GENESIS"
+    prev = docs_chain_tail()
     base = datetime.now(TZ).replace(microsecond=0)
     created = 0
     pending = 0

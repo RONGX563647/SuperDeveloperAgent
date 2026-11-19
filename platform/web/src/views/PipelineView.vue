@@ -208,6 +208,8 @@ async function loadTags(): Promise<void> {
 const showVersionControls = computed(() => env.value !== 'dev')
 /** 用户是否手动切过部署方式：切过后不再被 pipeline 定义的默认值覆盖。 */
 const targetTouched = ref(false)
+/** 当前生效的流水线定义里写的部署目标（用于提示"你的选择和脚本不一致"）。 */
+const definedTarget = ref('')
 
 function onTargetChange(value: string): void {
   deployTarget.value = value
@@ -280,6 +282,9 @@ const {
   void loadHistory()
   void loadEnvs()
   void loadImages()
+  // 跑通的运行会重新固化脚本（可能把部署方式写进去）：预览要跟着刷新，
+  // 否则方式旁的「当前脚本是…」提示会一直停留在跑之前的状态。
+  void loadPreview()
   // 打完 tag 后立刻刷新候选，避免继续用已占用的版本号
   void loadTags()
 } })
@@ -343,10 +348,12 @@ const runHint = computed(() => {
 const primaryLabel = computed(() => {
   if (env.value === 'prod') return '发布到生产'
   if (env.value === 'dev') return '启动本机前后端'
+  // 选了方式就以方式为准：此前 docker 被「重放到…」文案盖住，
+  // 主按钮看起来和部署方式无关，实际也确实没把 target 发下去。
   if (deployTarget.value === 'host') return '本机部署'
+  if (deployTarget.value === 'docker') return `打包并部署到${envShort(env.value)}环境`
   if (currentEnvRow.value?.recipeVersion) return `重放到${envShort(env.value)}环境`
-  if (!deployTarget.value) return `部署到${envShort(env.value)}环境（按流水线定义）`
-  return `打包并部署到${envShort(env.value)}环境`
+  return `部署到${envShort(env.value)}环境（按流水线定义）`
 })
 
 /** dev 固定本机、prod 固定服务器：只有 test 需要选镜像/直接部署。 */
@@ -356,8 +363,13 @@ const modeNote = computed(() => {
   if (env.value === 'dev') return '开发环境固定本机运行：后端 jar + 前端 dist，不打镜像'
   if (env.value === 'prod') return '发布到远程服务器（SSH），目标以流水线定义为准'
   if (!deployTarget.value) return '部署方式以流水线定义为准（读取到定义后显示）'
-  if (deployTarget.value === 'host') return '前后端直接跑在本机（后端 jar + 前端 dist）'
   if (!dockerAvailable.value) return '本机 Docker 不可用：已改为直接部署（后端 jar + 前端 dist）'
+  // 与流水线/固化脚本里记录的目标不同：说清楚"这次按你选的执行"，并提示会写回脚本
+  if (targetTouched.value && definedTarget.value && definedTarget.value !== deployTarget.value) {
+    const from = definedTarget.value === 'docker' ? '打包成镜像' : '直接部署'
+    return `本次按所选方式执行（当前脚本是「${from}」），跑通后会把脚本改成这次的方式`
+  }
+  if (deployTarget.value === 'host') return '前后端直接跑在本机（后端 jar + 前端 dist）'
   return '构建镜像并在本机 Docker 运行'
 })
 
@@ -684,6 +696,11 @@ async function loadPreview(): Promise<void> {
     // 部署方式以 pipeline 定义为准：ui 按环境猜（test=docker）会让没有
     // Dockerfile / image_package 的项目白跑完整构建，最后在 docker 部署阶段失败。
     const defined = release?.stages?.find((stage) => stage.type === 'deploy')?.deployTarget
+    if (defined && ['docker', 'host', 'server'].includes(defined)) {
+      definedTarget.value = defined
+    } else {
+      definedTarget.value = ''
+    }
     if (!targetTouched.value && defined
       && ['docker', 'host', 'server'].includes(defined)) {
       // 定义要 docker 但本机 Docker 不可用时，按现有产品语义退回直接部署；
@@ -902,7 +919,10 @@ async function triggerSelected(): Promise<void> {
 }
 
 async function replayEnv(): Promise<void> {
-  const result = await deployReplay(projectId.value, env.value, sha.value)
+  // 目标必须跟着重放走：脚本里记的是"当初跑通时的目标"，不带 target 时
+  // 后端会按脚本里的 host 执行，面板上选的「打包成镜像」被静默丢弃。
+  const result = await deployReplay(
+    projectId.value, env.value, sha.value, undefined, targetForTrigger())
   attachRun(result, { env: env.value, pipelineId: 'release', sha: sha.value })
   ElMessage.success('已按环境脚本重放')
 }
@@ -926,8 +946,9 @@ async function promoteProd(): Promise<void> {
     ElMessage.info('已取消')
     return
   }
+  // 生产固定 server 目标：必须显式下发，否则沿用测试脚本里的 host，生产会被部署到本机
   const result = await deployReplay(
-    projectId.value, 'prod', sha.value, plan.confirmToken)
+    projectId.value, 'prod', sha.value, plan.confirmToken, 'server')
   attachRun(result, { env: 'prod', pipelineId: 'release', sha: sha.value })
   ElMessage.success('已触发生产发布')
 }
@@ -942,7 +963,10 @@ async function doPrimary(): Promise<void> {
     } else if (env.value === 'dev') {
       // dev 固定本机：当前工作区代码直接构建运行，不走固化脚本重放（脚本里的 docker 步骤不适用）
       await triggerSelected()
-    } else if (deployTarget.value === 'host') {
+    } else if (targetTouched.value || deployTarget.value === 'host') {
+      // 用户显式选过部署方式就以它为准：直接触发并把 target 发下去。
+      // 以前 docker 会落进「有固化脚本就重放」的分支，重放又不带 target，
+      // 于是面板上选的「打包成镜像」被脚本里的 host 覆盖 —— 这就是选了 docker 却本机部署的原因。
       await triggerSelected()
     } else if (currentEnvRow.value?.recipeVersion) {
       await replayEnv()
@@ -1284,6 +1308,7 @@ watch(env, () => {
   // 环境也可能从侧栏/其他页面切换，不只是点环境胶囊
   targetTouched.value = false
   deployTarget.value = ''
+  definedTarget.value = ''
   choosePipeline()
   void loadEnvs()
   void loadHistory()
@@ -2033,7 +2058,18 @@ async function copyDigest(digest: string): Promise<void> {
   gap: var(--sp-5);
   min-height: 0;
   padding: var(--sp-6) var(--sp-6) var(--sp-8);
-  overflow: hidden;
+  /* 产物/镜像面板高度不固定：overflow:hidden 会把超出的日志区直接裁掉且无法滚动，
+     这里改成纵向滚动，日志区保底 320px 后再由自身滚动条滚动 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.run-detail :deep(.run-log) {
+  flex: 1 1 320px;
+  min-height: 320px;
+}
+/* 阶段时间线按内容高度占位，避免在可滚动容器里被压缩 */
+.run-detail :deep(.stage-timeline) {
+  flex: none;
 }
 
 /* 产物 */

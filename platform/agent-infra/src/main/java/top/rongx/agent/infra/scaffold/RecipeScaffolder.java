@@ -69,7 +69,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
      * 前端构建镜像默认值：默认沙箱镜像是 Maven，里面没有 node/npm，必须显式指定。
      * 只是生成配方时的兜底，可用 {@code agent.scaffold.node-image} 覆盖为本机已有镜像。
      */
-    public static final String DEFAULT_NODE_IMAGE = "node:20-bookworm";
+    /** 前端工具链镜像：依赖（puppeteer-core / @vueuse 等）已要求 Node >= 22。 */
+    public static final String DEFAULT_NODE_IMAGE = "node:22-bookworm";
     /** Dockerfile 探测顺序：根目录优先，其次是常见的前后端分离目录。 */
     private static final List<String> DOCKERFILE_DIRS = List.of(
             "", "backend", "frontend", "deploy", "docker");
@@ -147,7 +148,7 @@ public class RecipeScaffolder implements ProjectScaffolder {
             String context = dockerfile.getParent().equals(repoRoot)
                     ? "." : relative(repoRoot, dockerfile.getParent());
             actions.put("image_package",
-                    "docker build -f " + dockerfileRel + " -t ${tag} " + context);
+                    "docker buildx build --load -f " + dockerfileRel + " -t ${tag} " + context);
         } else if (target == DeployTarget.HOST) {
             diags.add(Diag.info("HOST_TARGET",
                     "HOST 目标直接运行 Java jar；前端静态产物不会由平台托管"));
@@ -346,10 +347,12 @@ public class RecipeScaffolder implements ProjectScaffolder {
         return sb.toString();
     }
 
-    /** 动作级超时：测试类给足（20m），构建/镜像按经验值，其余用 15m 兜底。 */
+    /** 动作级超时：测试类给足（20m），前端构建含冷安装也给足，其余按经验值。 */
     private String timeoutFor(String action) {
         return switch (action) {
-            case "backend_build", "frontend_build" -> "10m";
+            case "backend_build" -> "10m";
+            // 前端阶段包含 pnpm install：沙箱里冷安装 + vue-tsc 很容易超过 10m
+            case "frontend_build" -> "20m";
             case "backend_test", "frontend_test" -> "20m";
             case "image_package" -> "20m";
             default -> "15m";
@@ -424,8 +427,9 @@ public class RecipeScaffolder implements ProjectScaffolder {
     private String installCommand(String pm, boolean lock) {
         return switch (pm) {
             case "pnpm" -> lock
-                    ? "pnpm install --frozen-lockfile --ignore-scripts"
-                    : "pnpm install --ignore-scripts";
+                    // prefer-offline：store 已缓存时不再为每个包额外请求元数据
+                    ? "pnpm install --frozen-lockfile --ignore-scripts --prefer-offline"
+                    : "pnpm install --ignore-scripts --prefer-offline";
             case "yarn" -> lock
                     ? "yarn install --frozen-lockfile --ignore-scripts"
                     : "yarn install --ignore-scripts";

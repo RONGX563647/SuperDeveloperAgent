@@ -32,10 +32,12 @@ docs/
     docs/    …
     deploy/  …
   summary/                              # 人读总结（markdown + frontmatter），双索引
-    2026-11/                            # 时间维（按月）
+    2026-11/                            # 时间维（按月，权威内容）
       2026-11-16_deploy-track.md
-    deploy-track/                       # 功能维
+    deploy-track/                       # 功能维（会话总结轨：feat/bug/chore/docs/deploy）
       2026-11_versioning.md
+    plan/                               # 方案维：评审 / 优化方案（不生成 process 归档，见 §4.6）
+      quality-gate-review-2026-11.md    # 双索引副本，canonical 指回时间维主文件
 ```
 
 ## 3. process 归档规范
@@ -113,6 +115,115 @@ docs/
 - 测试不通过不允许 `git commit`（skill 流程强制 + spec-checks 兜底）。
 - bug 的回归用例必须先红后绿：`tests.evidence` 写明「先复现：xxx 失败；修复后：全绿」。
 - 归档时测试失败/未跑 = 不合格归档，`ProcessArchiveTest` 让构建失败。
+- **并发与复用**：pre-commit 的测试在公共 `.git/session-archive/test.lock` 上串行执行，
+  主树与 `.agent/worktrees/*` 不会同时跑两套全量测试；同一工作区内容（索引树 + 未暂存改动 +
+  未跟踪文件）在 `SESSION_ARCHIVE_EVIDENCE_TTL_MIN`（默认 60 分钟）内已验证为绿色时直接复用证据，
+  改提交信息之类的重试不再重跑。缩小范围用 `SESSION_ARCHIVE_TEST_CMD`。
+
+#### 3.3.1 各层测试范围（性能契约）
+
+门禁要快，就必须让每层只干该干的事。**提交求快、推送求全、CI 求彻底**：
+
+| 层 | 范围 | 实测（16 核 / 热态） |
+|---|---|---|
+| pre-commit | 受影响模块全部 `test-compile`（含下游，抓编译期破坏）+ **只跑变更模块自己的测试** | domain 改动 13s；gateway 改动 47s |
+| pre-push | 归档契约 + handbook 漂移 + `spec-checks` 全量（ArchUnit 架构/契约） | ~20s（tree 未变则命中缓存） |
+| CI（`mvn verify`） | 全 reactor 测试 + spec-checks | 90s（4 fork） |
+
+历史教训：pre-commit 曾用 `-pl <mods> -amd test`，改 `agent-domain` 这类基座模块时
+`-amd` 会连带跑全部下游模块的**测试**，命令退化成全 reactor 测试（167s），"增量"名存实亡。
+现在把 `-amd` 只用于 `test-compile`（4s），测试范围收窄到变更模块。
+
+- **全量兜底**：CI 缺失或改动风险高时，设 `SESSION_ARCHIVE_FULL_TEST=1` 让 pre-push
+  跑一次全 reactor 测试（结果按 tree 缓存，同 tree 重推不重跑）。CI 就位后不必开。
+- **测试并行**：surefire 默认 `forkCount=2`（`platform/pom.xml` 的 `surefire.forkCount`）；
+  门禁在核数 ≥8 的机器上自动提到 4。测试类之间不共享状态（各自 `@TempDir`），可安全并发。
+  实测全 reactor：1 fork 167s / 2 forks 126s / 4 forks 90s。
+- **JDK 探测**：`JAVA_HOME` 已达标时直接返回，不扫描安装目录；否则按候选列表缓存到
+  `.git/session-archive/jdk.json`。全量扫描要对每个候选起 `java -version`，实测 3.7s，
+  是门禁里最贵的纯 Python 开销。
+
+### 3.3.2 多会话并行
+
+会话状态按 **worktree** 分片，不再是全局单例：
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| 会话注册表 | `.git/session-archive/sessions/<worktree-key>.json` | 共享 git 目录；主树与 `.agent/worktrees/*` 各自一份，互不阻塞 |
+| 测试证据 | `.git/session-archive/session-evidence/<worktree-key>.json` | 每会话一份，`finish` 只读自己那份 |
+| 兼容 | `docs/.session/active.json` | 旧单例在首次访问时自动迁移到分片文件 |
+
+- 放在共享 git 目录而不是 `docs/.session`：每个 worktree 是独立工作目录，
+  放工作区里会出现"主树看不到 worktree 的会话"。
+- `git push` 只拦**本 worktree** 未归档的会话；其它 worktree 的进行中会话不阻塞。
+  仓库级约束仍在：`unarchived_code_commits` 要求每个代码提交都被某份 manifest 覆盖。
+- 排查入口：`python tools/session-archive/gate.py status`。
+
+### 3.3.3 门禁自检与观测
+
+| 命令 | 作用 |
+|---|---|
+| `gate.py doctor` | 环境自检：python/git/JDK 实际使用版本、mvn/mvnd、`core.hooksPath`、钩子安装、进行中会话、证据缓存数量 |
+| `gate.py metrics [--limit N]` | 每层耗时（pre-commit / spec-checks / full-test）的最近值、p50、p95 与预算判定 |
+| `gate.py status` | 所有 worktree 进行中的会话 |
+| `gate.py install-hooks` | 设置 `core.hooksPath=.githooks`，并清掉旧版复制到 `.git/hooks` 的副本 |
+
+耗时预算：`pre-commit ≤ 60s`、`spec-checks ≤ 180s`、`full-test ≤ 600s`；超预算由
+`metrics` 标「超预算」。
+
+### 3.3.4 规则自测、覆盖率闸门与前端自检
+
+| 机制 | 位置 | 说明 |
+|---|---|---|
+| 禁令规则自测 | `platform/spec-checks/fixtures/` + `RuleFixtureSelfTest` | 每条 R 规则必须有"必命中"样例，另有一组"零误报"正例；规则正则写错会立刻红（此前 R05/R10 就是死规则） |
+| 覆盖率闸门 | 根 pom 的 jacoco `check`（verify 阶段）+ 各模块 `jacoco.line.minimum` | 逐模块棘轮，阈值取实测基线小幅下浮；`test` 阶段不付这个成本 |
+| ArchUnit 基线收紧 | `spec-checks/pom.xml` 的 `allowStoreCreation=false` | 新增规则时不会静默冻结既有违规；更新基线必须显式提交 |
+| 前端自检 | `platform/web/tools/ts-resolve.mjs` + 三个 `.test.ts` | 零依赖：Node 22 `--experimental-strip-types` 跑 TS，钩子补无扩展名导入；pre-push 自动执行（< 1s） |
+| 真实 CI | `.github/workflows/ci.yml` | backend / frontend / docs / contract 四个 job，与本地门禁共用同一组命令 |
+
+**整文件匹配**：禁令扫描按文件内容匹配后再把偏移换算成行号，而不是逐行匹配——
+"空 catch"「@Autowired 换行后是字段声明」这类规则天然跨行，逐行匹配会让规则永远不可能命中。
+
+**覆盖率闸门只吃 verify**：`mvn test`（pre-commit 用）不做覆盖率检查，避免为每次提交增加成本；
+CI 与手动 `mvn verify` 才执行 `jacoco:check`。
+
+### 3.3.5 门禁红队自审
+
+`python tools/session-archive/gate.py red-team`：在临时目录造一个最小 platform 树，
+写入故意违规的样本（`System.out` / `new Thread` / `SELECT *` / `${}`），用 `-Dspec.root`
+指过去跑 `ForbiddenPatternScanTest`——**必须失败**。它要是一路绿灯，说明扫描器已经失效
+（正则写坏、剪枝把样本剪掉、作用域标错）。
+
+- 成本约 25s（含 spec-checks 编译），不进 pre-commit；改完 `spec-checks` 或每季度跑一次。
+- 与 `RuleFixtureSelfTest` 分工：fixture 自测保证「每条规则都能命中样例」，
+  红队自审保证「整条链路（扫描器 + maven 参数 + 报告）真的会红」。
+
+### 3.3.6 耗时预算的校准原则
+
+预算的作用是**抓退化**，不是把正常路径强行压进某个数字：
+
+| 层 | 预算 | 依据 |
+|---|---|---|
+| pre-commit | 90s | 单模块 13~47s；同时改两个重模块（gateway 28.8s + infra 19.4s + 编译）实测 70.3s 属正常。退化形态是全量跑（167s+） |
+| spec-checks | 180s | 实测 20~34s（tree 未变命中缓存） |
+| full-test | 600s | 全 reactor 4 fork 实测 90s |
+| web-test | 10s | 实测 0.5~0.6s |
+
+按模块并行跑测试实测**没有收益**（executor 12s + tools 11s：并行 28.2s vs 串行 25.3s，
+Maven 启动与 reactor 校验占大头），因此保持串行；`forkCount=8` 会让 gateway 的进程/端口
+用例直接失败，也不能靠堆 fork 数。
+注意 `install-hooks` 清理旧副本时必须用
+`git rev-parse --absolute-git-dir` 拼 `hooks/`，不能用 `--git-path hooks`
+——设置 `core.hooksPath` 后后者返回 `.githooks` 本身，会把仓库里的钩子脚本删掉。
+
+- **慢测试分组**：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代这类集成型用例打
+  `@Tag("slow")`，pre-commit 用 `-DexcludedGroups=slow` 排除，pre-push 全量兜底与 CI 全跑。
+  实测 gateway：`forkCount=2` 时 40.3s→27.9s；`forkCount=4` 时只差 2.5s（并行已掩盖）。
+- **模块级绿色证据**：`SESSION_ARCHIVE_FULL_TEST=1` 的全量兜底不再无条件跑整个 reactor。
+  每个模块按「自身源码指纹 + 全部上游模块闭包哈希」记账（`.git/session-archive/module-evidence/`），
+  闭包未变的模块直接跳过；改动只落在一个叶模块时，推送从全量 167s 降到只跑那一个模块。
+  闭包哈希是内容寻址的，不需要 TTL：源码一变哈希就变，旧证据自动失效。
+
 
 ### 3.4 只增不改
 
@@ -158,7 +269,10 @@ docs/
 
 - 一份 summary = 一个 markdown 文件，双索引两处存放（时间维 + 功能维），内容互链。
 - 路径：`docs/summary/<YYYY-MM>/<YYYY-MM-DD>_<slug>.md` + `docs/summary/<track>/<YYYY-MM>_<slug>.md`。
+- `track` 取值：会话总结轨 `feat|bug|chore|docs|deploy`（与 process 分类同名，语义为「这次会话的总结」）；
+  方案轨 `plan`（评审 / 优化方案，契约见 §4.6，**不是** process 分类，也不生成 manifest）。
 - 同等只增不改：同主题新进展 = 新文件 + frontmatter `extends` 回指旧文件（ADR supersede 风格）。
+  plan 类的版本化规则例外，见 §4.6.6。
 
 ### 4.2 frontmatter（数据聚合层）
 
@@ -244,14 +358,109 @@ FAIL 必须在下一期 summary 的「遗留与建议」中给出修复计划。
   （patch = 本期 refs 涉及的新增行覆盖）。
 - 未接入前各字段记 `N/A`，gate 降级为 WARN，不阻塞流程——但接入后 N/A 即 WARN。
 
+### 4.6 plan 类契约（评审与优化方案）
+
+本节自 2026-11-18 起生效。`docs/summary/plan/` 是与 feat/bug/chore/docs/deploy 并列的**方案轨**，
+承载「评审 → 现状证据 → 缺口分级 → 分批方案 → 验收契约 → 执行状态」这类横向文档。
+
+一句话定位：**plan 说"要怎么改"，process 记"已经改成了什么"。**
+
+#### 4.6.1 边界（三条硬线）
+
+1. plan 类**不生成 process 归档**：没有 manifest、不进 hash 链、不校验 commits / blobHash。
+2. plan 落地时照常按 feat/bug/chore 开归档；plan 只在「执行状态」里回指提交、归档 id 与证据。
+3. 一份 plan = 一个主题 + 一个周期。跨周期延续不新开文件，靠 `updatedAt` 与「变更记录」推进。
+
+#### 4.6.2 路径与命名
+
+| 角色 | 路径 | 说明 |
+|---|---|---|
+| 时间维主文件（权威内容） | `docs/summary/<YYYY-MM>/<YYYY-MM-DD>_<slug>.md` | 与 §4.1 一致，文件名含日期 |
+| 方案轨副本 | `docs/summary/plan/<YYYY-MM>_<slug>.md`（推荐）<br>`docs/summary/plan/<slug>-<YYYY-MM>.md`（等价，早期文件沿用） | 副本 frontmatter 增加 `canonical` 指向时间维主文件 |
+
+- `slug` 同其他文档：kebab-case，稳定不变；`<YYYY-MM>` 必须等于 frontmatter 的 `period`。
+- 两处正文保持一致；改动只在主文件改，副本同步。
+
+#### 4.6.3 frontmatter（`session-plan/v1`）
+
+```yaml
+schema: session-plan/v1                     # 固定，区别于 session-summary/v1
+kind: plan                                  # 固定
+slug: quality-gate-review                   # kebab-case，必须出现在文件名中
+period: 2026-11                             # YYYY-MM，必须出现在文件名中
+createdAt: 2026-11-18T20:04:00+08:00        # 首次立项时间，+08:00
+updatedAt: 2026-11-18T20:15:00+08:00        # 每次改正文必须前移，否则校验报错
+status: reviewing                           # draft|reviewing|approved|executing|done|dropped|superseded
+owner: YG                                   # 方案责任人
+verdict: FAIL                               # 被评审对象的现状结论：PASS|WARN|FAIL|N/A
+supersedes: null                            # 被本文件取代的旧 plan（slug 或相对路径）
+supersededBy: null                          # status=superseded 时必填
+refs: []                                    # 引用的 process 归档 id，必须真实存在（同 §4.2）
+canonical: docs/summary/2026-11/2026-11-18_quality-gate-review.md   # 仅方案轨副本有
+```
+
+- `verdict` 是「被评审对象」的结论，不是本文件的质量；`gate` 字段属于 session-summary，plan 不用。
+- `refs` 为空合法（方案常常先于落地），但**一旦填了就必须存在**，与 session-summary 同规则。
+
+#### 4.6.4 正文结构（必需章节，缺一即校验失败）
+
+| 章节 | 要求 | 机器校验 |
+|---|---|---|
+| `## 概述` | 2–4 句：评审对象、结论、影响面 | 必需 |
+| `## 现状与证据` | 每条结论后面跟可复核证据（命令输出、文件路径、grep 结果） | 必需 |
+| `## 缺口清单` | 按 P0/P1/P2 分级，每条带「证据 / 后果 / 等级」 | 必需 |
+| `## 优化方案` | 分阶段表格，每条有落点文件 | 必需 |
+| `## 验收契约` | 每条缺口一行：落点 + 验收命令 + 通过判定 + 反证（失败长什么样） | 必需 |
+| `## 执行状态` | 每条编号一行：未开始 / 进行中 / 已完成 / 放弃 + 依据（提交 sha、PR、证据文件） | 必需 |
+| `## 变更记录` | 追加式：时间 + 改了什么 + 为什么 | 必需 |
+| `## 链接` | 规格、相关归档、外部依据 | 必需 |
+
+**「验收契约」是 plan 能不能算方案的唯一标准**：一条缺口如果没有「可复制执行的验收命令 + 通过判定 + 反证」，
+它就只是意见，不是契约；`status` 也不得升到 `approved`。
+
+#### 4.6.5 与 session-summary 的差异
+
+| 维度 | session-summary（§4.2–4.4） | session-plan（本节） |
+|---|---|---|
+| schema | `session-summary/v1` | `session-plan/v1` |
+| 来源 | `gate.py finish` 从 manifest 自动生成 | 人写（agent 可起草），不自动生成 |
+| 是否进 process 归档 | 是（一份 summary 对应一份 manifest） | 否 |
+| 时间语义 | 一次会话 / 一个周期的事后账 | 一个方案的事前契约 + 事后状态 |
+| metrics 段 | 必需，禁止手编 | 不需要（plan 不聚合覆盖率） |
+| 变更 | 只增不改（新文件 + `extends`） | 允许原地更新 + 变更记录；拆题走 `supersedes` |
+
+#### 4.6.6 版本化：原地更新是允许的例外
+
+方案在评审中必然被改，因此 plan 类**不套用 §3.4 的"只增不改"**，改为：
+
+- 原地更新正文必须同时做到：`updatedAt` 前移 + 「变更记录」追加一行（写明改了哪节、为什么）。
+- 拆题 / 推翻重来：新 `slug` + 新文件，旧文件置 `status: superseded` 并填 `supersededBy`，新文件填 `supersedes`。
+- 已发布的 plan 文件（含时间维副本）**禁止删除或重命名**；作废只能靠 `status`。
+- `updatedAt` 不得早于 `createdAt`；校验器按此判定"有没有偷偷改而不留痕"。
+
+#### 4.6.7 校验（`gate.py validate`）
+
+对 `docs/summary/plan/**/*.md` 以及 frontmatter 里 `kind: plan` 的文件执行：
+
+1. frontmatter 存在，且 `schema=session-plan/v1`、`kind=plan`；
+2. `slug` 为 kebab-case 且出现在文件名中；`period` 形如 `YYYY-MM` 且出现在文件名中；
+3. `createdAt` / `updatedAt` 为 `+08:00` ISO 时间，且 `updatedAt >= createdAt`；
+4. `status` 在枚举内；`status=superseded` 时 `supersededBy` 非空；`verdict` 在 `PASS|WARN|FAIL|N/A` 内；`owner` 非空；
+5. 方案轨副本（`docs/summary/plan/` 下）必须有 `canonical`，指向存在的文件，且其 `slug`/`period` 与本文件一致；
+6. §4.6.4 的 8 个必需章节齐全；
+7. `refs` 内每个 process 归档 id 必须存在（与 §4.2 同规则）。
+
+校验失败 = `gate.py validate` 非零 = `ProcessArchiveTest` 红 = 禁止推送；与归档门禁同一条出口。
+
 ## 5. 落地件与执行
 
 | 件 | 位置 | 作用 |
 |---|---|---|
 | JSON Schema | `docs/schemas/process-manifest-v2.json`、`session-summary-v1.md` 的 frontmatter 说明 | 校验依据 |
 | 归档 skill | 仓库 skill `session-archive` | 会话末：跑测试 → 从 git 提取 commits/files → 生成 manifest（含 hash 链）→ 聚合 metrics 生成/追加 summary |
-| 校验器 | `spec-checks` 新增 `ProcessArchiveTest`（附单测，作为 feat 归档自身的合规样本） | §3.3/§3.4/§4.2 全部规则执行者 |
+| 校验器 | `spec-checks` 新增 `ProcessArchiveTest`（附单测，作为 feat 归档自身的合规样本） | §3.3/§3.4/§4.2/§4.6 全部规则执行者 |
 | 覆盖率 | 根 pom 加 JaCoCo 插件 | §4.5 数据来源 |
+| 方案轨 | `docs/summary/plan/` + `docs/summary/<YYYY-MM>/` 双份 | 评审/优化方案（§4.6）；由人写，校验器只做契约检查 |
 
 执行顺序（首次落地）：
 1. JaCoCo 插件 → 2. schema 文件 → 3. `ProcessArchiveTest` + 其单测 → 4. skill →
@@ -264,3 +473,5 @@ FAIL 必须在下一期 summary 的「遗留与建议」中给出修复计划。
 - 错误码枚举收敛、设计令牌重构 → **chore**
 - 本规格文档 → **docs**
 - 端口/环境/发布链路改造 → **deploy**
+- 质量门禁评审、跨模块整改方案、需要「验收契约 + 执行状态」的横向文档 → **plan**
+  （`docs/summary/plan/`，不进 process；落地时按实际改动另开 feat/bug/chore）

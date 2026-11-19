@@ -662,6 +662,32 @@ export function getEnvBinding(projectId: string, bindingId: string): Promise<Env
   )
 }
 
+/** 环境绑定历史：含草稿/已确认/过期/已解绑，卡片按这张表渲染。 */
+export interface EnvBindingHistory {
+  projectId: string
+  env: string
+  /** 为空 = 当前没有可用绑定（需要重新生成并确认）。 */
+  currentBindingId: string
+  bindings: EnvBindingView[]
+}
+
+export function listEnvBindings(
+  projectId: string,
+  env: string,
+  limit = 20,
+): Promise<EnvBindingHistory> {
+  const q = new URLSearchParams({ env, limit: String(limit) })
+  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/env-bindings?${q}`)
+}
+
+/** 解绑：标记 REVOKED 并保留记录（历史仍可查）。 */
+export function revokeEnvBinding(projectId: string, bindingId: string): Promise<EnvBindingView> {
+  return apiFetch(
+    `/api/v1/settings/projects/${encodeURIComponent(projectId)}/env-bindings/${encodeURIComponent(bindingId)}/revoke`,
+    { method: 'POST' }
+  )
+}
+
 export function listPortLeases(projectId: string, env: string): Promise<PortLeaseView[]> {
   const q = new URLSearchParams({ projectId, env })
   return apiFetch(`/api/v1/deploy/ports?${q}`)
@@ -1158,6 +1184,16 @@ export interface CapabilityEntry {
   /** 首次调用前必须提供的环境变量（仅 MCP stdio 包会返回） */
   requiredEnv: string[]
   installed: boolean
+  /** 用户是否开启（未开启时不会进入会话工具面） */
+  enabled: boolean
+  /** 当前是否真的可用（= 已开启 + 已落地 + 依赖就绪） */
+  available: boolean
+  /** 不可用的稳定原因码：CAPABILITY_DISABLED / NOT_INSTALLED / MISSING_ENV / TRANSPORT_UNAVAILABLE */
+  reasonCode: string
+  /** 不可用的一句话原因（可直接展示） */
+  reason: string
+  /** 缺少的环境变量名（只有缺变量时非空） */
+  missingEnv: string[]
 }
 
 export interface CapabilityInstallResult {
@@ -1196,3 +1232,121 @@ export function installCapability(id: string): Promise<CapabilityInstallResult> 
     body: JSON.stringify({ id })
   })
 }
+
+// ---------------------------------------------------------------- 数据库后端
+
+/** 当前数据库后端状态（设置页「数据库」分区）。 */
+export interface DatabaseStatus {
+  /** 实际生效的后端：取自连接池，热切换后立即变化 */
+  backend: 'SQLITE' | 'POSTGRES'
+  /** 启动时配置的后端：热切换不改它，只有重启才会一致 */
+  configuredBackend: 'SQLITE' | 'POSTGRES'
+  /** 已脱敏的 JDBC URL */
+  jdbcUrl: string
+  sqliteFile: string
+  poolSize: number
+  configFile: string
+  /** db-backend.yml 里已保存的目标 */
+  savedUrl: string
+  savedUsername: string
+  savedTarget: boolean
+  hasPassword: boolean
+  /** 只有当前是 SQLite 才谈得上"迁移到 PG" */
+  migratable: boolean
+  /** 支持热切换：改完立刻生效，不需要重启 */
+  hotReload: boolean
+}
+
+/** 目标 PostgreSQL 连接参数；password 留空 = 沿用已保存的密文。 */
+export interface PostgresInput {
+  url: string
+  username: string
+  password?: string
+  /** 切换时是否顺带搬运当前 SQLite 数据（默认 true） */
+  migrate?: boolean
+}
+
+export interface PostgresTestResult {
+  ok: boolean
+  latencyMs: number
+  serverVersion: string | null
+  message: string
+}
+
+export interface MigrationTable {
+  table: string
+  copied: number
+  sourceRows: number
+  ok: boolean
+  skipped: string | null
+}
+
+export interface MigrationResult {
+  ok: boolean
+  message: string
+  source: string
+  target: string
+  tables: number
+  copiedRows: number
+  skippedTables: number
+  details: MigrationTable[]
+  elapsedMs: number
+}
+
+/** 热切换结果：不重启进程，连接池已换成新后端。 */
+export interface DatabaseSwitchResult {
+  ok: boolean
+  message: string
+  fromBackend: 'SQLITE' | 'POSTGRES'
+  toBackend: 'SQLITE' | 'POSTGRES'
+  target: string
+  copiedRows: number
+  skippedTables: number
+  elapsedMs: number
+  restartRequired: false
+}
+
+export function getDatabaseStatus(): Promise<DatabaseStatus> {
+  return apiFetch('/api/v1/settings/database')
+}
+
+export function testPostgres(input: PostgresInput): Promise<PostgresTestResult> {
+  return apiFetch('/api/v1/settings/database/test', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+/** 热切换到 PostgreSQL：探活 → 建表 → 搬数据 → 落配置 → 原子替换，无需重启。 */
+export function switchToPostgres(input: PostgresInput): Promise<DatabaseSwitchResult> {
+  return apiFetch('/api/v1/settings/database/switch', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+/** 只搬数据不切换后端。 */
+export function migrateSqliteToPostgres(input: PostgresInput): Promise<MigrationResult> {
+  return apiFetch('/api/v1/settings/database/migrate', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+/** 只落盘配置，不切换（等合适时机再切）。 */
+export function savePostgresBackend(input: PostgresInput): Promise<{
+  ok: boolean
+  configFile: string
+  message: string
+}> {
+  return apiFetch('/api/v1/settings/database', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  })
+}
+
+/** 热切换回 SQLite（PG 数据保留，不清空）。 */
+export function switchToSqlite(): Promise<DatabaseSwitchResult> {
+  return apiFetch('/api/v1/settings/database', { method: 'DELETE' })
+}
+

@@ -109,7 +109,7 @@ class DockerfileToolsTest {
         String updated = DockerfileTools.addImageRecipe(actions, "Dockerfile");
 
         assertTrue(updated.contains("image_package:"));
-        assertTrue(updated.contains("[\"docker\", \"build\", \"-f\", \"Dockerfile\", \"-t\", \"${tag}\", \".\"]"));
+        assertTrue(updated.contains("[\"docker\", \"buildx\", \"build\", \"--load\", \"-f\", \"Dockerfile\", \"-t\", \"${tag}\", \".\"]"));
         assertNull(DockerfileTools.addImageRecipe(updated, "Dockerfile"));
     }
 

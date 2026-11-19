@@ -1,0 +1,199 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_1320_token-budget-observability",
+  "category": "feat",
+  "title": "Token 治理批次1：KV 命中率可观测 + 历史折叠摘要",
+  "createdAt": "2026-11-18T13:20:57+08:00",
+  "session": {
+    "agentModel": "glm-5.3",
+    "promptSummary": "补齐 token 三层治理的缺口：后端统一 KV 缓存命中率口径，并把上下文裁剪从直接丢弃升级为折叠摘要保留关键标识",
+    "toolCallCount": 0
+  },
+  "problem": "token 治理的前两层（渐进工具披露、工具输出限流、上下文预算）已落地，但后端没有统一的 KV 缓存命中率口径；上下文裁剪直接丢弃旧历史，runId/changeId 等关键标识随之消失，长会话追问需要重新取证；且 TOOL 消息正文不在 getTextContent() 里，导致工具输出完全不计入上下文预算。",
+  "solution": "1) UsageTotals.cacheHitRate() 统一命中率算法，TokenUsageRecorder 日志追加 hit=xx.x%，UsageController.session() 返回 cacheHitRate；2) ConversationContextTrimmer 新增 4 参重载，把被裁掉的旧历史折叠成一条 synthetic 摘要消息，关键标识单独汇总在头部且最多 12 个，summary-chars=0 可回退旧行为；3) textOf() 递归读取 ToolResultBlock.output，使工具结果真正计入上下文预算。",
+  "commits": [
+    {
+      "sha": "b95f3426f1873b11727c9223d9a60d76921b19a9",
+      "subject": "feat(token): 补齐 KV 命中率口径并把上下文裁剪升级为折叠摘要",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/state-agent-state-store.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "cd4b0e2051a8da4c20da4126ae992c3ecf549eea"
+        },
+        {
+          "path": "docs/handbook/l3/state-context-trimmer.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "44e6ce22747e9efe34808337cc8c14ddcc90ce05"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "29fe2fa7f81a9a2c7e46cb00e5737b9fcc470487"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/TokenUsageRepository.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "1d5b1be34825c8da6c9511676db732377ffb8670"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageTotalsTest.java",
+          "status": "A",
+          "additions": 29,
+          "deletions": 0,
+          "blobHash": "7371f8fd988ff0c19de172e736b93f8693a16179"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/UsageController.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "822cc59c2ac5f50a2864603bf08eff94c292b843"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "661e68a7c7c3c3da77bc98082342d31deaf479a7"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/AgentStateConfig.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 2,
+          "blobHash": "a695ad70a22f15550737a2bf2e2039ef2a133209"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java",
+          "status": "M",
+          "additions": 186,
+          "deletions": 3,
+          "blobHash": "ba46e5f792739bd8916419f04325cb8f793f0e38"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 1,
+          "blobHash": "5ddfb905af8728909d6453df194caf2757435420"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextSummaryTest.java",
+          "status": "A",
+          "additions": 115,
+          "deletions": 0,
+          "blobHash": "7c727ae3cd2d87d57fce030e699b36272541c0ee"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextTrimmerTest.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 2,
+          "blobHash": "ec1127a7b1bd638b1b65e2d9c44ec3d1a28e81df"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/TokenUsageRecorder.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 2,
+          "blobHash": "4efa7be29f29dbc4f290d58f1144d37200910750"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/TokenUsageRecorderTest.java",
+          "status": "A",
+          "additions": 90,
+          "deletions": 0,
+          "blobHash": "f9a350a2c4dde8318d5520f2702085d1b5410af5"
+        },
+        {
+          "path": "specs/token-budget-governance/spec.md",
+          "status": "A",
+          "additions": 139,
+          "deletions": 0,
+          "blobHash": "c62d7fb991cbf389856e0e1dc86abd9e999eac45"
+        },
+        {
+          "path": "specs/token-budget-governance/tasks.md",
+          "status": "A",
+          "additions": 26,
+          "deletions": 0,
+          "blobHash": "0e43ae77cb4c045bfdafca7c1dddd13de89371ac"
+        },
+        {
+          "path": "tools/session-archive/sweep.py",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "9ab62c40cb3372d8565588dccc67054d0c720cbe"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageTotalsTest.java",
+        "status": "A",
+        "additions": 29,
+        "deletions": 0,
+        "blobHash": "7371f8fd988ff0c19de172e736b93f8693a16179"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextSummaryTest.java",
+        "status": "A",
+        "additions": 115,
+        "deletions": 0,
+        "blobHash": "7c727ae3cd2d87d57fce030e699b36272541c0ee"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextTrimmerTest.java",
+        "status": "M",
+        "additions": 10,
+        "deletions": 2,
+        "blobHash": "ec1127a7b1bd638b1b65e2d9c44ec3d1a28e81df"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/TokenUsageRecorderTest.java",
+        "status": "A",
+        "additions": 90,
+        "deletions": 0,
+        "blobHash": "f9a350a2c4dde8318d5520f2702085d1b5410af5"
+      }
+    ],
+    "casesAdded": 9,
+    "command": "mvn -B -pl spec-checks -am test -Dtest=!DualStackPipelineTest,!IntakeE2ETest,!PipelineAcceptanceTest,!ChangeRegistryTest,!ConfirmTokenServiceTest,!PatchRegistryTest,!ProcessArchiveTest -Dsurefire.failIfNoSpecifiedTests=false",
+    "result": "PASSED",
+    "evidence": "Tests run: 626, Failures: 0, Errors: 0, Skipped: 1"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime"
+    ],
+    "verification": "新增 ConversationContextSummaryTest(4)、TokenUsageRecorderTest(3)、UsageTotalsTest(2) 共 9 个用例；ConversationContextTrimmerTest 幂等断言更新为摘要至多一条。pre-commit 门禁执行 626 个用例全部通过（排除 3 个依赖 Docker 的流水线用例、3 个 governance @TempDir 既有用例与 1 个历史归档 commit 缺失的 ProcessArchiveTest）。未重启后端/前端。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_1320_token-budget-observability"
+    ]
+  },
+  "chain": {
+    "prev": "16c33f967c26db31de7a4a8ba669bdb2c0882d814f207b8021a74bef55afda18",
+    "self": "685e5db7830e68345d2dc5e82db379ea7a6dbb22d305edb83963b03b85df3f20"
+  }
+}

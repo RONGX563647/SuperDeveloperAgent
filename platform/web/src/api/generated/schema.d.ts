@@ -621,6 +621,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/projects/{projectId}/env-bindings/{bindingId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** revoke binding */
+        post: operations["revokeBinding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/projects/{projectId}/env-binding/{bindingId}/confirm": {
         parameters: {
             query?: never;
@@ -958,6 +975,76 @@ export interface paths {
         put?: never;
         /** discover */
         post: operations["discover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/database": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** status */
+        get: operations["status"];
+        put?: never;
+        /** save */
+        post: operations["save_5"];
+        /** switch to sqlite */
+        delete: operations["switchToSqlite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/database/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** test */
+        post: operations["test_2"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/database/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** switch to postgres */
+        post: operations["switchToPostgres"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/database/migrate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** migrate */
+        post: operations["migrate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1933,6 +2020,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/projects/{projectId}/env-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** binding history */
+        get: operations["bindingHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/projects/{projectId}/env-binding/{bindingId}": {
         parameters: {
             query?: never;
@@ -2409,6 +2513,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/git-issues/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** versions */
+        get: operations["versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/git-issues/count": {
         parameters: {
             query?: never;
@@ -2562,6 +2683,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/{conversationId}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** timeline */
+        get: operations["timeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversationId}/timeline/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** timeline stream */
+        get: operations["timelineStream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversationId}/runs": {
         parameters: {
             query?: never;
@@ -2604,7 +2759,7 @@ export interface paths {
             cookie?: never;
         };
         /** status */
-        get: operations["status"];
+        get: operations["status_1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2622,6 +2777,23 @@ export interface paths {
         };
         /** log */
         get: operations["log"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ci/runs/{runId}/log/lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** log lines */
+        get: operations["logLines"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3175,6 +3347,7 @@ export interface components {
             createdAt?: number;
             /** Format: int64 */
             updatedAt?: number;
+            version?: string;
         };
         SaveTranscriptRequest: {
             payload?: string;
@@ -3589,6 +3762,22 @@ export interface components {
             modifiedAt?: number;
             content?: string;
             truncated?: boolean;
+        };
+        TimelineEntry: {
+            /** Format: int64 */
+            seq?: number;
+            conversationId?: string;
+            kind?: string;
+            role?: string;
+            text?: string;
+            tool?: string;
+            toolCallId?: string;
+            /** Format: int64 */
+            at?: number;
+        };
+        SseEmitter: {
+            /** Format: int64 */
+            timeout?: number;
         };
         TranscriptView: {
             found?: boolean;
@@ -5046,6 +5235,29 @@ export interface operations {
             };
         };
     };
+    revokeBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                bindingId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvBinding"];
+                };
+            };
+        };
+    };
     confirm: {
         parameters: {
             query?: never;
@@ -5618,6 +5830,162 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+        };
+    };
+    status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    save_5: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    switchToSqlite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    test_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    switchToPostgres: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    migrate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -6243,6 +6611,7 @@ export interface operations {
                 env: string;
                 sha: string;
                 confirmToken?: string;
+                deployTarget?: string;
             };
             header?: never;
             path: {
@@ -7240,6 +7609,33 @@ export interface operations {
             };
         };
     };
+    bindingHistory: {
+        parameters: {
+            query: {
+                env: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     binding: {
         parameters: {
             query?: never;
@@ -7911,6 +8307,30 @@ export interface operations {
             };
         };
     };
+    versions: {
+        parameters: {
+            query?: {
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     count: {
         parameters: {
             query?: never;
@@ -8122,6 +8542,57 @@ export interface operations {
             };
         };
     };
+    timeline: {
+        parameters: {
+            query?: {
+                after_seq?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                conversationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimelineEntry"][];
+                };
+            };
+        };
+    };
+    timelineStream: {
+        parameters: {
+            query?: {
+                after_seq?: number;
+            };
+            header?: {
+                "Last-Event-ID"?: string;
+            };
+            path: {
+                conversationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SseEmitter"];
+                };
+            };
+        };
+    };
     conversationRuns: {
         parameters: {
             query?: {
@@ -8171,7 +8642,7 @@ export interface operations {
             };
         };
     };
-    status: {
+    status_1: {
         parameters: {
             query?: {
                 withLog?: boolean;
@@ -8201,6 +8672,33 @@ export interface operations {
         parameters: {
             query?: {
                 offset?: number;
+            };
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    logLines: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
             };
             header?: never;
             path: {

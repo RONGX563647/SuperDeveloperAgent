@@ -18,11 +18,14 @@ import top.rongx.agent.domain.bugfix.BugFixRun;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.domain.error.PlatformException;
+import org.junit.jupiter.api.Tag;
 
 /**
  * 修复补丁落库测试：真实本地 git 仓库上验证「基线 worktree → 写文件 → 独立分支提交」，
  * 并确认路径逃逸与凭证文件仍被拒绝。
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class WorkspaceBugFixGitTest {
 
     @TempDir

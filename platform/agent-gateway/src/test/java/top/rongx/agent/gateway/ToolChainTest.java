@@ -16,6 +16,7 @@ import top.rongx.agent.tools.ActionCommandTools;
 import top.rongx.agent.tools.ActionQueryTools;
 import top.rongx.agent.tools.CiCommandTools;
 import top.rongx.agent.tools.CiQueryTools;
+import top.rongx.agent.tools.ChangeQueryTools;
 import top.rongx.agent.tools.ChangeTools;
 import top.rongx.agent.tools.ProjectTools;
 
@@ -56,6 +57,8 @@ class ToolChainTest {
     private CiCommandTools ciCommandTools;
     @Autowired
     private ChangeTools changeTools;
+    @Autowired
+    private ChangeQueryTools changeQueryTools;
     @Autowired
     private ChangeRegistry changes;
     @Autowired
@@ -177,6 +180,9 @@ class ToolChainTest {
         assertTrue(agentToolkit.getToolNames().contains("ci_run"));
         assertTrue(agentToolkit.getToolNames().contains("run_action"));
         assertTrue(agentToolkit.getToolNames().contains("propose_patch"));
+        // 会话工作树编辑：非生产完整面可见，生产只读面不可见
+        assertTrue(agentToolkit.getToolNames().contains("workspace_write"));
+        assertTrue(agentToolkit.getToolNames().contains("workspace_commit"));
         // Docker 目标缺 Dockerfile / image_package：Agent 可一键自愈（产出仍是待确认变更）
         assertTrue(agentToolkit.getToolNames().contains("ensure_dockerfile"));
         // 部署前置配置：Agent 能自己补变量与端口，不必让用户代改
@@ -191,6 +197,7 @@ class ToolChainTest {
         assertFalse(readOnlyToolkit.getToolNames().contains("confirm"));
         assertFalse(readOnlyToolkit.getToolNames().contains("ci_run"));
         assertFalse(readOnlyToolkit.getToolNames().contains("propose_patch"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("workspace_write"));
         assertFalse(readOnlyToolkit.getToolNames().contains("ensure_dockerfile"));
         assertFalse(readOnlyToolkit.getToolNames().contains("run_ops_agent"));
         assertFalse(readOnlyToolkit.getToolNames().contains("env_ensure"));
@@ -215,6 +222,7 @@ class ToolChainTest {
         assertTrue(deployToolkit.getToolNames().contains("confirm"));
         assertTrue(deployToolkit.getToolNames().contains("run_action"));
         assertTrue(deployToolkit.getToolNames().contains("propose_patch"));
+        assertTrue(deployToolkit.getToolNames().contains("workspace_write"));
         assertTrue(deployToolkit.getToolNames().contains("ensure_dockerfile"));
         // 部署前置配置也能由发布 Agent 直接补齐（变量 / 端口 / 健康检查）
         assertTrue(deployToolkit.getToolNames().contains("env_var_set"));
@@ -245,6 +253,40 @@ class ToolChainTest {
 
         String unknown = changeTools.confirm("chg-not-exists", ctx("test"));
         assertTrue(unknown.startsWith("err:"), unknown);
+    }
+
+    @Test
+    @DisplayName("T12b change_status：只读可查真实状态；生产只读面也能看到")
+    void changeStatusReportsRealState() {
+        String created = changeTools.requestConfirmation("stack_deploy",
+                "查询状态用", null, false, ctx("test"));
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("changeId:\\s*(chg-[A-Za-z0-9-]+)").matcher(created);
+        assertTrue(matcher.find(), created);
+        String changeId = matcher.group(1);
+
+        assertTrue(changeQueryTools.status(changeId, ctx("test")).contains("status: PENDING"),
+                "新建的变更应为 PENDING");
+        // reload：confirm 必须回报真实状态，而不是永远 PENDING
+        changes.updateStatus(changeId, top.rongx.agent.domain.change.ChangePlan.Status.CONFIRMED);
+        String afterConfirm = changeQueryTools.status(changeId, ctx("test"));
+        assertTrue(afterConfirm.contains("status: CONFIRMED"), afterConfirm);
+        String resent = changeTools.confirm(changeId, ctx("test"));
+        assertTrue(resent.contains("status: CONFIRMED"), resent);
+        assertTrue(resent.contains("不要再推送确认卡片"), resent);
+
+        changes.updateStatus(changeId, top.rongx.agent.domain.change.ChangePlan.Status.APPLIED);
+        String applied = changeTools.confirm(changeId, ctx("test"));
+        assertTrue(applied.contains("status: APPLIED"), applied);
+        assertTrue(applied.contains("无需再次确认"), applied);
+
+        // 跨项目不可查（防止编造单号读取别处状态）
+        ProjectContext other = new ProjectContext("OTHER", "test", "tester",
+                "https://gitee.com/x/Other.git", null);
+        assertTrue(changeQueryTools.status(changeId, other).startsWith("err:"), "跨项目必须拒绝");
+        // 生产只读面必须能查（确认卡是异步广播，只读会话也需要事后确认）
+        assertTrue(readOnlyToolkit.getToolNames().contains("change_status"));
+        assertFalse(readOnlyToolkit.getToolNames().contains("request_confirmation"));
     }
 
     @Test

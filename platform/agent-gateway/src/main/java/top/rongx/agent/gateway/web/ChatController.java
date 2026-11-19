@@ -35,6 +35,7 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.web.dto.ChatRequest;
 import top.rongx.agent.governance.ChangeRegistry;
 import top.rongx.agent.runtime.ChatService;
+import top.rongx.agent.runtime.ConversationTimelineRecorder;
 import top.rongx.agent.runtime.workspace.ConversationManager;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
@@ -55,7 +56,7 @@ public class ChatController {
     /** 变更相关工具：只有它们的返回会被翻译成确认卡事件（委派结果里也可能带 changeId）。 */
     private static final java.util.Set<String> CHANGE_TOOLS =
             java.util.Set.of("request_confirmation", "confirm", "propose_patch", "run_action",
-                    "run_ops_agent");
+                    "run_ops_agent", "workspace_write", "workspace_delete", "workspace_commit");
 
     /** 生成环境绑定草案的工具：返回里带 bindingId，前端据此在对话中展开绑定确认卡。 */
     private static final java.util.Set<String> ENV_BINDING_TOOLS =
@@ -72,12 +73,15 @@ public class ChatController {
     private final AgentStreamLimiter limiter;
     private final AgentMetrics metrics;
     private final ConversationManager conversations;
+    private final ConversationTimelineRecorder timelineRecorder;
     private final ModelRegistry models;
     private final ModelConnectionRepository connections;
     private final ModelCatalogRepository catalog;
     /** 单次会话的 SSE 生命周期上限（默认 3 分钟，可按部署调整）。 */
     private final long streamTimeoutMillis;
     private final long heartbeatMillis;
+    /** 业务事件静默多久判定为挂住（默认 90 秒，0 = 关闭看门狗）。 */
+    private final long stallMillis;
 
     public ChatController(ChatService chatService,
                           ProjectContextResolver contextResolver,
@@ -88,11 +92,13 @@ public class ChatController {
                           AgentStreamLimiter limiter,
                           AgentMetrics metrics,
                           ConversationManager conversations,
+                          ConversationTimelineRecorder timelineRecorder,
                           ModelRegistry models,
                           ModelConnectionRepository connections,
                           ModelCatalogRepository catalog,
                           @Value("${agent.chat.timeout-ms:180000}") long streamTimeoutMillis,
-                          @Value("${agent.chat.heartbeat-seconds:15}") long heartbeatSeconds) {
+                          @Value("${agent.chat.heartbeat-seconds:15}") long heartbeatSeconds,
+                          @Value("${agent.chat.stall-seconds:90}") long stallSeconds) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
@@ -102,11 +108,13 @@ public class ChatController {
         this.limiter = limiter;
         this.metrics = metrics;
         this.conversations = conversations;
+        this.timelineRecorder = timelineRecorder;
         this.models = models;
         this.connections = connections;
         this.catalog = catalog;
         this.streamTimeoutMillis = Math.max(30_000L, streamTimeoutMillis);
         this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
+        this.stallMillis = Math.max(0L, stallSeconds) * 1000L;
     }
 
     /**
@@ -136,6 +144,10 @@ public class ChatController {
         // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树/模型
         conversations.ensureFromChat(ctx, request.sessionId(), request.message(),
                 request.worktree(), request.modelConnectionId(), request.modelName());
+        // 2.2 服务端时间线：每轮的真实事件落盘（前端 transcript 只是渲染镜像，不能当账本）
+        ConversationTimelineRecorder.Recorder timeline =
+                timelineRecorder.begin(request.sessionId());
+        timeline.user(request.message());
         // 3. 并发闸门：拿不到许可直接 429，不构建 Agent、不拉起 MCP
         AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
 
@@ -146,6 +158,8 @@ public class ChatController {
         AtomicBoolean closed = new AtomicBoolean();
         AtomicLong seq = new AtomicLong();
         AtomicBoolean failed = new AtomicBoolean();
+        // 业务事件最后活跃时间：心跳不更新它，所以「只有心跳在走」也会被判成挂住
+        AtomicLong lastEventNanos = new AtomicLong(System.nanoTime());
         long started = System.nanoTime();
         io.micrometer.core.instrument.Timer.Sample sample = metrics.start();
         Runnable cancel = () -> {
@@ -164,15 +178,26 @@ public class ChatController {
         };
         // 客户端断开 / 超时 / 派发错误都要取消上游，否则 Agent 与 MCP 会继续跑
         emitter.onTimeout(() -> {
+            failed.set(true);
             log.warn("对话流超时，已取消 project={} session={} timeout={}ms",
                     ctx.projectId(), request.sessionId(), streamTimeoutMillis);
+            // 超时同样要落终态：否则时间线里这一轮永远停在「进行中」
+            timeline.finish("对话流超时（" + streamTimeoutMillis + "ms）");
+            sendError(emitter, new RunException(ErrorCode.TIMEOUT,
+                    "对话流超时（" + streamTimeoutMillis / 1000 + " 秒），本轮已中止；请重新发送"),
+                    sendLock);
             cancel.run();
             emitter.complete();
         });
         emitter.onCompletion(cancel);
         emitter.onError(error -> cancel.run());
-        // 工具执行/模型思考期间没有事件时靠心跳保活，避免代理按空闲超时断流
-        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, cancel));
+        // 心跳保活 + 静默看门狗：挂住时由服务端主动发失败终态，而不是让连接无限挂着
+        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, stallMillis,
+                lastEventNanos, () -> {
+                    failed.set(true);
+                    timeline.finish("服务端长时间没有进展，本轮已中止");
+                    cancel.run();
+                }));
 
         try {
             Flux<AgentEvent> events = chatService.stream(ctx, request.sessionId(), request.message(),
@@ -183,15 +208,17 @@ public class ChatController {
             Map<String, StringBuilder> toolResults = new HashMap<>();
             Disposable disposable = events.subscribe(
                     event -> onEvent(event, emitter, ctx, toolNames, toolResults, seq, cancel,
-                            sendLock, active.modelName()),
+                            sendLock, active.modelName(), timeline, lastEventNanos),
                     error -> {
                         failed.set(true);
                         log.error("对话流异常 project={} env={}", ctx.projectId(), ctx.env(), error);
+                        timeline.finish(String.valueOf(error.getMessage()));
                         sendError(emitter, error, sendLock);
                         cancel.run();
                         emitter.complete();
                     },
                     () -> {
+                        timeline.finish("");
                         emitter.complete();
                         cancel.run();
                     });
@@ -203,6 +230,7 @@ public class ChatController {
         } catch (RuntimeException error) {
             failed.set(true);
             log.error("对话启动失败 project={} env={}", ctx.projectId(), ctx.env(), error);
+            timeline.finish(String.valueOf(error.getMessage()));
             sendError(emitter, error, sendLock);
             cancel.run();
             emitter.complete();
@@ -231,7 +259,12 @@ public class ChatController {
 
     private void onEvent(AgentEvent event, SseEmitter emitter, ProjectContext ctx,
                          Map<String, String> toolNames, Map<String, StringBuilder> toolResults,
-                         AtomicLong seq, Runnable cancel, Object sendLock, String modelName) {
+                         AtomicLong seq, Runnable cancel, Object sendLock, String modelName,
+                         ConversationTimelineRecorder.Recorder timeline,
+                         AtomicLong lastEventNanos) {
+        timeline.onEvent(event);
+        // 有真实业务事件才算「活着」：看门狗只认这里更新的时间戳
+        lastEventNanos.set(System.nanoTime());
         try {
             if (event instanceof ToolCallStartEvent call && call.getToolCallId() != null) {
                 toolNames.put(call.getToolCallId(), call.getToolCallName());
@@ -344,6 +377,11 @@ public class ChatController {
         ChangePlan plan = changes.find(changeId).orElse(null);
         if (plan == null || !plan.projectId().equals(ctx.projectId())) {
             log.warn("忽略无法核对的变更单：{}（project={}）", changeId, ctx.projectId());
+            return null;
+        }
+        // 只有能走 /apply 的变更才值得弹确认卡；留痕单（env_ensure 等）推卡必然 400
+        if (!plan.executable()) {
+            log.debug("跳过不可执行变更的确认卡：{}（kind={}）", changeId, plan.kind());
             return null;
         }
         return changeId;

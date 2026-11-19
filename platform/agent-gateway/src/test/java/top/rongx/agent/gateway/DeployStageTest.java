@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
+import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.deploy.DeployRecipe;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
@@ -38,6 +39,7 @@ import top.rongx.agent.infra.recipe.RecipeActionResolver;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Tag;
 
 /**
  * 方案 C 的端到端验证（不依赖真实容器发布）：deploy stage → 平台部署器 → 证据链。
@@ -50,6 +52,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 时诚实失败（E-504），不允许假部署。这里用一个无副作用的 image_package 动作
  * （宿主执行器替身把它换成 {@code git status}）登记镜像产物，不真的构建镜像。
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class DeployStageTest {
 
     @TempDir
@@ -182,6 +186,25 @@ class DeployStageTest {
         assertEquals(StageStatus.SUCCEEDED, deployStage.status());
         assertTrue(deployStage.artifacts().stream().anyMatch(a -> "deployment".equals(a.kind())),
                 "应登记 deployment 产物：" + deployStage.artifacts());
+    }
+
+    @Test
+    @DisplayName("deployment 产物固化端口/容器端口/探活路径等证据字段")
+    void recordsDeploymentEvidence() throws Exception {
+        deployer.failNext = false;
+        deployer.calls.clear();
+        String runId = engine.trigger("RY", "release", Map.of("gitSha", sha));
+        awaitTerminal(runId, 30);
+        assertEquals(StageStatus.SUCCEEDED, engine.status(runId), engine.logTail(runId));
+
+        ArtifactRef deployment = stageOf(runId, "deploy").artifacts().stream()
+                .filter(a -> "deployment".equals(a.kind()))
+                .findFirst().orElseThrow(() -> new AssertionError("缺少 deployment 产物"));
+        // 排障不靠日志反推：实际端口、容器端口、探活路径与目标随产物落库
+        assertEquals("18090", deployment.meta().get("port"), deployment.meta().toString());
+        assertEquals("8080", deployment.meta().get("containerPort"), deployment.meta().toString());
+        assertEquals("/healthz", deployment.meta().get("healthPath"), deployment.meta().toString());
+        assertEquals("docker", deployment.meta().get("target"), deployment.meta().toString());
     }
 
     @Test

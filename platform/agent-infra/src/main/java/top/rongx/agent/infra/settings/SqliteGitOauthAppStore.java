@@ -1,15 +1,10 @@
 package top.rongx.agent.infra.settings;
 
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.GitOauthApp;
@@ -17,9 +12,11 @@ import top.rongx.agent.domain.settings.GitOauthAppRepository;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
+import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
- * Git 平台 OAuth 应用配置（SQLite）。
+ * Git 平台 OAuth 应用配置（JPA）。
  *
  * <p>一张表按 provider 存平台级应用凭据：client-secret AES-GCM 加密，
  * 接口只回掩码；保存时 secret 留空表示沿用旧值。
@@ -27,73 +24,57 @@ import top.rongx.agent.domain.error.IntakeException;
 @Repository
 public class SqliteGitOauthAppStore implements GitOauthAppRepository {
 
-    private static final String SCHEMA = """
-            CREATE TABLE IF NOT EXISTS git_oauth_apps (
-                provider     TEXT PRIMARY KEY,
-                client_id    TEXT NOT NULL,
-                secret_enc   TEXT NOT NULL,
-                secret_iv    TEXT NOT NULL,
-                redirect_uri TEXT NOT NULL,
-                scopes       TEXT NOT NULL,
-                enabled      INTEGER NOT NULL,
-                updated_at   INTEGER NOT NULL
-            )
-            """;
-
     private static final String COLUMNS =
             "provider, client_id, secret_enc, secret_iv, redirect_uri, scopes, enabled, updated_at";
 
-    private final Path dbFile;
+    private static final String INSERT_SQL = """
+            INSERT INTO git_oauth_apps
+                (provider, client_id, secret_enc, secret_iv, redirect_uri, scopes, enabled, updated_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            """;
+
+    private static final String UPDATE_SQL = """
+            UPDATE git_oauth_apps
+            SET client_id=?, secret_enc=?, secret_iv=?, redirect_uri=?, scopes=?, enabled=?, updated_at=?
+            WHERE provider=?
+            """;
+
+    private final PlatformDb db;
     private final SecretBox secretBox;
 
+    @Autowired
+    public SqliteGitOauthAppStore(PlatformDb db, SecretBox secretBox) {
+        this.db = db;
+        this.secretBox = secretBox;
+    }
+
+    /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public SqliteGitOauthAppStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
-        this.secretBox = secretBox;
-        initSchema();
-    }
-
-    private void initSchema() {
-        try (Connection conn = open(); PreparedStatement st = conn.prepareStatement(SCHEMA)) {
-            st.executeUpdate();
-        } catch (SQLException e) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "git_oauth_apps 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
+        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db")), secretBox);
     }
 
     @Override
     public List<GitOauthApp> findAll() {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + COLUMNS + " FROM git_oauth_apps ORDER BY provider")) {
-            try (ResultSet rs = st.executeQuery()) {
-                List<GitOauthApp> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(map(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                    "SELECT " + COLUMNS + " FROM git_oauth_apps ORDER BY provider").stream()
+                    .map(this::map).toList());
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<GitOauthApp> find(String provider) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + COLUMNS + " FROM git_oauth_apps WHERE provider = ?")) {
-            st.setString(1, normalizeProvider(provider));
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(map(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        String normalized = normalizeProvider(provider);
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT " + COLUMNS + " FROM git_oauth_apps WHERE provider = ?",
+                    normalized).map(this::map));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置查询失败：" + e.getMessage(), e);
         }
     }
@@ -112,107 +93,78 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
         String scopes = view.scopes() == null || view.scopes().isBlank()
                 ? defaultScopes(provider) : view.scopes().trim();
         long now = System.currentTimeMillis();
-        try (Connection conn = open()) {
-            SecretBox.Sealed existing = existingSecret(conn, provider);
+        try {
+            SecretBox.Sealed existing = existingSecret(provider);
             SecretBox.Sealed sealed = clientSecret != null && !clientSecret.isBlank()
                     ? secretBox.encrypt(clientSecret.trim()) : existing;
             if (sealed == null) {
                 throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "首次配置必须填写 Client Secret");
             }
+            long enabled = view.enabled() ? 1L : 0L;
             if (existing == null) {
-                try (PreparedStatement st = conn.prepareStatement("""
-                        INSERT INTO git_oauth_apps
-                            (provider, client_id, secret_enc, secret_iv, redirect_uri, scopes, enabled, updated_at)
-                        VALUES (?,?,?,?,?,?,?,?)
-                        """)) {
-                    st.setString(1, provider);
-                    st.setString(2, clientId);
-                    st.setString(3, sealed.cipherB64());
-                    st.setString(4, sealed.ivB64());
-                    st.setString(5, redirectUri);
-                    st.setString(6, scopes);
-                    st.setBoolean(7, view.enabled());
-                    st.setLong(8, now);
-                    st.executeUpdate();
-                }
+                db.run(em -> PlatformDb.update(em, INSERT_SQL,
+                        provider, clientId, sealed.cipherB64(), sealed.ivB64(),
+                        redirectUri, scopes, enabled, now));
             } else {
-                try (PreparedStatement st = conn.prepareStatement("""
-                        UPDATE git_oauth_apps
-                        SET client_id=?, secret_enc=?, secret_iv=?, redirect_uri=?, scopes=?, enabled=?, updated_at=?
-                        WHERE provider=?
-                        """)) {
-                    st.setString(1, clientId);
-                    st.setString(2, sealed.cipherB64());
-                    st.setString(3, sealed.ivB64());
-                    st.setString(4, redirectUri);
-                    st.setString(5, scopes);
-                    st.setBoolean(6, view.enabled());
-                    st.setLong(7, now);
-                    st.setString(8, provider);
-                    st.executeUpdate();
-                }
+                db.run(em -> PlatformDb.update(em, UPDATE_SQL,
+                        clientId, sealed.cipherB64(), sealed.ivB64(), redirectUri, scopes,
+                        enabled, now, provider));
             }
             return find(provider).orElseThrow();
-        } catch (SQLException e) {
+        } catch (PlatformException e) {
+            throw e;
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置保存失败：" + e.getMessage(), e);
         }
     }
 
-    private SecretBox.Sealed existingSecret(Connection conn, String provider) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement(
-                "SELECT secret_enc, secret_iv FROM git_oauth_apps WHERE provider = ?")) {
-            st.setString(1, provider);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return null;
-                }
-                return new SecretBox.Sealed(rs.getString("secret_enc"), rs.getString("secret_iv"));
-            }
+    private SecretBox.Sealed existingSecret(String provider) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT secret_enc, secret_iv FROM git_oauth_apps WHERE provider = ?", provider)
+                    .map(row -> new SecretBox.Sealed((String) row[0], (String) row[1]))
+                    .orElse(null));
+        } catch (RuntimeException e) {
+            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<String> secretOf(String provider) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT secret_enc, secret_iv FROM git_oauth_apps WHERE provider = ?")) {
-            st.setString(1, normalizeProvider(provider));
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(secretBox.decrypt(
-                        rs.getString("secret_enc"), rs.getString("secret_iv")));
-            }
-        } catch (SQLException e) {
+        String normalized = normalizeProvider(provider);
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                    "SELECT secret_enc, secret_iv FROM git_oauth_apps WHERE provider = ?",
+                    normalized)
+                    .map(row -> secretBox.decrypt((String) row[0], (String) row[1])));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "Client Secret 读取失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public void delete(String provider) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "DELETE FROM git_oauth_apps WHERE provider = ?")) {
-            st.setString(1, normalizeProvider(provider));
-            st.executeUpdate();
-        } catch (SQLException e) {
+        String normalized = normalizeProvider(provider);
+        try {
+            db.run(em -> PlatformDb.update(em,
+                    "DELETE FROM git_oauth_apps WHERE provider = ?", normalized));
+        } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "OAuth 应用配置删除失败：" + e.getMessage(), e);
         }
     }
 
-    private GitOauthApp map(ResultSet rs) throws SQLException {
-        String plain = secretBox.decrypt(rs.getString("secret_enc"), rs.getString("secret_iv"));
+    private GitOauthApp map(Object[] row) {
+        String plain = secretBox.decrypt((String) row[2], (String) row[3]);
         String masked = plain.length() <= 4 ? "***" : plain.substring(0, 4) + "***";
         return new GitOauthApp(
-                rs.getString("provider"),
-                rs.getString("client_id"),
-                rs.getString("redirect_uri"),
-                rs.getString("scopes"),
-                rs.getBoolean("enabled"),
+                (String) row[0],
+                (String) row[1],
+                (String) row[4],
+                (String) row[5],
+                ((Number) row[6]).intValue() == 1,
                 !plain.isBlank(),
                 masked,
-                rs.getLong("updated_at"));
+                ((Number) row[7]).longValue());
     }
 
     private static String normalizeProvider(String provider) {

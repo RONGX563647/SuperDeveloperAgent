@@ -7,6 +7,7 @@ import {
 } from '@element-plus/icons-vue'
 import {
   addGitIssueComment, closeGitIssue, createGitIssue, deleteGitIssue, deleteGitIssueComment,
+  getGitIssueVersions,
   listGitIssueComments, listGitIssues, reopenGitIssue, syncGitIssue, updateGitIssue,
   uploadIssueImage,
   type GitIssueCommentRow, type GitIssuePriority, type GitIssueRow,
@@ -472,10 +473,16 @@ watch(priorityFilter, () => {
     selectedId.value = ''
   }
 })
+// 切换项目后重新取当前分支版本与标签候选
+watch(() => appStore.projectId, (id) => {
+  versionLoadedFor = ''
+  if (id) void loadVersionContext(id)
+})
 
 onMounted(() => {
   void load()
   void listProjects().then((rows) => { projects.value = rows }).catch(() => {})
+  void loadVersionContext(appStore.projectId)
 })
 
 // ---------------------------------------------------------------- 选中 / 评论
@@ -545,7 +552,35 @@ const form = reactive({
   labels: '',
   kind: 'BUG' as 'BUG' | 'FEAT',
   priority: 'P2' as GitIssuePriority,
+  version: '',
 })
+
+/** 关联版本号：候选来自项目现有 git 标签；默认值是当前分支版本线的下一个补丁版本。 */
+const versionOptions = ref<string[]>([])
+const versionSuggestion = ref('')
+const versionBranch = ref('')
+let versionLoadedFor = ''
+
+/**
+ * 版本上下文全部取自后端 `/git-issues/versions`。
+ *
+ * 不在前端再算一遍：版本推导规则（版本线取最大补丁 +1、其他分支取最新标签）
+ * 一旦两边各写一份，任务栏显示的版本号就会和实际打 tag 的版本号对不上。
+ */
+async function loadVersionContext(projectId: string): Promise<void> {
+  if (!projectId || versionLoadedFor === projectId) return
+  versionLoadedFor = projectId
+  try {
+    const versions = await getGitIssueVersions(projectId)
+    versionBranch.value = versions.branch
+    versionOptions.value = versions.tags ?? []
+    versionSuggestion.value = versions.suggested ?? ''
+  } catch {
+    versionBranch.value = ''
+    versionOptions.value = []
+    versionSuggestion.value = ''
+  }
+}
 
 const editorTarget = computed(() => {
   const row = editingId.value
@@ -560,7 +595,15 @@ const editorTarget = computed(() => {
 function openCreate(): void {
   taskView.value = 'list'
   editingId.value = ''
-  Object.assign(form, { title: '', body: '', labels: '', kind: 'BUG', priority: 'P2' })
+  Object.assign(form, {
+    title: '', body: '', labels: '', kind: 'BUG', priority: 'P2',
+    version: versionSuggestion.value,
+  })
+  // 首次打开时提示值可能还没加载完：加载后补上默认版本，不覆盖用户已输入的内容
+  const projectId = appStore.projectId
+  void loadVersionContext(projectId).then(() => {
+    if (!editingId.value && !form.version) form.version = versionSuggestion.value
+  })
   editorOpen.value = true
   selectedId.value = ''
 }
@@ -570,6 +613,13 @@ function openEdit(row: GitIssueRow): void {
   Object.assign(form, {
     title: row.title, body: row.body, labels: row.labels, kind: row.kind ?? 'BUG',
     priority: row.priority ?? 'P2',
+    version: row.version || versionSuggestion.value,
+  })
+  const projectId = row.projectId || appStore.projectId
+  void loadVersionContext(projectId).then(() => {
+    if (editingId.value === row.id && !row.version) {
+      form.version = versionSuggestion.value
+    }
   })
   editorOpen.value = true
 }
@@ -660,6 +710,7 @@ async function submit(): Promise<void> {
       labels: form.labels.trim(),
       kind: form.kind,
       priority: form.priority,
+      version: form.version.trim(),
       state: editingRow?.state ?? ('OPEN' as const),
     }
     const row = editingId.value
@@ -1068,6 +1119,9 @@ defineExpose({ openCreate, focus })
               <span class="prio-pill" :class="(row.priority ?? 'P2').toLowerCase()">
                 {{ row.priority ?? 'P2' }}
               </span>
+              <span class="version-chip mono" :class="{ empty: !row.version }">
+                {{ row.version ? `v${row.version}` : '未关联版本' }}
+              </span>
               <span class="focus-title">{{ row.title }}</span>
               <span class="focus-meta">{{ kindLabel(row.kind) }} · {{ formatTime(row.updatedAt) }}</span>
               <span class="focus-arrow">→</span>
@@ -1180,6 +1234,7 @@ defineExpose({ openCreate, focus })
                   {{ row.priority ?? 'P2' }}
                 </span>
                 <span v-if="row.code" class="task-code mono">{{ row.code }}</span>
+                <span v-if="row.version" class="version-chip mono">v{{ row.version }}</span>
                 <span class="kind-chip" :class="row.kind === 'FEAT' ? 'feat' : 'bug'">
                   {{ kindLabel(row.kind) }}
                 </span>
@@ -1286,6 +1341,30 @@ defineExpose({ openCreate, focus })
                   <el-input v-model="form.labels" placeholder="bug, 待排查（逗号分隔）" />
                 </div>
               </div>
+              <div class="editor-field">
+                <div class="editor-label-row">
+                  <span class="editor-label">关联版本号</span>
+                  <span class="editor-hint">
+                    {{ versionBranch ? `当前分支 ${versionBranch}` : '仓库不可用，只能手输' }}
+                  </span>
+                  <button
+                    v-if="versionSuggestion && form.version !== versionSuggestion"
+                    type="button" class="editor-upload"
+                    @click="form.version = versionSuggestion"
+                  >
+                    使用默认 {{ versionSuggestion }}
+                  </button>
+                </div>
+                <el-select
+                  v-model="form.version" filterable allow-create default-first-option clearable
+                  placeholder="留空 = 当前分支版本；也可选下个版本的标签"
+                >
+                  <el-option v-for="tag in versionOptions" :key="tag" :label="tag" :value="tag" />
+                </el-select>
+                <p class="desc-hint">
+                  默认取当前分支版本线的下一个补丁版本；计划下个版本再做的 Feat 可改成目标版本。
+                </p>
+              </div>
               <div class="editor-target">
                 <span class="target-icon"><el-icon><Link /></el-icon></span>
                 <span v-if="editorTarget.repo" class="target-text">
@@ -1314,6 +1393,9 @@ defineExpose({ openCreate, focus })
                   </span>
                   <span class="kind-chip" :class="selectedRow.kind === 'FEAT' ? 'feat' : 'bug'">
                     {{ kindLabel(selectedRow.kind) }}
+                  </span>
+                  <span class="version-chip" :class="{ empty: !selectedRow.version }">
+                    {{ selectedRow.version ? `v${selectedRow.version}` : '未关联版本' }}
                   </span>
                   <span class="state-pill" :class="selectedRow.state.toLowerCase()">
                     {{ selectedRow.state === 'OPEN' ? '待处理' : '已完成' }}
@@ -2185,6 +2267,24 @@ defineExpose({ openCreate, focus })
   font-size: 10px;
   color: var(--ink-soft);
 }
+/* 关联版本徽标：列表 / 详情 / 看板共用；空值弱化提示未关联 */
+.version-chip {
+  flex: none;
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #2563eb;
+  white-space: nowrap;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 4px;
+}
+.version-chip.empty {
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+  border-color: transparent;
+}
 /* 优先级徽标：P0 红 / P1 琥珀 / P2 蓝，列表与详情共用 */
 .prio-chip,
 .prio-pill {
@@ -2590,6 +2690,12 @@ defineExpose({ openCreate, focus })
   gap: 8px;
   align-items: center;
   justify-content: space-between;
+}
+/* 版本号输入框旁的来源提示：说明默认值是怎么来的（当前分支版本线 / 最新标签）。 */
+.editor-hint {
+  font-size: 10px;
+  color: var(--ink-muted);
+  margin-right: auto;
 }
 .editor-upload {
   display: inline-flex;

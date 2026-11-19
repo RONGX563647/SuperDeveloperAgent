@@ -115,6 +115,9 @@ public class PipelineController {
                             row.put("script", s.script() == null ? "" : s.script());
                             row.put("scriptSha", s.scriptSha() == null ? "" : s.scriptSha());
                             row.put("builtin", s.builtin());
+                            // 定义里的默认目标必须回传：前端要据此回填部署方式，并在
+                            // 用户切换后判断"与脚本记录不一致"（此前漏传，界面永远拿不到）
+                            row.put("deployTarget", s.deployTarget() == null ? "" : s.deployTarget());
                             return row;
                         })
                         .toList());
@@ -381,6 +384,37 @@ public class PipelineController {
                 "complete", complete);
     }
 
+    /**
+     * 日志行分页：虚拟滚动与「跳到某一行」都靠它。
+     *
+     * <p>和 {@code /log} 的分工：{@code /log} 是按字节追加（首屏之后持续 follow），
+     * 这里是按行取窗口（用户拖动滚动条 / 打开一个很大的历史日志）。
+     * 只给 text 的接口没法回答「一共多少行」，前端就只能整包塞进 DOM，
+     * 几十万行的构建日志会把页面拖死。
+     *
+     * @param runId  运行 id
+     * @param offset 起始行号（0 基）
+     * @param limit  最多返回行数（上限由引擎夹紧）
+     */
+    @GetMapping("/runs/{runId}/log/lines")
+    public Map<String, Object> logLines(@PathVariable String runId,
+                                        @RequestParam(defaultValue = "0") int offset,
+                                        @RequestParam(defaultValue = "500") int limit) {
+        if (!engine.hasRun(runId)) {
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_INPUT, "运行不存在：" + runId);
+        }
+        PipelineEngine.LogLinePage page = engine.logLines(runId, offset, limit);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("offset", page.offset());
+        out.put("limit", page.limit());
+        out.put("total", page.total());
+        out.put("lines", page.lines());
+        out.put("truncated", page.truncated());
+        // complete = 已读到末尾：前端据此停止轮询并渲染「到底了」
+        out.put("complete", !page.truncated());
+        return out;
+    }
+
     @PostMapping("/runs/{runId}/cancel")
     public Map<String, Object> cancel(@PathVariable String runId) {
         engine.cancel(runId);
@@ -489,6 +523,15 @@ public class PipelineController {
         }
         // 增量日志模式下（withLog=false）不重复传输整段日志
         view.put("log", withLog ? engine.logTail(runId) : "");
+        // 发布形态事实：首次发布 / tag 是否真的在远端可见 / 为什么没生效。
+        // 只给版本号时页面只能显示"看起来成功"，用户到远端才发现没有标签。
+        PipelineEngine.ReleaseFacts release = engine.releaseFacts(runId);
+        view.put("release", Map.of(
+                "firstRelease", release.firstRelease(),
+                "tagState", release.tagState() == null ? "" : release.tagState(),
+                "tagReason", release.tagReason() == null ? "" : release.tagReason(),
+                "hint", release.hint() == null ? "" : release.hint(),
+                "remoteVisible", "PUSHED".equalsIgnoreCase(release.tagState())));
         // 运行元信息：触发者 / 环境绑定 / 定义来源（Agent 固化脚本时可直接看出）
         RunMeta meta = engine.runMeta(runId);
         if (meta != null) {

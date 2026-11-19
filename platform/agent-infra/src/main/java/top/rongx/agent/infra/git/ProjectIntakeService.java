@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +37,19 @@ public class ProjectIntakeService {
     /** 平台内置动作 id（报告按这个顺序展示，保持稳定）。 */
     private static final List<String> KNOWN_ACTIONS = List.of(
             "backend_build", "backend_test", "frontend_build", "frontend_test", "image_package");
+
+    /** Dockerfile 探测顺序：与 RecipeScaffolder / ensure_dockerfile 一致，根目录优先。 */
+    private static final List<String> DOCKERFILE_DIRS = List.of(
+            "", "backend", "frontend", "deploy", "docker");
+
+    /** 镜像阶段判定与执行面 {@code isImageStage} 对齐：动作 image_package 或阶段类型 image。 */
+    private static final Pattern IMAGE_ACTION =
+            Pattern.compile("(?m)\\baction\\s*:\\s*['\"]?image_package\\b");
+    private static final Pattern IMAGE_TYPE =
+            Pattern.compile("(?m)\\btype\\s*:\\s*['\"]?image\\b");
+    /** 兼容 block style（{@code target: docker}）与 inline flow map（{@code deploy: {target: docker}}）。 */
+    private static final Pattern TARGET_DOCKER =
+            Pattern.compile("(?mi)\\btarget\\s*:\\s*['\"]?docker['\"]?(?=\\s|[,}]|$)");
 
     private final GitWorktreeManager git;
     private final Path workspaceRoot;
@@ -372,15 +386,29 @@ public class ProjectIntakeService {
             }
         }
 
-        boolean hasDockerfile = Files.isRegularFile(repoRoot.resolve("Dockerfile"));
+        // 与流水线预检（ci_dry_run）同一口径：只要有镜像阶段（image_package / type: image），
+        // 就要求仓库里存在 Dockerfile；不能只看 deploy.target——target=host 的定义也可能
+        // 残留 image 阶段，那种定义照样会在预检被 E-501 挡住。
+        String dockerfilePath = findDockerfile(repoRoot);
+        boolean hasDockerfile = dockerfilePath != null;
+        boolean imageStage = hasImageStage(pipelineYaml);
+        boolean dockerTarget = targetIsDocker(pipelineYaml);
         report.put("dockerfile", hasDockerfile);
-        if (!hasDockerfile && targetIsDocker(pipelineYaml)) {
-            // 不区分定义来自仓库还是平台生成：最终目标是 docker 且没有 Dockerfile 就是跑不通，
-            // 必须在接入阶段挡住，而不是等部署时才 E-501（静默降级到 HOST 会让人以为在跑镜像）。
+        report.put("dockerfilePath", dockerfilePath);
+        if (!hasDockerfile && (imageStage || dockerTarget)) {
             diags.add(diag("blocker", "DOCKERFILE_MISSING",
-                    "流水线目标是 docker，但仓库没有 Dockerfile：镜像无法构建（"
+                    (imageStage
+                            ? "流水线含镜像阶段（image_package），但仓库没有 Dockerfile：镜像无法构建（"
+                            : "流水线目标是 docker，但仓库没有 Dockerfile：镜像无法构建（")
                             + ErrorCode.DEPLOY_PREREQUISITE_MISSING.code() + "）",
-                    "补 Dockerfile 后重新接入，或把 deploy.target 改成 host"));
+                    "让 Agent 调用 ensure_dockerfile（base_sha=当前提交、container_port=容器端口）"
+                            + "自动生成 Dockerfile 并登记待确认补丁；确认后提交新版本再发布"));
+        } else if (hasDockerfile && imageStage && !dockerTarget) {
+            // 定义自相矛盾：镜像阶段在 host 目标下不会产出任何被部署的东西，但预检仍会要求
+            // Dockerfile。保留为建议而不是阻塞项：补齐 Dockerfile 后发布仍可跑通。
+            diags.add(diag("suggestion", "IMAGE_STAGE_UNUSED",
+                    "定义含 image_package 阶段，但 deploy.target 不是 docker：镜像产物不会被部署使用",
+                    "确认是否需要镜像发布；不需要就删掉 image 阶段及 rollback 对镜像的依赖"));
         }
 
         // 动作配方：只看最终定义真正引用的动作（+ Makefile 里显式提供的配方）
@@ -510,17 +538,27 @@ public class ProjectIntakeService {
         return out;
     }
 
-    private boolean targetIsDocker(String pipelineYaml) {
+    /** 已存在的 Dockerfile（仓库相对路径）；没有返回 null。探测范围与脚手架一致。 */
+    private String findDockerfile(Path repoRoot) {
+        for (String dir : DOCKERFILE_DIRS) {
+            Path base = dir.isEmpty() ? repoRoot : repoRoot.resolve(dir);
+            if (Files.isRegularFile(base.resolve("Dockerfile"))) {
+                return dir.isEmpty() ? "Dockerfile" : dir + "/Dockerfile";
+            }
+        }
+        return null;
+    }
+
+    /** 定义里是否有镜像阶段（与执行面 isImageStage 同口径：image_package 动作或 image 类型）。 */
+    private boolean hasImageStage(String pipelineYaml) {
         if (pipelineYaml == null) {
             return false;
         }
-        for (String line : pipelineYaml.split("\\R")) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("target:")) {
-                return "docker".equals(trimmed.substring("target:".length()).trim());
-            }
-        }
-        return false;
+        return IMAGE_ACTION.matcher(pipelineYaml).find() || IMAGE_TYPE.matcher(pipelineYaml).find();
+    }
+
+    private boolean targetIsDocker(String pipelineYaml) {
+        return pipelineYaml != null && TARGET_DOCKER.matcher(pipelineYaml).find();
     }
 
     private boolean planProvidesAction(ScaffoldPlan plan, String wire) {

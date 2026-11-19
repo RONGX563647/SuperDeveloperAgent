@@ -24,6 +24,7 @@ import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.PipelineEngine.ReusableBuild;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -361,6 +362,12 @@ public class DeployTools {
                       @ToolParam(name = "tag", required = false,
                               description = "是否打 tag：true = 新版本独立部署，不覆盖旧版本；false/空 = 覆盖该环境默认部署")
                       String tag,
+                      @ToolParam(name = "deploy_target", required = false,
+                              description = "部署方式：docker = 打包镜像运行，host = 直接跑本机 jar；空 = 按流水线定义")
+                      String deployTarget,
+                      @ToolParam(name = "build_run_id", required = false,
+                              description = "复用某次已成功运行的产物（commit+version 必须一致），跳过构建")
+                      String buildRunId,
                       ProjectContext ctx) {
         String target = normalize(env);
         if ("prod".equals(target)) {
@@ -413,6 +420,15 @@ public class DeployTools {
         params.put("confirmedBy", binding.confirmedBy() == null ? "" : binding.confirmedBy());
         params.put("dryRunHash", dryRun.reportHash());
         params.put("dryRunFingerprint", dryRun.fingerprint());
+        // 目标随触发下发：不带时引擎按流水线定义走，agent 说的 docker 会被静默忽略
+        String wireTarget = null;
+        if (deployTarget != null && !deployTarget.isBlank()) {
+            wireTarget = deployTarget.trim().toLowerCase();
+            if (!"docker".equals(wireTarget) && !"host".equals(wireTarget)) {
+                return "err: deploy_target 只能是 docker / host（prod 走部署面板）";
+            }
+            params.put("deployTarget", wireTarget);
+        }
         if (version != null && !version.isBlank()) {
             params.put("version", version.trim());
         }
@@ -426,10 +442,41 @@ public class DeployTools {
             }
             params.put("tag", "true");
         }
+        // 复用已有构建产物：必须自证「同一份代码 + 同一个版本」，
+        // 否则就是在部署一份用户没有要求的产物。
+        boolean reusedBuild = false;
+        if (buildRunId != null && !buildRunId.isBlank()) {
+            String reuseId = buildRunId.trim();
+            ReusableBuild reusable = engine.reusableBuild(reuseId);
+            if (!reusable.available()) {
+                return "err: 无法复用 " + reuseId + " 的产物：" + reusable.reason()
+                        + "\nnext: 去掉 build_run_id 重新完整构建，或换一个成功的运行 id";
+            }
+            String requestedSha = sha;
+            if (!requestedSha.startsWith(reusable.gitSha())
+                    && !reusable.gitSha().startsWith(requestedSha)) {
+                return "err: 复用的运行 " + reuseId + " 构建的是提交 " + reusable.gitSha()
+                        + "，本次要求 " + requestedSha
+                        + "；提交不一致不能复用（会部署成另一份代码）"
+                        + "\nnext: 用 build_run_id 对应提交触发，或去掉 build_run_id 重新构建";
+            }
+            String requestedVersion = version == null ? "" : version.trim();
+            if (!requestedVersion.isBlank() && !reusable.version().isBlank()
+                    && !requestedVersion.equals(reusable.version())) {
+                return "err: 复用的运行 " + reuseId + " 版本是 " + reusable.version()
+                        + "，本次要求 " + requestedVersion
+                        + "；版本不一致不能复用（镜像标签与发布记录会对不上）"
+                        + "\nnext: 版本号保持一致，或去掉 build_run_id 重新构建";
+            }
+            params.put("deployImage", reusable.image());
+            reusedBuild = true;
+        }
         String runId = engine.trigger(ctx.projectId(), pipelineId, params);
         return "runId: " + runId + "\nenv: " + target
                 + "\nversion: " + (version == null || version.isBlank() ? "latest" : version.trim())
                 + "\ntagged: " + params.getOrDefault("tag", "false")
+                + "\ntarget: " + (wireTarget == null ? "按流水线定义" : wireTarget)
+                + "\nreusedBuild: " + reusedBuild
                 + "\nstatus: " + engine.status(runId);
     }
 

@@ -82,7 +82,8 @@ class PipelineWatchdogTest {
         set(state, "stageTotal", 3);
         set(state, "maxRunMillis", -1L);
         long now = System.currentTimeMillis();
-        set(state, "lastLogChangeAt", now - 31_000L);
+        // 心跳阈值 2 分钟：静默超过阈值才补一行，避免每 30s 一条把运行日志淹掉
+        set(state, "lastLogChangeAt", now - 121_000L);
         putRun(engine, "run-watch", state);
 
         PipelineEngine.RunProgress progress = engine.progress("run-watch");

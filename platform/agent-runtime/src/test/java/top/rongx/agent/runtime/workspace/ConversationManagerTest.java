@@ -13,7 +13,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -27,9 +31,11 @@ import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
 import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
+import top.rongx.agent.domain.conversation.ConversationTimelineRepository;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.RunStatus;
 import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.TimelineEntry;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
 import top.rongx.agent.domain.port.ProjectRepository;
@@ -39,6 +45,7 @@ import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.runtime.ChatSessionRegistry;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 工作区管理：调度会话、异步运行、防重复、取消与任务板。
@@ -54,10 +61,14 @@ class ConversationManagerTest {
     private final ProjectRepository projects = new FakeProjects();
 
     private ConversationManager manager(ChatService chat, int concurrency) {
+        return manager(store, chat, concurrency);
+    }
+
+    private ConversationManager manager(InMemoryStore store, ChatService chat, int concurrency) {
         WorkspaceRunExecutor executor = new WorkspaceRunExecutor(provider(() -> chat), store, store,
                 store, new WorkspaceEventBus(),
                 top.rongx.agent.domain.run.RunLedgerRepository.noop(), concurrency);
-        return new ConversationManager(store, store, store, store, projects, executor, userId -> false,
+        return new ConversationManager(store, store, store, store, store, projects, executor, userId -> false,
                 top.rongx.agent.domain.conversation.SessionDataCleaner.noop(),
                 DispatchPlan.DEFAULT_MAX_PARALLEL, DispatchPlan.DEFAULT_MAX_DURATION_SECONDS);
     }
@@ -119,6 +130,27 @@ class ConversationManagerTest {
     }
 
     @Test
+    @DisplayName("服务端事件时间线按 seq 游标增量读取，且只有 owner 能读")
+    void eventTimelineIsCursorReadable() {
+        ConversationManager manager = manager(new SilentChat(), 1);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        long first = store.append(c.id(), "user", "user", "修一下构建", null, null);
+        long second = store.append(c.id(), "tool_call", "assistant", null, "read_file", "call-1");
+        long third = store.append(c.id(), "tool_result", "tool", "file content", "read_file", "call-1");
+
+        List<TimelineEntry> all = manager.timeline(c.id(), USER, 0, 100);
+        assertEquals(List.of("user", "tool_call", "tool_result"),
+                all.stream().map(TimelineEntry::kind).toList());
+        // 断线续传：游标之后的记录
+        assertEquals(List.of(second, third), manager.timeline(c.id(), USER, first, 100).stream()
+                .map(TimelineEntry::seq).toList());
+        assertEquals(List.of(third), manager.timeline(c.id(), USER, second, 100).stream()
+                .map(TimelineEntry::seq).toList());
+        // 别人的会话读不到
+        assertThrows(PlatformException.class, () -> manager.timeline(c.id(), "bob", 0, 100));
+    }
+
+    @Test
     @DisplayName("同一会话多次运行按追加方式累积时间线，不覆盖历史")
     void runAppendsTranscript() {
         ConversationManager manager = manager(new EchoChat(), 1);
@@ -132,6 +164,24 @@ class ConversationManagerTest {
     }
 
     @Test
+    @DisplayName("时间线落库之前不对外暴露终态，避免下一轮读到旧时间线")
+    void terminalStatusVisibleOnlyAfterTranscriptSaved() throws Exception {
+        BlockingStore blocking = new BlockingStore();
+        ConversationManager manager = manager(blocking, new EchoChat(), 1);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        String runId = manager.send(c.id(), USER, "检查构建");
+
+        assertTrue(blocking.entered.await(3, TimeUnit.SECONDS), "运行应进入时间线写入");
+        assertEquals(ConversationStatus.RUNNING,
+                manager.findOwned(c.id(), USER).orElseThrow().status(),
+                "时间线未写完时不能先对外显示终态");
+
+        blocking.release.countDown();
+        assertEquals(RunStatus.SUCCEEDED, manager.waitForRun(runId, USER, 3_000).status());
+        assertTrue(manager.transcript(c.id(), USER).orElseThrow().contains("检查构建"));
+    }
+
+    @Test
     @DisplayName("不同会话的相同目标各自派发；同会话重复目标明确拒绝；可取消")
     void duplicateGoalAndCancel() {
         ConversationManager manager = manager(new NeverChat(), 2);
@@ -142,15 +192,22 @@ class ConversationManagerTest {
         assertFalse(first.equals(second), "不同会话的相同目标必须各自派发，不能复用别人的运行");
         assertFalse(second.startsWith("err:"));
 
-        // 同一会话重复派发相同目标：幂等拒绝并给出明确原因，不能静默返回旧 runId
-        String duplicate = manager.send(a.id(), USER, "修复 构建");
-        assertTrue(duplicate.startsWith("err:"), "同会话重复目标应返回明确错误文案");
+        // 同一会话重复派发相同目标：幂等拒绝并给出明确原因，不能静默返回旧 runId。
+        // 契约是「要么返回 runId，要么抛异常」——返回 "err: ..." 文本会让调用方
+        // 把它当成 runId 去轮询（子会话因此表现为"派发成功但永远不动"）。
+        RunException duplicate = assertThrows(RunException.class,
+                () -> manager.send(a.id(), USER, "修复 构建"));
+        assertTrue(duplicate.getMessage().contains("已有相同目标的运行"),
+                duplicate.getMessage());
         // 同一会话不能再并发派发其他目标
         assertThrows(PlatformException.class,
                 () -> manager.send(a.id(), USER, "另一个目标"));
         // 调度会话不能给自己派发（深度固定为 1）
         Conversation supervisor = manager.ensureSupervisor(PROJECT, USER);
-        assertTrue(manager.send(supervisor.id(), USER, "x").startsWith("err:"));
+        RunException supervisorRejected = assertThrows(RunException.class,
+                () -> manager.send(supervisor.id(), USER, "x"));
+        assertTrue(supervisorRejected.getMessage().contains("调度会话"),
+                supervisorRejected.getMessage());
 
         assertTrue(manager.cancelRun(first, USER));
         assertEquals(RunStatus.CANCELLED, manager.runStatus(first, USER).status());
@@ -271,14 +328,57 @@ class ConversationManagerTest {
         }
     }
 
+    /** 时间线写入可控阻塞，用于验证“先落时间线、再暴露终态”的顺序。 */
+    private static final class BlockingStore extends InMemoryStore {
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public void saveTranscript(String conversationId, String payload) {
+            entered.countDown();
+            try {
+                release.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            super.saveTranscript(conversationId, payload);
+        }
+    }
+
     /** 三份仓库接口的内存实现（测试专用）。 */
-    private static final class InMemoryStore implements ConversationRepository,
-            ConversationRunRepository, WorkspaceTaskRepository, ConversationTranscriptRepository {
+    private static class InMemoryStore implements ConversationRepository,
+            ConversationRunRepository, WorkspaceTaskRepository, ConversationTranscriptRepository,
+            ConversationTimelineRepository {
         private final Map<String, Conversation> conversations = new ConcurrentHashMap<>();
         private final Map<String, ConversationRun> runs = new ConcurrentHashMap<>();
         private final Map<String, WorkspaceTask> tasks = new ConcurrentHashMap<>();
         private final Map<String, String> transcripts = new ConcurrentHashMap<>();
+        private final Map<String, List<TimelineEntry>> timeline = new ConcurrentHashMap<>();
         private final AtomicInteger seq = new AtomicInteger();
+        private final AtomicLong timelineSeq = new AtomicLong();
+
+        @Override
+        public long append(String conversationId, String kind, String role, String text,
+                           String tool, String toolCallId) {
+            long seq = timelineSeq.incrementAndGet();
+            timeline.computeIfAbsent(conversationId, key -> new CopyOnWriteArrayList<>())
+                    .add(new TimelineEntry(seq, conversationId, kind, role, text, tool,
+                            toolCallId, System.currentTimeMillis()));
+            return seq;
+        }
+
+        @Override
+        public List<TimelineEntry> entries(String conversationId, long afterSeq, int limit) {
+            return timeline.getOrDefault(conversationId, List.of()).stream()
+                    .filter(e -> e.seq() > afterSeq)
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public void deleteByConversation(String conversationId) {
+            timeline.remove(conversationId);
+        }
 
         @Override
         public Conversation save(Conversation conversation) {
@@ -402,6 +502,14 @@ class ConversationManagerTest {
             return runs.values().stream()
                     .filter(r -> r.conversationId().equals(conversationId))
                     .sorted(Comparator.comparingLong(ConversationRun::createdAt).reversed())
+                    .limit(limit).toList();
+        }
+
+        @Override
+        public List<ConversationRun> findActiveRuns(int limit) {
+            return runs.values().stream()
+                    .filter(r -> !r.status().terminal())
+                    .sorted(Comparator.comparingLong(ConversationRun::createdAt))
                     .limit(limit).toList();
         }
 

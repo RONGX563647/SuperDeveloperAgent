@@ -4,8 +4,8 @@
  * 运行：node --experimental-strip-types src/state/agentEventReducer.test.ts
  * （Node 22+ 原生支持 TS 类型剥离；或用 tsx 运行）
  */
-import { emptyAgentProjection, reduceAgentEvent, toolDisplayName } from './agentEventReducer'
-import type { AgentEvent } from '../types'
+import { emptyAgentProjection, reduceAgentEvent, toolDisplayName } from './agentEventReducer.ts'
+import type { AgentEvent } from '../types.ts'
 
 let passed = 0
 let failed = 0
@@ -183,6 +183,40 @@ import { renderMarkdown } from '../utils/markdown'
   q = reduceAgentEvent(q, ev('tool.completed', 2, { toolCallId: 't-2', args: '{"priority":"P1"}' }))
   check('终态入参兜底', q.tools['t-2']?.arguments === '{"priority":"P1"}',
     JSON.stringify(q.tools['t-2']))
+}
+
+// 13. heartbeat 是保活帧：不产生消息、不打断流式正文（游标可单调推进，属无害）
+{
+  const before = emptyAgentProjection()
+  const after = reduceAgentEvent(before, ev('heartbeat', 7, { alive: true }))
+  check('heartbeat 不产生消息', after.messages.length === 0)
+  check('heartbeat 不建流式轮次', after.streamingTurn === null)
+  check('heartbeat 游标单调', after.lastSequence >= 0)
+  // 心跳之后真实事件仍能按自己的 sequence 生效
+  const next = reduceAgentEvent(after, ev('text.delta', 8, { text: 'ok' }))
+  check('heartbeat 后正文正常', next.streamingTurn?.text === 'ok')
+}
+
+// 14. 入参不可用标记：区分「工具无参」与「参数丢失」
+{
+  let p = emptyAgentProjection()
+  p = reduceAgentEvent(p, ev('tool.started', 1, { name: 'workspace_write', toolCallId: 'w-1' }))
+  p = reduceAgentEvent(p, ev('tool.completed', 2, {
+    toolCallId: 'w-1', argsUnavailable: true,
+  }))
+  check('argsUnavailable 透传到轨迹', p.tools['w-1']?.argsUnavailable === true,
+    JSON.stringify(p.tools['w-1']))
+
+  // 有入参时不能误标：真实参数优先，标记位应被覆盖为 false
+  let q = emptyAgentProjection()
+  q = reduceAgentEvent(q, ev('tool.started', 1, { name: 'grep', toolCallId: 'g-1' }))
+  q = reduceAgentEvent(q, ev('tool.arguments', 2, { toolCallId: 'g-1', args: '{"pattern":"x"}' }))
+  q = reduceAgentEvent(q, ev('tool.completed', 3, {
+    toolCallId: 'g-1', argsUnavailable: true,
+  }))
+  check('有入参时不算不可用', q.tools['g-1']?.argsUnavailable !== true,
+    JSON.stringify(q.tools['g-1']))
+  check('有入参时保留参数', q.tools['g-1']?.arguments === '{"pattern":"x"}')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed`)

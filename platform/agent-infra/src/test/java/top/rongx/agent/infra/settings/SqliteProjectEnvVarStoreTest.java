@@ -51,7 +51,7 @@ class SqliteProjectEnvVarStoreTest {
 
         // 密文落库：数据库里不应出现明文
         try (Connection conn = DriverManager.getConnection(
-                "jdbc:sqlite:" + workspace.resolve("_platform/projects.db"));
+                "jdbc:sqlite:" + workspace.resolve("_platform/platform.db"));
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("SELECT value_enc FROM project_env_vars")) {
             while (rs.next()) {

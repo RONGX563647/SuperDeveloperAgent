@@ -13,10 +13,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import top.rongx.agent.domain.error.PlatformException;
+import org.junit.jupiter.api.Tag;
 
 /**
  * GitWorktreeManager 真实集成测试：全部用本地目录 + 本地 bare 模拟（无网络、无真实远端）。
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class GitWorktreeManagerTest {
 
     @TempDir
@@ -76,6 +79,33 @@ class GitWorktreeManagerTest {
 
         assertEquals(sha, m.revParse(dir, "HEAD"));
         assertTrue(Files.exists(dir.resolve("Dockerfile")));
+    }
+
+    @Test
+    @DisplayName("commitOnly 用独立 index 提交未跟踪文件、绕过仓库 hook，提交后 index 干净")
+    void commitOnlyCommitsUntrackedBypassingHooks() throws Exception {
+        makeUserRepo("commit-only");
+        Path dir = userSpace.resolve("commit-only");
+        Path hooks = userSpace.resolve("blocking-hooks");
+        Files.createDirectories(hooks);
+        Path hook = hooks.resolve("pre-commit");
+        Files.writeString(hook, "#!/bin/sh\nexit 1\n");
+        try {
+            Files.setPosixFilePermissions(hook,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+        } catch (UnsupportedOperationException ignored) {
+            // Windows 没有 POSIX 权限位；hook 可能不执行，本用例在 Linux/CI 上才真正生效
+        }
+        exec(dir, "git", "config", "core.hooksPath", hooks.toAbsolutePath().toString());
+
+        GitWorktreeManager m = manager();
+        Files.writeString(dir.resolve("NewFile.txt"), "brand new\n");
+        String sha = m.commitOnly(dir, "agent: add new file");
+
+        assertEquals(sha, m.revParse(dir, "HEAD"));
+        assertEquals("brand new\n", m.showFile(dir, "HEAD", "NewFile.txt"));
+        // 提交后真实 index 已同步到新 HEAD：无未提交改动残留
+        assertTrue(m.statusPorcelain(dir).isEmpty(), "提交后 index 应干净：" + m.statusPorcelain(dir));
     }
 
     /** 在用户空间造一个真实开发中的项目：git init + 一次提交。返回 HEAD。 */

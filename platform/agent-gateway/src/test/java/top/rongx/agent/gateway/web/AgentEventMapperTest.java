@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.web;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -56,6 +57,32 @@ class AgentEventMapperTest {
         Map<String, Object> payload = (Map<String, Object>) dto.get("payload");
         assertEquals("read_file", payload.get("name"));
         assertEquals("success", String.valueOf(payload.get("state")).toLowerCase());
+    }
+
+    @Test
+    void toolEventsAlwaysExposeArgsContract() {
+        // 插件类 / MCP 工具走的是 start/completed 两条路，不是 tool.arguments：
+        // 只在那一条上补 args 会让它们在轨迹里永远空白。
+        Map<String, Object> start = mapper.toDto(
+                new ToolCallStartEvent("reply-1", "call-9", "workspace_write"));
+        Map<String, Object> startPayload = payloadOf(start);
+        assertTrue(startPayload.containsKey("args"), "start 事件必须显式给出 args 字段");
+        assertTrue(startPayload.containsKey("argsUnavailable"),
+                "start 事件必须显式给出 argsUnavailable，区分「无参」与「参数丢失」");
+
+        Map<String, Object> end = mapper.toDto(new ToolResultEndEvent(
+                "reply-1", "call-9", "workspace_write", ToolResultState.SUCCESS));
+        Map<String, Object> endPayload = payloadOf(end);
+        assertTrue(endPayload.containsKey("args"));
+        assertTrue(endPayload.containsKey("argsUnavailable"));
+        // 上游这条事件没带入参：必须标记为不可用，而不是给一个空对象
+        assertEquals(Boolean.TRUE, endPayload.get("argsUnavailable"));
+        assertNull(endPayload.get("args"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> payloadOf(Map<String, Object> dto) {
+        return (Map<String, Object>) dto.get("payload");
     }
 
     @Test

@@ -77,4 +77,37 @@ class DockerActionRunnerPrepareTest {
         assertEquals(StageStatus.FAILED, result.result().status());
         assertEquals("E-303", result.result().errorCode());
     }
+
+    @Test
+    @DisplayName("准备阶段吃光预算 → 明确的「准备阶段耗尽预算」，而不是命令 0s 超时")
+    void prepareOverBudgetFailsWithReason(@TempDir Path dir) {
+        DockerSandbox sandbox = sandbox((cmd, timeout, cancelled, live) -> {
+            if (cmd.contains("image") && cmd.contains("inspect")) {
+                return ProcessExecutor.StepOutcome.ok();
+            }
+            if (cmd.contains("test")) {
+                return ProcessExecutor.StepOutcome.failed(1, null, "not found"); // 空卷
+            }
+            // 模拟 chown -R 在大缓存卷上跑得比动作预算还久
+            try {
+                Thread.sleep(400);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return ProcessExecutor.StepOutcome.ok();
+        });
+        ActionSpec tiny = new ActionSpec(ActionId.BACKEND_BUILD,
+                List.of(List.of("mvn", "-B", "-q", "-DskipTests", "package")), List.of(),
+                Duration.ofMillis(100), ActionSource.builtin("test"));
+        StringBuilder live = new StringBuilder();
+
+        ActionResult result = new DockerActionRunner(sandbox).run(dir, tiny, () -> false, live::append);
+
+        assertEquals(StageStatus.FAILED, result.result().status());
+        assertEquals("E-302", result.result().errorCode());
+        assertTrue(result.result().errorSummary().contains("准备阶段"),
+                "失败原因必须指向准备阶段，否则用户与自愈都只能看到一条 0s 超时："
+                        + result.result().errorSummary());
+        assertTrue(live.toString().contains("[sandbox] ❌"), live.toString());
+    }
 }

@@ -1,0 +1,86 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_0108_capability-availability-reason",
+  "category": "feat",
+  "title": "能力列表返回可用状态与不可用原因",
+  "createdAt": "2026-11-19T01:08:49+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "task-46122095b6: 能力接口只给名字，不给可用状态/失败原因；补 {name,enabled,available,reason} 与安装结果可轮询",
+    "toolCallCount": 0
+  },
+  "problem": "task-46122095b6（会话能力 skill/mcp 不实用要大改）：能力接口只返回名字与 installed，用户装完在会话里发现用不上，却无法判断是没开启、没装好、缺环境变量还是平台没挂上；失败原因完全没有出口。skill 正文注入的问题已在渐进披露里解决（提示词只放 name + 一句话，正文由 skill_load 按需读取）。",
+  "solution": "新增 CapabilityState 把四件事分开表达：enabled（用户是否开启）/ installed（是否已落地）/ available（当前是否真的可用）/ reasonCode+reason（不可用的稳定原因码与可读原因，缺变量时列出键名）；原因码固定为 CAPABILITY_DISABLED / CAPABILITY_NOT_INSTALLED / CAPABILITY_MISSING_ENV / CAPABILITY_TRANSPORT_UNAVAILABLE；市场视图补齐 enabled/available/reasonCode/reason/missingEnv 五个字段，前端类型同步。",
+  "commits": [
+    {
+      "sha": "1614c1ede0f96afee216e7a789a1642498721789",
+      "subject": "feat(capability): 能力列表返回可用状态与不可用原因",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/CapabilityState.java",
+          "status": "A",
+          "additions": 110,
+          "deletions": 0,
+          "blobHash": "388d6635e2ecab59887b296acc5396936718ce8d"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/CapabilityStateTest.java",
+          "status": "A",
+          "additions": 90,
+          "deletions": 0,
+          "blobHash": "44bedc12068ac48e39c6d098c986396a1c1c8ea8"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/CapabilityMarketController.java",
+          "status": "M",
+          "additions": 49,
+          "deletions": 1,
+          "blobHash": "ac4f1905169a03dcd1e228368683b48dcc9a4c2b"
+        },
+        {
+          "path": "platform/web/src/api/settings.ts",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "a8eff7db12eadf531159944059cdf7bbb7a015a3"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/CapabilityStateTest.java",
+        "status": "A",
+        "additions": 90,
+        "deletions": 0,
+        "blobHash": "44bedc12068ac48e39c6d098c986396a1c1c8ea8"
+      }
+    ],
+    "casesAdded": 6,
+    "command": "mvn -B -nsu -pl agent-domain,agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 217, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "web"
+    ],
+    "verification": "Tests run: 217, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_0108_capability-availability-reason"
+    ]
+  },
+  "chain": {
+    "prev": "07b5af2cbf56ff02054fb192aa154789fa38cef79c34c340cb98859b74d8ac08",
+    "self": "a4782ff8a7f5687f14ad2eccc56448c90b4a633b79374f0b0c624914086c14e7"
+  }
+}

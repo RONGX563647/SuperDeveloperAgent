@@ -27,6 +27,7 @@ import top.rongx.agent.domain.conversation.ConversationPatch;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.runtime.ChatService;
+import top.rongx.agent.runtime.ConversationTimelineRecorder;
 import top.rongx.agent.runtime.workspace.ConversationManager;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
@@ -50,9 +51,12 @@ public class WorkspaceSuperController {
     private final CurrentUser currentUser;
     private final AgentStreamLimiter limiter;
     private final ConversationManager conversations;
+    private final ConversationTimelineRecorder timelineRecorder;
     /** 调度会话可能要等整张 DAG 跑完，默认 10 分钟（可按部署调整）。 */
     private final long streamTimeoutMillis;
     private final long heartbeatMillis;
+    /** 业务事件静默多久判定为挂住（默认 120 秒，0 = 关闭看门狗）。 */
+    private final long stallMillis;
 
     public WorkspaceSuperController(ChatService chatService,
                                     ProjectContextResolver contextResolver,
@@ -60,18 +64,23 @@ public class WorkspaceSuperController {
                                     CurrentUser currentUser,
                                     AgentStreamLimiter limiter,
                                     ConversationManager conversations,
+                                    ConversationTimelineRecorder timelineRecorder,
                                     @Value("${agent.chat.super-timeout-ms:600000}")
                                     long streamTimeoutMillis,
                                     @Value("${agent.chat.heartbeat-seconds:15}")
-                                    long heartbeatSeconds) {
+                                    long heartbeatSeconds,
+                                    @Value("${agent.chat.stall-seconds:120}")
+                                    long stallSeconds) {
         this.chatService = chatService;
         this.contextResolver = contextResolver;
         this.eventMapper = eventMapper;
         this.currentUser = currentUser;
         this.limiter = limiter;
         this.conversations = conversations;
+        this.timelineRecorder = timelineRecorder;
         this.streamTimeoutMillis = Math.max(30_000L, streamTimeoutMillis);
         this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
+        this.stallMillis = Math.max(0L, stallSeconds) * 1000L;
     }
 
     @Operation(summary = "工作区调度 Agent（SSE 事件流）",
@@ -95,6 +104,10 @@ public class WorkspaceSuperController {
                     new ConversationPatch(null, ctx.env(), null, null, null, null, null));
         }
         AgentStreamLimiter.Lease lease = limiter.acquireOrThrow();
+        // 调度会话同样要落时间线：DAG 派发过程断线后刷新页面必须能重放
+        ConversationTimelineRecorder.Recorder timeline =
+                timelineRecorder.begin(supervisor.id());
+        timeline.user(request.message());
 
         SseEmitter emitter = new SseEmitter(streamTimeoutMillis);
         Object sendLock = new Object();
@@ -102,6 +115,7 @@ public class WorkspaceSuperController {
         AtomicReference<ScheduledFuture<?>> heartbeat = new AtomicReference<>();
         AtomicBoolean closed = new AtomicBoolean();
         AtomicLong seq = new AtomicLong();
+        AtomicLong lastEventNanos = new AtomicLong(System.nanoTime());
         Runnable cancel = () -> {
             if (closed.compareAndSet(false, true)) {
                 SseHeartbeat.stop(heartbeat.get());
@@ -114,13 +128,21 @@ public class WorkspaceSuperController {
         };
         emitter.onTimeout(() -> {
             log.warn("调度对话超时 project={} timeout={}ms", projectId, streamTimeoutMillis);
+            timeline.finish("调度对话超时（" + streamTimeoutMillis + "ms）");
+            sendError(emitter, new RunException(ErrorCode.TIMEOUT,
+                    "调度对话超时（" + streamTimeoutMillis / 1000 + " 秒），本轮已中止；请重新发送"),
+                    sendLock);
             cancel.run();
             emitter.complete();
         });
         emitter.onCompletion(cancel);
         emitter.onError(error -> cancel.run());
-        // 长任务期间没有业务事件时靠心跳保活；发送失败会走 cancel 释放配额
-        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, cancel));
+        // 长任务期间靠命名心跳保活；静默看门狗在挂住时主动下发失败终态
+        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, stallMillis,
+                lastEventNanos, () -> {
+                    timeline.finish("服务端长时间没有进展，调度对话已中止");
+                    cancel.run();
+                }));
 
         try {
             Disposable disposable = chatService
@@ -128,14 +150,16 @@ public class WorkspaceSuperController {
                             supervisor.modelConnectionId(), supervisor.modelName())
                     .subscribe(
                             event -> send(emitter, event, supervisor.modelName(), seq, cancel,
-                                    sendLock),
+                                    sendLock, timeline, lastEventNanos),
                             error -> {
                                 log.error("调度对话异常 project={}", projectId, error);
+                                timeline.finish(String.valueOf(error.getMessage()));
                                 sendError(emitter, error, sendLock);
                                 cancel.run();
                                 emitter.complete();
                             },
                             () -> {
+                                timeline.finish("");
                                 emitter.complete();
                                 cancel.run();
                             });
@@ -153,7 +177,10 @@ public class WorkspaceSuperController {
     }
 
     private void send(SseEmitter emitter, AgentEvent event, String modelName, AtomicLong seq,
-                      Runnable cancel, Object sendLock) {
+                      Runnable cancel, Object sendLock,
+                      ConversationTimelineRecorder.Recorder timeline, AtomicLong lastEventNanos) {
+        timeline.onEvent(event);
+        lastEventNanos.set(System.nanoTime());
         try {
             synchronized (sendLock) {
                 emitter.send(SseEmitter.event()
@@ -165,13 +192,16 @@ public class WorkspaceSuperController {
             // 不能只依赖上游 Flux 的 onComplete —— 调度 Agent 的工具循环可能长时间不结束，
             // 心跳会让 SSE 连接一直挂着，前端只能手动点停止才能发下一条。
             if (event.getType() == AgentEventType.AGENT_END) {
+                timeline.finish("");
                 emitter.complete();
                 cancel.run();
             }
         } catch (IOException clientGone) {
+            timeline.finish("客户端断开连接");
             cancel.run();
             emitter.complete();
         } catch (RuntimeException error) {
+            timeline.finish(String.valueOf(error.getMessage()));
             sendError(emitter, error, sendLock);
             cancel.run();
             emitter.complete();

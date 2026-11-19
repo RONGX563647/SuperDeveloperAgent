@@ -25,7 +25,9 @@ import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.gitissue.GitIssue;
 import top.rongx.agent.domain.gitissue.GitIssueComment;
 import top.rongx.agent.domain.gitissue.GitIssueService;
+import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.gateway.auth.CurrentUser;
+import top.rongx.agent.gateway.gitissue.GitIssueServiceImpl;
 
 /**
  * 对话页「任务」Tab 的 Issue 任务接口（与 Agent 工具共用同一份数据）。
@@ -39,15 +41,18 @@ public class GitIssueController {
 
     private final GitIssueService issues;
     private final CurrentUser currentUser;
+    private final ProjectRepoLocator repoLocator;
     /** 任务配图落盘目录：与工作区数据同源，不污染用户仓库。 */
     private final Path imageDir;
     private static final long IMAGE_MAX_BYTES = 5L * 1024 * 1024;
     private static final Set<String> IMAGE_EXTS = Set.of("png", "jpg", "jpeg", "gif", "webp");
 
     public GitIssueController(GitIssueService issues, CurrentUser currentUser,
+                              ProjectRepoLocator repoLocator,
                               @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.issues = issues;
         this.currentUser = currentUser;
+        this.repoLocator = repoLocator;
         this.imageDir = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("issues").resolve("images");
     }
@@ -73,12 +78,39 @@ public class GitIssueController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public GitIssue create(@RequestBody Map<String, Object> body) {
-        return issues.create(currentUser.requireUserId(), draft(body));
+        return issues.create(currentUser.requireUserId(), draft(body, null));
     }
 
+    /**
+     * 更新任务：只改请求体里真正出现的字段。
+     *
+     * <p>为什么按 key 判断而不是按空串：前端与 Agent 都做部分更新（只改版本号、只改标签），
+     * 把缺失字段当成空串会把标题/标签一起清空——这正是「版本号写不进、标签读不出」的根。
+     */
     @PutMapping("/{id}")
     public GitIssue update(@PathVariable String id, @RequestBody Map<String, Object> body) {
-        return issues.update(currentUser.requireUserId(), id, draft(body));
+        String userId = currentUser.requireUserId();
+        GitIssue current = issues.get(userId, id);
+        return issues.update(userId, id, draft(body, current));
+    }
+
+    /**
+     * 版本号候选项：当前分支推导的建议值 + 仓库现有标签。
+     *
+     * <p>建任务时 bug/feat 都要关联版本，UI 与 Agent 需要同一份候选来源，
+     * 否则只能让用户手输一个必然写错的版本号。
+     */
+    @GetMapping("/versions")
+    public Map<String, Object> versions(@RequestParam(required = false) String projectId) {
+        if (projectId == null || projectId.isBlank()) {
+            return Map.of("branch", "", "suggested", "", "tags", List.of());
+        }
+        String branch = repoLocator.currentBranch(projectId);
+        List<String> tags = repoLocator.listTags(projectId, 50);
+        return Map.of(
+                "branch", branch == null ? "" : branch,
+                "suggested", GitIssueServiceImpl.suggestVersion(branch, tags),
+                "tags", tags);
     }
 
     @DeleteMapping("/{id}")
@@ -170,22 +202,39 @@ public class GitIssueController {
         return "";
     }
 
-    private static GitIssue.Draft draft(Map<String, Object> body) {
-        String title = str(body, "title");
+    /**
+     * 请求体 → 写入模型。
+     *
+     * @param current 更新时的当前任务；创建时为 null。
+     *                <p>非 null 表示「部分更新」：请求体里没有的 key 沿用当前值，
+     *                只有显式出现的 key 才覆盖（包括有意清空的空串）。
+     */
+    private static GitIssue.Draft draft(Map<String, Object> body, GitIssue current) {
+        String title = pick(body, "title", current == null ? "" : current.title());
         if (title.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "任务标题不能为空");
         }
         return new GitIssue.Draft(
-                str(body, "projectId"),
-                str(body, "provider"),
-                str(body, "repo"),
+                pick(body, "projectId", current == null ? "" : current.projectId()),
+                pick(body, "provider", current == null ? "" : current.provider()),
+                pick(body, "repo", current == null ? "" : current.repo()),
                 title,
-                str(body, "body"),
-                str(body, "state"),
-                str(body, "kind"),
-                str(body, "priority"),
-                str(body, "labels"),
-                str(body, "assignee"));
+                pick(body, "body", current == null ? "" : current.body()),
+                pick(body, "state", current == null ? "" : current.state()),
+                pick(body, "kind", current == null ? "" : current.kind()),
+                pick(body, "priority", current == null ? "" : current.priority()),
+                pick(body, "labels", current == null ? "" : current.labels()),
+                pick(body, "assignee", current == null ? "" : current.assignee()),
+                pick(body, "version", current == null ? "" : current.version()));
+    }
+
+    /** 请求体里出现的 key 用它（可为空串 = 显式清空），没出现则用兜底值。 */
+    private static String pick(Map<String, Object> body, String key, String fallback) {
+        if (body == null || !body.containsKey(key)) {
+            return fallback;
+        }
+        Object value = body.get(key);
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     private static String str(Map<String, Object> body, String key) {

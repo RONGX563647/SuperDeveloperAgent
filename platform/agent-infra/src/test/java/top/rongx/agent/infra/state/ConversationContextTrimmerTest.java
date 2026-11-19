@@ -52,7 +52,7 @@ class ConversationContextTrimmerTest {
     }
 
     @Test
-    @DisplayName("重复裁剪是幂等的")
+    @DisplayName("重复裁剪不会重复叠加摘要消息")
     void trimIsIdempotent() {
         List<Msg> messages = new ArrayList<>();
         messages.add(msg(MsgRole.SYSTEM, "sys"));
@@ -63,7 +63,15 @@ class ConversationContextTrimmerTest {
         AgentState once = ConversationContextTrimmer.trim(state(messages), 1_000, 4);
         AgentState twice = ConversationContextTrimmer.trim(once, 1_000, 4);
 
-        assertEquals(once.getContext().size(), twice.getContext().size());
+        assertEquals(1, compactions(once), "第一次裁剪只生成一条摘要");
+        assertEquals(1, compactions(twice), "第二次裁剪不能叠加新的摘要消息");
+        assertTrue(twice.getContext().size() <= once.getContext().size(), "裁剪后不应变长");
+    }
+
+    private static long compactions(AgentState state) {
+        return state.getContext().stream()
+                .filter(m -> "compaction".equals(m.getName()))
+                .count();
     }
 
     @Test

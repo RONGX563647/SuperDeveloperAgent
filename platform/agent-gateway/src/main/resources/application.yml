@@ -7,6 +7,23 @@ spring:
   threads:
     virtual:
       enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      # 保留 update 作为安全网：Flyway 是权威 schema 源，这里只补极端情况下的缺列。
+      ddl-auto: ${AGENT_DDL_AUTO:update}
+    properties:
+      hibernate.jdbc.batch_size: 50
+      hibernate.order_inserts: true
+      hibernate.order_updates: true
+  # Flyway：统一迁移管理。V1 建表（common）、V2 自增表（{vendor}：postgresql / sqlite 各一份）、
+  # V3 二级索引（common）。baseline-on-migrate 兼容存量库：已有表的库从 V2 之后继续补齐
+  # （自增表已存在则 IF NOT EXISTS 跳过），索引 V3 一定补上。Flyway 先于 JPA 初始化。
+  flyway:
+    enabled: ${AGENT_FLYWAY_ENABLED:true}
+    locations: classpath:db/migration/common,classpath:db/migration/{vendor}
+    baseline-on-migrate: ${AGENT_FLYWAY_BASELINE:true}
+    baseline-version: 1
 
 # OpenAPI：/v3/api-docs 是唯一规范源，/doc.html 是 Swagger UI（保持 Knife4j 的习惯路径）。
 # Knife4j 4.5 依赖 springdoc 2.x，与 Boot 4 不兼容，因此 UI 由 springdoc 自带页面提供。
@@ -46,6 +63,16 @@ sa-token:
   # 未配置时回退环境变量 AGENT_MODEL_API_KEY；两者都没有也能启动，仅调用模型时提示去配置。
   # 明文凭证不入配置库（规约 §8）。
 agent:
+  # 数据库：留空走 SQLite（单文件、零运维）；配置 PG URL 后所有持久化切换过去。
+  # 只认“未配置”时回落 SQLite；配置了 PG 但连不上会启动失败，避免数据分裂。
+  # 运行中换后端不必改这里：设置页的「热切换」会替换连接池并写回 db-backend.yml。
+  db:
+    url: ${AGENT_DB_URL:}
+    username: ${AGENT_DB_USERNAME:}
+    # 密码：设置页写入的密文在启动时解密并注入 AGENT_DB_PASSWORD；环境变量仍优先。
+    password: ${AGENT_DB_PASSWORD:}
+    sqlite-file: ${AGENT_SQLITE_FILE:./data/workspaces/_platform/platform.db}
+    pool-size: ${AGENT_DB_POOL_SIZE:8}
   # OpenAPI 快照与访问控制：
   # - snapshot：启动时刷新，供 api_search / api_get 与外部 MCP 读取；
   # - public：默认 false（需登录 + settings:read），仅本地联调可放开。
@@ -74,6 +101,16 @@ agent:
     dispatch:
       max-parallel: ${AGENT_WORKSPACE_DISPATCH_MAX_PARALLEL:4}
       max-duration-seconds: ${AGENT_WORKSPACE_DISPATCH_MAX_DURATION:600}
+    # 运行看门狗：卡死/排队超时的运行自动收敛到 FAILED，避免永远显示「运行中」
+    watchdog:
+      interval-ms: ${AGENT_WORKSPACE_WATCHDOG_INTERVAL_MS:30000}
+      initial-delay-ms: ${AGENT_WORKSPACE_WATCHDOG_INITIAL_DELAY_MS:30000}
+      run-timeout-ms: ${AGENT_WORKSPACE_WATCHDOG_RUN_TIMEOUT_MS:600000}
+      queue-timeout-ms: ${AGENT_WORKSPACE_WATCHDOG_QUEUE_TIMEOUT_MS:600000}
+    # 时间线订阅：SSE 轮询间隔与单条连接的生命周期上限
+    timeline:
+      poll-ms: ${AGENT_WORKSPACE_TIMELINE_POLL_MS:500}
+      stream-timeout-ms: ${AGENT_WORKSPACE_TIMELINE_STREAM_TIMEOUT_MS:600000}
   # 能力市场：设置页「MCP 市场 / Skill 市场」直接读外部目录，不再内置虚构条目。
   # 内网无外网时改为镜像地址，或用 HTTPS_PROXY/HTTP_PROXY 让平台走代理。
   market:
@@ -96,7 +133,7 @@ agent:
       agent-fallback: ${AGENT_PIPELINE_AUTO_REPAIR_AGENT:true}
       auto-resume: ${AGENT_PIPELINE_AUTO_RESUME:true}
   # 预置项目清单（agent.projects.items）已移除：项目统一走下面的「项目接入」，
-  # 由项目页接入后落库（data/workspaces/_platform/projects.db）。
+  # 由项目页接入后落库（统一库 data/workspaces/_platform/platform.db）。
   # 项目接入
   intake:
     # 工作区边界（shared-root 模式）：配置后目录浏览限制在此边界内，
@@ -107,7 +144,9 @@ agent:
   # 生成配方时写入的前端工具链镜像：本机已有对应镜像时直接换成它，
   # 否则 stage 启动前会做 docker image inspect 预检并给出明确失败。
   scaffold:
-    node-image: ${AGENT_SCAFFOLD_NODE_IMAGE:node:20-bookworm}
+    # 与 RecipeScaffolder.DEFAULT_NODE_IMAGE 保持一致：前端依赖已要求 Node >= 22，
+    # 默认值写成 20 会让生成的配方在 frontend 阶段报 Unsupported engine。
+    node-image: ${AGENT_SCAFFOLD_NODE_IMAGE:node:22-bookworm}
   # Gitee OAuth 网页授权（推荐）：gitee.com → 设置 → 第三方应用 创建应用，
   # 回调地址填 http://localhost:8090/api/v1/gitee/oauth/callback
   gitee:
@@ -146,9 +185,15 @@ agent:
   # 动作执行沙箱：默认 fail-closed（Docker 不可用则启动失败）；仅本地开发显式设为 process
   sandbox:
     mode: ${AGENT_SANDBOX_MODE:docker}        # docker | process
+    # docker 可执行文件：可指向 podman（rootless）或远程 buildkitd，避免强依赖 Docker Desktop
+    docker-binary: ${AGENT_SANDBOX_DOCKER_BINARY:docker}
     # 工具链镜像：默认只是兜底，本机没有就换成已安装的镜像（或先 docker pull）。
     # 平台在动作前做一次 docker image inspect 预检；缺镜像会自动 pull 并复核，失败才明确报错。
     image: ${AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
+    # 可选运行时（gVisor 的 runsc 等）：留空走默认 runc；跑不可信代码时设 runsc 强化隔离
+    runtime: ${AGENT_SANDBOX_RUNTIME:}
+    # 缓存卷初始化用的可信最小镜像（只 mkdir/chown/touch），绝不用构建镜像
+    init-image: ${AGENT_SANDBOX_INIT_IMAGE:busybox:1.36}
     # 自动拉取的硬超时（秒）；网络慢的 registry 可调大，离线环境可关闭预检
     pull-timeout-seconds: ${AGENT_SANDBOX_PULL_TIMEOUT_SECONDS:180}
     # 离线/自建 registry 场景可关闭预检（关闭后会回到 docker CLI 自行拉取的行为）
@@ -163,6 +208,9 @@ agent:
     # 依赖缓存卷前缀（按项目隔离）：Maven ~/.m2 与 npm cache 跨构建复用，
     # 否则每次构建都冷下载依赖，大项目必然撞上 10 分钟构建超时
     cache-volume-prefix: ${AGENT_SANDBOX_CACHE_VOLUME:agent-cache}
+    # npm 源镜像：默认直连 npmjs 在沙箱里只有几 KB/s，冷安装会吃光构建预算；
+    # 内网/自建源用 AGENT_SANDBOX_NPM_REGISTRY 覆盖，留空则用容器默认源
+    npm-registry: ${AGENT_SANDBOX_NPM_REGISTRY:https://registry.npmmirror.com}
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}          # 可选：留空不阻塞启动，设置页可随时补配
@@ -193,6 +241,8 @@ agent:
     # 落盘前保留的上下文字符预算（不含开头的 SYSTEM 提示）与最少保留消息数
     max-chars: ${AGENT_CONTEXT_MAX_CHARS:80000}
     keep-messages: ${AGENT_CONTEXT_KEEP_MESSAGES:24}
+    # 被裁掉的旧历史折叠成一条摘要消息的字符上限（0 = 不生成摘要，退回直接丢弃）
+    summary-chars: ${AGENT_CONTEXT_SUMMARY_CHARS:4000}
 
 logging:
   level:

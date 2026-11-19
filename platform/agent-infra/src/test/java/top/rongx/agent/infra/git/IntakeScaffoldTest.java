@@ -15,6 +15,7 @@ import top.rongx.agent.infra.scaffold.RecipeScaffolder;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Tag;
 
 /**
  * 接入流程验收：导入一个**没有 ci/ 目录**的 Java 项目，接入完成后平台应自动生成流水线定义。
@@ -22,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>关键契约（用户反馈驱动）：定义存**平台侧**（{@code <workspace>/<id>/ci/}），
  * 不往用户仓库里塞文件——否则用户得先提交 ci/ 才能运行，这一步经常被跳过。
  */
+// 慢测试：真实进程 / 真实 git / Spring 上下文 / BCrypt 迭代，提交时跳过（pre-commit 加 -DexcludedGroups=slow），推送与 CI 全跑。
+@Tag("slow")
 class IntakeScaffoldTest {
 
     @TempDir
@@ -38,7 +41,7 @@ class IntakeScaffoldTest {
         sh(repo, "git", "add", "-A");
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
 
-        IntakeProjectStore store = new IntakeProjectStore(workspace.resolve("_platform/projects.db"));
+        IntakeProjectStore store = new IntakeProjectStore(workspace.resolve("_platform/platform.db"));
         ProjectIntakeService service = new ProjectIntakeService(
                 new GitWorktreeManager(workspace), store, workspace.toString(), new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE));
 
@@ -85,7 +88,7 @@ class IntakeScaffoldTest {
 
         ProjectIntakeService service = new ProjectIntakeService(
                 new GitWorktreeManager(workspace),
-                new IntakeProjectStore(workspace.resolve("_platform2/projects.db")),
+                new IntakeProjectStore(workspace.resolve("_platform2/platform.db")),
                 workspace.toString(), new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE));
         service.submit(new ProjectIntakeService.IntakeRequest(
                 "DEMO2", repo.toString(), null, "java", false, "DIRECT", null));
@@ -117,7 +120,7 @@ class IntakeScaffoldTest {
 
         ProjectIntakeService service = new ProjectIntakeService(
                 new GitWorktreeManager(workspace),
-                new IntakeProjectStore(workspace.resolve("_platform3/projects.db")),
+                new IntakeProjectStore(workspace.resolve("_platform3/platform.db")),
                 workspace.toString(), new RecipeScaffolder(RecipeScaffolder.DEFAULT_NODE_IMAGE));
         service.submit(new ProjectIntakeService.IntakeRequest(
                 "RENEW", repo.toString(), null, "java", false, "DIRECT", null));

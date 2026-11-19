@@ -206,9 +206,7 @@ public class CiQueryTools {
         }
         // 构建日志可能包含 docker login / 环境变量打印：先做值级 + 形态级脱敏，再截断
         log = redactor.redact(log, ctx);
-        int max = 6000;
-        String tail = log.length() > max ? "…（已截断前 " + (log.length() - max) + " 字符）\n"
-                + log.substring(log.length() - max) : log;
+        String tail = headTail(log, 6000);
         return """
                 runId: %s
                 status: %s
@@ -255,11 +253,7 @@ public class CiQueryTools {
                     .collect(Collectors.joining("\n", "failed:\n", ""));
         }
         String log = engine.logTail(runId);
-        String tail = log == null ? "" : log;
-        int max = 2000;
-        if (tail.length() > max) {
-            tail = "…（已截断前 " + (tail.length() - max) + " 字符）\n" + tail.substring(tail.length() - max);
-        }
+        String tail = log == null ? "" : headTail(log, 2000);
         return """
                 runId: %s
                 status: %s
@@ -272,6 +266,23 @@ public class CiQueryTools {
                 ---
                 evidence: run:%s""".formatted(runId, status, status.isTerminal(), timeout,
                 stageList.size(), failedPart, tail.isBlank() ? "(暂无日志)" : tail, runId);
+    }
+
+    /**
+     * 日志只留头 + 尾：只看尾部会丢掉阶段开始、命令与错误码，只看头部又会丢掉最终失败原因。
+     *
+     * <p>诊断"为什么失败"需要开头（哪个阶段、什么命令）和结尾（错误码、最后输出）同时在场。
+     */
+    static String headTail(String log, int max) {
+        if (log == null || log.length() <= max) {
+            return log;
+        }
+        int head = max / 4;
+        int tail = max - head;
+        int skipped = log.length() - head - tail;
+        return log.substring(0, head)
+                + "\n…（中间省略 " + skipped + " 字符；保留开头 " + head + " 与结尾 " + tail + "）…\n"
+                + log.substring(log.length() - tail);
     }
 
     @Tool(name = "ci_history", description = "List recent builds of this project.",

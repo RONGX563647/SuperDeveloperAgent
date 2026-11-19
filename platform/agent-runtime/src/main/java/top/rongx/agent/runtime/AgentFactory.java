@@ -149,7 +149,9 @@ public class AgentFactory {
                                    String modelName) {
         // 1. 权限模式按环境决定：生产 DEFAULT（写必 ASK），非生产 BYPASS
         //    非生产不能用 ACCEPT_EDITS：它只放行文件类编辑，readOnly=false 的工具仍走默认 ASK，
-        //    而对话链路没有回传"用户已确认"的通道，request_confirmation / ci_run 会永远停在执行中。
+        //    而对话链路没有通用的“工具审批”回传通道：Toolkit 的 ASK 状态不会回到对话，
+        //    request_confirmation / ci_run 会永远停在执行中。例外是变更卡/绑定卡：
+        //    它们的确认结果会由 ChatView 回灌成一条新消息，但那不是通用工具审批。
         //    真正的门禁在平台层：写工具本身拒绝生产、变更单要人工确认、部署要 binding_id。
         PolicyDecision l2 = policy.decide(ctx.env(), ToolLevel.L2_EXECUTE_ISOLATED);
         // 只读用户（VIEWER）即使处在 dev/test 也只装配只读工具面：角色不能靠提示词约束
@@ -415,16 +417,18 @@ public class AgentFactory {
                     repo is written. Re-run with the new commit after confirmation.
                 5. If the root cause is repo configuration, fix it with propose_patch (the only way to
                    change the repo). Fix the platform pipeline deploy section with ci_configure_deploy:
-                   - propose_patch may only change ci/**, Jenkinsfile, **/pom.xml, **/build.gradle(.kts),
-                     **/src/test/**, Dockerfile, deploy/**, docker-compose*.yml, nginx*.conf,
-                     application*.yml, package.json, .env.example;
+                   - propose_patch may only change src/main/**, src/test/**, ci/**, Jenkinsfile,
+                     **/pom.xml, **/build.gradle(.kts), Dockerfile, deploy/**, docker-compose*.yml,
+                     nginx*.conf, application*.yml, package.json, .env.example; it always rejects
+                     .git/, target/, build/, node_modules/ and credential files (.env, *.pem, *.key,
+                     id_rsa*, .npmrc) and answers PATH_DENIED with the allowed list;
                    - it only returns a diff and registers a change (changeId); a human must confirm on
                      the card before it is applied;
                    - typical fixes: e2e tests must not run in the build stage -> tag the tests and
                      exclude them in the build config; wrong build command or image -> edit the ci/
                      pipeline definition; frontend build fails with missing node/npm -> add a Node
-                     image to the frontend stage;
-                   - never try to change business code, config files or credentials (the tool rejects).
+                     image to the frontend stage; a real code defect -> patch src/main/**;
+                   - never try to change credentials or write shell (the tool rejects).
                 6. Use run_action to verify a single allow-listed action; use request_confirmation when
                    an audit trail or confirmation is needed.
                 7. Once it works, call deploy_save_recipe and describe the action sequence clearly; that
@@ -581,9 +585,10 @@ public class AgentFactory {
                 - Read-only calls may run directly. Write operations (build, rollback, deploy, config
                   change) must be registered with request_confirmation first; give the changeId to the
                   user and wait until they confirm on the platform card. Never assume confirmation.
-                - Repo changes are allowed only through propose_patch (ci/**, build config, tests). It
-                  returns a diff and registers a change; a human confirms before it is applied. Never
-                  edit business code or credentials, and never write shell.
+                - Repo changes are allowed only through propose_patch (src/main/**, src/test/**, ci/**,
+                  build config). It returns a diff and registers a change; a human confirms before it
+                  is applied. Never edit credentials and never write shell; a rejected path comes back
+                  as PATH_DENIED with the allowed list.
                 - Before deploy, create an env binding with env_mapping_draft; only the user can confirm
                   it and obtain a binding_id. deploy_run accepts dev/test only and always refuses prod.
                 - Pre-deploy gaps may be fixed autonomously on dev/test: variables via

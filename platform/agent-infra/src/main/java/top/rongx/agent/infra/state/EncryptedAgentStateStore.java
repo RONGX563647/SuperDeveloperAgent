@@ -51,6 +51,8 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     private final SecretBox cipher;
     private final int contextMaxChars;
     private final int contextKeepMessages;
+    /** 被裁掉的旧历史折叠成一条摘要的字符上限；0 = 不生成摘要（旧行为）。 */
+    private final int contextSummaryChars;
     private final JsonCodec codec = JsonUtils.getJsonCodec();
     /**
      * 会话级互斥：同一 sessionId 并发两轮对话时，不能出现"读-改-写"互相覆盖。
@@ -61,10 +63,16 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     public EncryptedAgentStateStore(Path root, SecretBox cipher,
                                     int contextMaxChars, int contextKeepMessages) {
+        this(root, cipher, contextMaxChars, contextKeepMessages, 4_000);
+    }
+
+    public EncryptedAgentStateStore(Path root, SecretBox cipher, int contextMaxChars,
+                                    int contextKeepMessages, int contextSummaryChars) {
         this.root = root.toAbsolutePath().normalize();
         this.cipher = cipher;
         this.contextMaxChars = contextMaxChars;
         this.contextKeepMessages = contextKeepMessages;
+        this.contextSummaryChars = contextSummaryChars;
     }
 
     @Override
@@ -76,7 +84,7 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         State toSave = state;
         if (state instanceof io.agentscope.core.state.AgentState agentState) {
             toSave = ConversationContextTrimmer.trim(agentState, contextMaxChars,
-                    contextKeepMessages);
+                    contextKeepMessages, contextSummaryChars);
             if (toSave != state) {
                 log.debug("会话上下文已裁剪：session={} before={} after={}", sessionId,
                         agentState.getContext().size(),

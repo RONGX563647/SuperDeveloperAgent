@@ -53,6 +53,20 @@ class RecipeScaffolderTest {
     }
 
     @Test
+    @DisplayName("镜像打包用 BuildKit：image_package 配方是 docker buildx build --load")
+    void imageRecipeUsesBuildkit(@TempDir Path repo) throws Exception {
+        Files.writeString(repo.resolve("pom.xml"), "<project/>");
+        Files.writeString(repo.resolve("Dockerfile"), "FROM eclipse-temurin:21-jre");
+
+        ScaffoldPlan plan = scaffolder.plan("RY", repo, DeployTarget.DOCKER);
+        String actions = content(plan, "ci/actions.yml");
+
+        assertTrue(actions.contains("\"buildx\""), actions);
+        assertTrue(actions.contains("\"--load\""), actions);
+        assertFalse(actions.contains("\"docker\", \"build\", \"-f\""), actions);
+    }
+
+    @Test
     @DisplayName("monorepo（backend + frontend）→ 两个 stage 带 workdir，包管理器按锁文件识别")
     void monorepo(@TempDir Path repo) throws Exception {
         Files.createDirectories(repo.resolve("backend"));
@@ -74,7 +88,7 @@ class RecipeScaffolderTest {
         String actions = content(plan, "ci/actions.yml");
         assertTrue(actions.contains("pnpm"), actions);
         // 前端 stage 必须显式用 Node 镜像，否则默认 Maven 沙箱里没有 node/npm
-        assertTrue(pipeline.contains("image: node:20-bookworm"), pipeline);
+        assertTrue(pipeline.contains("image: node:22-bookworm"), pipeline);
         // pnpm 不是 Node 镜像自带的全局命令：用 corepack 直接运行；
         // 不能用 corepack enable（非 root 沙箱写 /usr/local/bin 会 EACCES）
         assertTrue(actions.contains("corepack"), actions);

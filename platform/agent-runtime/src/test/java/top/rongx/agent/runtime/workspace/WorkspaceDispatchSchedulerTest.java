@@ -131,6 +131,28 @@ class WorkspaceDispatchSchedulerTest {
     }
 
     @Test
+    @DisplayName("派发即登记票据，终态回写结果：任务板能看到规格、会话与结论")
+    void ticketsOpenOnDispatchAndCloseWithResult() {
+        FakeBackend backend = new FakeBackend();
+        DispatchPlan plan = new DispatchPlan(List.of(
+                node("build", 60, true),
+                node("docs", 60, false)), true, 2);
+
+        DispatchResult result = scheduler.execute(plan, backend);
+
+        assertEquals(2, backend.openedTickets.size(), "每个成功派发的节点都应开票据");
+        // 票据必须绑定到真正执行它的会话，而不是随便哪个会话
+        assertEquals(result.find("build").orElseThrow().conversationId(),
+                backend.ticketConversations.get(0));
+        assertEquals(result.find("docs").orElseThrow().conversationId(),
+                backend.ticketConversations.get(1));
+        assertTrue(backend.closedTickets.containsKey("ticket-1"), "终态必须回写票据");
+        assertEquals("SUCCEEDED", backend.closedTickets.get("ticket-1").status());
+        assertEquals("ticket-1", result.find("build").orElseThrow().ticketId(),
+                "结果要带回票据 id，便于从任务板追溯到运行");
+    }
+
+    @Test
     @DisplayName("派发失败（err 文本）不会拖垮其它节点")
     void dispatchErrorIsIsolated() {
         FakeBackend backend = new FakeBackend();
@@ -238,8 +260,26 @@ class WorkspaceDispatchSchedulerTest {
         final Map<String, AtomicInteger> transientFailures = new ConcurrentHashMap<>();
         final AtomicInteger sequence = new AtomicInteger();
         final AtomicInteger conversationsCreated = new AtomicInteger();
+        final List<String> openedTickets = Collections.synchronizedList(new ArrayList<>());
+        final List<String> ticketConversations = Collections.synchronizedList(new ArrayList<>());
+        final Map<String, DispatchNodeResult> closedTickets = new ConcurrentHashMap<>();
         volatile long delayMillis = 20;
         volatile String rejectMessage;
+
+        @Override
+        public String openTicket(DispatchNode node, String conversationId) {
+            String ticket = "ticket-" + (openedTickets.size() + 1);
+            openedTickets.add(ticket);
+            ticketConversations.add(conversationId);
+            return ticket;
+        }
+
+        @Override
+        public void closeTicket(String ticketId, DispatchNodeResult result) {
+            if (ticketId != null) {
+                closedTickets.put(ticketId, result);
+            }
+        }
 
         @Override
         public String createConversation(String title, String env, String worktree) {

@@ -1,12 +1,8 @@
 package top.rongx.agent.infra.settings;
 
+import jakarta.persistence.EntityManager;
 import java.nio.file.Path;
 import java.security.SecureRandom;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -15,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.McpServer;
@@ -22,9 +19,10 @@ import top.rongx.agent.domain.settings.McpServerRepository;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.infra.persistence.PlatformDb;
 
 /**
- * MCP 服务器配置（SQLite）。
+ * MCP 服务器配置。
  *
  * <p>形状对齐 Claude Desktop 的 {@code mcpServers}：
  * <ul>
@@ -36,87 +34,44 @@ import top.rongx.agent.domain.error.EnvironmentException;
 @Repository
 public class SqliteMcpServerStore implements McpServerRepository {
 
-    private static final String SCHEMA = """
-            CREATE TABLE IF NOT EXISTS mcp_servers (
-                id              TEXT PRIMARY KEY,
-                name            TEXT NOT NULL UNIQUE,
-                transport       TEXT NOT NULL,
-                command         TEXT,
-                args            TEXT,
-                url             TEXT,
-                headers_enc     TEXT,
-                headers_iv      TEXT,
-                enabled         INTEGER NOT NULL DEFAULT 1,
-                updated_by      TEXT,
-                updated_at      INTEGER NOT NULL
-            )
-            """;
-
-    private static final String TOOL_SCHEMA = """
-            CREATE TABLE IF NOT EXISTS mcp_disabled_tools (
-                server_id TEXT NOT NULL,
-                tool_name TEXT NOT NULL,
-                PRIMARY KEY (server_id, tool_name)
-            )
-            """;
-
     private static final String COLUMNS = "id, name, transport, command, args, url, "
             + "headers_enc, headers_iv, enabled, updated_at";
 
-    private final Path dbFile;
+    private final PlatformDb db;
     private final SecretBox secretBox;
 
+    @Autowired
+    public SqliteMcpServerStore(PlatformDb db, SecretBox secretBox) {
+        this.db = db;
+        this.secretBox = secretBox;
+    }
+
+    /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public SqliteMcpServerStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this.dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("projects.db");
-        this.secretBox = secretBox;
-        initSchema();
-    }
-
-    private void initSchema() {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(SCHEMA);
-             PreparedStatement tools = conn.prepareStatement(TOOL_SCHEMA)) {
-            st.executeUpdate();
-            tools.executeUpdate();
-        } catch (SQLException e) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "mcp_servers 表初始化失败：" + e.getMessage(), e);
-        }
-    }
-
-    private Connection open() throws SQLException {
-        return top.rongx.agent.infra.sqlite.SqliteConnections.get(dbFile);
+        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
+                .resolve("_platform").resolve("platform.db")), secretBox);
     }
 
     @Override
     public List<McpServer> findAll() {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + COLUMNS + " FROM mcp_servers ORDER BY updated_at DESC")) {
-            try (ResultSet rs = st.executeQuery()) {
-                List<McpServer> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(map(rs));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                            "SELECT " + COLUMNS + " FROM mcp_servers ORDER BY updated_at DESC").stream()
+                    .map(this::map).toList());
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 列表查询失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Optional<McpServer> find(String id) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT " + COLUMNS + " FROM mcp_servers WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next() ? Optional.of(map(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.row(em,
+                            "SELECT " + COLUMNS + " FROM mcp_servers WHERE id = ?", id)
+                    .map(this::map));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 查询失败：" + e.getMessage(), e);
         }
     }
@@ -133,115 +88,87 @@ public class SqliteMcpServerStore implements McpServerRepository {
         }
         String id = blank(view.id()) ? newId() : view.id();
         long now = System.currentTimeMillis();
-        try (Connection conn = open()) {
-            boolean exists = exists(conn, id);
-            SecretBox.Sealed sealed = headers == null || headers.isEmpty()
-                    ? null : secretBox.encrypt(joinHeaders(headers));
-            if (exists) {
-                update(conn, view, id, transport, name, sealed, updatedBy, now);
-            } else {
-                insert(conn, view, id, transport, name, sealed, updatedBy, now);
-            }
-            return find(id).orElseThrow();
-        } catch (SQLException e) {
+        try {
+            db.inTx(em -> {
+                boolean exists = PlatformDb.first(em,
+                        "SELECT 1 FROM mcp_servers WHERE id = ?", id).isPresent();
+                SecretBox.Sealed sealed = headers == null || headers.isEmpty()
+                        ? null : secretBox.encrypt(joinHeaders(headers));
+                if (exists) {
+                    update(em, view, id, transport, name, sealed, updatedBy, now);
+                } else {
+                    insert(em, view, id, transport, name, sealed, updatedBy, now);
+                }
+                return null;
+            });
+        } catch (RuntimeException e) {
             String message = String.valueOf(e.getMessage());
             if (message.contains("UNIQUE")) {
                 throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "名称已存在：" + name);
             }
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 保存失败：" + message, e);
         }
+        return find(id).orElseThrow();
     }
 
-    private void insert(Connection conn, McpServerView v, String id, String transport, String name,
-                        SecretBox.Sealed sealed, String updatedBy, long now) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement("""
+    private void insert(EntityManager em, McpServerView v, String id, String transport, String name,
+                        SecretBox.Sealed sealed, String updatedBy, long now) {
+        PlatformDb.update(em, """
                 INSERT INTO mcp_servers (id, name, transport, command, args, url,
                     headers_enc, headers_iv, enabled, updated_by, updated_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                """)) {
-            st.setString(1, id);
-            st.setString(2, name);
-            st.setString(3, transport);
-            st.setString(4, clean(v.command()));
-            st.setString(5, joinArgs(v.args()));
-            st.setString(6, clean(v.url()));
-            st.setString(7, sealed == null ? null : sealed.cipherB64());
-            st.setString(8, sealed == null ? null : sealed.ivB64());
-            st.setInt(9, v.enabled() ? 1 : 0);
-            st.setString(10, updatedBy);
-            st.setLong(11, now);
-            st.executeUpdate();
-        }
+                """,
+                id, name, transport, clean(v.command()), joinArgs(v.args()), clean(v.url()),
+                sealed == null ? null : sealed.cipherB64(),
+                sealed == null ? null : sealed.ivB64(),
+                v.enabled() ? 1 : 0, updatedBy, now);
     }
 
-    private void update(Connection conn, McpServerView v, String id, String transport, String name,
-                        SecretBox.Sealed sealed, String updatedBy, long now) throws SQLException {
-        String sql = sealed == null
-                ? """
-                UPDATE mcp_servers SET name=?, transport=?, command=?, args=?, url=?, enabled=?,
-                    updated_by=?, updated_at=? WHERE id=?
-                """
-                : """
-                UPDATE mcp_servers SET name=?, transport=?, command=?, args=?, url=?, enabled=?,
-                    headers_enc=?, headers_iv=?, updated_by=?, updated_at=? WHERE id=?
-                """;
-        try (PreparedStatement st = conn.prepareStatement(sql)) {
-            int i = 1;
-            st.setString(i++, name);
-            st.setString(i++, transport);
-            st.setString(i++, clean(v.command()));
-            st.setString(i++, joinArgs(v.args()));
-            st.setString(i++, clean(v.url()));
-            st.setInt(i++, v.enabled() ? 1 : 0);
-            if (sealed != null) {
-                st.setString(i++, sealed.cipherB64());
-                st.setString(i++, sealed.ivB64());
-            }
-            st.setString(i++, updatedBy);
-            st.setLong(i++, now);
-            st.setString(i, id);
-            st.executeUpdate();
-        }
-    }
-
-    private boolean exists(Connection conn, String id) throws SQLException {
-        try (PreparedStatement st = conn.prepareStatement("SELECT 1 FROM mcp_servers WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                return rs.next();
-            }
+    private void update(EntityManager em, McpServerView v, String id, String transport, String name,
+                        SecretBox.Sealed sealed, String updatedBy, long now) {
+        if (sealed == null) {
+            PlatformDb.update(em, """
+                    UPDATE mcp_servers SET name=?, transport=?, command=?, args=?, url=?, enabled=?,
+                        updated_by=?, updated_at=? WHERE id=?
+                    """,
+                    name, transport, clean(v.command()), joinArgs(v.args()), clean(v.url()),
+                    v.enabled() ? 1 : 0, updatedBy, now, id);
+        } else {
+            PlatformDb.update(em, """
+                    UPDATE mcp_servers SET name=?, transport=?, command=?, args=?, url=?, enabled=?,
+                        headers_enc=?, headers_iv=?, updated_by=?, updated_at=? WHERE id=?
+                    """,
+                    name, transport, clean(v.command()), joinArgs(v.args()), clean(v.url()),
+                    v.enabled() ? 1 : 0, sealed.cipherB64(), sealed.ivB64(), updatedBy, now, id);
         }
     }
 
     @Override
     public void delete(String id) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement("DELETE FROM mcp_servers WHERE id = ?")) {
-            st.setString(1, id);
-            st.executeUpdate();
-        } catch (SQLException e) {
+        try {
+            db.run(em -> PlatformDb.update(em, "DELETE FROM mcp_servers WHERE id = ?", id));
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 删除失败：" + e.getMessage(), e);
         }
     }
 
     @Override
     public Map<String, String> headersOf(String id) {
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT headers_enc, headers_iv FROM mcp_servers WHERE id = ?")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                if (!rs.next()) {
+        try {
+            return db.read(em -> {
+                Optional<Object[]> row = PlatformDb.row(em,
+                        "SELECT headers_enc, headers_iv FROM mcp_servers WHERE id = ?", id);
+                if (row.isEmpty()) {
                     return Map.of();
                 }
-                String enc = rs.getString("headers_enc");
-                String iv = rs.getString("headers_iv");
+                String enc = (String) row.get()[0];
+                String iv = (String) row.get()[1];
                 if (enc == null || iv == null) {
                     return Map.of();
                 }
                 return parseHeaders(secretBox.decrypt(enc, iv));
-            }
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 请求头读取失败：" + e.getMessage(), e);
         }
     }
@@ -253,18 +180,12 @@ public class SqliteMcpServerStore implements McpServerRepository {
         if (id == null || id.isBlank()) {
             return List.of();
         }
-        try (Connection conn = open();
-             PreparedStatement st = conn.prepareStatement(
-                     "SELECT tool_name FROM mcp_disabled_tools WHERE server_id = ? ORDER BY tool_name")) {
-            st.setString(1, id);
-            try (ResultSet rs = st.executeQuery()) {
-                List<String> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(rs.getString("tool_name"));
-                }
-                return out;
-            }
-        } catch (SQLException e) {
+        try {
+            return db.read(em -> PlatformDb.rows(em,
+                            "SELECT tool_name, server_id FROM mcp_disabled_tools "
+                                    + "WHERE server_id = ? ORDER BY tool_name", id).stream()
+                    .map(row -> (String) row[0]).toList());
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 工具开关读取失败：" + e.getMessage(), e);
         }
     }
@@ -274,47 +195,43 @@ public class SqliteMcpServerStore implements McpServerRepository {
         if (id == null || id.isBlank()) {
             return;
         }
-        try (Connection conn = open()) {
-            try (PreparedStatement del = conn.prepareStatement(
-                    "DELETE FROM mcp_disabled_tools WHERE server_id = ?")) {
-                del.setString(1, id);
-                del.executeUpdate();
-            }
-            if (tools == null || tools.isEmpty()) {
-                return;
-            }
-            try (PreparedStatement ins = conn.prepareStatement(
-                    "INSERT OR IGNORE INTO mcp_disabled_tools (server_id, tool_name) VALUES (?,?)")) {
+        try {
+            db.inTx(em -> {
+                PlatformDb.update(em, "DELETE FROM mcp_disabled_tools WHERE server_id = ?", id);
+                if (tools == null || tools.isEmpty()) {
+                    return null;
+                }
                 for (String tool : tools) {
                     if (tool != null && !tool.isBlank()) {
-                        ins.setString(1, id);
-                        ins.setString(2, tool.trim());
-                        ins.addBatch();
+                        PlatformDb.update(em, """
+                                INSERT INTO mcp_disabled_tools (server_id, tool_name) VALUES (?,?)
+                                ON CONFLICT(server_id, tool_name) DO NOTHING
+                                """, id, tool.trim());
                     }
                 }
-                ins.executeBatch();
-            }
-        } catch (SQLException e) {
+                return null;
+            });
+        } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "MCP 工具开关保存失败：" + e.getMessage(), e);
         }
     }
 
-    private McpServer map(ResultSet rs) throws SQLException {
-        String enc = rs.getString("headers_enc");
-        String iv = rs.getString("headers_iv");
+    private McpServer map(Object[] row) {
+        String enc = (String) row[6];
+        String iv = (String) row[7];
         List<String> headerNames = enc == null || iv == null
                 ? List.of()
                 : new ArrayList<>(parseHeaders(secretBox.decrypt(enc, iv)).keySet());
         return new McpServer(
-                rs.getString("id"),
-                rs.getString("name"),
-                rs.getString("transport"),
-                rs.getString("command"),
-                splitArgs(rs.getString("args")),
-                rs.getString("url"),
+                (String) row[0],
+                (String) row[1],
+                (String) row[2],
+                (String) row[3],
+                splitArgs((String) row[4]),
+                (String) row[5],
                 headerNames,
-                rs.getInt("enabled") == 1,
-                rs.getLong("updated_at"));
+                ((Number) row[8]).intValue() == 1,
+                ((Number) row[9]).longValue());
     }
 
     // ---------------------------------------------------------------- 文本编解码

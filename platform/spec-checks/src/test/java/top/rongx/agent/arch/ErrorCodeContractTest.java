@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.charset.MalformedInputException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -100,7 +101,7 @@ class ErrorCodeContractTest {
         List<String> misplaced = new ArrayList<>();
         try (Stream<Path> files = mainJavaFiles(root)) {
             for (Path file : files.toList()) {
-                String source = Files.readString(file, StandardCharsets.UTF_8);
+                String source = readStringUtf8(file);
                 if (!source.contains("extends PlatformException")) {
                     continue;
                 }
@@ -120,7 +121,7 @@ class ErrorCodeContractTest {
         List<String> violations = new ArrayList<>();
         try (Stream<Path> files = mainJavaFiles(specRoot())) {
             for (Path file : files.toList()) {
-                String source = Files.readString(file, StandardCharsets.UTF_8);
+                String source = readStringUtf8(file);
                 Matcher matcher = CODED_GENERIC_THROW.matcher(source);
                 while (matcher.find()) {
                     violations.add(specRoot().relativize(file) + ":"
@@ -176,7 +177,7 @@ class ErrorCodeContractTest {
         Map<String, Integer> counts = new TreeMap<>();
         try (Stream<Path> files = mainJavaFiles(root)) {
             for (Path file : files.toList()) {
-                List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+                List<String> lines = readAllLinesUtf8(file);
                 int count = 0;
                 for (int i = 0; i < lines.size(); i++) {
                     if (!GENERIC_THROW.matcher(lines.get(i)).find()) {
@@ -246,6 +247,26 @@ class ErrorCodeContractTest {
             }
         }
         return files.stream();
+    }
+
+    /** UTF-8 读取；文件含非法字节时报出具体路径（MalformedInputException 默认不带路径，难定位）。 */
+    private static String readStringUtf8(Path file) throws IOException {
+        try {
+            return Files.readString(file, StandardCharsets.UTF_8);
+        } catch (MalformedInputException e) {
+            throw new IOException("文件不是合法 UTF-8（Input length = " + e.getInputLength()
+                    + "）：" + specRoot().relativize(file) + "，请转码为 UTF-8 或登记豁免", e);
+        }
+    }
+
+    /** 同 {@link #readStringUtf8(Path)}，逐行读取。 */
+    private static List<String> readAllLinesUtf8(Path file) throws IOException {
+        try {
+            return Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (MalformedInputException e) {
+            throw new IOException("文件不是合法 UTF-8（Input length = " + e.getInputLength()
+                    + "）：" + specRoot().relativize(file) + "，请转码为 UTF-8 或登记豁免", e);
+        }
     }
 
     private static Path specRoot() {

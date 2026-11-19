@@ -1,8 +1,14 @@
 package top.rongx.agent.gateway.web;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -10,16 +16,22 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import top.rongx.agent.domain.conversation.Conversation;
 import top.rongx.agent.domain.conversation.ConversationPatch;
 import top.rongx.agent.domain.conversation.ConversationRun;
 import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.TimelineEntry;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.gateway.auth.CurrentUser;
 import top.rongx.agent.runtime.workspace.ConversationManager;
+import top.rongx.agent.runtime.workspace.ConversationTimelineStream;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
 import top.rongx.agent.domain.error.PlatformException;
@@ -35,11 +47,22 @@ import top.rongx.agent.domain.error.PlatformException;
 public class WorkspaceController {
 
     private final ConversationManager conversations;
+    private final ConversationTimelineStream timelineStream;
     private final CurrentUser currentUser;
+    private final long streamTimeoutMillis;
+    private final long heartbeatMillis;
 
-    public WorkspaceController(ConversationManager conversations, CurrentUser currentUser) {
+    public WorkspaceController(ConversationManager conversations,
+                               ConversationTimelineStream timelineStream,
+                               CurrentUser currentUser,
+                               @Value("${agent.workspace.timeline.stream-timeout-ms:600000}")
+                               long streamTimeoutMillis,
+                               @Value("${agent.chat.heartbeat-seconds:15}") long heartbeatSeconds) {
         this.conversations = conversations;
+        this.timelineStream = timelineStream;
         this.currentUser = currentUser;
+        this.streamTimeoutMillis = Math.max(30_000L, streamTimeoutMillis);
+        this.heartbeatMillis = Math.max(1, heartbeatSeconds) * 1000L;
     }
 
     // ------------------------------------------------------------------ 会话
@@ -116,11 +139,19 @@ public class WorkspaceController {
         return Map.of("deleted", true);
     }
 
+    /**
+     * 向普通会话派发一条消息。
+     *
+     * <p>契约：成功返回 {@code runId}；失败抛业务异常（由统一异常处理器转成 4xx + 错误码）。
+     * 这里不做「把错误文本塞进 runId 字段」的降级——前端拿 runId 去轮询，
+     * 一个假 runId 会让界面一直转圈，比明确报错糟得多。
+     */
     @PostMapping("/conversations/{conversationId}/send")
     public Map<String, Object> send(@PathVariable String conversationId,
                                     @RequestBody SendRequest request) {
         String userId = currentUser.requireUserId();
-        return Map.of("runId", conversations.send(conversationId, userId, request.message()));
+        String runId = conversations.send(conversationId, userId, request.message());
+        return Map.of("runId", runId);
     }
 
     /** 会话时间线（消息 + 工具结果）：前端换浏览器 / 清缓存后从这里恢复。 */
@@ -138,6 +169,116 @@ public class WorkspaceController {
         String userId = currentUser.requireUserId();
         conversations.saveTranscript(conversationId, userId, request.payload());
         return Map.of("saved", true);
+    }
+
+    /**
+     * 服务端时间线：按 {@code after_seq} 游标增量读取（不含前端上传的整包 transcript）。
+     *
+     * <p>用于重启/换端回放与断线续传：客户端记住最后一条 seq，重连后从它之后继续拉。
+     */
+    @GetMapping("/conversations/{conversationId}/timeline")
+    public List<TimelineEntry> timeline(@PathVariable String conversationId,
+                                        @RequestParam(name = "after_seq", defaultValue = "0")
+                                        long afterSeq,
+                                        @RequestParam(defaultValue = "200") int limit) {
+        String userId = currentUser.requireUserId();
+        return conversations.timeline(conversationId, userId, afterSeq, limit);
+    }
+
+    /**
+     * 会话时间线实时订阅（SSE），支持断线续传。
+     *
+     * <p>游标优先取浏览器自动带上的 {@code Last-Event-ID}（即上一条记录的 seq），
+     * 其次取查询参数 {@code after_seq}。重连后先补齐断线期间的记录再持续推送，
+     * 会话进入终态且无新记录时下发 {@code done} 并结束流。
+     *
+     * @param conversationId 会话 id
+     * @param afterSeq       客户端已读到的最后一条 seq（0 = 从头开始）
+     * @param lastEventId    SSE 标准断线续传头
+     */
+    @GetMapping(value = "/conversations/{conversationId}/timeline/stream",
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter timelineStream(@PathVariable String conversationId,
+                                     @RequestParam(name = "after_seq", defaultValue = "0")
+                                     long afterSeq,
+                                     @RequestHeader(name = "Last-Event-ID", required = false)
+                                     String lastEventId) {
+        String userId = currentUser.requireUserId();
+        Flux<TimelineEntry> stream = timelineStream.stream(conversationId, userId,
+                parseCursor(lastEventId, afterSeq));
+
+        SseEmitter emitter = new SseEmitter(streamTimeoutMillis);
+        Object sendLock = new Object();
+        AtomicReference<Disposable> subscription = new AtomicReference<>();
+        AtomicReference<ScheduledFuture<?>> heartbeat = new AtomicReference<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        Runnable cancel = () -> {
+            if (closed.compareAndSet(false, true)) {
+                SseHeartbeat.stop(heartbeat.get());
+                Disposable current = subscription.get();
+                if (current != null) {
+                    current.dispose();
+                }
+            }
+        };
+        emitter.onTimeout(() -> {
+            cancel.run();
+            emitter.complete();
+        });
+        emitter.onCompletion(cancel);
+        emitter.onError(error -> cancel.run());
+        // 命名心跳：前端据此区分「服务端在算」和「连接已死」，不依赖注释帧
+        heartbeat.set(SseHeartbeat.start(emitter, sendLock, heartbeatMillis, cancel));
+
+        Disposable disposable = stream.subscribe(
+                entry -> {
+                    try {
+                        synchronized (sendLock) {
+                            emitter.send(SseEmitter.event()
+                                    .id(String.valueOf(entry.seq()))
+                                    .name(entry.kind())
+                                    .data(entry, MediaType.APPLICATION_JSON));
+                        }
+                    } catch (IOException | IllegalStateException gone) {
+                        cancel.run();
+                        emitter.complete();
+                    }
+                },
+                error -> {
+                    cancel.run();
+                    emitter.complete();
+                },
+                () -> {
+                    try {
+                        synchronized (sendLock) {
+                            emitter.send(SseEmitter.event().name("done")
+                                    .data(Map.of("conversationId", conversationId),
+                                            MediaType.APPLICATION_JSON));
+                        }
+                    } catch (IOException | IllegalStateException ignored) {
+                        // 客户端已断开
+                    } finally {
+                        cancel.run();
+                        emitter.complete();
+                    }
+                });
+        subscription.set(disposable);
+        if (closed.get()) {
+            disposable.dispose();
+        }
+        return emitter;
+    }
+
+    /** Last-Event-ID 优先于查询参数；非数字时回退查询参数，避免恶意头把游标打乱。 */
+    private static long parseCursor(String lastEventId, long afterSeq) {
+        if (lastEventId != null && !lastEventId.isBlank()) {
+            try {
+                return Math.max(0, Long.parseLong(lastEventId.trim()));
+            } catch (NumberFormatException ignored) {
+                // 非数字游标按查询参数处理
+            }
+        }
+        return Math.max(0, afterSeq);
     }
 
     // ------------------------------------------------------------------ 运行

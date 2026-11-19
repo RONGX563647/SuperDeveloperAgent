@@ -1,6 +1,7 @@
 package top.rongx.agent.domain.change;
 
 import java.time.Instant;
+import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.PromotionException;
 
@@ -19,6 +20,7 @@ import top.rongx.agent.domain.error.PromotionException;
  * @param frontendDistHash 前端 dist 哈希（可空）
  * @param highRisk        是否高危（含 SQL / 依赖升级 / 安全配置）
  * @param createdAt       创建时间
+ * @param status          流转状态：PENDING → CONFIRMED → APPLIED / FAILED
  */
 public record ChangePlan(
         String changeId,
@@ -30,7 +32,13 @@ public record ChangePlan(
         String imageDigest,
         String frontendDistHash,
         boolean highRisk,
-        Instant createdAt) {
+        Instant createdAt,
+        Status status) {
+
+    /** 变更单状态：工具与卡片都按这四个值对齐，避免各自猜。 */
+    public enum Status {
+        PENDING, CONFIRMED, APPLIED, FAILED
+    }
 
     public ChangePlan {
         if (planHash == null || planHash.isBlank()) {
@@ -39,5 +47,28 @@ public record ChangePlan(
         if (createdAt == null) {
             createdAt = Instant.now();
         }
+        status = status == null ? Status.PENDING : status;
+    }
+
+    /** 兼容旧调用：未指定状态时按 PENDING。 */
+    public ChangePlan(String changeId, String projectId, String env, String kind, String planHash,
+                      String summary, String imageDigest, String frontendDistHash,
+                      boolean highRisk, Instant createdAt) {
+        this(changeId, projectId, env, kind, planHash, summary, imageDigest, frontendDistHash,
+                highRisk, createdAt, Status.PENDING);
+    }
+
+    /**
+     * 是否是「确认卡片可执行」的变更。
+     *
+     * <p>只有补丁类（{@code patch:*}）、编辑器授权（{@code editor_branch:*}）与
+     * {@link ActionId} 里的动作能被 {@code /apply} 执行；{@code env_ensure /
+     * deploy_save_recipe / env_mapping_draft} 这类留痕单没有执行闭环，
+     * 不应推送成「变更待确认」卡片。
+     */
+    public boolean executable() {
+        return kind.startsWith("patch:")
+                || kind.startsWith("editor_branch:")
+                || ActionId.fromWire(kind).isPresent();
     }
 }
