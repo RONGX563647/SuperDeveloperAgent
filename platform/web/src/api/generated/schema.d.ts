@@ -3729,6 +3729,8 @@ export interface components {
             daily?: components["schemas"]["DailyUsage"][];
             byModel?: components["schemas"]["ModelUsageSummary"][];
             byProject?: components["schemas"]["ProjectUsageSummary"][];
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         UsageTotals: {
             /** Format: int64 */

@@ -2,6 +2,7 @@ package top.rongx.agent.gateway.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -147,5 +148,29 @@ class BuildFreshnessCheckTest {
                 BuildFreshnessCheck.sourceRootOf(classes).normalize());
         // 不是 target 布局（例如以 jar 解包运行）时不猜
         assertNull(BuildFreshnessCheck.sourceRootOf(Path.of("X:/demo/classes")));
+    }
+
+    @Test
+    @DisplayName("运行期过期提示：产物晚于进程启动就给出「请重启网关」")
+    void runtimeHintWhenArtifactsAreNewerThanProcess() {
+        Instant started = Instant.ofEpochMilli(1_000_000L);
+        Instant compiled = Instant.ofEpochMilli(5_000_000L);
+
+        String hint = BuildFreshnessCheck.staleHint(compiled, started);
+
+        assertNotNull(hint, "产物比进程新时必须给提示");
+        assertTrue(hint.contains("旧字节码"), hint);
+        assertTrue(hint.contains("请重启网关"), "提示要给出动作：" + hint);
+    }
+
+    @Test
+    @DisplayName("运行期过期提示：进程比产物新或读不到产物时不误报")
+    void noHintWhenProcessIsNewest() {
+        Instant started = Instant.ofEpochMilli(9_000_000L);
+        Instant compiled = Instant.ofEpochMilli(5_000_000L);
+
+        assertNull(BuildFreshnessCheck.staleHint(compiled, started));
+        assertNull(BuildFreshnessCheck.staleHint(null, started), "读不到产物时不该告警");
+        assertNull(BuildFreshnessCheck.staleHint(compiled, null), "拿不到进程时间时不该告警");
     }
 }
