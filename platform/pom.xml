@@ -155,6 +155,13 @@
                     <!-- 测试类并行：见属性 surefire.forkCount 的说明（-Dsurefire.forkCount=N 可覆盖） -->
                     <forkCount>${surefire.forkCount}</forkCount>
                     <reuseForks>true</reuseForks>
+                    <!-- 默认只跑 *Test。带外部依赖的端到端用例命名为 *IT，由这里显式纳入：
+                         它们没有 PG 时靠 assumeTrue 自行 skip，因此纳入不会让主干变红，
+                         但配了 AGENT_TEST_PG_URL 就会真的执行（CI 用 service 容器提供 PG）。 -->
+                    <includes>
+                        <include>**/*Test.java</include>
+                        <include>**/*IT.java</include>
+                    </includes>
                 </configuration>
             </plugin>
             <!-- 覆盖率数据供会话归档 summary 聚合（docs/session-archive-spec-v1.md §4.5） -->
