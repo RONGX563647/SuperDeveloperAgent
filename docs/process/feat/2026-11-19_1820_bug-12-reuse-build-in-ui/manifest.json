@@ -13,7 +13,7 @@
   "solution": "HistoryList 对 SUCCEEDED 的运行多一个「复用产物部署」入口（Van 图标，带 tooltip 说明跳过构建）；点击后取该次运行的镜像产物，走既有的按版本部署通道（deployImageVersion），不新增链路。可见性与取产物抽到 utils/reuseBuild.ts：canReuseBuild 只认 SUCCEEDED（未成功的运行没有可复用产物，给按钮只会点出错误），pickReusableImage 取最后一个 image（与后端「以最后产出为准」一致），没有镜像时提示「这次只跑了检查构建」——在点击之前就说清楚，而不是等后端报错。新增 11 个断言并接入前端自检。",
   "commits": [
     {
-      "sha": "2d8c0e48708cb29025e8878a650d45703d5915cf",
+      "sha": "636a7ce9c5f95428c2968e37a329f145552c0dc9",
       "subject": "feat(pipeline): 构建历史提供「复用产物部署」入口",
       "category": "feat",
       "files": [
@@ -85,7 +85,7 @@
     ]
   },
   "chain": {
-    "prev": "7cf3b0a493eba1109e5e120b102638678351215e487802fdad50cc965f396aa4",
-    "self": "09a0527d0f98bc7169ea55669bed3cafa851bab8fba825813b966bc2f733502b"
+    "prev": "f54ded0f4fdb821b637df234de79787ebd327369c8c40c506098520c2e6c997f",
+    "self": "10bd652ac7515eaa7e1d52f1f7fd9cfa94a869374d54f24bc6c17b193382f819"
   }
 }
