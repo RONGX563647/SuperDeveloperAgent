@@ -1,11 +1,19 @@
 name: ci
 
 # 真实 CI：本地钩子可以被 --no-verify 绕过，远端这一层才是强制力。
-# 四个 job 与本地门禁共用同一组命令，避免"本地绿、CI 红"的分叉。
+# 五个 job（backend / frontend / docs / contract / security）与本地门禁共用同一组命令，
+# 避免"本地绿、CI 红"的分叉。
 #
 # 需要你在 GitHub 仓库设置里把这些 job 设为 required checks：
 #   Settings → Branches → Branch protection rules → Require status checks
-#   backend / frontend / docs / contract
+#   backend / frontend / docs / contract / security
+#
+# action 版本约定（2026-11）：GitHub 已把 runner 默认运行时从 Node 20 切到 Node 24，
+# 并在 2026-09-16 从托管 runner 上移除 Node 20。所有 action 都必须钉在 node24 运行时
+# 的版本上，否则每次运行都会打印 "Node.js 20 has been deprecated" 警告。
+# 升级时核对三件事：runs.using 是否为 node24、self-hosted runner 是否 ≥ 2.327.1、
+# 输入名是否被改名（见各 step 的注释）。这里用精确版本号而不是浮动大版本 tag，
+# 保证"同一个 commit 跑出来的 CI 完全可复现"，也避免 tag 被移动带来的供应链风险。
 
 on:
   push:
@@ -23,6 +31,13 @@ env:
   # 前端自检脚本用 node --experimental-strip-types 直接跑 TS，需要 Node ≥22.6
   NODE_VERSION: "22"
   PYTHON_VERSION: "3.11"
+  # 全链路 UTF-8：runner 默认 locale 是 C/POSIX，Python 与子进程会退回 ASCII，
+  # 中文输出变成 "?????"、写出的归档文件也可能被逐字节改写。
+  # 这三个变量分别管：Python 解释器默认编码、stdio 编码、glibc locale。
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
 
 jobs:
   backend:
@@ -46,14 +61,16 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           # 归档契约要读历史提交；M1 迁移守卫要读发布 tag（x.y.z）判断"哪些迁移算已发布"。
           # 浅克隆不带 tag，缺了它守卫只能退化成"全部按已发布"，未发布迁移也会被迫冻结。
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-java@v4
+      # v4 → v6.3.0：Node 20 运行时已移除；v6 把 jdkFile 输入改名为 jdk-file（本项目未用），
+      # 并移除 legacy Adopt 发行版（本项目用 temurin），cache: maven 语义不变。
+      - uses: actions/setup-java@v6.3.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
@@ -65,6 +82,9 @@ jobs:
         env:
           # CI 机器核数不固定：让 surefire 按可用核数走 pom 默认（2），
           # 需要更快可在仓库变量里覆盖。
+          # 注意：这里的 -Dfile.encoding 只作用于 mvn 自己的 JVM，surefire fork 不继承；
+          # 需要给测试 JVM 指定编码就写进 pom 的 argLine。JDK21 默认已是 UTF-8，
+          # 这里不再重复设置，免得给人"已经管到测试进程"的错觉。
           MAVEN_OPTS: -Xmx2g
           # 端到端用例的目标库；不设则自动 skip（本地默认即如此）。
           #
@@ -77,7 +97,7 @@ jobs:
 
       - name: 上传测试与覆盖率报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: surefire-and-jacoco
           path: |
@@ -90,13 +110,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: pnpm/action-setup@v4
+      # v4 → v6.1.1：node24 运行时；inputs 未变（version / dest / run_install / cache ...）。
+      - uses: pnpm/action-setup@v6.1.1
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      # v4 → v7.1.0：node24 运行时；v7 迁到 ESM 且不再导出 dummy NODE_AUTH_TOKEN
+      # （本项目不用 registry-url / npm publish，无影响）；cache: pnpm 语义不变。
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -123,11 +146,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
+          # 归档契约要读历史提交；编码门禁也要按 base..head 取范围，浅克隆取不到 base。
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -135,6 +159,21 @@ jobs:
       # doc-marshal 要求 kebab-case 文件名、frontmatter 'type' 枚举、不得有 index.md，
       # 与本仓库的 session-summary/v1 归档规范、handbook 生成器直接冲突；
       # 同时跑两套契约只会让人不知道该听谁的，故只保留一套。
+
+      # 乱码源头治理：中文提交信息被 GBK/ASCII 编码链打进 git 后只剩 "?"，
+      # 变成不可逆损坏（GitHub 上显示成 "chore(release): main ???? 0.1.0-snapshot"）。
+      # 本地钩子能拦 git commit，网页/API 提交绕得过，所以远端再兜一层。
+      - name: 提交信息编码（禁止 ? / U+FFFD 损坏）
+        # fork PR 跑的是 base 分支的 workflow，可能还没有这个脚本；没有就跳过，
+        # 不要把"检查器本身不存在"当成提交信息有问题。
+        if: hashFiles('tools/ci/check-commit-messages.py') != ''
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/check-commit-messages.py
+          --base "$BASE_SHA" --head "$HEAD_SHA"
+          --allow-file tools/ci/known-bad-commit-messages.txt
 
       - name: 会话归档校验（不依赖本地钩子）
         run: python tools/session-archive/gate.py validate
@@ -147,9 +186,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -167,17 +206,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0  # gitleaks 要扫历史提交
 
-      # 密钥扫描：平台持有 SSH 部署凭据与 SecretBox 主密钥，泄漏面最大
+      # 密钥扫描：平台持有 SSH 部署凭据与 SecretBox 主密钥，泄漏面最大。
+      # v2 → v3.0.0：官方明确只迁运行时到 node24，inputs / outputs / 行为不变。
       - name: gitleaks（密钥/凭据）
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 依赖漏洞：直读 pom / package-lock，不需要构建
+      # 依赖漏洞：直读 pom / package-lock，不需要构建。
+      # osv-scanner-action 是 composite action（内部走 Go 二进制 + docker），
+      # 没有 Node 运行时，因此不在 Node 20 弃用名单里，保持现有版本不动。
       - name: osv-scanner（依赖漏洞）
         uses: google/osv-scanner-action/osv-scanner-action@v1.9.0
         with:

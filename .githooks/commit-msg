@@ -1,0 +1,45 @@
+#!/bin/sh
+# 提交信息编码门禁（commit-msg）：拦下已经被编码链打坏的中文提交信息。
+#
+# 为什么单独一个钩子：pre-commit 只看 staged 文件，管不到 message。中文在
+# 「脚本拼串 → 命令行传参 → 代码页转换」中一旦落到 ASCII/GBK，字符会被替换成
+# 问号 0x3F，写进 git 对象后不可逆（GitHub 上就是 "chore(release): main ????"）。
+#
+# 安装：powershell -ExecutionPolicy Bypass -File tools/session-archive/install-hooks.ps1
+# 绕过：git commit --no-verify（绕过等于放弃这道闸门，CI 仍会兜底）
+set -e
+
+msg_file=$1
+if [ -z "$msg_file" ]; then
+    echo "ERROR: commit-msg 钩子缺少参数（message 文件路径）" >&2
+    exit 1
+fi
+
+# git 传进来的是相对路径（通常是 .git/COMMIT_EDITMSG，也可能是 worktree 里的路径）。
+# 先把绝对路径算出来，再切到仓库根去调用工具，避免 cd 之后相对路径失效。
+if [ -f "$msg_file" ]; then
+    msg_dir=$(cd "$(dirname "$msg_file")" && pwd)
+    msg_abs="$msg_dir/$(basename "$msg_file")"
+else
+    msg_abs=$msg_file
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# python 探测要"真能跑"才算：Windows 上 python3 常是应用商店的 stub，
+# command -v 成功但执行失败，直接用会让正常提交被无关错误挡住。
+# 顺序：py -3（Windows 官方 launcher）→ python → python3。
+PY=""
+for cand in "py -3" python python3; do
+    if command -v "${cand%% *}" >/dev/null 2>&1 && $cand -c "import sys" >/dev/null 2>&1; then
+        PY=$cand
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "ERROR: 未找到可用的 python，无法执行提交信息编码门禁（见 docs/ci-commit-encoding.md）" >&2
+    exit 1
+fi
+
+exec $PY tools/ci/check-commit-messages.py --file "$msg_abs"

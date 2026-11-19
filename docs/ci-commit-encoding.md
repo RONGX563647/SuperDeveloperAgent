@@ -43,11 +43,26 @@ ASCII/GBK 处理，无法表示的字符被编码器替换为 `?`，**替换不�
 ### 三层闸门（本次落地）
 
 1. **本地**：`.githooks/commit-msg` → `tools/ci/check-commit-messages.py --file`
-   提交信息非法（含 U+FFFD 或连续 `??`）时直接拒绝落库，并打印修复命令。
+   提交信息非法（含 U+FFFD，或连续 `??` 且整行一个中文都不剩）时直接拒绝落库，
+   并打印修复命令。行内仍有中文的双问号（"你确定??"）只提示不阻断；`??  path`
+   这种 git status 片段会跳过，不误伤。
    安装：`powershell -ExecutionPolicy Bypass -File tools/session-archive/install-hooks.ps1`。
 2. **远端**：`.github/workflows/ci.yml` 的 `docs` job 里
    `提交信息编码（禁止 ? / U+FFFD 损坏）` 这一步，按 `base..head` 复查 PR / push
    引入的提交。网页提交、API 提交、Agent 脚本绕得过本地钩子，但绕不过这一层。
+   历史遗留的脏提交登记在 `tools/ci/known-bad-commit-messages.txt`（一行一个 sha
+   前缀）——否则每次「snapshot → main」同步 PR 都会把陈年旧账重新带进范围、永远红。
+   新提交不进白名单，照旧拦截。
+
+判定规则（`--help` 里也有）：
+
+| 形态 | 判定 |
+| --- | --- |
+| 含 U+FFFD | 损坏，阻断 |
+| `??` 且整行无中文 | 损坏（中文被整段替换），阻断 |
+| `??` 但行内仍有中文 | 提示，放行 |
+| 行首 `??  path` / `!!  path` | git status 片段，跳过 |
+| 单个 `?` | 不判（正常英文问句） |
 3. **生成侧**：写提交信息的脚本/命令统一走 UTF-8。PowerShell 里最少要这三行：
 
    ```powershell
@@ -70,9 +85,25 @@ ASCII/GBK 处理，无法表示的字符被编码器替换为 `?`，**替换不�
 # 最近 30 条（只报告，不阻断）
 python tools/ci/check-commit-messages.py --history 30
 
-# 某个区间
-python tools/ci/check-commit-messages.py --base origin/main --head HEAD
+# 某个区间（带白名单，模拟 CI）
+python tools/ci/check-commit-messages.py --base origin/main --head HEAD \
+    --allow-file tools/ci/known-bad-commit-messages.txt
 ```
+
+### 维护约定（踩过的坑）
+
+- **`.ps1` 必须存成 UTF-8 with BOM**。PowerShell 5.1 对无 BOM 的脚本按系统 ANSI
+  （GBK）解码，中文注释会被拆错字节，行号错位几十行、甚至把语句拼进注释里。
+  `install-hooks.ps1` 就是因此一度执行到 `Join-Path $null`。改完用
+  `[IO.File]::ReadAllText`/`WriteAllText` 带 `UTF8Encoding($true)` 复核首三字节
+  `239,187,191`；编辑器保存时选 "UTF-8 with BOM"。
+- **钩子需要可执行位**。本仓库 `core.fileMode=false`（Windows），索引里 `.githooks/*`
+  是 `100644`；Linux/macOS 克隆后 git 不会执行不可执行的钩子（静默失效）。
+  统一执行一次：
+  `git add --chmod=+x .githooks/pre-commit .githooks/pre-push .githooks/commit-msg`。
+- **不要用 `git rev-parse --git-path hooks` 当"legacy 目录"**：`core.hooksPath` 生效后
+  它返回 `.githooks` 本身，拿它清理旧副本会删掉仓库里的钩子。用
+  `git rev-parse --absolute-git-dir` 再拼 `hooks/`。
 
 ### 历史损坏（可选，需协调）
 
