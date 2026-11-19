@@ -51,14 +51,20 @@ public class BuildFreshnessCheck {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
-        Path moduleRoot = Path.of("").toAbsolutePath();
-        Path classesRoot = Path.of("target", "classes");
+        // 产物目录必须从「本类是从哪里加载的」反推，不能写死相对路径：
+        // 同一份代码可能以仓库根为工作目录启动（IDE 多模块），也可能是模块目录，
+        // 写死 target/classes 时在另一种工作目录下会静默跳过——等于没有自检。
+        Path classesRoot = classesLocation();
+        if (classesRoot == null) {
+            log.debug("构建产物新鲜度自检跳过：定位不到本类的 class 目录（可能以 jar 运行）");
+            return;
+        }
         // 两件事都要比：
         // 1) 源码 vs 产物 —— 产物过期（改了没编译）；
         // 2) 进程 vs 产物 —— 进程启动后又编译过（编译了没重启）。
         // 第 2 类正是本次会话实测到的形态：进程启动于 23:13，产物 12:12 又被重新编译，
         // 进程继续用旧字节码服务，表现为「改了不生效 / 请求挂住」。
-        Verdict verdict = inspect(moduleRoot, classesRoot,
+        Verdict verdict = inspectClasses(classesRoot,
                 ProcessHandle.current().info().startInstant().orElse(null));
         if (!verdict.checked()) {
             log.debug("构建产物新鲜度自检跳过：{}", verdict.detail());
@@ -74,7 +80,26 @@ public class BuildFreshnessCheck {
     }
 
     /**
-     * 抽样比对：{@code classesRoot} 下的 .class 是否比 {@code sourceRoot} 下同名 .java 更新。
+     * 本类所在 class 目录（即 {@code target/classes}）。
+     *
+     * <p>以 jar 运行时返回 null：那种部署形态下没有源码可比，本来就不该告警。
+     */
+    static Path classesLocation() {
+        try {
+            java.security.CodeSource source = BuildFreshnessCheck.class
+                    .getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) {
+                return null;
+            }
+            Path path = Path.of(source.getLocation().toURI());
+            return Files.isDirectory(path) ? path : null;
+        } catch (java.net.URISyntaxException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 抽样比对：{@code moduleRoot} 下的产物与源码。
      *
      * <p>纯函数式实现（不读 Spring 上下文），便于直接单测。
      *
@@ -82,20 +107,20 @@ public class BuildFreshnessCheck {
      * @param classesRoot 相对 {@code moduleRoot} 的 class 输出目录
      */
     public static Verdict inspect(Path moduleRoot, Path classesRoot) {
-        return inspect(moduleRoot, classesRoot, null);
+        return inspectClasses(moduleRoot.resolve(classesRoot).normalize(), null);
     }
 
     /**
-     * 同上，并额外判断「进程启动之后产物是否又被编译过」。
+     * 以「产物目录」为入口做比对：源码目录由产物目录反推
+     * （{@code .../target/classes} → {@code .../src/main/java}）。
      *
-     * @param processStartedAt 本进程启动时间；null 表示无法取得（跳过这一项比较）
+     * @param classes          实际被加载的 class 目录
+     * @param processStartedAt 本进程启动时间；null 表示跳过这一项比较
      */
-    public static Verdict inspect(Path moduleRoot, Path classesRoot,
-                                  Instant processStartedAt) {
-        if (moduleRoot == null || classesRoot == null) {
-            return Verdict.skipped("缺少路径");
+    public static Verdict inspectClasses(Path classes, Instant processStartedAt) {
+        if (classes == null) {
+            return Verdict.skipped("缺少产物目录");
         }
-        Path classes = moduleRoot.resolve(classesRoot).normalize();
         if (!Files.isDirectory(classes)) {
             return Verdict.skipped("没有编译产物目录：" + classes);
         }
@@ -107,9 +132,9 @@ public class BuildFreshnessCheck {
                         + "，进程启动于 " + processStartedAt + "）");
             }
         }
-        Path sources = moduleRoot.resolve("src/main/java").normalize();
-        if (!Files.isDirectory(sources)) {
-            return Verdict.skipped("没有源码目录（镜像内通常如此）：" + sources);
+        Path sources = sourceRootOf(classes);
+        if (sources == null || !Files.isDirectory(sources)) {
+            return Verdict.skipped("没有源码目录（镜像内通常如此）：" + classes);
         }
         List<Path> classFiles;
         try (Stream<Path> walk = Files.walk(classes)) {
@@ -148,6 +173,16 @@ public class BuildFreshnessCheck {
         return Verdict.stale("源码比编译产物新（" + stale.size() + "/" + compared
                 + " 个类，例如 " + String.join(", ", stale.stream().limit(3).toList())
                 + "）");
+    }
+
+    /** 产物目录反推源码目录：{@code <module>/target/classes} → {@code <module>/src/main/java}。 */
+    static Path sourceRootOf(Path classes) {
+        Path target = classes.getParent();
+        if (target == null || !"target".equals(String.valueOf(target.getFileName()))) {
+            return null;
+        }
+        Path module = target.getParent();
+        return module == null ? null : module.resolve("src/main/java");
     }
 
     /** 产物目录里最新的一个 .class 时间；目录为空或读不到返回 null。 */

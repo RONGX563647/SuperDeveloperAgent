@@ -1,0 +1,84 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_1309_migration-baseline-generator",
+  "category": "chore",
+  "title": "迁移基线改为生成物：未登记即红、失败带处方",
+  "createdAt": "2026-11-19T13:09:36+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "把 M1 基线从手改 txt 改成生成物；未登记即失败；失败信息带修复处方",
+    "toolCallCount": 0
+  },
+  "problem": "CI 报三个迁移文件『已被修改』，但内容一个字节都没动——基线哈希由人用 Get-FileHash 手算，是工作区原始字节口径：Windows 检出 CRLF、Linux CI 检出 LF，同一份内容两个哈希。d91cd59 已把守卫改成 LF 归一化，但『谁在什么时候重算基线』仍靠手改 txt，且未登记的迁移只打一行 hint——忘了补录就等于 M1 静默失效。",
+  "solution": "把基线改成生成物：新增 MigrationBaseline 承载口径（LF 归一化 sha256，与 Flyway checksum 一致）、校验（区分被修改/未登记）、整份重算与处方文本；MigrationGuardTest 相应瘦身并把『未登记』从提示升级为失败，失败信息直接给恢复命令、新增迁移模板与重算命令；migration-baseline.txt 由 rewrite 重写注释头，写明口径、禁止手算、以及重算时机。",
+  "commits": [
+    {
+      "sha": "a38ca42d80c77714aca1a36c9391eeaec599a2fc",
+      "subject": "test(spec-checks): 迁移基线改为生成物：未登记即红、失败带处方",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/spec-checks/migration-baseline.txt",
+          "status": "M",
+          "additions": 14,
+          "deletions": 23,
+          "blobHash": "659d26b8a09ce0e0c1db82b09eefc5df21ad2ef5"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/MigrationBaseline.java",
+          "status": "A",
+          "additions": 219,
+          "deletions": 0,
+          "blobHash": "ecfda841c564b6f85d6eb3e89ad776d68465e4bc"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/MigrationGuardTest.java",
+          "status": "M",
+          "additions": 123,
+          "deletions": 123,
+          "blobHash": "8ad2b32e924c1454cbca75eb87332c472dcaa27f"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/MigrationBaseline.java",
+        "status": "A",
+        "additions": 219,
+        "deletions": 0,
+        "blobHash": "ecfda841c564b6f85d6eb3e89ad776d68465e4bc"
+      },
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/MigrationGuardTest.java",
+        "status": "M",
+        "additions": 123,
+        "deletions": 123,
+        "blobHash": "8ad2b32e924c1454cbca75eb87332c472dcaa27f"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -nsu -pl spec-checks test -Dsurefire.forkCount=4",
+    "result": "PASSED",
+    "evidence": "Tests run: 29, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "spec-checks"
+    ],
+    "verification": "mvn -pl spec-checks test 全绿（29 用例，较之前 +5）；-Dmigration.baseline.update=true 对现有 5 个迁移报『0 项变化』，证明新口径与 d91cd59 之后的基线完全一致，没有放宽判定。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1309_migration-baseline-generator"
+    ]
+  },
+  "chain": {
+    "prev": "a69f521396642d625126040ddf0af6f51a479f65843421cb2f3d991105fccd3a",
+    "self": "09ebcbdeaf2788ea4808b4fcf601aea2d47231eef5d428359dc1fa8ee8c602c9"
+  }
+}

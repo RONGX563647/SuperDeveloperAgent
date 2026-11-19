@@ -1,0 +1,77 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-19_1311_bug-12-freshness-locate-by-codesource",
+  "category": "bug",
+  "title": "BUG-12 新鲜度自检按 CodeSource 定位产物目录",
+  "createdAt": "2026-11-19T13:11:34+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "实际重启后自检被静默跳过：它按相对路径找 target/classes，而进程工作目录是仓库根；改用本类 CodeSource 定位产物目录，源码目录由产物目录反推",
+    "toolCallCount": 0
+  },
+  "problem": "重启网关后发现新鲜度自检根本没执行：日志里既没有 stale 告警也没有 fresh 结论。原因是自检按相对路径找 target/classes，而进程的工作目录是仓库根，多模块布局下这个路径不存在，代码走了「没有编译产物目录」的跳过分支——一个会静默失效的自检等于没有自检，而这恰恰是它要防的那类问题。",
+  "solution": "改为从本类自身的 CodeSource 定位实际加载目录（即 agent-gateway/target/classes），源码目录由产物目录反推（target/classes 的父父目录 + src/main/java），完全不依赖进程工作目录；以 jar 方式运行时 CodeSource 不是目录，明确跳过并说明「那类部署形态没有源码可比」。方法拆成 inspectClasses(产物目录, 进程启动时间) 与 sourceRootOf(产物目录)，避免 Path/Instant 重载歧义。另加 tools/task-board/runtime-probe.py：未登录探活本轮新增的三个路由，404 就说明网关还在跑旧字节码——本次重启正是靠它确认新代码已生效。",
+  "commits": [
+    {
+      "sha": "ba7b2312c58034ba044615552e12aae4994f8577",
+      "subject": "fix(gateway): 新鲜度自检按 CodeSource 定位产物目录",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/config/BuildFreshnessCheck.java",
+          "status": "M",
+          "additions": 50,
+          "deletions": 15,
+          "blobHash": "4424ec201b44debf69c9ad7a7bed83d0673bfbd7"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/config/BuildFreshnessCheckTest.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 24,
+          "blobHash": "2159a70fe88126a883f5692e559de0417d9e5cdd"
+        },
+        {
+          "path": "tools/task-board/runtime-probe.py",
+          "status": "A",
+          "additions": 54,
+          "deletions": 0,
+          "blobHash": "57a52e8137bad0e491236bdf84b700b4d428ddad"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/config/BuildFreshnessCheckTest.java",
+        "status": "M",
+        "additions": 35,
+        "deletions": 24,
+        "blobHash": "2159a70fe88126a883f5692e559de0417d9e5cdd"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 149, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "mvn -pl agent-gateway test：149 用例通过；运行时探活：/git-issues/versions、/settings/projects/{id}/env-bindings、/ci/runs/{id}/log/lines 均返回 401（路由存在）而非 404"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1311_bug-12-freshness-locate-by-codesource"
+    ]
+  },
+  "chain": {
+    "prev": "45e010ce1f7d0a9ac3dcfa7ab6bb2d79deb0e850a4cb535972c9fdd867136bde",
+    "self": "18deaf8b3b3db1fd93321be12b524fe191025bbdb8cd05dd2f86ae3ab56cc3d0"
+  }
+}

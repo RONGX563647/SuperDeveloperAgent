@@ -2,33 +2,39 @@ package top.rongx.agent.arch;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.util.ArrayList;
-import java.util.HexFormat;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * 项目规约 §5.2：已执行的迁移不可修改。
  *
- * <p>{@code spec-checks/migration-baseline.txt} 记录已发布迁移的 sha256；
- * 内容变化即失败（Flyway 校验和会变，且线上已执行过）。
- * 基线文件缺失时跳过（首次接入）。
+ * <p>{@code spec-checks/migration-baseline.txt} 记录已发布迁移的 <b>LF 归一化</b> sha256；
+ * 内容变化即失败（Flyway 校验和会变，且线上已执行过）。读写口径与处方文本都在
+ * {@link MigrationBaseline} 里，本类只负责"把问题摆到台面上"。
+ *
+ * <p>两类问题都必须红，不能只提示：
+ * <ul>
+ *   <li><b>已登记但哈希不符</b> —— 历史迁移被原地改；</li>
+ *   <li><b>未登记</b> —— 基线里没有这一行，等于这个文件没人守（上一版只打 hint，
+ *       忘了补录就静默失效）。</li>
+ * </ul>
+ * 重算基线：{@code mvn -pl spec-checks -Dtest=MigrationGuardTest -Dmigration.baseline.update=true test}
  */
 class MigrationGuardTest {
 
-    private static final String BASELINE = "spec-checks/migration-baseline.txt";
+    private static final String UPDATE = MigrationBaseline.UPDATE_PROPERTY;
+
+    @TempDir
+    Path tempDir;
 
     @Test
     @DisplayName("行尾归一化：CRLF 与 LF 检出算出的哈希必须相同")
@@ -36,138 +42,132 @@ class MigrationGuardTest {
         // M1 曾误报的根因：基线在某一台机器上算出，而 git 的 `* text=auto eol=lf`
         // 只约束仓库内的 blob，工作区实际字节取决于 core.autocrlf 与检出平台。
         // Windows 检出 CRLF、Linux 检出 LF，同一份文件得到两个哈希。
-        Path lf = Files.createTempFile("mig-lf", ".sql");
-        Path crlf = Files.createTempFile("mig-crlf", ".sql");
-        Path mixed = Files.createTempFile("mig-mixed", ".sql");
-        try {
-            String text = "CREATE TABLE t (id TEXT);\nINSERT INTO t VALUES ('a');\n";
-            Files.write(lf, text.getBytes(StandardCharsets.UTF_8));
-            Files.write(crlf, text.replace("\n", "\r\n").getBytes(StandardCharsets.UTF_8));
-            // 混合行尾（编辑器或补丁工具只转换了一部分）也要归一到同一哈希
-            Files.write(mixed, text.replace(";\n", ";\r\n").getBytes(StandardCharsets.UTF_8));
+        String text = "CREATE TABLE t (id TEXT);\nINSERT INTO t VALUES ('a');\n";
+        Path lf = write(tempDir.resolve("lf.sql"), text);
+        Path crlf = write(tempDir.resolve("crlf.sql"), text.replace("\n", "\r\n"));
+        // 混合行尾（编辑器或补丁工具只转换了一部分）也要归一到同一哈希
+        Path mixed = write(tempDir.resolve("mixed.sql"), text.replace(";\n", ";\r\n"));
 
-            String lfHash = sha256(lf);
-            assertEquals(lfHash, sha256(crlf), "CRLF 与 LF 必须算出同一哈希");
-            assertEquals(lfHash, sha256(mixed), "混合行尾必须归一到同一哈希");
-        } finally {
-            Files.deleteIfExists(lf);
-            Files.deleteIfExists(crlf);
-            Files.deleteIfExists(mixed);
-        }
+        String lfHash = MigrationBaseline.hash(lf);
+        assertEquals(lfHash, MigrationBaseline.hash(crlf), "CRLF 与 LF 必须算出同一哈希");
+        assertEquals(lfHash, MigrationBaseline.hash(mixed), "混合行尾必须归一到同一哈希");
     }
 
     @Test
     @DisplayName("归一化不得掩盖真实内容改动")
     void normalizationStillDetectsRealEdits() throws Exception {
-        // 反向保证：归一化只吃掉行尾差异，内容变了必须还是不同哈希。
-        Path before = Files.createTempFile("mig-before", ".sql");
-        Path after = Files.createTempFile("mig-after", ".sql");
-        try {
-            Files.write(before, "CREATE TABLE t (id TEXT);\n".getBytes(StandardCharsets.UTF_8));
-            Files.write(after, "CREATE TABLE t (id TEXT, name TEXT);\r\n"
-                    .getBytes(StandardCharsets.UTF_8));
-            assertNotEquals(sha256(before), sha256(after), "内容被改动时必须仍然能被发现");
-        } finally {
-            Files.deleteIfExists(before);
-            Files.deleteIfExists(after);
-        }
+        Path before = write(tempDir.resolve("before.sql"), "CREATE TABLE t (id TEXT);\n");
+        Path after = write(tempDir.resolve("after.sql"),
+                "CREATE TABLE t (id TEXT, name TEXT);\r\n");
+        assertNotEquals(MigrationBaseline.hash(before), MigrationBaseline.hash(after),
+                "内容被改动时必须仍然能被发现");
     }
 
     @Test
-    @DisplayName("已发布的迁移文件不得被修改")
+    @DisplayName("改历史迁移：报哈希不符，并给出恢复原文件 + 新增迁移的处方")
+    void editedReleasedMigrationFailsWithPrescription() throws Exception {
+        Path root = fixtureRoot("V1__platform_schema.sql", "CREATE TABLE a (id TEXT);\n");
+        // 先记基线，再把内容改掉——这就是"已发布迁移被原地修改"的形态
+        MigrationBaseline.rewrite(root);
+        write(root.resolve(MIGRATION_DIR + "V1__platform_schema.sql"),
+                "CREATE TABLE a (id TEXT, name TEXT);\n");
+
+        MigrationBaseline.Snapshot snapshot = MigrationBaseline.check(root);
+
+        assertFalse(snapshot.ok(), "改历史迁移必须失败");
+        assertEquals(1, snapshot.violations().size());
+        assertTrue(snapshot.unrecorded().isEmpty());
+        assertTrue(snapshot.violations().get(0).contains("V1__platform_schema.sql"));
+
+        String prescription = MigrationBaseline.prescription();
+        assertTrue(prescription.contains("git checkout"), "处方要给恢复原文件的命令");
+        assertTrue(prescription.contains("V<n+1>__<slug>.sql"), "处方要指向新增迁移");
+        assertTrue(prescription.contains(UPDATE), "处方要给重算命令（未发布迁移的正路）");
+    }
+
+    @Test
+    @DisplayName("未登记迁移必须红，不再只打 hint")
+    void unrecordedMigrationFailsLoudly() throws Exception {
+        Path root = fixtureRoot("V1__platform_schema.sql", "CREATE TABLE a (id TEXT);\n");
+        MigrationBaseline.rewrite(root);
+        // 新增一个迁移但没重算基线：上一版只打印"尚未纳入基线"，等于没守住
+        write(root.resolve(MIGRATION_DIR + "V2__identity_tables.sql"),
+                "CREATE TABLE b (id BIGINT GENERATED BY DEFAULT AS IDENTITY);\n");
+
+        MigrationBaseline.Snapshot snapshot = MigrationBaseline.check(root);
+
+        assertFalse(snapshot.ok(), "未登记迁移必须失败");
+        assertEquals(1, snapshot.unrecorded().size());
+        assertTrue(snapshot.unrecorded().get(0).endsWith("V2__identity_tables.sql"));
+        assertTrue(snapshot.violations().isEmpty());
+    }
+
+    @Test
+    @DisplayName("重算基线：按 LF 口径写回、保留注释头、重算后可校验通过")
+    void rewriteMakesBaselineCanonical() throws Exception {
+        Path root = fixtureRoot("V1__platform_schema.sql", "CREATE TABLE a (id TEXT);\r\n");
+        Path baseline = root.resolve(MigrationBaseline.FILE);
+
+        MigrationBaseline.rewrite(root);
+
+        String text = Files.readString(baseline, StandardCharsets.UTF_8);
+        assertTrue(text.startsWith("# 迁移基线"), "注释头必须由代码写回，保留口径说明");
+        assertTrue(text.contains("migration.baseline.update=true"), "注释头要带重算命令");
+        // CRLF 文件按 LF 口径登记：哈希等于 LF 版本的哈希
+        Path lfTwin = write(tempDir.resolve("twin.sql"), "CREATE TABLE a (id TEXT);\n");
+        assertTrue(text.contains(MigrationBaseline.hash(lfTwin)), "基线必须记 LF 归一化哈希");
+
+        assertTrue(MigrationBaseline.check(root).ok(), "重算后必须自洽");
+    }
+
+    @Test
+    @DisplayName("已发布的迁移文件不得被修改（真实仓库）")
     void appliedMigrationsAreImmutable() throws Exception {
         Path root = Path.of(System.getProperty("spec.root", ".")).toAbsolutePath().normalize();
-        Path baseline = root.resolve(BASELINE);
-        List<Path> migrations = collect(root);
 
-        if (!Files.exists(baseline)) {
-            System.out.printf("[M1] 基线文件不存在，跳过（发现 %d 个迁移）%n", migrations.size());
+        if (Boolean.getBoolean(UPDATE)) {
+            // 生成模式：只重算，不判红——这是"未发布迁移要改"与"发布切点补录"的正路
+            var changes = MigrationBaseline.rewrite(root);
+            System.out.printf("[M1] 已重算迁移基线（%s=%s）：%d 项变化%n",
+                    UPDATE, "true", changes.size());
+            changes.forEach(change -> System.out.println("  " + change));
             return;
         }
 
-        Map<String, String> recorded = parse(Files.readAllLines(baseline, StandardCharsets.UTF_8));
-        List<String> violations = new ArrayList<>();
-        List<String> unrecorded = new ArrayList<>();
-
-        for (Path file : migrations) {
-            String rel = root.relativize(file).toString().replace('\\', '/');
-            String expected = recorded.get(rel);
-            String actual = sha256(file);
-            if (expected == null) {
-                unrecorded.add(rel);
-            } else if (!expected.equals(actual)) {
-                violations.add(String.format("[M1] %s 已被修改（基线 %s… 当前 %s…）—— 项目规约 §5.2：已执行迁移必须新增，不得原地修改",
-                        rel, expected.substring(0, 12), actual.substring(0, 12)));
-            }
+        if (!Files.exists(root.resolve(MigrationBaseline.FILE))) {
+            System.out.printf("[M1] 基线文件不存在，跳过（发现 %d 个迁移）%n",
+                    MigrationBaseline.migrations(root).size());
+            return;
         }
 
-        assertTrue(violations.isEmpty(), () -> String.join(System.lineSeparator(), violations));
-
-        if (!unrecorded.isEmpty()) {
-            System.out.printf("[M1] 提示：%d 个迁移尚未纳入基线（发布后补录）：%n  %s%n",
-                    unrecorded.size(), String.join(System.lineSeparator() + "  ", unrecorded));
+        MigrationBaseline.Snapshot snapshot = MigrationBaseline.check(root);
+        if (snapshot.ok()) {
+            System.out.printf("[M1] 迁移基线一致（%d 个迁移）%n",
+                    MigrationBaseline.migrations(root).size());
+            return;
         }
+        StringBuilder report = new StringBuilder("[M1] 迁移基线守卫失败（")
+                .append(snapshot.total()).append(" 项）").append(System.lineSeparator());
+        snapshot.violations().forEach(v -> report.append("  - 被修改：").append(v)
+                .append(System.lineSeparator()));
+        snapshot.unrecorded().forEach(u -> report.append("  - 未登记：").append(u)
+                .append(System.lineSeparator()));
+        report.append(MigrationBaseline.prescription());
+        fail(report.toString());
     }
 
-    private static List<Path> collect(Path root) throws IOException {
-        List<Path> files = new ArrayList<>();
-        try (Stream<Path> s = Files.walk(root)) {
-            s.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().replace('\\', '/').contains("/db/migration/"))
-                    .filter(p -> p.getFileName().toString().endsWith(".sql"))
-                    .filter(p -> !p.toString().contains("target"))
-                    .sorted()
-                    .forEach(files::add);
-        }
-        return files;
+    private static final String MIGRATION_DIR =
+            "agent-infra/src/main/resources/db/migration/common/";
+
+    /** 造一个只有一条迁移（和空基线）的临时仓库根。 */
+    private Path fixtureRoot(String fileName, String content) throws Exception {
+        write(tempDir.resolve(MIGRATION_DIR + fileName), content);
+        return tempDir;
     }
 
-    private static Map<String, String> parse(List<String> lines) {
-        Map<String, String> map = new LinkedHashMap<>();
-        for (String line : lines) {
-            String t = line.trim();
-            if (t.isEmpty() || t.startsWith("#")) {
-                continue;
-            }
-            String[] parts = t.split("\\s+", 2);
-            if (parts.length == 2) {
-                map.put(parts[0], parts[1]);
-            }
-        }
-        return map;
-    }
-
-    private static String sha256(Path file) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        return HexFormat.of().formatHex(md.digest(normalized(Files.readAllBytes(file))));
-    }
-
-    /**
-     * 行尾归一化为 LF 后再算哈希。
-     *
-     * <p><b>为什么必须归一化</b>：基线是在某台机器上算出来的，而 git 的
-     * {@code * text=auto eol=lf} 只约束仓库内的 blob；工作区里的实际字节取决于
-     * {@code core.autocrlf} 与检出平台。Windows 上检出为 CRLF、Linux CI 上检出为 LF，
-     * 同一份文件会得到两个哈希——于是"已在基线中的迁移被改动"在 CI 上误报，
-     * 真正被改动的文件反倒可能因两边都 CRLF 而漏报。
-     *
-     * <p>归一化之后，哈希只反映<b>内容</b>，与检出平台无关。这也是 Flyway 自己的判定
-     * 口径：它的校验和同样忽略行尾差异。
-     */
-    private static byte[] normalized(byte[] raw) {
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(raw.length);
-        for (int i = 0; i < raw.length; i++) {
-            byte b = raw[i];
-            if (b == '\r') {
-                // CRLF → LF；孤立的 CR 也一并归成 LF，避免混合行尾产生第三个哈希
-                out.write('\n');
-                if (i + 1 < raw.length && raw[i + 1] == '\n') {
-                    i++;
-                }
-            } else {
-                out.write(b);
-            }
-        }
-        return out.toByteArray();
+    private static Path write(Path file, String content) throws Exception {
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, content, StandardCharsets.UTF_8);
+        return file;
     }
 }
