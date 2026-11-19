@@ -49,6 +49,17 @@ public class GitIssueController {
     private static final Logger log = LoggerFactory.getLogger(GitIssueController.class);
     /** 单次导出上限：防止一次把整库任务拉进内存。 */
     private static final int EXPORT_MAX_IDS = 2000;
+    /**
+     * xlsx 的媒体类型。
+     *
+     * <p>必须在 {@code produces} 里显式声明：只写 {@code ResponseEntity<byte[]>} 时，
+     * springdoc 会按默认的 {@code application/json} 推断出
+     * {@code {application/json: {schema: {type: string, format: byte}}}}，
+     * 与实际返回的 xlsx 类型不符；而且不同环境下推断结果还会漂移，
+     * 导致 OpenAPI 快照在本地能过、CI 上判过期。
+     */
+    private static final String XLSX_MEDIA_TYPE =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
     private final GitIssueService issues;
     private final CurrentUser currentUser;
@@ -90,7 +101,7 @@ public class GitIssueController {
      * @param body {@code {"ids": ["...", "..."]}}
      * @return xlsx 字节流（附件下载）
      */
-    @PostMapping("/export")
+    @PostMapping(value = "/export", produces = XLSX_MEDIA_TYPE)
     public ResponseEntity<byte[]> export(@RequestBody Map<String, Object> body) {
         String userId = currentUser.requireUserId();
         List<String> ids = new ArrayList<>();
@@ -131,8 +142,7 @@ public class GitIssueController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"" + fileName + "\"")
-                .contentType(MediaType.parseMediaType(
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .contentType(MediaType.parseMediaType(XLSX_MEDIA_TYPE))
                 .contentLength(xlsx.length)
                 .body(xlsx);
     }
