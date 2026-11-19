@@ -1,0 +1,98 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_1718_pg-e2e-final",
+  "category": "feat",
+  "title": "真 PostgreSQL 端到端验证热切换",
+  "createdAt": "2026-11-19T17:18:22+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "PG 端到端用例 + CI service + 凭据修正",
+    "toolCallCount": 0
+  },
+  "problem": "热切换主链路（探活成功 → Flyway 建 PG schema → 搬行 → 原子替换 → 新后端可读）只有 SQLite 上的失败路径单测，方言、identity 列、ON CONFLICT 的 PG 语义都没被真库验证过，CI 上也从不执行。",
+  "solution": "新增 DatabaseHotSwapperPostgresIT 4 例并用 postgres:16 实跑：全链路切换、源非 SQLite 时拒绝搬数据、探活失败不写配置、切回 SQLite 保留 PG 数据。踩到两坑并修正：探针表必须用平台自带 run_ledger（搬运器契约是只在目标库已有同名表之间搬行）；源库不能用 @TempDir（被换下的连接池锁 -wal 导致误判）。surefire 纳入 **/*IT.java，ci.yml 的 backend job 加 postgres service，凭据写进 AGENT_TEST_PG_URL（IdentitySequenceSyncTest 直连需要）。",
+  "commits": [
+    {
+      "sha": "59dcd042a0d9710b44b1229c355a44e9c165cd50",
+      "subject": "test(db): 真 PostgreSQL 端到端验证热切换",
+      "category": "chore",
+      "files": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "status": "M",
+          "additions": 24,
+          "deletions": 0,
+          "blobHash": "b07a1fd935ea1e6c1522a7018bcb81b6c197c65c"
+        },
+        {
+          "path": "docs/process/feat/2026-11-19_1646_hot-switch-pg-e2e/manifest.json",
+          "status": "A",
+          "additions": 77,
+          "deletions": 0,
+          "blobHash": "c598ac07dd2a4f445f3c070ac38e2799ba1e3dcf"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_1646_hot-switch-pg-e2e.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "7759000601e8949a5e42eca3599ea93b185b95d6"
+        },
+        {
+          "path": "docs/summary/feat/2026-11_hot-switch-pg-e2e.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "d428547b7094168e681ca2656b263c7d928a2d8e"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/settings/DatabaseHotSwapperPostgresIT.java",
+          "status": "A",
+          "additions": 260,
+          "deletions": 0,
+          "blobHash": "e412fe91aa0ad8cd9b682643ae7f4c216b00670f"
+        },
+        {
+          "path": "platform/pom.xml",
+          "status": "M",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "f5fc3111b8d5e5fb000fe3171c42e8b5ab18ec88"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/settings/DatabaseHotSwapperPostgresIT.java",
+        "status": "A",
+        "additions": 260,
+        "deletions": 0,
+        "blobHash": "e412fe91aa0ad8cd9b682643ae7f4c216b00670f"
+      }
+    ],
+    "casesAdded": 4,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 159, Failures: 0, Errors: 0, Skipped: 6"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "配 PG 时 4 例全绿、infra 148 + gateway 187 全量通过（skipped 6→2）；不配 PG 时 4 例全 skip 且构建绿；提交门禁 159 用例通过；归档校验 108 份。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1718_pg-e2e-final"
+    ]
+  },
+  "chain": {
+    "prev": "d16e6183890f0d4591980020217f6cb3f6ff61d8cf8434fd1939f1f7b408ac03",
+    "self": "60826b1e3cf78bdccaaa8187440c7650a39145e1f573e6b409fd5c4efc9bdf46"
+  }
+}
