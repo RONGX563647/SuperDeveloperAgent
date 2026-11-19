@@ -28,6 +28,7 @@ import { appStore } from '../stores/app'
 import { useRunTracker } from '../composables/useRunTracker'
 import { formatDuration, statusLabel, statusTone } from '../utils/status'
 import { envLabel, envShort, formatBytes, pipelineLabel } from '../utils/pipelineLabels'
+import { tagNeedsAttention, tagStateText as releaseTagText } from '../utils/releaseTag'
 
 /**
  * 流水线工作台：
@@ -635,6 +636,18 @@ const autoRepairText = computed(() => {
     ? `自动修复 ${a.attempts}/${a.maxAttempts} 轮 · 已自动续跑`
     : `自动修复 ${a.attempts}/${a.maxAttempts} 轮 · 仍需人工`
 })
+
+/**
+ * tag 状态文案：只有 PUSHED 才是"真的生效"。
+ *
+ * <p>这一行是为 BUG-10「打 tag 未生效」补的：后端会把 LOCAL（只在本机）
+ * 与原因码下发给界面，但界面原来完全不展示，用户只能到远端自己发现没有标签。
+ * 映射放在 utils/releaseTag，视图与回归脚本共用同一份。
+ */
+const tagStateText = computed(() => releaseTagText(run.value?.release?.tagState))
+
+/** 标签是否需要警示：只有远端可见（PUSHED）才不警示。 */
+const tagWarn = computed(() => tagNeedsAttention(run.value?.release?.tagState))
 
 const runDuration = computed(() => {
   if (!run.value) return ''
@@ -1590,6 +1603,17 @@ async function copyDigest(digest: string): Promise<void> {
               :class="{ ok: run?.status === 'SUCCEEDED' }"
               :title="run?.autoRepair?.lastResult || ''"
             >{{ autoRepairText }}</span>
+            <!-- 首次发布：显式标出来，否则用户会把「没有上一版、跳过回滚」当成故障 -->
+            <span
+              v-if="run?.release?.firstRelease" class="rb-tag plain"
+              title="该环境没有上一版镜像：回滚预检会被跳过，这不是错误"
+            >首次发布</span>
+            <!-- tag 状态：只有 PUSHED 才算远端可见；LOCAL/FAILED 必须显形并给出原因 -->
+            <span
+              v-if="run?.release && run.release.tagState && run.release.tagState !== 'SNAPSHOT'"
+              class="rb-tag" :class="{ warn: tagWarn }"
+              :title="run.release.hint || ''"
+            >{{ tagStateText }}</span>
             <span v-if="errorText" class="rb-err">{{ errorText }}</span>
             <div class="rb-actions">
               <button
@@ -2058,12 +2082,17 @@ async function copyDigest(digest: string): Promise<void> {
   gap: var(--sp-5);
   min-height: 0;
   padding: var(--sp-6) var(--sp-6) var(--sp-8);
-  /* 产物/镜像面板高度不固定：overflow:hidden 会把超出的日志区直接裁掉且无法滚动，
-     这里改成纵向滚动，日志区保底 320px 后再由自身滚动条滚动 */
+  /* 阶段 / 产物 / 镜像面板高度不固定，外层保留纵向滚动。
+     日志区不再用 min-height 撑开（见下一条），两层滚动因此不冲突。 */
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .run-detail :deep(.run-log) {
+  /* 日志区保底高度：既有回归用例（pipelineLayout.test.ts）要求 ≥240px——
+     高度太小会让日志被挤成一条缝，用户根本看不到内容。
+     注意别把这里改成 min-height: 0 去"修"滚动问题：
+     .run-detail 是可纵向滚动的外层，日志靠自身 .log-scroll 滚动，
+     两层各司其职，压掉保底高度只会让日志变得不可用。 */
   flex: 1 1 320px;
   min-height: 320px;
 }
