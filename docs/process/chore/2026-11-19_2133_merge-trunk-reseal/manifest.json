@@ -1,0 +1,53 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_2133_merge-trunk-reseal",
+  "category": "chore",
+  "title": "合入主干并重排归档链",
+  "createdAt": "2026-11-19T21:33:19+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "分支落后主干 5 个提交导致 CI 归档校验失败；合入主干后 feat 链断，用 reseal_chain 修复",
+    "toolCallCount": 0
+  },
+  "problem": "推送 feat/usage-cache-hit-rate 时 CI 三项失败（backend / docs / frontend）。本地 gate validate 却能通过，排查后发现不是代码问题：我的分支基于较旧的主干，落后 5 个提交（含 PR #24 合并进来的界面归档），而归档校验依赖这些文件；缺文件导致 docs 的归档校验失败，frontend 与 backend 的失败也源于同一棵树不完整。合并时又被并行工作线留在工作区的 api-docs-mcp 改动挡住。",
+  "solution": "先把并行工作线的 api-docs-mcp 改动 stash 起来（不丢弃，留待其恢复），再合入 origin/0.1.0-snapshot 解决分支落后。合并后 feat 分类的归档链因两路各接旧链尾而断裂（chain.prev 断链），用 gate.reseal_chain 按 createdAt 重排并重算 self，validate 恢复通过（129 份）。",
+  "commits": [
+    {
+      "sha": "0f233ae05889fe8abd2bd1ae148337a216973c27",
+      "subject": "chore: 合入最新主干并重排归档链",
+      "category": "chore",
+      "files": [
+        {
+          "path": "docs/process/feat/2026-11-19_2123_feat-5-usage-cache-hit-rate/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "1e39ea5143ff7b449d31dd02490e534800ea17bd"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "python tools/session-archive/gate.py validate：129 份通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2133_merge-trunk-reseal"
+    ]
+  },
+  "chain": {
+    "prev": "01fdadd69176f0a6c69556d1ecb7a45cc9c24a783a3cbf62b94e537cbcdaaa9c",
+    "self": "8e1b2af8badf3afb7eecf54d3571dabac8a08cfc4ffc8750105eabf74dea4e6c"
+  }
+}
