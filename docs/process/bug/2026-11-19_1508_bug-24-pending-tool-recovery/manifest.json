@@ -1,0 +1,84 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-19_1508_bug-24-pending-tool-recovery",
+  "category": "bug",
+  "title": "BUG-24 工具调用悬挂导致会话永久中断",
+  "createdAt": "2026-11-19T15:08:44+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "BUG-24 工具调用悬挂导致会话永久中断",
+    "toolCallCount": 0
+  },
+  "problem": "BUG-24 工具调用悬挂导致会话永久中断",
+  "solution": "﻿fix(agent): 开启悬挂工具调用恢复，堵住会话永久中断",
+  "commits": [
+    {
+      "sha": "5fc1ab1f6d800f6106b9efc874d59f24eb8b8d2d",
+      "subject": "﻿fix(agent): 开启悬挂工具调用恢复，堵住会话永久中断",
+      "category": "chore",
+      "files": [
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "d984f9eac15c60e04cf9777d6d706f9acd9f69ea"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "64524bd2f5ccf6714de43e7ed444340cced25087"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 6,
+          "blobHash": "3ccdd5330bbccfa86f47d87afff99bda9540108c"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AgentFactoryPendingRecoveryTest.java",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "0583b941d5016970906b519a7d689fa18fe22e73"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AgentFactoryPendingRecoveryTest.java",
+        "status": "A",
+        "additions": 44,
+        "deletions": 0,
+        "blobHash": "0583b941d5016970906b519a7d689fa18fe22e73"
+      }
+    ],
+    "casesAdded": 2,
+    "command": "mvn -B -nsu -pl agent-runtime,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-runtime test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 66, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "agent-runtime"
+    ],
+    "verification": "Tests run: 66, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1508_bug-24-pending-tool-recovery"
+    ]
+  },
+  "chain": {
+    "prev": "4f45f1f9acd40bb9a77fb4f3cd1a961680924cf2920bfd0f687c0a6a25759933",
+    "self": "448fafb8312b31acf5b08c609a587949e9c1d173ef7e0f833a89fd08d8c3b732"
+  }
+}
