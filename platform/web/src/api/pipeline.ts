@@ -66,6 +66,20 @@ export interface RunAutoRepairView {
   lastResult: string
 }
 
+/** 发布形态事实：后端 releaseFacts 的结构化输出。 */
+export interface ReleaseFactsView {
+  /** 首次发布（该环境没有上一版）：回滚预检会被跳过，这不是错误 */
+  firstRelease: boolean
+  /** PUSHED / LOCAL / FAILED / REJECTED / SNAPSHOT */
+  tagState: string
+  /** 稳定原因码（LOCAL 时为 TAG_PUSH_CREDENTIAL_MISSING） */
+  tagReason: string
+  /** 面向用户的处理建议 */
+  hint: string
+  /** 标签是否真的在远端可见（只有 PUSHED 为 true） */
+  remoteVisible: boolean
+}
+
 /** GET /api/v1/ci/runs/{runId} 的响应；log 为脱敏后的日志尾部。 */
 export interface RunView {
   runId: string
@@ -76,6 +90,8 @@ export interface RunView {
   meta?: RunMetaView
   progress?: RunProgressView
   autoRepair?: RunAutoRepairView
+  /** 发布形态：首次发布 / tag 是否真的生效 / 为什么没生效 */
+  release?: ReleaseFactsView
 }
 
 /** 与后端 StageStatus.isTerminal() 对齐的终态集合。 */

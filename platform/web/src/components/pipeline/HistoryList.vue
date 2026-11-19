@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Delete, Refresh } from '@element-plus/icons-vue'
+import { Delete, Refresh, Van } from '@element-plus/icons-vue'
 import type { HistoryItem } from '../../api/pipeline'
 import { formatDuration, formatTime, statusLabel, statusTone } from '../../utils/status'
 import { envShort, pipelineLabel } from '../../utils/pipelineLabels'
@@ -28,6 +28,8 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'open', item: HistoryItem): void
   (e: 'rerun', item: HistoryItem): void
+  /** 复用该次运行的产物部署（跳过构建）。 */
+  (e: 'reuse', item: HistoryItem): void
   (e: 'delete', item: HistoryItem): void
   (e: 'refresh'): void
   (e: 'more'): void
@@ -282,6 +284,17 @@ function onKeydown(e: KeyboardEvent, item: HistoryItem): void {
             @keydown.enter.stop="emit('rerun', h)"
           >
             <el-icon><Refresh /></el-icon>
+          </span>
+          <!-- 复用它部署：只有成功的运行才有可复用产物；重新构建要几分钟，
+               而这次只是想把已经验证过的产物再部署一次（BUG-12 的诉求）。 -->
+          <span
+            v-if="h.status === 'SUCCEEDED'"
+            class="hist-rerun hist-reuse" role="button" tabindex="0"
+            title="复用这次构建的产物部署：跳过构建与打包，只跑部署与健康检查"
+            @click.stop="emit('reuse', h)"
+            @keydown.enter.stop="emit('reuse', h)"
+          >
+            <el-icon><Van /></el-icon>
           </span>
         </button>
       </div>

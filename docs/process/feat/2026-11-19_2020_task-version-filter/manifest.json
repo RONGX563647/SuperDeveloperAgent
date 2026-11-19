@@ -1,0 +1,105 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_2020_task-version-filter",
+  "category": "feat",
+  "title": "任务栏新增按版本号筛选",
+  "createdAt": "2026-11-19T20:20:34+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1-flash",
+    "promptSummary": "任务栏新增一个按照版本号筛选",
+    "toolCallCount": 0
+  },
+  "problem": "任务栏只能按状态/类型/优先级筛选，无法按关联版本号收敛——一个版本发布前想知道这个版本还剩哪些任务只能肉眼翻列表。",
+  "solution": "新增 utils/taskVersionFilter.ts（normalizeVersion / compareVersion / filterByVersion / versionFilterOptions）承接纯逻辑，列表工具栏新增版本下拉（全部/各版本/未关联）；版本号按点分段数值比较而非字符串，并归一前导 v；只列真实出现过的版本避免死选项；筛选项基于全部已加载任务以免选完消失；看板点状态/优先级时清空版本筛选。顺带把前端测试改成自动发现（package.json 用新 run-tests.mjs，门禁 web_tests 改目录扫描），修掉手写清单导致 8 个测试文件只有 3~6 个真正执行的静默漏跑。",
+  "commits": [
+    {
+      "sha": "abe33a11cc18d3b3df708074b3ef42a7c069a676",
+      "subject": "feat(task): 任务栏新增按版本号筛选",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l2/quality-gates.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "a2302117d782689223c9b265d11452657e61e394"
+        },
+        {
+          "path": "platform/web/package.json",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "ce5d73e0f009505e424af045ee7acaac3aa39963"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatIssuesView.vue",
+          "status": "M",
+          "additions": 33,
+          "deletions": 1,
+          "blobHash": "df4c9151cc1ee4c8f124eafc58b809d7a1661506"
+        },
+        {
+          "path": "platform/web/src/utils/taskVersionFilter.test.ts",
+          "status": "A",
+          "additions": 69,
+          "deletions": 0,
+          "blobHash": "9f31c765043031545022001ab24b510c03f244bd"
+        },
+        {
+          "path": "platform/web/src/utils/taskVersionFilter.ts",
+          "status": "A",
+          "additions": 92,
+          "deletions": 0,
+          "blobHash": "cb3dacc2f4794d67c5f981de23229a0e7a0cdcc0"
+        },
+        {
+          "path": "platform/web/tools/run-tests.mjs",
+          "status": "A",
+          "additions": 61,
+          "deletions": 0,
+          "blobHash": "44f7f55bbf3263a30b22d6508dc639618771ecf2"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 14,
+          "deletions": 15,
+          "blobHash": "b9e476587f434537a1b0a6fd9065484f1d66d1e6"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/web/src/utils/taskVersionFilter.test.ts",
+        "status": "A",
+        "additions": 69,
+        "deletions": 0,
+        "blobHash": "9f31c765043031545022001ab24b510c03f244bd"
+      }
+    ],
+    "casesAdded": 17,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "taskVersionFilter.test.ts 17 断言通过（含 0.1.10 必须排在 0.1.2 前、v 前缀归一、未关联归类、空列表不产生死选项）；前端 8 个测试文件 122 断言全部通过（原来只跑 3 个）；vue-tsc --noEmit exit 0；门禁 web_tests 发现 8 个脚本并 1.7s 通过；本提交门禁实测走「前端自检 8 个脚本 + 跳过 Maven」。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2020_task-version-filter"
+    ]
+  },
+  "chain": {
+    "prev": "89d1ad9c49bc45fb00cb51ca0b2137bde297025bdc41e06426c455c9b56a4608",
+    "self": "006987ef4c190407bb0512e5e0beb798d31fefa8a468b5651d8cbe93a416eea8"
+  }
+}

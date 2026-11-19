@@ -51,6 +51,8 @@ TEST_PATH_RE = re.compile(r"(/src/test/|Test\.java$|Tests\.java$|\.test\.tsx?$|\
 CASE_LINE_RE = re.compile(r"^\+\s*(@Test\b|@ParameterizedTest\b|it\(|test\(|check\()")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 MODULE_RE = re.compile(r"^platform/([^/]+)/")
+# 根 pom：唯一"改了就必须全 reactor 重新解析"的文件。
+ROOT_POM = "platform/pom.xml"
 # hook 会把这些变量注入子进程（GIT_INDEX_FILE=.git/index 是相对路径），
 # 测试里再跑 git 时会按错误的目录解析，导致 worktree/index 建到别处。
 GIT_ENV_KEYS = (
@@ -577,14 +579,28 @@ def surefire_parallel_flag() -> str:
     return ""
 
 
-def changed_modules(staged_files: list[str]) -> list[str]:
-    """本次提交涉及的 Maven 模块（platform/<模块>/ 前缀，排除前端 web）。"""
-    mods = set()
+def changed_modules(staged_files: list[str]) -> tuple[list[str], bool]:
+    """本次提交涉及的 Maven 模块，以及是否含前端改动。
+
+    <p>返回二元组而不是单个列表：前端（{@code platform/web}）与后端是两条完全独立的
+    测试链，混在一起会让"只改了 .vue"也去跑后端全量。历史上就是这样漏的——
+    {@code changed_modules} 把 web 过滤掉后返回空列表，而空列表的语义被当成
+    "不知道影响什么 ⇒ 全跑"，于是**任何前端改动都要跑 775 个后端用例（实测 ~120s）**。
+
+    @return (Maven 模块列表, 是否含前端改动)
+    """
+    mods: set[str] = set()
+    web = False
     for path in staged_files:
         match = MODULE_RE.match(path)
-        if match and match.group(1) != "web":
-            mods.add(match.group(1))
-    return sorted(mods)
+        if not match:
+            continue
+        name = match.group(1)
+        if name == "web":
+            web = True
+        else:
+            mods.add(name)
+    return sorted(mods), web
 
 
 # 定向测试上限：超过这个数量，surefire 启动/筛选成本与模块全量已经接近，
@@ -689,18 +705,37 @@ def incremental_test_plan(staged_files: list[str]) -> tuple[str, bool, str]:
       <li>映射不完整时退回模块全量，保证不漏测；</li>
       <li>受影响模块（含下游）始终先 {@code test-compile}，编译期破坏仍然当场发现。</li>
     </ol>
-    下游模块的测试交给 pre-push / CI。只有「模块全量」才登记模块绿色证据；
-    定向跑过的模块不登记，避免 pre-push 误跳过。
+    下游模块的测试交给 pre-push（{@code SESSION_ARCHIVE_FULL_TEST=1}）或 CI 全量兜底：
+    提交时求快、推送/CI 求全，两层职责分开。
+
+    <p>spec-checks（ArchUnit 架构 + 契约检查）是全量扫描，改动业务模块时排除它，
+    移到 pre-push/CI；只有改 spec-checks 本身时才跑它验证检查规则。
+
+    <p><b>返回空命令表示不需要跑 Maven</b>，由 {@code cmd_gate_pre_commit} 处理：
+    <ul>
+      <li>只有前端改动 → 跑前端自检（&lt;1s），不碰 Maven；</li>
+      <li>只改了根 {@code platform/pom.xml} → 编译全 reactor（不跑测试，验证依赖可解析）；</li>
+      <li>其它（工具脚本、CI 配置等）→ 什么都不跑。</li>
+    </ul>
+    判定"全跑"的唯一正当理由是根 pom 变了，而不是"我没认出这些文件"。
+    只有「模块全量」才登记模块绿色证据；定向跑过的模块不登记，避免 pre-push 误跳过。
     """
     mvn = maven_binary()
 
     def join(*parts: str) -> str:
         return " ".join(part for part in parts if part)
 
-    mods = changed_modules(staged_files)
+    mods, web = changed_modules(staged_files)
     if not mods:
-        return (join(mvn, "-B -nsu -pl !spec-checks test", surefire_parallel_flag()),
-                True, "未识别业务模块，按全部业务模块全量")
+        if web:
+            # 前端自检是 Python 函数不是 shell 命令，由 pre-commit 直接调用
+            return "", False, "仅前端改动，走前端自检"
+        if ROOT_POM in staged_files:
+            # 根 pom 改的是依赖/插件版本，全 reactor 都要重新解析：编译即可，
+            # 测试交给 CI（与"提交求快、推送/CI 求全"的分层一致）。
+            return (f"{mvn} -B -nsu -pl !spec-checks -DskipTests "
+                    f"-Djacoco.skip=true test-compile", False, "根 pom 变更，全 reactor 编译验证")
+        return "", False, "无 Maven 模块受影响，跳过后端测试"
     if "spec-checks" in mods:
         return (join(mvn, "-B -nsu -pl spec-checks test", surefire_parallel_flag()),
                 True, "spec-checks 规则变更，全量")
@@ -886,12 +921,24 @@ def cmd_gate_pre_commit(args) -> int:
             "--category feat|bug|chore|deploy --slug <英文短名> --title <中文标题>\n"
             "（docs 类纯文档提交免此限制）"
         )
+    _, web = changed_modules(staged)
     override = os.environ.get("SESSION_ARCHIVE_TEST_CMD")
     if override:
-        command, module_scope, scope_note = override.strip(), True, "外部 SESSION_ARCHIVE_TEST_CMD"
+        command, module_scope, _ = override.strip(), True, "外部 SESSION_ARCHIVE_TEST_CMD"
     else:
         command, module_scope, scope_note = incremental_test_plan(staged)
     out(f"测试范围：{scope_note}")
+    if not command:
+        # 没有任何 Maven 模块受影响：前端跑轻量自检，其余直接放行。
+        # 关键是不能退化成"全 reactor 775 个用例"——纯前端或纯工具改动跑后端全量
+        # 是纯浪费（实测每次 ~120s），而且它挡不住任何真实回归。
+        if web and web_tests() != 0:
+            return fail("前端自检未通过；禁止提交")
+        note = "(前端自检)" if web else "(无需后端测试：本次改动不涉及 Maven 模块)"
+        evidence = synth_evidence(note)
+        write_json(evidence_path(), evidence)
+        out(f"跳过 Maven 测试：{note}")
+        return 0
     try:
         with TestLock(worktree_git_dir() / "session-archive" / "test.lock"):
             fingerprint = ""
@@ -924,16 +971,43 @@ def cmd_gate_pre_commit(args) -> int:
     # 只有模块全量才登记；定向测试覆盖不到全模块，登记会误导 pre-push 跳过。
     if module_scope:
         try:
-            record_module_green(changed_modules(staged))
+            record_module_green(changed_modules(staged)[0])
         except (GateError, OSError):
             pass
+    # 前后端混合改动：Maven 那半已经跑过，前端自检还差一次（<1s，不做"要不要跑"的
+    # 判断反而更省心——漏跑的代价是一次坏提交，多跑的代价是一次亚秒级脚本）。
+    if web and web_tests() != 0:
+        return fail("前端自检未通过；禁止提交")
     return 0
+
+
+def synth_evidence(note: str, tests_run: int = 0) -> dict:
+    """构造"不跑 Maven 但结论有效"的测试证据。
+
+    <p>{@code cmd_finish} 要求 feat/bug 会话有 PASSED 证据且 tree 与最后一次代码提交
+    一致。纯前端或纯工具改动确实没有 JUnit 用例，但归档链仍需一份可核对的证据，
+    否则要么被迫跑无意义的后端全量，要么归档失败。这里把 tree 记成当前索引树，
+    语义是"这个树上的轻量门禁是绿的"。
+    """
+    return {
+        "schema": "test-evidence/v1",
+        "command": note,
+        "ranAt": now_iso(),
+        "result": "PASSED",
+        "testsRun": tests_run,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "tree": write_tree(),
+    }
 
 
 def is_exempt(path: str) -> bool:
     return (
         path.startswith("docs/")
         or path.startswith("tools/session-archive/")
+        or path.startswith("tools/ci/")          # CI/钩子侧静态检查脚本：与 .github/ 同类，
+                                                 # 由 CI 自己执行，本地门禁不跑它
         or path.startswith(".githooks/")
         or path.startswith(".github/")          # CI 配置：本地不跑测试，由 CI 自己跑
         or path.startswith(".trae-html-share-packages/")  # 分享产物，非源码
@@ -1186,7 +1260,14 @@ REQUIRED = ("schema", "id", "category", "title", "createdAt", "session", "proble
             "solution", "commits", "tests", "impact", "links", "chain")
 
 
-def validate_manifest(path: Path, manifest: dict, skip_git: bool) -> list[str]:
+def validate_manifest(path: Path, manifest: dict, skip_git: bool,
+                      known_commits: set[str] | None = None) -> list[str]:
+    """校验单份 manifest。
+
+    @param known_commits 调用方已批量查好的"存在的提交"集合。传了就直接用，
+           不再为每份 manifest 各起一次 {@code git cat-file}——117 份归档各自查一次
+           实测要 9s 以上，合并成一次之后降到亚秒级。{@code None} 表示本函数自行查。
+    """
     errors: list[str] = []
     rel = path.relative_to(path.parents[2]) if len(path.parents) > 2 else path
     for key in REQUIRED:
@@ -1221,11 +1302,14 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool) -> list[str]:
     # git show 只会拖慢校验（68 份归档即上千次子进程），防篡改交给 git 历史。
     existing: set[str] = set()
     if not skip_git:
-        try:
-            existing = existing_commits(
-                [c["sha"] for c in commits if SHA_RE.fullmatch(c.get("sha", ""))])
-        except GateError as exc:
-            errors.append(f"{rel}: {exc}")
+        if known_commits is not None:
+            existing = known_commits
+        else:
+            try:
+                existing = existing_commits(
+                    [c["sha"] for c in commits if SHA_RE.fullmatch(c.get("sha", ""))])
+            except GateError as exc:
+                errors.append(f"{rel}: {exc}")
     for commit in commits:
         sha = commit.get("sha", "")
         if not SHA_RE.fullmatch(sha):
@@ -1379,8 +1463,18 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
                 rows.append((path, load_json(path)))
             except GateError as exc:
                 errors.append(str(exc))
+    # 提交存在性：全部归档的 sha 一次性批量查完，再分发给各 manifest。
+    # 逐份查会让 117 份归档各起一个 git 子进程（实测 9s+），批量后亚秒级。
+    known: set[str] | None = None
+    if not skip_git:
+        all_shas = [c.get("sha", "") for _, m in rows for c in (m.get("commits") or [])]
+        try:
+            known = existing_commits([s for s in all_shas if SHA_RE.fullmatch(s)])
+        except GateError as exc:
+            errors.append(str(exc))
+            known = set()
     for path, manifest in rows:
-        errors.extend(validate_manifest(path, manifest, skip_git))
+        errors.extend(validate_manifest(path, manifest, skip_git, known))
     # 一个 AI 开发会话只能有一份归档：ideSessionId 全局唯一。
     seen_ide: dict[str, str] = {}
     for path, manifest in rows:
@@ -1516,25 +1610,69 @@ def handbook_check() -> int:
     return proc.returncode
 
 
+def spec_input_path(path: str) -> bool:
+    """该路径是否属于 spec-checks 的输入（决定它的缓存能否复用）。
+
+    <p>判定标准只有一条：**ArchUnit 与契约检查会不会读它**。读的留下，不读的排除——
+    尤其是业务模块的测试源码（ArchUnit 只读主类）与全部归档文档。
+    """
+    return bool(
+        path.startswith("platform/spec-checks/")
+        or re.fullmatch(r"platform/pom\.xml", path)
+        or re.fullmatch(r"platform/[^/]+/pom\.xml", path)
+        or re.fullmatch(r"platform/[^/]+/src/main/.*", path)
+        or path.startswith("docs/handbook/")
+        or path.startswith("tools/handbook/")
+    )
+
+
+def spec_checks_fingerprint() -> str:
+    """spec-checks 的真正输入指纹（只含它读的东西）。
+
+    <p><b>为什么不能直接用 tree</b>：{@code write_tree()} 含全部文件，于是
+    "只提交归档文档"也会让缓存失效、白跑一次 ~30s 的 ArchUnit + 契约检查。
+    本仓库的提交流常常是「代码提交 → 归档文档提交 → 再推」，后一次纯属浪费。
+
+    <p>输入范围见 {@link spec_input_path}；此外还包含发布 tag 列表
+    （MigrationGuardTest 用 tag 判断"哪些迁移算已发布"）。
+    """
+    listing = git("ls-tree", "-r", "HEAD", "--", "platform", "docs/handbook", "tools/handbook")
+    digest = hashlib.sha256()
+    for line in listing.splitlines():
+        if not line.strip():
+            continue
+        if spec_input_path(line.partition("\t")[2].strip()):
+            digest.update(line.encode("utf-8"))
+            digest.update(b"\n")
+    digest.update(b"\0tags\0")
+    digest.update(git("tag", "--list").encode("utf-8"))
+    return digest.hexdigest()
+
+
 def spec_checks() -> int:
     """spec-checks 全量（ArchUnit 架构 + 契约检查），pre-push 兜底。
 
     <p>两步走：先编译全 reactor（跳过测试），再单跑 spec-checks 的架构测试——
     避免 -am 连带执行上游业务测试。不用 -T 并行：并行 reactor 下传递依赖的
     classpath 解析存在竞争（agent-gateway 曾因此编译期找不到 domain 包）。
-    结果按工作区 tree 指纹缓存，代码没变直接复用绿色结果。与业务测试共用
-    TestLock，防止多轮 mvn 并发写同一 target 目录（编译产物被并发覆盖曾导致
-    类版本错配假失败）。
+    结果按 {@code spec_checks_fingerprint}（只含它真正读的输入）缓存，
+    规则与主代码没变就复用绿色结果——纯归档文档提交不再触发重跑。
+    与业务测试共用 TestLock，防止多轮 mvn 并发写同一 target 目录
+    （编译产物被并发覆盖曾导致类版本错配假失败）。
     """
     tree = write_tree()
+    try:
+        fingerprint = spec_checks_fingerprint()
+    except GateError:
+        fingerprint = tree  # 算不出来就退回最保守的 key：宁可多跑，不可漏跑
     cache = shared_state_dir() / "spec-checks-cache.json"
     if cache.is_file():
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
-        if data.get("tree") == tree and data.get("result") == "PASSED":
-            out(f"复用 spec-checks 绿色缓存（{data.get('ranAt')}，tree 一致）")
+        if data.get("fingerprint") == fingerprint and data.get("result") == "PASSED":
+            out(f"复用 spec-checks 绿色缓存（{data.get('ranAt')}，规约输入未变）")
             return 0
     mvn = maven_binary()
     ensure_jdk()
@@ -1555,7 +1693,10 @@ def spec_checks() -> int:
     record_metric("spec-checks", time.time() - spec_begun,
                   result="PASSED" if proc.returncode == 0 else "FAILED")
     if proc.returncode == 0:
-        write_json(cache, {"schema": "spec-checks-cache/v1", "tree": tree,
+        # 同时记 fingerprint 与 tree：前者用于命中判定，后者保留便于排查
+        # "为什么这次没命中"（比如有人改了主代码但 tree 恰好没变）。
+        write_json(cache, {"schema": "spec-checks-cache/v1",
+                           "fingerprint": fingerprint, "tree": tree,
                            "result": "PASSED", "ranAt": now_iso()})
     return proc.returncode
 
@@ -1734,11 +1875,15 @@ def full_test_backstop() -> int:
 
 
 def web_tests() -> int:
-    """前端零依赖自检（platform/web 下的三个 .test.ts 脚本）。
+    """前端零依赖自检：自动发现 platform/web/src 下全部 `*.test.ts`。
 
     <p>这些脚本不依赖 vitest：Node 22 的 `--experimental-strip-types` 直接跑 TS，
-    `tools/ts-resolve.mjs` 负责把无扩展名的相对导入补成 .ts。整套跑完 < 1s，
+    `tools/ts-resolve.mjs` 负责把无扩展名的相对导入补成 .ts。整套跑完 < 2s，
     所以不做"只在改动 web 时才跑"的判断——省下的逻辑成本比它省的时间更贵。
+
+    <p><b>为什么改成自动发现</b>：原来是手写清单，新增的 .test.ts 不加进清单就永远
+    不执行——实测曾有 8 个测试文件而清单只列 6 个，等于"写了测试但没人跑"。
+    目录扫描一次几毫秒，换掉这类静默漏跑。
 
     <p>没有 node 时跳过（与 PythonScripts 找不到 python 时的处理一致：不能因为
     环境缺工具就把门禁判红）。
@@ -1750,13 +1895,14 @@ def web_tests() -> int:
     web = ROOT / "platform" / "web"
     if not web.is_dir():
         return 0
-    scripts = [
-        "src/state/agentEventReducer.test.ts",
-        "src/components/chat/capabilityOrder.test.ts",
-        "src/views/pipelineLayout.test.ts",
-        # 工具入参表达口径：区分「工具无参」「还没到」「后端拿不到」
-        "src/utils/toolArgs.test.ts",
-    ]
+    src = web / "src"
+    scripts = sorted(
+        str(path.relative_to(web)).replace("\\", "/")
+        for path in src.rglob("*.test.ts")
+    ) if src.is_dir() else []
+    if not scripts:
+        out("未发现前端测试脚本，跳过前端自检")
+        return 0
     begun = time.time()
     for script in scripts:
         proc = subprocess.run(
@@ -1984,6 +2130,8 @@ def cmd_doctor(args) -> int:
     legacy_hook = (Path(git("rev-parse", "--git-path", "hooks").strip()) / "pre-commit")
     out(f"core.hooksPath: {hooks or '（未设置）'}")
     out(f"pre-commit 钩子: {'已安装 ' + str(legacy_hook) if legacy_hook.is_file() else '未安装'}")
+    encoding_hook = legacy_hook.parent / "commit-msg"
+    out(f"commit-msg 钩子: {'已安装 ' + str(encoding_hook) if encoding_hook.is_file() else '未安装（提交信息编码门禁不在位）'}")
     if hooks != ".githooks":
         out("  ↑ 建议执行 python tools/session-archive/gate.py install-hooks（钩子随仓库走）")
 
@@ -2047,6 +2195,57 @@ def cmd_self_test(args) -> int:
         return fail("self-test: 任务编码应进入归档目录 slug")
     if folder_slug("patch-guard", "  ") != "patch-guard":
         return fail("self-test: 未给任务编码时应退回纯 slug")
+    # 增量测试的选择契约：纯前端/纯工具改动绝不能退化成后端全量。
+    # 历史事故：changed_modules 把 web 过滤掉后返回空列表，空列表被当成
+    # "不知道影响什么 ⇒ 跑全部业务模块"，于是每个前端提交都白跑 775 个后端用例。
+    cases = [
+        # (标签, staged 文件, 期望的 mods, 期望 web, 期望命令类别)
+        ("纯前端", ["platform/web/src/x.vue"], [], True, "empty"),
+        ("前端测试", ["platform/web/src/x.test.ts"], [], True, "empty"),
+        ("工具脚本", ["tools/handbook/build.py"], [], False, "empty"),
+        ("CI 配置", [".github/workflows/ci.yml"], [], False, "empty"),
+        ("根 pom", [ROOT_POM], [], False, "compile"),
+        ("单后端模块", ["platform/agent-gateway/a.java"], ["agent-gateway"], False, "test"),
+        ("后端 + 前端", ["platform/agent-gateway/a.java", "platform/web/x.vue"],
+         ["agent-gateway"], True, "test"),
+    ]
+    for label, staged, want_mods, want_web, want_kind in cases:
+        mods, web = changed_modules(staged)
+        if mods != want_mods or web != want_web:
+            return fail(f"self-test: {label} 的 changed_modules 判定错误 "
+                        f"(mods={mods} web={web})")
+        cmd, module_scope, _note = incremental_test_plan(staged)
+        kind = ("empty" if not cmd
+                else "compile" if "test-compile" in cmd and "&&" not in cmd
+                else "test")
+        if kind != want_kind:
+            return fail(f"self-test: {label} 应选择 {want_kind} 类命令，实际 {kind}")
+        if not cmd and not web and ROOT_POM not in staged:
+            # 空命令的非前端场景必须是"确实没有 Maven 影响"，不能是漏判
+            if any(MODULE_RE.match(p) for p in staged):
+                return fail(f"self-test: {label} 被漏判成无需测试")
+    # spec-checks 缓存键的输入范围：只有它真正读的文件才算数。
+    # 历史事故：用全域 tree 当 key，于是"只提交归档文档"也会让它白跑一次 ~30s。
+    spec_cases = [
+        # (路径, 是否属于 spec-checks 输入)
+        ("platform/agent-infra/src/main/java/A.java", True),
+        ("platform/agent-infra/src/main/resources/application.yml", True),
+        ("platform/spec-checks/src/test/java/Rule.java", True),
+        ("platform/pom.xml", True),
+        ("platform/agent-gateway/pom.xml", True),
+        ("docs/handbook/l2/quality-gates.md", True),
+        ("tools/handbook/build.py", True),
+        # 以下都不该让 spec-checks 重跑
+        ("platform/agent-infra/src/test/java/ATest.java", False),
+        ("docs/summary/2026-11/x.md", False),
+        ("docs/process/feat/x/manifest.json", False),
+        (".github/workflows/ci.yml", False),
+        ("tools/task-board/show.py", False),
+        ("platform/web/src/views/PipelineView.vue", False),
+    ]
+    for path, want in spec_cases:
+        if spec_input_path(path) != want:
+            return fail(f"self-test: spec-checks 输入判定错误：{path} 应为 {want}")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         base = {

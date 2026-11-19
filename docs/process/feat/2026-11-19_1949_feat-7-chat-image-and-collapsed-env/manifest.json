@@ -1,0 +1,133 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_1949_feat-7-chat-image-and-collapsed-env",
+  "category": "feat",
+  "title": "FEAT-7 会话支持插图，环境面板默认收起",
+  "createdAt": "2026-11-19T19:49:56+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "FEAT-7: 会话需要能上传图片；环境面板需要默认折叠",
+    "toolCallCount": 0
+  },
+  "problem": "FEAT-7（会话）两项都没做：1) 对话输入框的附件按钮被写死成 disabled（title=附件功能待接入），用户想贴一张截图说明问题只能另存文件再描述；2) 环境面板虽然能折叠且会记 localStorage，但默认值写死在代码里，新设备首次进入会占掉一整块版面。",
+  "solution": "插图：点按钮选图、Ctrl+V 粘贴、拖入 三种入口都能上传（复用已有的 uploadIssueImage），上传后以 Markdown 图片语法插到光标处——正文本来就是 Markdown，模型能直接看到地址并据此回答，不需要另立图片消息协议；逻辑抽到 utils/chatImage.ts（imageMarkdown 处理方括号截断、insertAt 做光标夹紧，失焦时 selectionStart 可能是 0 或越界）。环境面板：加 defaultOpen 参数（默认收起），且只对没点开过的设备生效——用户手动展开过就按他的选择，否则每次进页面都被强制收起反而更烦。新增 15 个断言的 chatImage.test.ts 并接入前端自检；同时取回被分支切换覆盖的 releaseTag/reuseBuild 两份工具与 25 个断言。",
+  "commits": [
+    {
+      "sha": "3cd35a0c0178f0d77efb170ab656d3c84a57a28d",
+      "subject": "feat(chat): 会话支持插图，环境面板默认收起",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/components/chat/EnvironmentStatusBar.vue",
+          "status": "M",
+          "additions": 13,
+          "deletions": 2,
+          "blobHash": "58187753439f9efc57bdda9f0dc62d4a77585eee"
+        },
+        {
+          "path": "platform/web/src/utils/chatImage.test.ts",
+          "status": "A",
+          "additions": 64,
+          "deletions": 0,
+          "blobHash": "b21a593896da9700db4798c1bf67d180fa8c43bf"
+        },
+        {
+          "path": "platform/web/src/utils/chatImage.ts",
+          "status": "A",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "006cc5f229d3ada84d932a433b10a9557107b343"
+        },
+        {
+          "path": "platform/web/src/utils/releaseTag.test.ts",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "9b97f58a48cb3ba2f2cfa7ab2740f79ccd16ffc6"
+        },
+        {
+          "path": "platform/web/src/utils/releaseTag.ts",
+          "status": "A",
+          "additions": 37,
+          "deletions": 0,
+          "blobHash": "27e0c256df6b013bfa29a86a0707cc602d0a4dec"
+        },
+        {
+          "path": "platform/web/src/utils/reuseBuild.test.ts",
+          "status": "A",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "a7f5c35e8694f79ff4a24a3b26d7f35ac85d4e41"
+        },
+        {
+          "path": "platform/web/src/utils/reuseBuild.ts",
+          "status": "A",
+          "additions": 33,
+          "deletions": 0,
+          "blobHash": "d4a4116abd90ed40182d5bf2555cace269927944"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 92,
+          "deletions": 5,
+          "blobHash": "94ba3e307e94a9a565799ca42cd4d345f951f4a0"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "ac956f703c6336ae35f10787e1f2f82e4fd58de1"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/web/src/utils/chatImage.test.ts",
+        "status": "A",
+        "additions": 64,
+        "deletions": 0,
+        "blobHash": "b21a593896da9700db4798c1bf67d180fa8c43bf"
+      },
+      {
+        "path": "platform/web/src/utils/releaseTag.test.ts",
+        "status": "A",
+        "additions": 44,
+        "deletions": 0,
+        "blobHash": "9b97f58a48cb3ba2f2cfa7ab2740f79ccd16ffc6"
+      },
+      {
+        "path": "platform/web/src/utils/reuseBuild.test.ts",
+        "status": "A",
+        "additions": 48,
+        "deletions": 0,
+        "blobHash": "a7f5c35e8694f79ff4a24a3b26d7f35ac85d4e41"
+      }
+    ],
+    "casesAdded": 40,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "vue-tsc 通过；chatImage 15 / releaseTag 14 / reuseBuild 11 / toolArgs 20 全部通过；gate 前端自检纳入 4 个 utils 脚本"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1949_feat-7-chat-image-and-collapsed-env"
+    ]
+  },
+  "chain": {
+    "prev": "5238c4d61172b53e8751d6118f4bdb2ace80e267b5d4e8fac62f3f7a176250ac",
+    "self": "89d1ad9c49bc45fb00cb51ca0b2137bde297025bdc41e06426c455c9b56a4608"
+  }
+}

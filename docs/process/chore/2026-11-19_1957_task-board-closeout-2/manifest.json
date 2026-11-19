@@ -1,0 +1,60 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_1957_task-board-closeout-2",
+  "category": "chore",
+  "title": "关闭 FEAT-4 与 FEAT-7",
+  "createdAt": "2026-11-19T19:57:26+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "FEAT-4 两项与 FEAT-7 两项都已完成，按证据关闭并写入完成记录；看板 OPEN 降到 5 条",
+    "toolCallCount": 0
+  },
+  "problem": "FEAT-4（任务）与 FEAT-7（会话）的四项需求都已完成，但看板仍显示 OPEN——其中 FEAT-4 的两项跨越了多个批次（标题带编码在 028d277，版本选择在 ff496d1），FEAT-7 的两项在刚推的 feat/chat-image-collapsed-env 上。不关闭会让优先级判断继续被已完成项占位；直接改库又缺少「凭什么说已完成」的留痕。",
+  "solution": "用脚本 close-feat4.py / close-feat7.py 逐条写入完成记录（每项对应提交号与复核用例）并关闭，脚本本身入库以便追溯和复跑。FEAT-4 的第 1 项明确写出「标题带编码 = 存储层 withCodePrefix + 归档 --task-code」两处落地；第 2 项写出「版本候选接口 + PUT 按 key 局部更新」；FEAT-7 写出插图三种入口与 defaultOpen 语义，并注明图片当前只给模型本机地址、不编码图片内容这一边界。看板 OPEN 从 7 条降到 5 条（1 BUG + 4 FEAT）。",
+  "commits": [
+    {
+      "sha": "d10be49b5c6ec50e6f515215d86ff581da0e5fa5",
+      "subject": "chore(task-board): 关闭 FEAT-4 与 FEAT-7",
+      "category": "chore",
+      "files": [
+        {
+          "path": "tools/task-board/close-feat4.py",
+          "status": "A",
+          "additions": 60,
+          "deletions": 0,
+          "blobHash": "9e60ad003663d3cc1ef505a5f41040b29ef61582"
+        },
+        {
+          "path": "tools/task-board/close-feat7.py",
+          "status": "A",
+          "additions": 64,
+          "deletions": 0,
+          "blobHash": "e1bdc389dd907bcab956e9d1d6d4355af8671062"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "(无需后端测试：本次改动不涉及 Maven 模块)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "task-board/open.py 显示 OPEN 5 条；verify.py 结构校验通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1957_task-board-closeout-2"
+    ]
+  },
+  "chain": {
+    "prev": "944b031d6631ec8509a2a8eeb6a3020a1e13a468bf64098f35117ec1a47c2c44",
+    "self": "f7752f875faae5012218a4b61732dea6472eba3d44d9e568431d0151ecb7bcac"
+  }
+}
