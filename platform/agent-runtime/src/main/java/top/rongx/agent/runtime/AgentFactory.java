@@ -121,6 +121,22 @@ public class AgentFactory {
         }
     }
 
+    /**
+     * 所有角色共用的 builder 基线。
+     *
+     * <p><b>为什么必须开 {@code enablePendingToolRecovery}</b>：工具调用"发出去了但没拿到结果"
+     * 是必然事件（进程重启、SSE 看门狗掐流、用户点停止、工具超时）。框架默认不开恢复，
+     * 于是那一轮的 {@code tool_use} 永久留在会话状态里，之后每一轮都用同一句
+     * {@code Pending tool calls exist without results} 直接失败——用户重发多少次都一样，
+     * 表现就是「会话卡死」。开启后框架在下一轮把这些悬挂调用补成错误结果并继续，
+     * 与生产环境只读工具面（不存在 ASK 审批通道）的设计一致。
+     */
+    static ReActAgent.Builder baseBuilder(String name) {
+        return ReActAgent.builder()
+                .name(name)
+                .enablePendingToolRecovery(true);
+    }
+
     /** 为一个会话构造 Agent（不挂载额外能力；保留给只读调用方）。Agent 无状态，可每次新建。 */
     public ReActAgent create(ProjectContext ctx) {
         return createChat(ctx, List.of(), List.of()).agent();
@@ -174,8 +190,7 @@ public class AgentFactory {
         ToolPluginIndex plugins = ToolPluginIndex.of(definitions, toolkit.getToolNames(),
                 ToolPlugins.CORE);
         // 3. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
-        ReActAgent.Builder builder = ReActAgent.builder()
-                .name("devops-agent")
+        ReActAgent.Builder builder = baseBuilder("devops-agent")
                 .sysPrompt(systemPrompt(ctx, skillIndex(requestedSkills), plugins.promptIndex()))
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(toolkit)
@@ -350,8 +365,7 @@ public class AgentFactory {
         PermissionContextState permission = PermissionContextState.builder()
                 .mode(ctx.isProduction() ? PermissionMode.DEFAULT : PermissionMode.BYPASS)
                 .build();
-        return ReActAgent.builder()
-                .name("deploy-agent")
+        return baseBuilder("deploy-agent")
                 .sysPrompt(deploySystemPrompt(ctx))
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(deployToolkit)
@@ -468,8 +482,7 @@ public class AgentFactory {
         PermissionContextState permission = PermissionContextState.builder()
                 .mode(PermissionMode.DEFAULT)
                 .build();
-        return ReActAgent.builder()
-                .name("workspace-supervisor")
+        return baseBuilder("workspace-supervisor")
                 .sysPrompt(supervisorSystemPrompt(ctx))
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(supervisorToolkit.copy())
