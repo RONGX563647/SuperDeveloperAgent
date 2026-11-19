@@ -29,6 +29,7 @@ import { useRunTracker } from '../composables/useRunTracker'
 import { formatDuration, statusLabel, statusTone } from '../utils/status'
 import { envLabel, envShort, formatBytes, pipelineLabel } from '../utils/pipelineLabels'
 import { tagNeedsAttention, tagStateText as releaseTagText } from '../utils/releaseTag'
+import { canReuseBuild, pickReusableImage } from '../utils/reuseBuild'
 
 /**
  * 流水线工作台：
@@ -1217,6 +1218,42 @@ async function rerun(item: HistoryItem): Promise<void> {
   }
 }
 
+/**
+ * 复用该次运行的产物部署（BUG-12）。
+ *
+ * <p>为什么值得单独一个入口：同样的代码要发到另一个环境、或只是想重发一次，
+ * 重新构建要几分钟并且会再产出一次镜像；而这次运行已经成功、产物就在本机，
+ * 只需要跑部署与健康检查。
+ *
+ * <p>实现上走「按版本部署」而不是新开一条链路：`deployImageVersion` 传的是
+ * 镜像 tag，后端 `deploy_run` 收到 deployImage 就跳过检出与构建。
+ */
+async function reuseBuild(item: HistoryItem): Promise<void> {
+  if (!canReuseBuild(item.status)) {
+    topError.value = '只有成功完成的运行才能复用产物'
+    return
+  }
+  const run = await getRun(item.runId, false).catch(() => null)
+  const image = pickReusableImage(run?.artifacts)
+  if (!image) {
+    topError.value = '这次运行没有镜像产物（可能只跑了检查构建），无法复用；请重新构建'
+    return
+  }
+  triggerBusy.value = true
+  topError.value = ''
+  try {
+    const result = await deployImageVersion(
+      item.pipelineId, projectId.value, item.env, image, item.gitSha,
+      item.version || undefined, false)
+    attachRun(result, { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha })
+    ElMessage.success('已复用该次产物部署（跳过构建）')
+  } catch (e) {
+    topError.value = `复用部署失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    triggerBusy.value = false
+  }
+}
+
 /** 删除一条构建历史：只删记录（含磁盘上的 run yml），不动仓库与已构建镜像。 */
 async function handleDeleteHistory(item: HistoryItem): Promise<void> {
   const label = `#${item.seq || '—'} · ${item.gitSha.slice(0, 8)}`
@@ -1542,6 +1579,7 @@ async function copyDigest(digest: string): Promise<void> {
             :has-more="historyHasMore"
             @open="openedRun"
             @rerun="rerun"
+            @reuse="reuseBuild"
             @delete="handleDeleteHistory"
             @refresh="loadHistory"
             @more="loadMoreHistory"
