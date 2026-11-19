@@ -1,0 +1,60 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "docs/2026-11-19_2332_handbook-sync-2",
+  "category": "docs",
+  "title": "同步执行器锚点",
+  "createdAt": "2026-11-19T23:32:59+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "执行器代码改动后 handbook 锚点漂移，按当前代码同步",
+    "toolCallCount": 0
+  },
+  "problem": "推送命中率面板这批改动时，pre-push 报「Harness Handbook 已漂移」。原因是本 worktree 上与并行工作线共用：它们的执行器改动（BuiltInPipelineEngine / TriggerScheduler）改变了代码行号，而 handbook 的锚点是「文件 + 起止行号」，行号一变就对不上。第一次同步时我为了跑通测试把这些文件 stash 了，导致同步结果基于「被 stash 后的代码」，一旦恢复就又漂移——这是顺序错了。",
+  "solution": "先恢复并行工作线的改动，再执行 handbook sync，让锚点基于真实代码计算；提交 handbook 后单独推送 docs。这条经验值得记：handbook 同步必须与代码的最终状态同源，在临时 stash 期间同步等于白做。",
+  "commits": [
+    {
+      "sha": "c21e04a4c28b876be355216bbccabc1a347e201e",
+      "subject": "docs(handbook): 按当前执行器代码同步锚点",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "a99971d3382257a19e1d6837a711b7c4012a2f44"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "a602fcd93d773343d1a5206766bac3710018a35c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "python tools/handbook/build.py sync：锚点 11 个已刷新；git diff 显示仅 5 行行号变化"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2332_handbook-sync-2"
+    ]
+  },
+  "chain": {
+    "prev": "e9f86e10fb230f075135ac89365ae0641929841102a3d432c675f4996bf3cc60",
+    "self": "fe69d1cb6d8eaf6cfb588bed64e3a43377229e47e41e9f9f55fd350940037593"
+  }
+}

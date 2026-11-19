@@ -238,6 +238,8 @@ export interface SessionUsageView {
 export interface UsageSummaryView {
   days: number
   totals: TokenUsageTotals
+  /** 总体缓存命中率（0–100 整数）：后端已算好，前端不要重复计算。 */
+  cacheHitRate?: number
   daily: Array<{
     day: string
     calls: number
@@ -245,6 +247,8 @@ export interface UsageSummaryView {
     cachedTokens: number
     outputTokens: number
     totalTokens: number
+    /** 该行的缓存命中率（0–100 整数）。 */
+    cacheHitRate?: number
   }>
   byModel: Array<{
     modelName: string
@@ -253,6 +257,8 @@ export interface UsageSummaryView {
     cachedTokens: number
     outputTokens: number
     totalTokens: number
+    /** 该行的缓存命中率（0–100 整数）。 */
+    cacheHitRate?: number
   }>
   byProject: Array<{
     projectId: string
@@ -261,6 +267,8 @@ export interface UsageSummaryView {
     cachedTokens: number
     outputTokens: number
     totalTokens: number
+    /** 该行的缓存命中率（0–100 整数）。 */
+    cacheHitRate?: number
   }>
 }
 
