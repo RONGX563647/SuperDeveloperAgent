@@ -46,7 +46,9 @@ CATEGORIES = ("feat", "bug", "chore", "docs", "deploy")
 TEST_CATEGORIES = ("feat", "bug")
 FOLDER_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{4})_([a-z0-9]+(?:-[a-z0-9]+)*)$")
 TEST_PATH_RE = re.compile(r"(/src/test/|Test\.java$|Tests\.java$|\.test\.tsx?$|\.spec\.tsx?$)")
-CASE_LINE_RE = re.compile(r"^\+\s*(@Test\b|@ParameterizedTest\b|it\(|test\()")
+# 用例计数：Java 用注解，vitest 用 it()/test()，而本仓库的前端自检脚本是零依赖的
+# `check('名字', 条件)` 形式——漏掉它会让"确实写了 20 个断言"的提交被判成没有新增用例。
+CASE_LINE_RE = re.compile(r"^\+\s*(@Test\b|@ParameterizedTest\b|it\(|test\(|check\()")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 MODULE_RE = re.compile(r"^platform/([^/]+)/")
 # hook 会把这些变量注入子进程（GIT_INDEX_FILE=.git/index 是相对路径），
