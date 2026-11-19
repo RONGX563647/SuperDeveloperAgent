@@ -1,0 +1,366 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_2311_merge-base-and-reseal",
+  "category": "chore",
+  "title": "合并基线并重排归档链",
+  "createdAt": "2026-11-19T23:11:58+08:00",
+  "session": {
+    "agentModel": "traecn/deepseek-v4.1-flash",
+    "promptSummary": "合并 origin/0.1.0-snapshot 解决 PR 冲突，取主线等价实现并重排归档链",
+    "toolCallCount": 0
+  },
+  "problem": "PR #28 与基线冲突（dirty）：并行会话在主线实现了等价的 405 诊断（BuildFreshnessCheck 运行期提示 + GlobalExceptionHandler.methodNotSupported），与我的改动正面相撞三处；合并后归档链也断了两条。",
+  "solution": "代码冲突取主线版本（功能等价，避免重复实现），删掉我这边重复的同名测试用例；对 feat/chore 两条归档链执行 reseal 收敛。",
+  "commits": [
+    {
+      "sha": "dbeb7280afa6e4c583a5bf20ea1859186d13188e",
+      "subject": "feat(usage): 用量记录提供缓存命中率，汇总带组件",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/TokenUsageRepository.java",
+          "status": "M",
+          "additions": 42,
+          "deletions": 1,
+          "blobHash": "12d932a72e5b49af4042f1fe9bd5e14169c82a54"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageSummaryHitRateTest.java",
+          "status": "A",
+          "additions": 79,
+          "deletions": 0,
+          "blobHash": "4961982af98754cd1b9b3697b96ea2e5e1e1cc7f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "eb2389376256523e34f34c796739f83057f5b265"
+        }
+      ]
+    },
+    {
+      "sha": "fe0b85fca754512730a57f04d279c4e9938adf86",
+      "subject": "chore: 重新生成前端类型并加 CI 失败日志抓取脚本",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "75b8e4c6674b2dd87745972bf5817c970717dac8"
+        },
+        {
+          "path": "tools/ci/fetch-ci-failure.py",
+          "status": "A",
+          "additions": 35,
+          "deletions": 0,
+          "blobHash": "c2dd56cd3970608f86acaaf90b61d95b4bee784d"
+        }
+      ]
+    },
+    {
+      "sha": "2a4591d9519582c5ba9edb587ea89157137b667b",
+      "subject": "docs(process): 归档用量命中率会话并同步 OpenAPI 快照",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/feat/2026-11-19_2151_feat-5-usage-hitrate-component/manifest.json",
+          "status": "A",
+          "additions": 121,
+          "deletions": 0,
+          "blobHash": "5728ecfc6b5b5ebcef40e88e5894d4b7290f99cb"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_2151_feat-5-usage-hitrate-component.md",
+          "status": "A",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "aa32f55b9829d9596a01e508c01c1f9ec430a018"
+        },
+        {
+          "path": "docs/summary/feat/2026-11_feat-5-usage-hitrate-component.md",
+          "status": "A",
+          "additions": 49,
+          "deletions": 0,
+          "blobHash": "7475a6fd48f51aa51cb771edc059eeb96a4a71b8"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/config/BuildFreshnessCheck.java",
+          "status": "M",
+          "additions": 76,
+          "deletions": 0,
+          "blobHash": "25a5534eb369ac5c255e335a18709418eaa53e7e"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GlobalExceptionHandler.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 0,
+          "blobHash": "b37cbd7b6ce764be21d3008e05e1b90ddf0e78ec"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 0,
+          "deletions": 4,
+          "blobHash": "73f85e2e3fcaf886f423d783f6c93fe04f71e0cb"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/config/BuildFreshnessCheckTest.java",
+          "status": "M",
+          "additions": 25,
+          "deletions": 0,
+          "blobHash": "08296a02b6bdb60cc0addb237ccd9e1d0e159d6f"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GlobalExceptionHandlerTest.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "30c322fa98427e4b67b6bc53d472b428b82980c0"
+        }
+      ]
+    },
+    {
+      "sha": "cfaf4874fe1a0da02c17603508fea8c962e72b3d",
+      "subject": "docs(process): 归档用量命中率与门禁隔离会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_2219_usage-hitrate-archive/manifest.json",
+          "status": "A",
+          "additions": 119,
+          "deletions": 0,
+          "blobHash": "c77572103d0a3402f45c3ff04c5cada9ffd9c2cc"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_2219_usage-hitrate-archive.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "f14e374987894ba4700f5ac3252897f4c51b8177"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_usage-hitrate-archive.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "cd9bee9d6b3b1281489b0597aa8f1360bd02bca4"
+        }
+      ]
+    },
+    {
+      "sha": "ac40c70f1b2535fcc12354c069481c1bb4061548",
+      "subject": "docs(process): 归档纯文档收口会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/docs/2026-11-19_2232_usage-hitrate-archive-doc/manifest.json",
+          "status": "A",
+          "additions": 67,
+          "deletions": 0,
+          "blobHash": "f7913d5523ca256a9d2b555df200c0253c7e68fe"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_2232_usage-hitrate-archive-doc.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "73eb5e26d7d694f2d21b6d6b12196741e8298e04"
+        },
+        {
+          "path": "docs/summary/docs/2026-11_usage-hitrate-archive-doc.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "7e0f33e459eaf6a15fe93b0887f217b8580d567d"
+        }
+      ]
+    },
+    {
+      "sha": "a054113f845c4dc9431c5e0df701258f7874add9",
+      "subject": "fix(process): 归档改记 cherry-pick 后的新 sha，修复 CI 归档校验",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/process/feat/2026-11-19_1747_bug-10-release-facts-in-ui/manifest.json",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "c2d2da97f901faed0d094220e703ce5d0111bf45"
+        },
+        {
+          "path": "docs/process/feat/2026-11-19_1820_bug-12-reuse-build-in-ui/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "d695d4760433fa8bbac2f464843ade07eceaf623"
+        },
+        {
+          "path": "docs/process/feat/2026-11-19_1931_feat-4-title-carries-task-code/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "af785b28e1d13e118b30a4b982e6f0185e2cab2e"
+        },
+        {
+          "path": "docs/process/feat/2026-11-19_1949_feat-7-chat-image-and-collapsed-env/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "e9eca8f0bfa3f74087d3a73f3f427041f9b02391"
+        },
+        {
+          "path": "docs/process/feat/2026-11-19_2020_task-version-filter/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "5b9649f0748608f441abf6401bce80dcf5a13491"
+        },
+        {
+          "path": "docs/process/feat/2026-11-19_2107_issue-filter-ui-and-excel-export/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "e4e00fa1e6e9e903487e5f54aca5db2a3cd6872e"
+        },
+        {
+          "path": "docs/process/feat/2026-11-19_2151_feat-5-usage-hitrate-component/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "a7c7a96ba566d2ed3a0e2be5bdfefc801f90df7e"
+        },
+        {
+          "path": "tools/session-archive/append-cherry-pick.py",
+          "status": "A",
+          "additions": 75,
+          "deletions": 0,
+          "blobHash": "8cae56a0b4405d612fe3ced4f0b39877600b0303"
+        }
+      ]
+    },
+    {
+      "sha": "9b96b5244aa91444c7807cd92468f87a1fb68e96",
+      "subject": "docs(process): 归档 cherry-pick sha 修正会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_2243_cherry-pick-sha-fix/manifest.json",
+          "status": "A",
+          "additions": 102,
+          "deletions": 0,
+          "blobHash": "95a3a3cfb9093f8cb8ebda77cbbc8a30c9b7aefc"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_2243_cherry-pick-sha-fix.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "b2290649a3df034e3cebb41dd02cf14701726050"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_cherry-pick-sha-fix.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "29c9c1c105ae6ad8c1e2d72991d7e35d7f9c1fe1"
+        }
+      ]
+    },
+    {
+      "sha": "60accb87223cdbfb65b812e85b2180fa03f8e5cd",
+      "subject": "chore: 补装 domain 后重新生成 OpenAPI 快照",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "eb2389376256523e34f34c796739f83057f5b265"
+        }
+      ]
+    },
+    {
+      "sha": "d2ce0ba343778aa4cc6c08f25e8bcad3f08e5ef2",
+      "subject": "docs(process): 归档快照重生成会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_2254_openapi-snapshot-refresh/manifest.json",
+          "status": "A",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "3fb4395bd263d907a31ab535d7cd3377664c92bc"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_2254_openapi-snapshot-refresh.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "00f8acc12b8fd1910d09152ed5242fc8f2f6eec9"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_openapi-snapshot-refresh.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "1ed59f7de5fcd6f30bdada14006de3cebf5147b3"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageSummaryHitRateTest.java",
+        "status": "A",
+        "additions": 79,
+        "deletions": 0,
+        "blobHash": "4961982af98754cd1b9b3697b96ea2e5e1e1cc7f"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/config/BuildFreshnessCheckTest.java",
+        "status": "M",
+        "additions": 25,
+        "deletions": 0,
+        "blobHash": "08296a02b6bdb60cc0addb237ccd9e1d0e159d6f"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GlobalExceptionHandlerTest.java",
+        "status": "M",
+        "additions": 20,
+        "deletions": 0,
+        "blobHash": "30c322fa98427e4b67b6bc53d472b428b82980c0"
+      }
+    ],
+    "casesAdded": 8,
+    "command": "mvn -B -nsu -pl agent-domain,agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 265, Failures: 0, Errors: 0, Skipped: 6"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "web"
+    ],
+    "verification": "编译通过；提交门禁 265 用例 0 失败；validate 136 份通过；导出功能（ExportData / XLSX_MEDIA_TYPE / produces）合并后仍然完整。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2311_merge-base-and-reseal"
+    ]
+  },
+  "chain": {
+    "prev": "4eb3e793787baafa5fff31fad233c94ba6b9b2a05655ed01cd3ef91434dae62a",
+    "self": "860be5fe45625bcae4a2f7fd5d737391bc4047f1f7f35d3a81002520a3ee0bf0"
+  }
+}
