@@ -1,0 +1,55 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_2326_fix-02-ci-jar-scan",
+  "category": "chore",
+  "title": "迁移版本扫描兼容 jar classpath",
+  "createdAt": "2026-11-19T23:26:18+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "迁移版本扫描兼容 jar classpath",
+    "toolCallCount": 0
+  },
+  "problem": "CI run 44551144198 backend 仍在 switchBackKeepsPostgresData 报 duplicate column source_ref：latestMigrationVersion 只扫 file: 协议，CI 上迁移脚本在 agent-infra 依赖 jar（jar: 协议）里，扫描返回 0 → baselineVersion=0 → 从 V1 重放",
+  "solution": "scanMigrationVersions 支持 file: 与 jar: 两种协议（JarFile 条目按 rest 段无 '/' 过滤文件）；全部扫不到兜底 1；失败路径记 warn。jar classpath 反射探针验证 sqlite/postgresql latest=5；目录 classpath 单测 6/6；PG 实库 IT 首跑与重跑各 4/4",
+  "commits": [
+    {
+      "sha": "832170390a12bcc2ba19f282f65125aa7437783a",
+      "subject": "fix(settings): 迁移版本扫描兼容 jar classpath，修复 PG 回切二次失败",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/DatabaseHotSwapper.java",
+          "status": "M",
+          "additions": 64,
+          "deletions": 15,
+          "blobHash": "e3691161429097a31b517125d5bc00099d811747"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dtest=DatabaseHotSwapperPostgresIT,DatabaseHotSwapperTest -Dsurefire.failIfNoSpecifiedTests=false -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 10, Failures: 0, Errors: 0, Skipped: 4"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "jar 探针 JAR-SCAN-OK；DatabaseHotSwapperTest 6/6；DatabaseHotSwapperPostgresIT（postgres:16-alpine）4/4 x2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2326_fix-02-ci-jar-scan"
+    ]
+  },
+  "chain": {
+    "prev": "0ea4b951e147482a31ab78cd329ca6d7b0a00cf1055c24d613287b5489454054",
+    "self": "bea000d31675136a7b69917ab92869e78358003fdccc447bb59a587a1dd6199d"
+  }
+}
