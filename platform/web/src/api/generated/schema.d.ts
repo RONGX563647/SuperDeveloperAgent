@@ -3695,6 +3695,8 @@ export interface components {
             outputTokens?: number;
             /** Format: int64 */
             totalTokens?: number;
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         ModelUsageSummary: {
             modelName?: string;
@@ -3708,6 +3710,8 @@ export interface components {
             outputTokens?: number;
             /** Format: int64 */
             totalTokens?: number;
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         ProjectUsageSummary: {
             projectId?: string;
@@ -3721,6 +3725,8 @@ export interface components {
             outputTokens?: number;
             /** Format: int64 */
             totalTokens?: number;
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         UsageSummary: {
             /** Format: int32 */

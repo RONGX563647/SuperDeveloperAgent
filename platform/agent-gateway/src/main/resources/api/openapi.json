@@ -8635,6 +8635,10 @@
           "totalTokens" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
@@ -8663,6 +8667,10 @@
           "totalTokens" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
@@ -8691,6 +8699,10 @@
           "totalTokens" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
