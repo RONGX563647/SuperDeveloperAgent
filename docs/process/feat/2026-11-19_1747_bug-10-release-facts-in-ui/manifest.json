@@ -272,8 +272,8 @@
       ]
     },
     {
-      "sha": "ea95dc006bd58e86da5bd531a7aaaf1d2ae36135",
-      "subject": "feat(pipeline): 界面展示发布事实与日志总行数",
+      "sha": "4fe1c130bb4270e84cba504471d510fdff3d476f",
+      "subject": "feat(pipeline): 界面展示发布事实与日志总行数（cherry-pick 到主干基线）",
       "category": "feat",
       "files": [
         {
@@ -367,6 +367,6 @@
   },
   "chain": {
     "prev": "c0f7fb5397326ccfbedd7878814edef32e87e05dc228a9ff2a887f4b81f4310c",
-    "self": "ad61fa429ca5c65f92c8831eea0b44f090c8936b4c168aaff8e330c4ebfb005f"
+    "self": "cd506d08e7d63f7088da2cd2f1aa65bdd477a3244c614a6f0f50ab73b3b944e9"
   }
 }
