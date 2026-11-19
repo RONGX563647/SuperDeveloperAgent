@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -27,6 +29,49 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MigrationGuardTest {
 
     private static final String BASELINE = "spec-checks/migration-baseline.txt";
+
+    @Test
+    @DisplayName("行尾归一化：CRLF 与 LF 检出算出的哈希必须相同")
+    void lineEndingsDoNotAffectHash() throws Exception {
+        // M1 曾误报的根因：基线在某一台机器上算出，而 git 的 `* text=auto eol=lf`
+        // 只约束仓库内的 blob，工作区实际字节取决于 core.autocrlf 与检出平台。
+        // Windows 检出 CRLF、Linux 检出 LF，同一份文件得到两个哈希。
+        Path lf = Files.createTempFile("mig-lf", ".sql");
+        Path crlf = Files.createTempFile("mig-crlf", ".sql");
+        Path mixed = Files.createTempFile("mig-mixed", ".sql");
+        try {
+            String text = "CREATE TABLE t (id TEXT);\nINSERT INTO t VALUES ('a');\n";
+            Files.write(lf, text.getBytes(StandardCharsets.UTF_8));
+            Files.write(crlf, text.replace("\n", "\r\n").getBytes(StandardCharsets.UTF_8));
+            // 混合行尾（编辑器或补丁工具只转换了一部分）也要归一到同一哈希
+            Files.write(mixed, text.replace(";\n", ";\r\n").getBytes(StandardCharsets.UTF_8));
+
+            String lfHash = sha256(lf);
+            assertEquals(lfHash, sha256(crlf), "CRLF 与 LF 必须算出同一哈希");
+            assertEquals(lfHash, sha256(mixed), "混合行尾必须归一到同一哈希");
+        } finally {
+            Files.deleteIfExists(lf);
+            Files.deleteIfExists(crlf);
+            Files.deleteIfExists(mixed);
+        }
+    }
+
+    @Test
+    @DisplayName("归一化不得掩盖真实内容改动")
+    void normalizationStillDetectsRealEdits() throws Exception {
+        // 反向保证：归一化只吃掉行尾差异，内容变了必须还是不同哈希。
+        Path before = Files.createTempFile("mig-before", ".sql");
+        Path after = Files.createTempFile("mig-after", ".sql");
+        try {
+            Files.write(before, "CREATE TABLE t (id TEXT);\n".getBytes(StandardCharsets.UTF_8));
+            Files.write(after, "CREATE TABLE t (id TEXT, name TEXT);\r\n"
+                    .getBytes(StandardCharsets.UTF_8));
+            assertNotEquals(sha256(before), sha256(after), "内容被改动时必须仍然能被发现");
+        } finally {
+            Files.deleteIfExists(before);
+            Files.deleteIfExists(after);
+        }
+    }
 
     @Test
     @DisplayName("已发布的迁移文件不得被修改")
@@ -94,6 +139,35 @@ class MigrationGuardTest {
 
     private static String sha256(Path file) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
-        return HexFormat.of().formatHex(md.digest(Files.readAllBytes(file)));
+        return HexFormat.of().formatHex(md.digest(normalized(Files.readAllBytes(file))));
+    }
+
+    /**
+     * 行尾归一化为 LF 后再算哈希。
+     *
+     * <p><b>为什么必须归一化</b>：基线是在某台机器上算出来的，而 git 的
+     * {@code * text=auto eol=lf} 只约束仓库内的 blob；工作区里的实际字节取决于
+     * {@code core.autocrlf} 与检出平台。Windows 上检出为 CRLF、Linux CI 上检出为 LF，
+     * 同一份文件会得到两个哈希——于是"已在基线中的迁移被改动"在 CI 上误报，
+     * 真正被改动的文件反倒可能因两边都 CRLF 而漏报。
+     *
+     * <p>归一化之后，哈希只反映<b>内容</b>，与检出平台无关。这也是 Flyway 自己的判定
+     * 口径：它的校验和同样忽略行尾差异。
+     */
+    private static byte[] normalized(byte[] raw) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(raw.length);
+        for (int i = 0; i < raw.length; i++) {
+            byte b = raw[i];
+            if (b == '\r') {
+                // CRLF → LF；孤立的 CR 也一并归成 LF，避免混合行尾产生第三个哈希
+                out.write('\n');
+                if (i + 1 < raw.length && raw[i + 1] == '\n') {
+                    i++;
+                }
+            } else {
+                out.write(b);
+            }
+        }
+        return out.toByteArray();
     }
 }
