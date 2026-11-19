@@ -1,0 +1,81 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_1851_final-closeout-docs",
+  "category": "chore",
+  "title": "Dockerfile 提示会话归档与看板脚本入库",
+  "createdAt": "2026-11-19T18:51:44+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "提交 Dockerfile 预检提示的归档，以及看板收口脚本（close-pipeline-ui.py 等）",
+    "toolCallCount": 0
+  },
+  "problem": "两件事：1) 提交 Dockerfile 预检提示的归档时，pre-commit 直接抛 TypeError: unhashable type: 'list'——并行工作线把 gate.py 的 changed_modules 返回值从集合改成 (mods, web) 元组，却只改了一处调用，record_module_green 仍把整个 list 当模块名传进去，在 closures.get(module) 处崩；2) 看板上六条已完成的流水线相关任务（日志分页、首次发布、tag 状态、复用产物、任务查询输出、变更状态）没有关闭，优先级判断仍被已完成项占位。",
+  "solution": "把工作区里已适配的 gate.py（record_module_green(changed_modules(staged)[0])）重新暂存后再提交——崩溃的根源是暂存区里还是旧版本，而钩子读的是暂存区内容；self-test 恢复 OK。同时入库 close-pipeline-ui.py：按「后端提交已在主干 / 界面提交在 feat/release-facts-ui」的实际情况，把这六条任务逐条写入修复记录（含提交号与复核用例）并关闭，看板 OPEN 从 13 条降到 7 条。",
+  "commits": [
+    {
+      "sha": "e413c8f677bd104fe13093414adcd85913e41102",
+      "subject": "docs(process): 归档 Dockerfile 预检提示会话与看板收口脚本",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-19_1850_bug-1-dockerfile-blocker-hint/manifest.json",
+          "status": "A",
+          "additions": 70,
+          "deletions": 0,
+          "blobHash": "b36f9f65f7480c4218bf82451968965f829b24cc"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_1850_bug-1-dockerfile-blocker-hint.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "9c4e27c701b602bb7af5757ee3b3e3c470789e26"
+        },
+        {
+          "path": "docs/summary/bug/2026-11_bug-1-dockerfile-blocker-hint.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "c80aa03997f41e703f324c71b7e380b07e054de5"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 107,
+          "deletions": 11,
+          "blobHash": "30b3f9f067e162c3d98504ce1d77fe3a6917cc53"
+        },
+        {
+          "path": "tools/task-board/close-pipeline-ui.py",
+          "status": "A",
+          "additions": 91,
+          "deletions": 0,
+          "blobHash": "afc34913872e55bf9c3a91e342947728d3d5a348"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "(无需后端测试：本次改动不涉及 Maven 模块)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "gate self-test OK；看板 open.py 显示 OPEN 7 条（1 条 BUG + 6 条 FEAT）、verify.py 结构校验通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1851_final-closeout-docs"
+    ]
+  },
+  "chain": {
+    "prev": "a4cf2cfe44f1964df28ba6b9115b64f41689b4f1de6e98c086bc256dca1e2471",
+    "self": "d0a93cce8de92ba3f7620cc74c93e281940fe95d0b4f1ca9ec455d8e3721e0dd"
+  }
+}
