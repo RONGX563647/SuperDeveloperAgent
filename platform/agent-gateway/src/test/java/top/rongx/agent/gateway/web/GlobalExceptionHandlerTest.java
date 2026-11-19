@@ -12,6 +12,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 异常响应与 SSE 内容协商：流式请求只接受 text/event-stream，
@@ -58,5 +59,24 @@ class GlobalExceptionHandlerTest {
 
     private NotLoginException notLogin() {
         return new NotLoginException("token 无效", "login", "stale-token");
+    }
+
+    @Test
+    @DisplayName("方法不支持：405 并在报文里指名方法与路径")
+    void methodNotSupportedExplainsWhatFailed() {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/v1/git-issues/export");
+
+        ResponseEntity<?> response = handler.methodNotSupported(
+                new org.springframework.web.HttpRequestMethodNotSupportedException("POST"), request);
+
+        assertEquals(HttpStatus.METHOD_NOT_ALLOWED, response.getStatusCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        String message = String.valueOf(body.get("message"));
+        // 默认报文是空的，排查全靠状态码；这里必须说清哪个方法打到了哪个路径
+        assertTrue(message.contains("POST"), message);
+        assertTrue(message.contains("/api/v1/git-issues/export"), message);
+        assertEquals(405, body.get("code"));
     }
 }

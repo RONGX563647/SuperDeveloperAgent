@@ -49,6 +49,78 @@ public class BuildFreshnessCheck {
         }
     }
 
+    /**
+     * 运行期是否已过期（进程比产物旧）的可读提示；未过期返回 {@code null}。
+     *
+     * <p><b>为什么不能只在启动时查</b>：过期是启动<b>之后</b>才产生的——IDE 里改代码
+     * 重新编译，JVM 不会因此重启，进程继续用旧字节码。实测后果是接口层报
+     * {@code Request method 'POST' is not supported}（新加的映射在旧字节码里根本不存在），
+     * 排查起来像代码 bug，其实是没重启。
+     *
+     * <p>结果缓存 {@value #HINT_TTL_MILLIS} 毫秒：本方法会被异常处理器调用，
+     * 不能每次报错都遍历产物目录。
+     */
+    public static String staleRuntimeHint() {
+        long now = System.currentTimeMillis();
+        if (now - cachedAtMillis < HINT_TTL_MILLIS) {
+            return cachedHint.isBlank() ? null : cachedHint;
+        }
+        String hint = computeStaleHint();
+        cachedHint = hint == null ? "" : hint;
+        cachedAtMillis = now;
+        return hint;
+    }
+
+    private static String computeStaleHint() {
+        Path classes = classesLocation();
+        if (classes == null) {
+            return null;
+        }
+        Instant started = ProcessHandle.current().info().startInstant().orElse(null);
+        if (started == null) {
+            return null;
+        }
+        return staleHint(newestClassTime(classes), started);
+    }
+
+    /**
+     * 纯函数：产物最新时间晚于进程启动时间即视为过期。
+     *
+     * <p>单独抽出来便于单测，不必构造真实的"编译后不重启"现场。
+     *
+     * @param newestClassAt 产物里最新的 class 时间；null 表示读不到
+     * @param processStart  本进程启动时间
+     * @return 可读提示；未过期返回 null
+     */
+    static String staleHint(Instant newestClassAt, Instant processStart) {
+        if (newestClassAt == null || processStart == null || !newestClassAt.isAfter(processStart)) {
+            return null;
+        }
+        return "编译产物（" + newestClassAt + "）比本进程启动（" + processStart
+                + "）更新：当前进程仍在用旧字节码，新接口或改动不会生效，请重启网关";
+    }
+
+    /**
+     * 运行期巡检：启动后产物被重新编译就主动告警一次（同一提示不重复刷屏）。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(
+            fixedDelay = 60_000, initialDelay = 60_000)
+    public void watchStaleRuntime() {
+        String hint = staleRuntimeHint();
+        if (hint == null || hint.equals(lastWarnedHint)) {
+            return;
+        }
+        lastWarnedHint = hint;
+        log.warn("[freshness] {}；重启后本告警自动消失", hint);
+    }
+
+    /** 最近一次已告警的提示，用于去重。 */
+    private volatile String lastWarnedHint = "";
+
+    private static volatile String cachedHint = "";
+    private static volatile long cachedAtMillis = 0L;
+    private static final long HINT_TTL_MILLIS = 15_000L;
+
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
         // 产物目录必须从「本类是从哪里加载的」反推，不能写死相对路径：

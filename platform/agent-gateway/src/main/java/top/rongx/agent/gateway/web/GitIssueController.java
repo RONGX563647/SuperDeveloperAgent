@@ -120,7 +120,9 @@ public class GitIssueController {
         }
         byte[] xlsx;
         try {
-            xlsx = IssueExcelExporter.render(rows);
+            // 评论与配图一并导出：只有元数据的表格说不清"这条缺陷到底发生了什么"
+            xlsx = IssueExcelExporter.render(new IssueExcelExporter.ExportData(
+                    rows, issueId -> issues.comments(userId, issueId), imageDir));
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "生成 Excel 失败：" + e.getMessage(), e);
