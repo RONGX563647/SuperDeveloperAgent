@@ -20,7 +20,8 @@ concurrency:
 env:
   # 与 platform/pom.xml 的 java.release 对齐
   JAVA_VERSION: "21"
-  NODE_VERSION: "20"
+  # 前端自检脚本用 node --experimental-strip-types 直接跑 TS，需要 Node ≥22.6
+  NODE_VERSION: "22"
   PYTHON_VERSION: "3.11"
 
 jobs:
@@ -103,11 +104,10 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 文档契约检查
-        run: |
-          pip install --quiet 'doc-marshal==0.6.1'
-          # 仓库未提交 .doc-marshal/config.toml，显式指定文档树（工具要求二选一）
-          doc-marshal check --all --docs-tree docs
+      # 文档契约以仓库自有门禁为准（tools/session-archive + tools/handbook）：
+      # doc-marshal 要求 kebab-case 文件名、frontmatter 'type' 枚举、不得有 index.md，
+      # 与本仓库的 session-summary/v1 归档规范、handbook 生成器直接冲突；
+      # 同时跑两套契约只会让人不知道该听谁的，故只保留一套。
 
       - name: 会话归档校验（不依赖本地钩子）
         run: python tools/session-archive/gate.py validate
