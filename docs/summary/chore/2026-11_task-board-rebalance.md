@@ -1,3 +1,22 @@
+---
+canonical: docs/summary/2026-11/2026-11-19_1154_bug-4-task-board-rebalance.md
+schema: session-summary/v1
+period: 2026-11
+createdAt: 2026-11-19T11:54:00+08:00
+extends: api-doc-baseline-refresh
+refs:
+  - chore/2026-11-19_1154_bug-4-task-board-rebalance
+metrics:
+  sessions: 1
+  casesAdded: 0
+  casesTotal: 748
+  passRate: "100%"
+  lineCoverage: "N/A"
+  coverageDelta: "N/A"
+  patchCoverage: "N/A"
+  gate: PASS
+---
+
 # 任务看板重排口径（2026-11-19）
 
 > 重排对象：`data/workspaces/_platform/platform.db` 的 `git_issues` 表（32 条）。
