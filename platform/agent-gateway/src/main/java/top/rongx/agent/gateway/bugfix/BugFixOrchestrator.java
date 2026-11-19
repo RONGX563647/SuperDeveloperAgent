@@ -565,7 +565,7 @@ public class BugFixOrchestrator {
             String error = run.status() == BugFixStatus.FAILED ? run.message() : "";
             ledger.save(new RunRecord(run.id(), RunKind.BUGFIX, run.projectId(), run.issueId(),
                     run.userId(), state, run.message(), error, run.createdAt(),
-                    System.currentTimeMillis()));
+                    System.currentTimeMillis(), null, null));
         } catch (RuntimeException e) {
             log.warn("运行账本写入失败 run={}：{}", run.id(), e.getMessage());
         }

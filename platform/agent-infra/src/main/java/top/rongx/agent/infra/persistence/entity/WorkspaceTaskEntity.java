@@ -38,4 +38,10 @@ public class WorkspaceTaskEntity {
     @Column(name = "updated_at", columnDefinition = "bigint", nullable = false)
     private Long updatedAt;
 
+    @Column(name = "source_ref", columnDefinition = "text")
+    private String sourceRef;
+
+    @Column(name = "trigger_type", columnDefinition = "text")
+    private String triggerType;
+
 }

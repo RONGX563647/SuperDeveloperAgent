@@ -66,7 +66,7 @@ class ConversationManagerTest {
 
     private ConversationManager manager(InMemoryStore store, ChatService chat, int concurrency) {
         WorkspaceRunExecutor executor = new WorkspaceRunExecutor(provider(() -> chat), store, store,
-                store, new WorkspaceEventBus(),
+                store, store, new WorkspaceEventBus(),
                 top.rongx.agent.domain.run.RunLedgerRepository.noop(), concurrency);
         return new ConversationManager(store, store, store, store, store, projects, executor, userId -> false,
                 top.rongx.agent.domain.conversation.SessionDataCleaner.noop(),

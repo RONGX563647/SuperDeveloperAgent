@@ -128,7 +128,7 @@ public class WorkspaceRunWatchdog {
             long now = System.currentTimeMillis();
             ledger.save(new RunRecord(run.id(), RunKind.WORKSPACE, run.projectId(),
                     run.conversationId(), run.ownerUserId(), RunState.FAILED,
-                    "看门狗中止", reason, run.createdAt(), now));
+                    "看门狗中止", reason, run.createdAt(), now, null, null));
         } catch (RuntimeException e) {
             log.debug("看门狗写运行账本失败 run={}：{}", run.id(), e.getMessage());
         }

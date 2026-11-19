@@ -18,6 +18,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.ProjectRepository;
+import top.rongx.agent.domain.conversation.TaskStatus;
+import top.rongx.agent.domain.conversation.WorkspaceTask;
+import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
 
@@ -35,14 +38,19 @@ public class GiteeWebhookController {
 
     private final PipelineEngine engine;
     private final ProjectRepository projects;
+    private final WorkspaceTaskRepository tasks;
     private final String secret;
     private final java.util.Set<String> seen = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 事件去重键：同一 issue/PR 的同一动作只建一次任务（内存去重，重启后由任务表去重）。 */
+    private final java.util.Set<String> seenEvents = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public GiteeWebhookController(PipelineEngine engine,
                                   ProjectRepository projects,
+                                  WorkspaceTaskRepository tasks,
                                   @Value("${agent.webhook.gitee-secret:}") String secret) {
         this.engine = engine;
         this.projects = projects;
+        this.tasks = tasks;
         this.secret = secret;
         // 通过 domain 端口恢复去重集合（不依赖执行面具体类）
         engine.history().forEach(h -> seen.add(h.projectId() + ":" + h.gitSha()));
@@ -68,13 +76,7 @@ public class GiteeWebhookController {
             return Map.of("duplicate", true, "sha", sha);
         }
         // 只触发已托管仓库的构建：按 repoUrl 反查 projectId，未注册仓库直接拒绝
-        String projectId = projects.findAll().stream()
-                .filter(p -> p.repoUrl() != null && p.repoUrl().endsWith("/" + project + ".git")
-                        || project.equals(p.id()))
-                .map(top.rongx.agent.domain.project.Project::id)
-                .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "仓库未托管：" + project + "（请先在 agent.projects 配置）"));
+        String projectId = projectIdOf(project);
         String runId;
         try {
             runId = engine.trigger(projectId, "verify", Map.of("gitSha", sha));
@@ -86,6 +88,71 @@ public class GiteeWebhookController {
         }
         return Map.of("runId", runId, "projectId", projectId, "gitSha", sha,
                 "pipeline", "verify", "status", engine.status(runId));
+    }
+
+    /**
+     * 事件旁路：issue / PR 事件经确定性 Fast Path 过滤后登记成工作区任务。
+     *
+     * <p>与 push 共用同一套鉴权；<b>不调用 LLM</b>：来源 + 事件类型 + 动作白名单命中才建任务，
+     * 其余事件直接忽略。建任务之后由调度 Agent 在正常对话里判断「建工单 / 关联已有 / 忽略」，
+     * 真正改代码仍要走子会话的权限与人工确认。
+     */
+    @PostMapping("/event")
+    public Map<String, Object> event(
+            @RequestHeader(value = "X-Gitee-Token", required = false) String token,
+            @RequestHeader(value = "X-Gitee-Signature", required = false) String signature,
+            @RequestHeader(value = "X-Gitee-Event", required = false) String eventHeader,
+            @RequestBody String body) {
+        verify(token, signature, body);
+        String event = eventType(eventHeader, body);
+        String action = jsonString(body, "action");
+        if (!allowlisted(event, action)) {
+            return Map.of("ignored", true, "event", event);
+        }
+        String projectId = projectIdOf(projectName(body));
+        String number = jsonString(body, "number");
+        String title = jsonString(body, "title");
+        String sourceRef = projectId + ":" + event + ":" + (number == null ? "" : number)
+                + ":" + action;
+        if (!seenEvents.add(sourceRef)) {
+            return Map.of("duplicate", true, "sourceRef", sourceRef);
+        }
+        long now = System.currentTimeMillis();
+        String suffix = java.util.UUID.randomUUID().toString().substring(0, 8);
+        WorkspaceTask task = tasks.saveTask(new WorkspaceTask("task-" + suffix, projectId, null,
+                "[" + event + "] #" + (number == null ? "" : number) + " "
+                        + (title == null ? "" : title),
+                "由调度 Agent 判断：建工单 / 关联已有 / 忽略",
+                TaskStatus.TODO, 3, now, now, sourceRef, event));
+        return Map.of("taskId", task.id(), "projectId", projectId,
+                "triggerType", event, "sourceRef", sourceRef);
+    }
+
+    /** 事件类型归一化：优先用 Gitee 请求头，退回 body 里的 hook_name。 */
+    private static String eventType(String header, String body) {
+        String raw = header == null || header.isBlank() ? jsonString(body, "hook_name") : header;
+        return raw == null ? "" : raw.trim().toLowerCase(java.util.Locale.ROOT)
+                .replace(' ', '_').replace('-', '_');
+    }
+
+    /** Fast Path 白名单：只有 issue / PR 的 open / reopen 需要进入任务板。 */
+    private static boolean allowlisted(String event, String action) {
+        if (action == null) {
+            return false;
+        }
+        String act = action.trim().toLowerCase(java.util.Locale.ROOT);
+        boolean opening = "open".equals(act) || "reopen".equals(act);
+        return opening && ("issue_hook".equals(event) || "merge_request_hook".equals(event));
+    }
+
+    private String projectIdOf(String project) {
+        return projects.findAll().stream()
+                .filter(p -> p.repoUrl() != null && p.repoUrl().endsWith("/" + project + ".git")
+                        || project.equals(p.id()))
+                .map(top.rongx.agent.domain.project.Project::id)
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "仓库未托管：" + project + "（请先在 agent.projects 配置）"));
     }
 
     /** 最近构建历史（含重启前落盘的运行）。 */
