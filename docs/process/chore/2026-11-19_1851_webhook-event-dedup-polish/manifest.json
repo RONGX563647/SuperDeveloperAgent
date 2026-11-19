@@ -1,0 +1,85 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_1851_webhook-event-dedup-polish",
+  "category": "chore",
+  "title": "Gitee事件去重与角色Worker细节收尾",
+  "createdAt": "2026-11-19T18:51:23+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "Gitee事件去重与角色Worker细节收尾",
+    "toolCallCount": 0
+  },
+  "problem": "Gitee事件去重与角色Worker细节收尾",
+  "solution": "chore: 完善Gitee事件幂等与OpenAPI快照",
+  "commits": [
+    {
+      "sha": "5188d9500df5dab789fa46398b35631ba9861059",
+      "subject": "chore: 完善Gitee事件幂等与OpenAPI快照",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/WorkerRole.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "94db027a4f678d1da74a24a4b4d952e0d9915e78"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GiteeWebhookController.java",
+          "status": "M",
+          "additions": 57,
+          "deletions": 6,
+          "blobHash": "a89062a76911a45d31a3125541044968bb16040a"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 52,
+          "deletions": 0,
+          "blobHash": "74d627fb492903ca8081d452ce8a8d5375ab8433"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GiteeWebhookControllerTest.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 4,
+          "blobHash": "395f9757b14acce3470e2662204fe9727085f1cb"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GiteeWebhookControllerTest.java",
+        "status": "M",
+        "additions": 19,
+        "deletions": 4,
+        "blobHash": "395f9757b14acce3470e2662204fe9727085f1cb"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -nsu -pl agent-domain,agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-gateway test  -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 239, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway"
+    ],
+    "verification": "gate-pre-commit: agent-domain+agent-gateway 239 用例全部通过（含 GiteeWebhookControllerTest 新增重启幂等与未加引号编号用例、ApiDocsSnapshotTest 快照已同步）"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1851_webhook-event-dedup-polish"
+    ]
+  },
+  "chain": {
+    "prev": "a1a7abebff9411db44f4fa9a6b8a30fa08d0471e74a77121c83d422137334fe7",
+    "self": "f70a024a3c11f7507e8097ba3a4e657e9c10a2dd77c6fe1e1a4db546a948fbef"
+  }
+}
