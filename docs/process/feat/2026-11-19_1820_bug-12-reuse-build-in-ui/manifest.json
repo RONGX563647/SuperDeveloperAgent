@@ -1,0 +1,91 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_1820_bug-12-reuse-build-in-ui",
+  "category": "feat",
+  "title": "BUG-12 构建历史提供复用产物部署入口",
+  "createdAt": "2026-11-19T18:20:54+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "BUG-12: 后端 deploy_run 已支持 build_run_id/deployImage 跳过构建，但界面只有重跑；补成功运行行的复用部署入口",
+    "toolCallCount": 0
+  },
+  "problem": "BUG-12（为何不能复用前面产物部署）：后端 deploy_run 早已支持跳过构建（触发参数 deployImage、工具参数 build_run_id），但界面上只有「重跑」——同样代码要发到另一个环境、或只是想重发一次，都得重新走一遍构建，既多等几分钟又多产一个镜像。用户看到「前面的检查构建已经把那些跑完了、版本号也一致」，却找不到复用入口。",
+  "solution": "HistoryList 对 SUCCEEDED 的运行多一个「复用产物部署」入口（Van 图标，带 tooltip 说明跳过构建）；点击后取该次运行的镜像产物，走既有的按版本部署通道（deployImageVersion），不新增链路。可见性与取产物抽到 utils/reuseBuild.ts：canReuseBuild 只认 SUCCEEDED（未成功的运行没有可复用产物，给按钮只会点出错误），pickReusableImage 取最后一个 image（与后端「以最后产出为准」一致），没有镜像时提示「这次只跑了检查构建」——在点击之前就说清楚，而不是等后端报错。新增 11 个断言并接入前端自检。",
+  "commits": [
+    {
+      "sha": "2d8c0e48708cb29025e8878a650d45703d5915cf",
+      "subject": "feat(pipeline): 构建历史提供「复用产物部署」入口",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/components/pipeline/HistoryList.vue",
+          "status": "M",
+          "additions": 14,
+          "deletions": 1,
+          "blobHash": "54c2250e773c749059000ac63ba8c1e077ab9514"
+        },
+        {
+          "path": "platform/web/src/utils/reuseBuild.test.ts",
+          "status": "A",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "a7f5c35e8694f79ff4a24a3b26d7f35ac85d4e41"
+        },
+        {
+          "path": "platform/web/src/utils/reuseBuild.ts",
+          "status": "A",
+          "additions": 33,
+          "deletions": 0,
+          "blobHash": "d4a4116abd90ed40182d5bf2555cace269927944"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "8b25145e9109661afc1f86249b611b7823815551"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "a971f0b7fdf643d4842e16a9a986200db53641df"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/web/src/utils/reuseBuild.test.ts",
+        "status": "A",
+        "additions": 48,
+        "deletions": 0,
+        "blobHash": "a7f5c35e8694f79ff4a24a3b26d7f35ac85d4e41"
+      }
+    ],
+    "casesAdded": 11,
+    "command": "mvn -B -nsu -pl !spec-checks test -Dsurefire.forkCount=4",
+    "result": "PASSED",
+    "evidence": "Tests run: 779, Failures: 0, Errors: 0, Skipped: 7"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "vue-tsc 通过；reuseBuild.test.ts 11 passed；前端自检脚本已纳入 gate"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1820_bug-12-reuse-build-in-ui"
+    ]
+  },
+  "chain": {
+    "prev": "ad61fa429ca5c65f92c8831eea0b44f090c8936b4c168aaff8e330c4ebfb005f",
+    "self": "54953499338ef930b53e8852ed139d1b4fb545355ce46cfbffa3c505cc752869"
+  }
+}

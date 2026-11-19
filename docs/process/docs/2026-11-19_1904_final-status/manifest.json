@@ -1,0 +1,53 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "docs/2026-11-19_1904_final-status",
+  "category": "docs",
+  "title": "最终状态与 BUG 收口结论",
+  "createdAt": "2026-11-19T19:04:36+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "看板 23→7、BUG 17→1、四批新增、BUG-1 为何仍 OPEN、三个顺手修掉的工具缺陷、下次接手顺序",
+    "toolCallCount": 0
+  },
+  "problem": "本轮把 BUG 从 17 条收口到 1 条，但缺少一份能一眼看懂的收尾结论：看板变化、四批新增里哪些已进主干哪些还在分支、BUG-1 为什么仍 OPEN、以及顺手修掉的三个工具缺陷（changed_modules 接口漂移导致的 unhashable list 崩溃、cherry-pick 归档断链、门禁漏认 check()）散在各批归档里，下次接手要翻七八份文件才能拼出来。",
+  "solution": "新增 docs/summary/chore/2026-11_final-status.md：看板 23→7 / BUG 17→1 的变化表、本轮四批新增与各自所在分支、BUG-1 保留的两条理由（两个真实成因都已修，剩下是实机多环境验证）、质量证据（全量 9 模块 + spec-checks、前端六套自检）、三个顺手修掉的工具缺陷、以及下次接手的四步顺序（先看 open.py、BUG-1 需实机、6 条 FEAT 单独立项）。",
+  "commits": [
+    {
+      "sha": "3de20844ff9fd7f730dd6bbc70f6f0669c22a1f3",
+      "subject": "docs(summary): 最终状态与 BUG 收口结论",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/summary/chore/2026-11_final-status.md",
+          "status": "A",
+          "additions": 82,
+          "deletions": 0,
+          "blobHash": "c4de3694fdb4cb6b0aa67678b19e3a505ac48511"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "python tools/session-archive/gate.py validate 通过；tools/task-board/verify.py 结构校验通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1904_final-status"
+    ]
+  },
+  "chain": {
+    "prev": "d1ed545e91df17d04a442d8081c08180b5e84fb29567135ea1f02b7cca516e5c",
+    "self": "475564b3deaa75228c74061e8eb24782c4d7764621ff162ae69279fb2414f286"
+  }
+}

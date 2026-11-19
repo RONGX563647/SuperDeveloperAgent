@@ -619,9 +619,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         // 也救不了（生成 Dockerfile 是待确认补丁，确认后还得用新提交重跑），必须在预检挡住。
         String missingDockerfile = missingImageDockerfile(repo, previews);
         if (missingDockerfile != null) {
-            blockers.add(ErrorCode.DEPLOY_PREREQUISITE_MISSING.code()
-                    + " 发布将失败：镜像阶段需要 " + missingDockerfile
-                    + "，但本次提交里没有（先生成 Dockerfile，用新提交再发布）");
+            blockers.add(missingDockerfileBlocker(missingDockerfile));
         }
         // DOCKER 目标却没有镜像阶段时，发布必然 E-501。
         String deployTarget = previews.stream().map(StagePreview::deployTarget)
@@ -633,7 +631,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     || Files.isRegularFile(repo.resolve("backend").resolve("Dockerfile"))
                     || Files.isRegularFile(repo.resolve("frontend").resolve("Dockerfile")));
             if (!hasDockerfile) {
-                blockers.add(ErrorCode.DEPLOY_PREREQUISITE_MISSING.code() + " 发布将失败：DOCKER 目标但仓库没有 Dockerfile，镜像阶段无法生成");
+                blockers.add(missingDockerfileBlocker("Dockerfile"));
             } else if ("verify".equals(pipelineId)) {
                 warnings.add("检查构建会跳过镜像打包；发布前需运行 release 流水线，否则可能 "
                         + ErrorCode.DEPLOY_PREREQUISITE_MISSING.code());
@@ -673,6 +671,25 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * <p>路径从镜像阶段的命令里取 {@code -f/--file}（缺省 {@code Dockerfile}）：
      * 不能一律按根目录 {@code Dockerfile} 判断，否则自定义配方会被误判成阻塞。
      */
+    /**
+     * 缺 Dockerfile 的阻塞文案（预检的两条路径共用）。
+     *
+     * <p>为什么单独抽出来：这条文案是用户在该场景下唯一的指引。只说「先生成 Dockerfile」
+     * 时，用户不知道平台已能按仓库结构自动生成，只能手写一个，而手写的又常常和
+     * 镜像阶段/目录结构对不上——历史上 E-101/E-501 有一半来自这里。
+     * 文案必须明确给出工具名（{@code ensure_dockerfile}）并说明不需要手写，
+     * 抽成方法后也便于用测试把它钉住。
+     *
+     * @param missingPath 预检判定缺失的 Dockerfile 路径
+     */
+    static String missingDockerfileBlocker(String missingPath) {
+        return ErrorCode.DEPLOY_PREREQUISITE_MISSING.code()
+                + " 发布将失败：镜像阶段需要 " + missingPath + "，但本次提交里没有。"
+                + "下一步：在对话里说「生成 Dockerfile」，Agent 会调用 ensure_dockerfile "
+                + "按仓库结构生成并补齐镜像阶段（产出变更单，确认后自动用新提交重跑）；"
+                + "不需要手写 Dockerfile";
+    }
+
     static String missingImageDockerfile(Path repo, List<StagePreview> previews) {
         if (repo == null) {
             return null;

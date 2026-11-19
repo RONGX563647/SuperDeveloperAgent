@@ -10,10 +10,24 @@
 
 | 层 | 入口 | 跑什么 | 本地命令 |
 |---|---|---|---|
-| L1 pre-commit | `git commit` | 活跃会话 + 变更模块增量测试，证据按工作区指纹复用 | `python tools/session-archive/gate.py gate-pre-commit` |
+| L1 pre-commit | `git commit` | 活跃会话 + **按改动性质分派**的增量测试，证据按工作区指纹复用 | `python tools/session-archive/gate.py gate-pre-commit` |
 | L2 pre-push | `git push` | 会话已归档、归档链完整、handbook 漂移、前端自检、spec-checks 全量 | `python tools/session-archive/gate.py gate-pre-push` |
 | L3 CI | PR / push | 5 个 required checks（backend / frontend / docs / contract / security） | `gh pr checks <n>` |
 | L4 spec-checks | `mvn verify` | ArchUnit 棘轮、R01–R15、错误码契约、凭证扫描、**迁移基线 M1**、schema 预算、API 契约 | `mvn -pl spec-checks test` |
+
+### L1 怎么选测试范围
+
+| 改动 | 跑什么 | 实测 |
+|---|---|---|
+| `platform/<模块>/` 里的后端代码 | 该模块 `test-compile`（含下游）+ 该模块测试 | 单模块 42s / 80 用例 |
+| 只有 `platform/web/` | **前端自检 4 个脚本，不碰 Maven** | **1.4s** |
+| 只有根 `platform/pom.xml` | 全 reactor `test-compile`（不跑测试） | ~30s |
+| 只有工具脚本、CI 配置 | 什么都不跑 | <1s |
+
+**为什么不再"没认出模块就全跑"**：历史上 `changed_modules` 把 web 过滤掉后返回空列表，
+而空列表的语义被当成"不知道影响什么 ⇒ 跑全部业务模块"。结果**任何前端提交都要跑
+775 个后端用例**（实测 325s，最慢一次 356s）。按 `gate-metrics.json` 统计，
+8 次这种全量占了 pre-commit 总耗时的 45%。判"全跑"的唯一正当理由是根 pom 变了。
 
 **能绕过吗**：L1/L2 可以用 `--no-verify` 跳过，但 `0.1.0-snapshot` 已加 ruleset（必须走 PR + 5 个必过检查），
 真实边界在 L3。
