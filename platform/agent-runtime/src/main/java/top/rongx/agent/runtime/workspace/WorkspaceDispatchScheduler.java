@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.conversation.ConversationRun;
@@ -52,6 +53,15 @@ public final class WorkspaceDispatchScheduler {
     private static final long WAIT_SLICE_MILLIS = 15_000L;
     private static final int MAX_SUMMARY_CHARS = 800;
     private static final int MAX_ERROR_CHARS = 400;
+
+    /**
+     * runId 的形状：以 {@code run-} 开头且后面还有内容。
+     *
+     * <p>用它代替"以 err: 开头就当失败"的文本猜测。只校验前缀而不是更严的字符集，
+     * 是因为这是一道"别把错误文案当 runId"的护栏，不是 id 生成规则的复制品：
+     * 规则收紧时不应该连带把合法派发判成失败。
+     */
+    private static final Pattern RUN_ID_SHAPE = Pattern.compile("run-.+");
 
     /** 调度器需要的最小会话能力（由 ConversationManager 绑定 owner 后传入）。 */
     public interface Backend {
@@ -270,9 +280,16 @@ public final class WorkspaceDispatchScheduler {
         } catch (RuntimeException e) {
             return completedFailure(node, conversationId, "", safeMessage(e), start);
         }
-        if (runId == null || runId.isBlank() || runId.startsWith("err:")) {
-            String message = runId == null || runId.isBlank() ? "派发失败：没有返回 runId" : runId;
-            return completedFailure(node, conversationId, "", message, start);
+        // send 的契约是「要么返回 runId，要么抛异常」。这里不再靠 "err:" 前缀猜错误：
+        // 前缀判断曾经掩盖了一个真实缺陷（send 返回错误文案被当成 runId 用），
+        // 现在只校验形状，形状不对就当作契约被破坏并明确指出。
+        if (runId == null || runId.isBlank()) {
+            return completedFailure(node, conversationId, "", "派发失败：没有返回 runId", start);
+        }
+        if (!RUN_ID_SHAPE.matcher(runId).matches()) {
+            return completedFailure(node, conversationId, "",
+                    "派发失败：send 返回值不是合法 runId（" + truncate(runId, 120)
+                            + "）；这是一个契约缺陷，请报告", start);
         }
         // 派发成功即开票据：即使等待侧崩溃/进程重启，也能从任务列表看到「派给了谁、什么规格」
         String ticketId = backend.openTicket(node, conversationId);

@@ -139,11 +139,19 @@ public class WorkspaceController {
         return Map.of("deleted", true);
     }
 
+    /**
+     * 向普通会话派发一条消息。
+     *
+     * <p>契约：成功返回 {@code runId}；失败抛业务异常（由统一异常处理器转成 4xx + 错误码）。
+     * 这里不做「把错误文本塞进 runId 字段」的降级——前端拿 runId 去轮询，
+     * 一个假 runId 会让界面一直转圈，比明确报错糟得多。
+     */
     @PostMapping("/conversations/{conversationId}/send")
     public Map<String, Object> send(@PathVariable String conversationId,
                                     @RequestBody SendRequest request) {
         String userId = currentUser.requireUserId();
-        return Map.of("runId", conversations.send(conversationId, userId, request.message()));
+        String runId = conversations.send(conversationId, userId, request.message());
+        return Map.of("runId", runId);
     }
 
     /** 会话时间线（消息 + 工具结果）：前端换浏览器 / 清缓存后从这里恢复。 */

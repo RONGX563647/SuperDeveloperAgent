@@ -373,17 +373,22 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         Conversation conversation = conversations.findByOwner(conversationId, ownerUserId)
                 .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "会话不存在或无权访问：" + conversationId));
         if (conversation.kind() == ConversationKind.SUPERVISOR) {
-            return "err: 不能给调度会话本身派发任务（调度深度固定为 1）";
+            // 契约：本方法只会返回 runId 或抛异常，绝不返回 "err: ..." 文本。
+            // 之前这里 return 一句错误文案，调用方（HTTP 的 Map.of("runId", ...) 与
+            // 派发器）会把它当成一个 runId 继续用，于是子会话「派发成功但永远不动」。
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT,
+                    "不能给调度会话本身派发任务（调度深度固定为 1）");
         }
         Optional<ConversationRun> active = runs.findActiveByConversation(conversationId);
         if (active.isPresent()) {
             ConversationRun current = active.get();
             // 同一会话的相同目标按幂等处理，但必须明确告知调用方，避免把旧 runId 当成新派发
             if (current.goalKey().equals(goalKey(text))) {
-                return "err: 该会话已有相同目标的运行（runId=" + current.id()
-                        + "），请等待完成或取消后再派发";
+                throw new RunException(ErrorCode.RUN_INVALID_STATE,
+                        "该会话已有相同目标的运行（runId=" + current.id()
+                                + "），请等待完成或取消后再派发");
             }
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT,
+            throw new RunException(ErrorCode.RUN_INVALID_STATE,
                     "会话正在运行，请先等待或取消：runId=" + current.id());
         }
         Project project = projects.findById(conversation.projectId())

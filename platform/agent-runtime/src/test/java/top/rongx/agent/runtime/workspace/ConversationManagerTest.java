@@ -45,6 +45,7 @@ import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.runtime.ChatSessionRegistry;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 工作区管理：调度会话、异步运行、防重复、取消与任务板。
@@ -191,15 +192,22 @@ class ConversationManagerTest {
         assertFalse(first.equals(second), "不同会话的相同目标必须各自派发，不能复用别人的运行");
         assertFalse(second.startsWith("err:"));
 
-        // 同一会话重复派发相同目标：幂等拒绝并给出明确原因，不能静默返回旧 runId
-        String duplicate = manager.send(a.id(), USER, "修复 构建");
-        assertTrue(duplicate.startsWith("err:"), "同会话重复目标应返回明确错误文案");
+        // 同一会话重复派发相同目标：幂等拒绝并给出明确原因，不能静默返回旧 runId。
+        // 契约是「要么返回 runId，要么抛异常」——返回 "err: ..." 文本会让调用方
+        // 把它当成 runId 去轮询（子会话因此表现为"派发成功但永远不动"）。
+        RunException duplicate = assertThrows(RunException.class,
+                () -> manager.send(a.id(), USER, "修复 构建"));
+        assertTrue(duplicate.getMessage().contains("已有相同目标的运行"),
+                duplicate.getMessage());
         // 同一会话不能再并发派发其他目标
         assertThrows(PlatformException.class,
                 () -> manager.send(a.id(), USER, "另一个目标"));
         // 调度会话不能给自己派发（深度固定为 1）
         Conversation supervisor = manager.ensureSupervisor(PROJECT, USER);
-        assertTrue(manager.send(supervisor.id(), USER, "x").startsWith("err:"));
+        RunException supervisorRejected = assertThrows(RunException.class,
+                () -> manager.send(supervisor.id(), USER, "x"));
+        assertTrue(supervisorRejected.getMessage().contains("调度会话"),
+                supervisorRejected.getMessage());
 
         assertTrue(manager.cancelRun(first, USER));
         assertEquals(RunStatus.CANCELLED, manager.runStatus(first, USER).status());

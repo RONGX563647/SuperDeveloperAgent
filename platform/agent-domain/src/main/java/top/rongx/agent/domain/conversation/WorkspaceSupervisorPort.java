@@ -27,7 +27,14 @@ public interface WorkspaceSupervisorPort {
 
     boolean setArchived(String conversationId, String ownerUserId, boolean archived);
 
-    /** 异步发送一条消息；返回 runId。目标重复且仍在运行时直接返回已有 runId。 */
+    /**
+     * 异步发送一条消息；返回 runId。
+     *
+     * <p><b>契约</b>：要么返回合法 runId，要么抛业务异常（会话无权访问、调度会话
+     * 不能再被派发、同会话已有相同/并发运行）。
+     * <b>绝不</b>返回 {@code "err: ..."} 之类的错误文案——调用方（HTTP 层与 DAG 派发器）
+     * 会把它当成 runId 去轮询，表现为「派发成功但永远不动」，且错误原因彻底丢失。
+     */
     String send(String conversationId, String ownerUserId, String text);
 
     /**
