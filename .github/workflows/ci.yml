@@ -9,9 +9,14 @@ name: ci
 
 on:
   push:
-    branches: [main, "0.1.0-snapshot"]
+    branches: [main, "0.1.0-snapshot", "0.2.0-snapshot"]
   pull_request:
-    branches: [main, "0.1.0-snapshot"]
+    branches: [main, "0.1.0-snapshot", "0.2.0-snapshot"]
+
+# 最小权限：只读仓库内容；paths-filter 在 PR 上还需要读取变更文件列表。
+permissions:
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,8 +30,45 @@ env:
   PYTHON_VERSION: "3.11"
 
 jobs:
+  # 先算路径：文档/前端改动不再触发后端全量，后端改动也不白跑前端。
+  # 被跳过的 job 在分支保护里记为 skipped，不会阻塞对应类型的 PR。
+  changes:
+    name: changes (路径过滤)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docs: ${{ steps.filter.outputs.docs }}
+      contract: ${{ steps.filter.outputs.contract }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'platform/**'
+              - '!platform/web/**'
+            frontend:
+              - 'platform/web/**'
+              - 'platform/agent-gateway/src/main/resources/api/openapi.json'
+            docs:
+              - 'docs/**'
+              - 'tools/session-archive/**'
+              - 'tools/handbook/**'
+              - '.githooks/**'
+              - '.github/workflows/**'
+            contract:
+              - 'platform/agent-gateway/src/main/resources/api/openapi.json'
+              - 'tools/api-docs-mcp/**'
+
   backend:
     name: backend (mvn verify)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -51,8 +93,8 @@ jobs:
           # 需要更快可在仓库变量里覆盖。
           MAVEN_OPTS: -Xmx2g
 
-      - name: 上传测试与覆盖率报告
-        if: always()
+      - name: 上传失败报告
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: surefire-and-jacoco
@@ -63,6 +105,8 @@ jobs:
 
   frontend:
     name: frontend (typecheck + api contract + vitest)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -96,6 +140,8 @@ jobs:
 
   docs:
     name: docs (doc-marshal + 会话归档)
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -120,6 +166,8 @@ jobs:
 
   contract:
     name: contract (api-docs-mcp)
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -140,6 +188,7 @@ jobs:
 
   security:
     name: security (secrets + dependencies)
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
