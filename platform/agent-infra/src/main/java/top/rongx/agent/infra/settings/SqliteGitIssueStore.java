@@ -131,6 +131,9 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 if (code.isBlank()) {
                     code = exists ? existingCode(em, issue.id()) : nextCode(em, issue);
                 }
+                // 标题里带编码（FEAT-4 第 1 项）：编码在创建时才分配，调用方拿不到，
+                // 所以由存储层统一加前缀。用户已经自己写了编码就不重复加。
+                String title = exists ? issue.title() : withCodePrefix(issue.title(), code);
                 if (!exists) {
                     PlatformDb.update(em, """
                             INSERT INTO git_issues
@@ -140,7 +143,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """,
                             issue.id(), code, issue.userId(), issue.projectId(), issue.provider(),
-                            issue.repo(), issue.number(), issue.title(), issue.body(), issue.state(),
+                            issue.repo(), issue.number(), title, issue.body(), issue.state(),
                             issue.kind(), issue.priority(), issue.labels(), issue.url(), issue.source(),
                             issue.syncStatus(), issue.syncError(), issue.assignee(),
                             issue.createdAt() > 0 ? issue.createdAt() : now, now, issue.version());
@@ -158,7 +161,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                             issue.syncError(), issue.assignee(), now, issue.version(), issue.id());
                 }
                 return new GitIssue(issue.id(), code, issue.userId(), issue.projectId(),
-                        issue.provider(), issue.repo(), issue.number(), issue.title(), issue.body(),
+                        issue.provider(), issue.repo(), issue.number(), title, issue.body(),
                         issue.state(), issue.kind(), issue.priority(), issue.labels(), issue.url(),
                         issue.source(), issue.syncStatus(), issue.syncError(), issue.assignee(),
                         issue.createdAt() > 0 ? issue.createdAt() : now, now, issue.version());
@@ -166,6 +169,31 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
         } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "任务保存失败：" + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 标题前缀：把编码写进标题，让列表、提交信息、归档名三处对得上同一个编号。
+     *
+     * <p>为什么在存储层做：编码是创建时按分类自增分配的，调用方提交草稿时
+     * 根本还不知道自己会拿到哪个编码。放在这里既保证唯一性，也让所有入口
+     * （任务页、Agent 工具、Git webhook）行为一致。
+     *
+     * <p>幂等：用户/模型已经自己写了 {@code BUG-3 xxx} 这种标题时不再重复加。
+     */
+    static String withCodePrefix(String title, String code) {
+        String text = title == null ? "" : title.trim();
+        String prefix = code == null ? "" : code.trim();
+        if (prefix.isBlank() || text.isBlank()) {
+            return text;
+        }
+        // 已带编码（大小写不敏感、允许后面跟空格或冒号）就不重复
+        if (text.regionMatches(true, 0, prefix, 0, prefix.length())) {
+            String rest = text.substring(prefix.length());
+            if (rest.isEmpty() || rest.startsWith(" ") || rest.startsWith(":") || rest.startsWith("：")) {
+                return text;
+            }
+        }
+        return prefix + " " + text;
     }
 
     /**

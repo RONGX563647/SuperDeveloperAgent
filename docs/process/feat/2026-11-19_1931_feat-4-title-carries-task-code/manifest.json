@@ -1,0 +1,70 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_1931_feat-4-title-carries-task-code",
+  "category": "feat",
+  "title": "FEAT-4 新建任务标题自动带任务编码",
+  "createdAt": "2026-11-19T19:31:12+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "FEAT-4 第1项剩下一半：归档名已能带编码，但任务标题本身没带；编码创建时才分配，只能由存储层统一加前缀",
+    "toolCallCount": 0
+  },
+  "problem": "FEAT-4（任务）第 1 项「新建任务标题需要带任务编码，git 提交和存档使用此编码作为标题」只做了一半：归档目录已经支持 --task-code（目录名与归档标题带编码），但任务本身的标题没带——看板上仍然只能看到「登录失败」而不是「BUG-3 登录失败」，列表、提交信息、归档名三处对不上同一个编号。根因是编码在创建时由存储层按分类自增分配，调用方提交草稿时根本不知道自己会拿到哪个编号，所以只能由存储层统一加前缀。",
+  "solution": "在 SqliteGitIssueStore.save 里，创建路径把分配到的编码写进标题（withCodePrefix），读回与返回值都带；更新路径不动标题，避免用户改一次标题就多叠一层前缀。withCodePrefix 做成幂等：已写「BUG-7 」「BUG-7: 」的标题不重复加（大小写不敏感），而「BUG-7xx」这种前缀相同但不是编码的仍会补上真编码。这样任务页、Agent 工具、Git webhook 三个入口行为一致，不必各自实现。新增 GitIssueTitleCodeTest 5 例：标题带编码且与 code 字段一致（含读回）、幂等、前缀须独立、更新不变、空值安全。",
+  "commits": [
+    {
+      "sha": "028d27717c5ac7330c784015b0021b5dafa395de",
+      "subject": "feat(task): 新建任务标题自动带编码",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteGitIssueStore.java",
+          "status": "M",
+          "additions": 30,
+          "deletions": 2,
+          "blobHash": "94870515d3dd77319cf69d0b4abb5eef079b9d8d"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/GitIssueTitleCodeTest.java",
+          "status": "A",
+          "additions": 100,
+          "deletions": 0,
+          "blobHash": "82cc51064b2f4ca4024e23da1349489cca62d897"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/GitIssueTitleCodeTest.java",
+        "status": "A",
+        "additions": 100,
+        "deletions": 0,
+        "blobHash": "82cc51064b2f4ca4024e23da1349489cca62d897"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "mvn -B -nsu -pl agent-infra,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-infra test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 137, Failures: 0, Errors: 0, Skipped: 1"
+  },
+  "impact": {
+    "modules": [
+      "agent-infra"
+    ],
+    "verification": "mvn -pl agent-infra test：7 用例通过；agent-infra + agent-gateway + agent-tools 联合跑 159 用例通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1931_feat-4-title-carries-task-code"
+    ]
+  },
+  "chain": {
+    "prev": "54953499338ef930b53e8852ed139d1b4fb545355ce46cfbffa3c505cc752869",
+    "self": "b9f76409cd103482b7baa77e84e1f2ba61f2595bc75b3c283ce928d874942bfb"
+  }
+}

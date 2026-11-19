@@ -1148,7 +1148,14 @@ REQUIRED = ("schema", "id", "category", "title", "createdAt", "session", "proble
             "solution", "commits", "tests", "impact", "links", "chain")
 
 
-def validate_manifest(path: Path, manifest: dict, skip_git: bool) -> list[str]:
+def validate_manifest(path: Path, manifest: dict, skip_git: bool,
+                      known_commits: set[str] | None = None) -> list[str]:
+    """校验单份 manifest。
+
+    @param known_commits 调用方已批量查好的"存在的提交"集合。传了就直接用，
+           不再为每份 manifest 各起一次 {@code git cat-file}——117 份归档各自查一次
+           实测要 9s 以上，合并成一次之后降到亚秒级。{@code None} 表示本函数自行查。
+    """
     errors: list[str] = []
     rel = path.relative_to(path.parents[2]) if len(path.parents) > 2 else path
     for key in REQUIRED:
@@ -1183,11 +1190,14 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool) -> list[str]:
     # git show 只会拖慢校验（68 份归档即上千次子进程），防篡改交给 git 历史。
     existing: set[str] = set()
     if not skip_git:
-        try:
-            existing = existing_commits(
-                [c["sha"] for c in commits if SHA_RE.fullmatch(c.get("sha", ""))])
-        except GateError as exc:
-            errors.append(f"{rel}: {exc}")
+        if known_commits is not None:
+            existing = known_commits
+        else:
+            try:
+                existing = existing_commits(
+                    [c["sha"] for c in commits if SHA_RE.fullmatch(c.get("sha", ""))])
+            except GateError as exc:
+                errors.append(f"{rel}: {exc}")
     for commit in commits:
         sha = commit.get("sha", "")
         if not SHA_RE.fullmatch(sha):
@@ -1341,8 +1351,18 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
                 rows.append((path, load_json(path)))
             except GateError as exc:
                 errors.append(str(exc))
+    # 提交存在性：全部归档的 sha 一次性批量查完，再分发给各 manifest。
+    # 逐份查会让 117 份归档各起一个 git 子进程（实测 9s+），批量后亚秒级。
+    known: set[str] | None = None
+    if not skip_git:
+        all_shas = [c.get("sha", "") for _, m in rows for c in (m.get("commits") or [])]
+        try:
+            known = existing_commits([s for s in all_shas if SHA_RE.fullmatch(s)])
+        except GateError as exc:
+            errors.append(str(exc))
+            known = set()
     for path, manifest in rows:
-        errors.extend(validate_manifest(path, manifest, skip_git))
+        errors.extend(validate_manifest(path, manifest, skip_git, known))
     # 一个 AI 开发会话只能有一份归档：ideSessionId 全局唯一。
     seen_ide: dict[str, str] = {}
     for path, manifest in rows:
@@ -1478,25 +1498,69 @@ def handbook_check() -> int:
     return proc.returncode
 
 
+def spec_input_path(path: str) -> bool:
+    """该路径是否属于 spec-checks 的输入（决定它的缓存能否复用）。
+
+    <p>判定标准只有一条：**ArchUnit 与契约检查会不会读它**。读的留下，不读的排除——
+    尤其是业务模块的测试源码（ArchUnit 只读主类）与全部归档文档。
+    """
+    return bool(
+        path.startswith("platform/spec-checks/")
+        or re.fullmatch(r"platform/pom\.xml", path)
+        or re.fullmatch(r"platform/[^/]+/pom\.xml", path)
+        or re.fullmatch(r"platform/[^/]+/src/main/.*", path)
+        or path.startswith("docs/handbook/")
+        or path.startswith("tools/handbook/")
+    )
+
+
+def spec_checks_fingerprint() -> str:
+    """spec-checks 的真正输入指纹（只含它读的东西）。
+
+    <p><b>为什么不能直接用 tree</b>：{@code write_tree()} 含全部文件，于是
+    "只提交归档文档"也会让缓存失效、白跑一次 ~30s 的 ArchUnit + 契约检查。
+    本仓库的提交流常常是「代码提交 → 归档文档提交 → 再推」，后一次纯属浪费。
+
+    <p>输入范围见 {@link spec_input_path}；此外还包含发布 tag 列表
+    （MigrationGuardTest 用 tag 判断"哪些迁移算已发布"）。
+    """
+    listing = git("ls-tree", "-r", "HEAD", "--", "platform", "docs/handbook", "tools/handbook")
+    digest = hashlib.sha256()
+    for line in listing.splitlines():
+        if not line.strip():
+            continue
+        if spec_input_path(line.partition("\t")[2].strip()):
+            digest.update(line.encode("utf-8"))
+            digest.update(b"\n")
+    digest.update(b"\0tags\0")
+    digest.update(git("tag", "--list").encode("utf-8"))
+    return digest.hexdigest()
+
+
 def spec_checks() -> int:
     """spec-checks 全量（ArchUnit 架构 + 契约检查），pre-push 兜底。
 
     <p>两步走：先编译全 reactor（跳过测试），再单跑 spec-checks 的架构测试——
     避免 -am 连带执行上游业务测试。不用 -T 并行：并行 reactor 下传递依赖的
     classpath 解析存在竞争（agent-gateway 曾因此编译期找不到 domain 包）。
-    结果按工作区 tree 指纹缓存，代码没变直接复用绿色结果。与业务测试共用
-    TestLock，防止多轮 mvn 并发写同一 target 目录（编译产物被并发覆盖曾导致
-    类版本错配假失败）。
+    结果按 {@code spec_checks_fingerprint}（只含它真正读的输入）缓存，
+    规则与主代码没变就复用绿色结果——纯归档文档提交不再触发重跑。
+    与业务测试共用 TestLock，防止多轮 mvn 并发写同一 target 目录
+    （编译产物被并发覆盖曾导致类版本错配假失败）。
     """
     tree = write_tree()
+    try:
+        fingerprint = spec_checks_fingerprint()
+    except GateError:
+        fingerprint = tree  # 算不出来就退回最保守的 key：宁可多跑，不可漏跑
     cache = shared_state_dir() / "spec-checks-cache.json"
     if cache.is_file():
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
-        if data.get("tree") == tree and data.get("result") == "PASSED":
-            out(f"复用 spec-checks 绿色缓存（{data.get('ranAt')}，tree 一致）")
+        if data.get("fingerprint") == fingerprint and data.get("result") == "PASSED":
+            out(f"复用 spec-checks 绿色缓存（{data.get('ranAt')}，规约输入未变）")
             return 0
     mvn = maven_binary()
     ensure_jdk()
@@ -1517,7 +1581,10 @@ def spec_checks() -> int:
     record_metric("spec-checks", time.time() - spec_begun,
                   result="PASSED" if proc.returncode == 0 else "FAILED")
     if proc.returncode == 0:
-        write_json(cache, {"schema": "spec-checks-cache/v1", "tree": tree,
+        # 同时记 fingerprint 与 tree：前者用于命中判定，后者保留便于排查
+        # "为什么这次没命中"（比如有人改了主代码但 tree 恰好没变）。
+        write_json(cache, {"schema": "spec-checks-cache/v1",
+                           "fingerprint": fingerprint, "tree": tree,
                            "result": "PASSED", "ranAt": now_iso()})
     return proc.returncode
 
@@ -2040,6 +2107,28 @@ def cmd_self_test(args) -> int:
             # 空命令的非前端场景必须是"确实没有 Maven 影响"，不能是漏判
             if any(MODULE_RE.match(p) for p in staged):
                 return fail(f"self-test: {label} 被漏判成无需测试")
+    # spec-checks 缓存键的输入范围：只有它真正读的文件才算数。
+    # 历史事故：用全域 tree 当 key，于是"只提交归档文档"也会让它白跑一次 ~30s。
+    spec_cases = [
+        # (路径, 是否属于 spec-checks 输入)
+        ("platform/agent-infra/src/main/java/A.java", True),
+        ("platform/agent-infra/src/main/resources/application.yml", True),
+        ("platform/spec-checks/src/test/java/Rule.java", True),
+        ("platform/pom.xml", True),
+        ("platform/agent-gateway/pom.xml", True),
+        ("docs/handbook/l2/quality-gates.md", True),
+        ("tools/handbook/build.py", True),
+        # 以下都不该让 spec-checks 重跑
+        ("platform/agent-infra/src/test/java/ATest.java", False),
+        ("docs/summary/2026-11/x.md", False),
+        ("docs/process/feat/x/manifest.json", False),
+        (".github/workflows/ci.yml", False),
+        ("tools/task-board/show.py", False),
+        ("platform/web/src/views/PipelineView.vue", False),
+    ]
+    for path, want in spec_cases:
+        if spec_input_path(path) != want:
+            return fail(f"self-test: spec-checks 输入判定错误：{path} 应为 {want}")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         base = {
