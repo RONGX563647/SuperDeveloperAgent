@@ -51,6 +51,8 @@ TEST_PATH_RE = re.compile(r"(/src/test/|Test\.java$|Tests\.java$|\.test\.tsx?$|\
 CASE_LINE_RE = re.compile(r"^\+\s*(@Test\b|@ParameterizedTest\b|it\(|test\(|check\()")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 MODULE_RE = re.compile(r"^platform/([^/]+)/")
+# 根 pom：唯一"改了就必须全 reactor 重新解析"的文件。
+ROOT_POM = "platform/pom.xml"
 # hook 会把这些变量注入子进程（GIT_INDEX_FILE=.git/index 是相对路径），
 # 测试里再跑 git 时会按错误的目录解析，导致 worktree/index 建到别处。
 GIT_ENV_KEYS = (
@@ -577,14 +579,28 @@ def surefire_parallel_flag() -> str:
     return ""
 
 
-def changed_modules(staged_files: list[str]) -> list[str]:
-    """本次提交涉及的 Maven 模块（platform/<模块>/ 前缀，排除前端 web）。"""
-    mods = set()
+def changed_modules(staged_files: list[str]) -> tuple[list[str], bool]:
+    """本次提交涉及的 Maven 模块，以及是否含前端改动。
+
+    <p>返回二元组而不是单个列表：前端（{@code platform/web}）与后端是两条完全独立的
+    测试链，混在一起会让"只改了 .vue"也去跑后端全量。历史上就是这样漏的——
+    {@code changed_modules} 把 web 过滤掉后返回空列表，而空列表的语义被当成
+    "不知道影响什么 ⇒ 全跑"，于是**任何前端改动都要跑 775 个后端用例（实测 ~120s）**。
+
+    @return (Maven 模块列表, 是否含前端改动)
+    """
+    mods: set[str] = set()
+    web = False
     for path in staged_files:
         match = MODULE_RE.match(path)
-        if match and match.group(1) != "web":
-            mods.add(match.group(1))
-    return sorted(mods)
+        if not match:
+            continue
+        name = match.group(1)
+        if name == "web":
+            web = True
+        else:
+            mods.add(name)
+    return sorted(mods), web
 
 
 def incremental_test_command(staged_files: list[str]) -> str:
@@ -603,14 +619,28 @@ def incremental_test_command(staged_files: list[str]) -> str:
     下游模块的测试交给 pre-push（{@code SESSION_ARCHIVE_FULL_TEST=1}）或 CI 全量兜底：
     提交时求快、推送/CI 求全，两层职责分开。
 
-    <p>spec-checks（ArchUnit 架构 + 契约检查）是全量扫描，改动业务模块时排除它、
+    <p>spec-checks（ArchUnit 架构 + 契约检查）是全量扫描，改动业务模块时排除它，
     移到 pre-push/CI；只有改 spec-checks 本身时才跑它验证检查规则。
-    无 Maven 业务模块改动（如根 pom、tools/handbook）时跑全部业务模块、排除 spec-checks。
+
+    <p><b>返回空命令表示不需要跑 Maven</b>，由 {@code cmd_gate_pre_commit} 处理：
+    <ul>
+      <li>只有前端改动 → 跑前端自检（&lt;1s），不碰 Maven；</li>
+      <li>只改了根 {@code platform/pom.xml} → 编译全 reactor（不跑测试，验证依赖可解析）；</li>
+      <li>其它（工具脚本、CI 配置等）→ 什么都不跑。</li>
+    </ul>
+    判定"全跑"的唯一正当理由是根 pom 变了，而不是"我没认出这些文件"。
     """
     mvn = maven_binary()
-    mods = changed_modules(staged_files)
+    mods, web = changed_modules(staged_files)
     if not mods:
-        return f"{mvn} -B -nsu -pl !spec-checks test {surefire_parallel_flag()}".strip()
+        if web:
+            return ""  # 前端自检是 Python 函数不是 shell 命令，由 pre-commit 直接调用
+        if ROOT_POM in staged_files:
+            # 根 pom 改的是依赖/插件版本，全 reactor 都要重新解析：编译即可，
+            # 测试交给 CI（与"提交求快、推送/CI 求全"的分层一致）。
+            return (f"{mvn} -B -nsu -pl !spec-checks -DskipTests "
+                    f"-Djacoco.skip=true test-compile")
+        return ""
     if "spec-checks" in mods:
         return f"{mvn} -B -nsu -pl spec-checks test {surefire_parallel_flag()}".strip()
     pl = ",".join(mods)
@@ -786,7 +816,19 @@ def cmd_gate_pre_commit(args) -> int:
             "--category feat|bug|chore|deploy --slug <英文短名> --title <中文标题>\n"
             "（docs 类纯文档提交免此限制）"
         )
+    _, web = changed_modules(staged)
     command = (os.environ.get("SESSION_ARCHIVE_TEST_CMD") or incremental_test_command(staged)).strip()
+    if not command:
+        # 没有任何 Maven 模块受影响：前端跑轻量自检，其余直接放行。
+        # 关键是不能退化成"全 reactor 775 个用例"——纯前端或纯工具改动跑后端全量
+        # 是纯浪费（实测每次 ~120s），而且它挡不住任何真实回归。
+        if web and web_tests() != 0:
+            return fail("前端自检未通过；禁止提交")
+        note = "(前端自检)" if web else "(无需后端测试：本次改动不涉及 Maven 模块)"
+        evidence = synth_evidence(note)
+        write_json(evidence_path(), evidence)
+        out(f"跳过 Maven 测试：{note}")
+        return 0
     try:
         with TestLock(worktree_git_dir() / "session-archive" / "test.lock"):
             fingerprint = ""
@@ -817,10 +859,35 @@ def cmd_gate_pre_commit(args) -> int:
     )
     # 记下"这些模块在当前闭包哈希下已跑绿"，供 pre-push 全量兜底按模块跳过。
     try:
-        record_module_green(changed_modules(staged))
+        record_module_green(changed_modules(staged)[0])
     except (GateError, OSError):
         pass
+    # 前后端混合改动：Maven 那半已经跑过，前端自检还差一次（<1s，不做"要不要跑"的
+    # 判断反而更省心——漏跑的代价是一次坏提交，多跑的代价是一次亚秒级脚本）。
+    if web and web_tests() != 0:
+        return fail("前端自检未通过；禁止提交")
     return 0
+
+
+def synth_evidence(note: str, tests_run: int = 0) -> dict:
+    """构造"不跑 Maven 但结论有效"的测试证据。
+
+    <p>{@code cmd_finish} 要求 feat/bug 会话有 PASSED 证据且 tree 与最后一次代码提交
+    一致。纯前端或纯工具改动确实没有 JUnit 用例，但归档链仍需一份可核对的证据，
+    否则要么被迫跑无意义的后端全量，要么归档失败。这里把 tree 记成当前索引树，
+    语义是"这个树上的轻量门禁是绿的"。
+    """
+    return {
+        "schema": "test-evidence/v1",
+        "command": note,
+        "ranAt": now_iso(),
+        "result": "PASSED",
+        "testsRun": tests_run,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "tree": write_tree(),
+    }
 
 
 def is_exempt(path: str) -> bool:
@@ -1940,6 +2007,35 @@ def cmd_self_test(args) -> int:
         return fail("self-test: 任务编码应进入归档目录 slug")
     if folder_slug("patch-guard", "  ") != "patch-guard":
         return fail("self-test: 未给任务编码时应退回纯 slug")
+    # 增量测试的选择契约：纯前端/纯工具改动绝不能退化成后端全量。
+    # 历史事故：changed_modules 把 web 过滤掉后返回空列表，空列表被当成
+    # "不知道影响什么 ⇒ 跑全部业务模块"，于是每个前端提交都白跑 775 个后端用例。
+    cases = [
+        # (标签, staged 文件, 期望的 mods, 期望 web, 期望命令类别)
+        ("纯前端", ["platform/web/src/x.vue"], [], True, "empty"),
+        ("前端测试", ["platform/web/src/x.test.ts"], [], True, "empty"),
+        ("工具脚本", ["tools/handbook/build.py"], [], False, "empty"),
+        ("CI 配置", [".github/workflows/ci.yml"], [], False, "empty"),
+        ("根 pom", [ROOT_POM], [], False, "compile"),
+        ("单后端模块", ["platform/agent-gateway/a.java"], ["agent-gateway"], False, "test"),
+        ("后端 + 前端", ["platform/agent-gateway/a.java", "platform/web/x.vue"],
+         ["agent-gateway"], True, "test"),
+    ]
+    for label, staged, want_mods, want_web, want_kind in cases:
+        mods, web = changed_modules(staged)
+        if mods != want_mods or web != want_web:
+            return fail(f"self-test: {label} 的 changed_modules 判定错误 "
+                        f"(mods={mods} web={web})")
+        cmd = incremental_test_command(staged)
+        kind = ("empty" if not cmd
+                else "compile" if "test-compile" in cmd and "&&" not in cmd
+                else "test")
+        if kind != want_kind:
+            return fail(f"self-test: {label} 应选择 {want_kind} 类命令，实际 {kind}")
+        if not cmd and not web and ROOT_POM not in staged:
+            # 空命令的非前端场景必须是"确实没有 Maven 影响"，不能是漏判
+            if any(MODULE_RE.match(p) for p in staged):
+                return fail(f"self-test: {label} 被漏判成无需测试")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         base = {
