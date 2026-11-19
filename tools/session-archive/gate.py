@@ -1763,11 +1763,15 @@ def full_test_backstop() -> int:
 
 
 def web_tests() -> int:
-    """前端零依赖自检（platform/web 下的三个 .test.ts 脚本）。
+    """前端零依赖自检：自动发现 platform/web/src 下全部 `*.test.ts`。
 
     <p>这些脚本不依赖 vitest：Node 22 的 `--experimental-strip-types` 直接跑 TS，
-    `tools/ts-resolve.mjs` 负责把无扩展名的相对导入补成 .ts。整套跑完 < 1s，
+    `tools/ts-resolve.mjs` 负责把无扩展名的相对导入补成 .ts。整套跑完 < 2s，
     所以不做"只在改动 web 时才跑"的判断——省下的逻辑成本比它省的时间更贵。
+
+    <p><b>为什么改成自动发现</b>：原来是手写清单，新增的 .test.ts 不加进清单就永远
+    不执行——实测曾有 8 个测试文件而清单只列 6 个，等于"写了测试但没人跑"。
+    目录扫描一次几毫秒，换掉这类静默漏跑。
 
     <p>没有 node 时跳过（与 PythonScripts 找不到 python 时的处理一致：不能因为
     环境缺工具就把门禁判红）。
@@ -1779,19 +1783,14 @@ def web_tests() -> int:
     web = ROOT / "platform" / "web"
     if not web.is_dir():
         return 0
-    scripts = [
-        "src/state/agentEventReducer.test.ts",
-        "src/components/chat/capabilityOrder.test.ts",
-        "src/views/pipelineLayout.test.ts",
-        # 工具入参表达口径：区分「工具无参」「还没到」「后端拿不到」
-        "src/utils/toolArgs.test.ts",
-        # 发布标签状态口径：只有 PUSHED 才算远端可见（「打 tag 未生效」）
-        "src/utils/releaseTag.test.ts",
-        # 复用产物部署入口的可见性与取产物规则
-        "src/utils/reuseBuild.test.ts",
-        # 会话插图：Markdown 语法与光标插入位置
-        "src/utils/chatImage.test.ts",
-    ]
+    src = web / "src"
+    scripts = sorted(
+        str(path.relative_to(web)).replace("\\", "/")
+        for path in src.rglob("*.test.ts")
+    ) if src.is_dir() else []
+    if not scripts:
+        out("未发现前端测试脚本，跳过前端自检")
+        return 0
     begun = time.time()
     for script in scripts:
         proc = subprocess.run(

@@ -20,7 +20,7 @@
 | 改动 | 跑什么 | 实测 |
 |---|---|---|
 | `platform/<模块>/` 里的后端代码 | 该模块 `test-compile`（含下游）+ 该模块测试 | 单模块 42s / 80 用例 |
-| 只有 `platform/web/` | **前端自检 4 个脚本，不碰 Maven** | **1.4s** |
+| 只有 `platform/web/` | **前端自检（自动发现 `src/**/*.test.ts`），不碰 Maven** | **1.7s / 8 个文件** |
 | 只有根 `platform/pom.xml` | 全 reactor `test-compile`（不跑测试） | ~30s |
 | 只有工具脚本、CI 配置 | 什么都不跑 | <1s |
 
