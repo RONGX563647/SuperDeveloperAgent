@@ -272,7 +272,7 @@
       ]
     },
     {
-      "sha": "ea95dc006bd58e86da5bd531a7aaaf1d2ae36135",
+      "sha": "4fe1c130bb4270e84cba504471d510fdff3d476f",
       "subject": "feat(pipeline): 界面展示发布事实与日志总行数",
       "category": "feat",
       "files": [
