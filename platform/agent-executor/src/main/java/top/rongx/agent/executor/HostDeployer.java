@@ -39,6 +39,15 @@ public class HostDeployer implements Deployer {
 
     private static final long STARTUP_PROBE_MS = 800;
 
+    /**
+     * 产物复制的尝试次数与间隔。
+     *
+     * <p>「另一个程序正在使用此文件」在 Windows 上多是短暂占用（旧实例退出中、
+     * 杀毒在扫），重试 6 次共约 3 秒即可覆盖，不必让人手动重跑。
+     */
+    private static final int COPY_ATTEMPTS = 6;
+    private static final long COPY_RETRY_DELAY_MS = 500L;
+
     /** 槽内进程登记（追加写）：每行 {@code pid 启动时刻毫秒}，pid 文件丢失时据此回收遗留进程。 */
     private static final String PIDS_FILE = "app.pids";
 
@@ -116,7 +125,7 @@ public class HostDeployer implements Deployer {
             jar = stateDir.resolve("releases").resolve(releaseSha).resolve("app.jar");
             try {
                 Files.createDirectories(jar.getParent());
-                Files.copy(sourceJar, jar, StandardCopyOption.REPLACE_EXISTING);
+                copyReplacing(sourceJar, jar);
                 // 前端 dist 与 jar 同版本落盘：回滚时页面与后端保持一致
                 Path dist = findWebDist(workdir);
                 if (dist != null) {
@@ -128,8 +137,13 @@ public class HostDeployer implements Deployer {
                     }
                 }
             } catch (IOException e) {
+                // 产物落盘失败要给出「该怎么做」，而不是把 Windows 那句
+                // 「另一个程序正在使用此文件」直接抛给用户。
                 return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
-                        "复制产物失败：" + e.getMessage(), "");
+                        "复制产物失败：" + e.getMessage()
+                                + "；若提示文件被占用，说明同一版本的应用正在运行且未停止——"
+                                + "先停止该实例（或改用不同的 version 发布）后重试",
+                        "");
             }
         }
 
@@ -410,6 +424,48 @@ public class HostDeployer implements Deployer {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /**
+     * 供同包测试调用的薄封装：复制逻辑本身不对外暴露（它是部署器的内部细节）。
+     *
+     * <p>可见性保持包级，生产代码没有任何调用点。
+     */
+    static void copyReplacingForTest(Path source, Path target) throws IOException {
+        copyReplacing(source, target);
+    }
+
+    /**
+     * 复制产物到目标路径，对被短暂占用的情况做有限重试。
+     *
+     * <p>为什么需要重试：Windows 上「另一个程序正在使用此文件」有两个真实来源——
+     * 目标位置的旧实例还没完全退出（文件句柄未释放），或源文件正被 JVM/杀毒扫描持有。
+     * 这两种都是短暂状态，直接失败会把「等一秒就好」变成一次部署失败，
+     * 也就是线上那种「同一份代码重跑一次就成功」的怪现象。
+     *
+     * <p>先复制到同目录临时文件再原子替换：避免复制中途失败在目标位置留下半个 jar，
+     * 让下一次启动拿到一个坏产物。
+     */
+    private static void copyReplacing(Path source, Path target) throws IOException {
+        Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
+        IOException last = null;
+        for (int attempt = 0; attempt < COPY_ATTEMPTS; attempt++) {
+            try {
+                Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING);
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+                return;
+            } catch (IOException e) {
+                last = e;
+                try {
+                    Thread.sleep(COPY_RETRY_DELAY_MS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("复制产物被中断：" + e.getMessage(), e);
+                }
+            }
+        }
+        Files.deleteIfExists(tmp);
+        throw last == null ? new IOException("复制产物失败：" + source) : last;
     }
 
     private static boolean copyTree(Path from, Path to) {
