@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-19T00:57:07+08:00",
-  "sourceCommit": "c8d29672235a1d5cddbfc01e81fa4159fc0e7e74",
+  "generatedAt": "2026-11-19T13:37:04+08:00",
+  "sourceCommit": "aba3e2a63a39e0368655b8278a0521c3a1104e01",
   "docs": [
     {
       "level": "L1",
@@ -34,6 +34,10 @@
     {
       "level": "L2",
       "path": "docs/handbook/l2/project-intake.md"
+    },
+    {
+      "level": "L2",
+      "path": "docs/handbook/l2/quality-gates.md"
     },
     {
       "level": "L2",

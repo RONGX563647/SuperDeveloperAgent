@@ -19,6 +19,7 @@ summary: 三级工程文档导航：L1 系统总览、L2 阶段、L3 行为到�
 | 改流水线/部署 | [L2 流水线](l2/pipeline-stages.md) → [L2 部署配方](l2/deploy-recipe.md) |
 | 改会话状态/上下文 | [L2 状态与上下文](l2/session-state-context.md) |
 | 改项目接入 | [L2 项目接入](l2/project-intake.md) |
+| 提交/推送被门禁拦下 | [L2 质量门禁](l2/quality-gates.md) |
 
 ## L1 系统总览
 
@@ -37,6 +38,7 @@ summary: 三级工程文档导航：L1 系统总览、L2 阶段、L3 行为到�
 | 会话状态与上下文 | [session-state-context](l2/session-state-context.md) |
 | 项目接入 | [project-intake](l2/project-intake.md) |
 | 部署配方与发布 | [deploy-recipe](l2/deploy-recipe.md) |
+| 质量门禁与修法 | [quality-gates](l2/quality-gates.md) |
 
 ## L3 实现单元
 

@@ -32,7 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 归档契约要读历史提交
+          # 归档契约要读历史提交；M1 迁移守卫要读发布 tag（x.y.z）判断"哪些迁移算已发布"。
+          # 浅克隆不带 tag，缺了它守卫只能退化成"全部按已发布"，未发布迁移也会被迫冻结。
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-java@v4
         with:
