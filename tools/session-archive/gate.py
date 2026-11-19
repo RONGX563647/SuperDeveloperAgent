@@ -1645,6 +1645,8 @@ def web_tests() -> int:
         "src/state/agentEventReducer.test.ts",
         "src/components/chat/capabilityOrder.test.ts",
         "src/views/pipelineLayout.test.ts",
+        # 工具入参表达口径：区分「工具无参」「还没到」「后端拿不到」
+        "src/utils/toolArgs.test.ts",
     ]
     begun = time.time()
     for script in scripts:

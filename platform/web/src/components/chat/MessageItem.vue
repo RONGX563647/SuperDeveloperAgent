@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { CopyDocument } from '@element-plus/icons-vue'
 import type { ChatMessage, ToolActivity } from '../../types'
+import { summarizeToolArgs } from '../../utils/toolArgs'
 import AskUserCard from './AskUserCard.vue'
 import MarkdownView from './MarkdownView.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
@@ -64,12 +65,10 @@ const normalizedResult = computed(() => {
 const resultOpen = ref(false)
 
 /** 工具入参摘要：优先展示参数（那才是"调用了什么"），没有参数再退回结果首行。 */
-const argsSummary = computed(() => {
-  const raw = props.tool?.arguments?.trim()
-  if (!raw || raw === '{}' || raw === '[]') return ''
-  const compact = raw.replace(/\s+/g, ' ')
-  return compact.length > 64 ? `${compact.slice(0, 64)}…` : compact
-})
+const argsSummary = computed(() =>
+  // 口径统一走 utils/toolArgs：入参「拿不到」要写出来，不能留空——
+  // 一行空白会让人以为"这个工具没参数"，而这是参数长期看起来缺失却没人发现的原因。
+  summarizeToolArgs(props.tool?.arguments, props.tool?.argsUnavailable, props.tool?.status))
 
 const resultPreview = computed(() => {
   // 流式中间态还没闭合引号时，先去掉外层引号与 \n 转义，避免摘要里出现字面量

@@ -3,6 +3,7 @@ import { computed, shallowRef } from 'vue'
 import { Loading, Select } from '@element-plus/icons-vue'
 import type { ToolActivity } from '../../types'
 import { toolDisplayName } from '../../state/agentEventReducer'
+import { describeToolArgs } from '../../utils/toolArgs'
 
 /**
  * 工具调用折叠卡（参考 ruoyi-copilot 的 ToolCallCard.vue，皮肤用 Element Plus 重做）：
@@ -36,6 +37,10 @@ const argumentsPreview = computed(() => {
     return raw
   }
 })
+
+/** 入参表达口径统一由 utils/toolArgs 决定（含 pending / unavailable 区分）。 */
+const argsView = computed(() =>
+  describeToolArgs(props.tool.arguments, props.tool.argsUnavailable, props.tool.status))
 </script>
 
 <template>
@@ -52,8 +57,13 @@ const argumentsPreview = computed(() => {
       </span>
     </button>
     <div v-if="expanded" class="tool-call-detail">
-      <pre v-if="argumentsPreview">{{ argumentsPreview }}</pre>
-      <p v-else class="tool-empty">无参数</p>
+      <pre v-if="argsView.kind === 'present'">{{ argumentsPreview }}</pre>
+      <!-- 入参不可用与「工具本来无参」必须分开显示：
+           都写成「无参数」时，排查的人分不清是映射漏了还是工具真的没参数 -->
+      <p v-else-if="argsView.warn" class="tool-empty tool-empty--unavailable">
+        {{ argsView.text }}
+      </p>
+      <p v-else class="tool-empty">{{ argsView.kind === 'pending' ? '等待入参…' : '无参数' }}</p>
     </div>
   </article>
 </template>
@@ -137,5 +147,9 @@ const argumentsPreview = computed(() => {
   margin: 0;
   font-size: 11.5px;
   color: var(--ink-faint);
+}
+/* 入参不可用：比「无参数」更需要被注意到，用告警色而不是弱化色 */
+.tool-empty--unavailable {
+  color: var(--warn-ink, #b26a00);
 }
 </style>
