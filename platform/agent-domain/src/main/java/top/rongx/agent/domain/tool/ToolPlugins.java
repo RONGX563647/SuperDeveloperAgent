@@ -80,7 +80,7 @@ public final class ToolPlugins {
                         "Human-confirmed changes, patches and session worktree edits",
                         Set.of("补丁", "修改代码", "变更", "确认", "修复", "patch", "propose",
                                 "change", "confirm", "写文件", "编辑", "工作树"),
-                        Set.of("request_confirmation", "confirm", "propose_patch",
+                        Set.of("request_confirmation", "confirm", "change_status", "propose_patch",
                                 "workspace_open", "workspace_write", "workspace_read",
                                 "workspace_list", "workspace_delete", "workspace_diff",
                                 "workspace_commit")),
