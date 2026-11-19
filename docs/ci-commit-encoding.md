@@ -40,8 +40,47 @@ ASCII/GBK 处理，无法表示的字符被编码器替换为 `?`，**替换不�
 | Python | `PYTHONIOENCODING` 未设、`locale` 是 C → `sys.stdout.encoding` 退化为 ascii |
 | Git | `i18n.commitEncoding` 未声明，日志按本地代码页解码显示成 mojibake |
 
-### 三层闸门（本次落地）
+### 平台合并提交：为什么白名单改成自动识别（2026-11-19）
 
+一开始的做法是 `known-bad-commit-messages.txt` 逐条登记坏提交。跑了一天后发现
+这个白名单是**同一个系统性问题的 10 次补丁**：
+
+```
+$ git log --format=%s origin/0.1.0-snapshot | 统计损坏提交
+带 (PR #n) 标记且损坏：13
+不带标记且损坏：      0
+```
+
+白名单里登记的条目**全部**以 `(PR #n)` 结尾——它们是 GitHub 在网页上合并 PR 时
+拼装的提交信息（`committer` 是 `GitHub <noreply@github.com>`），中文在平台侧
+就被替换成问号，与我们本地的编码习惯无关。每合并一个 PR 就多一条，
+靠人肉补白名单永远追不上：修完 PR #21，PR #22 合进来又是一条 `58c383a`。
+
+现在改为在门禁里识别（`PLATFORM_MERGE_SUBJECT`，只认 subject **结尾**的
+`(PR #n)`，正文里提到 PR 不算）：
+
+| 提交类型 | 判定 |
+| --- | --- |
+| 平台合并提交（结尾 `(PR #n)`）+ 损坏 | **提示不阻断**，并打印出来让人知悉 |
+| 其它提交 + 损坏 | 照旧阻断，无豁免 |
+| 平台合并提交 + 内容完好 | 不触发 |
+
+白名单因此清空。保留文件是为了将来真需要豁免时仍有统一入口。
+
+配套加了门禁自测 `tools/ci/test_check_commit_messages.py`（12 条断言），
+并接入 CI：改判定规则时先证明「本地损坏仍被拦、平台合并被识别、正常内容不误判」。
+这条自测不是形式主义——放行逻辑最容易写宽，写宽了就等于把闸门关掉。
+
+**验证方式（可复现）**：用修复后的门禁重放那两次失败的 CI 原位范围：
+
+```bash
+python tools/ci/check-commit-messages.py --base b82fe79 --head 1d03365   # PR #21
+python tools/ci/check-commit-messages.py --base 1d03365 --head 58c383a   # PR #22
+```
+
+修复前两次都 exit 1；修复后都 exit 0，并把对应提交列进「平台合并提交，不阻断但请知悉」。
+
+### 三层闸门（本次落地）
 1. **本地**：`.githooks/commit-msg` → `tools/ci/check-commit-messages.py --file`
    提交信息非法（含 U+FFFD，或连续 `??` 且整行一个中文都不剩）时直接拒绝落库，
    并打印修复命令。行内仍有中文的双问号（"你确定??"）只提示不阻断；`??  path`

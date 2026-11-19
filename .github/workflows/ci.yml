@@ -175,6 +175,12 @@ jobs:
           --base "$BASE_SHA" --head "$HEAD_SHA"
           --allow-file tools/ci/known-bad-commit-messages.txt
 
+      # 门禁自身也要有测试：改了判定规则（例如新增「平台合并提交放行」）之后，
+      # 必须先证明没有把闸门整体放松——本地损坏的提交仍要被拦住。
+      - name: 提交信息门禁自测
+        if: hashFiles('tools/ci/test_check_commit_messages.py') != ''
+        run: python tools/ci/test_check_commit_messages.py
+
       - name: 会话归档校验（不依赖本地钩子）
         run: python tools/session-archive/gate.py validate
 
