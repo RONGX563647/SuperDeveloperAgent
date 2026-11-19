@@ -8,6 +8,8 @@ import top.rongx.agent.domain.error.RunException;
  *
  * @param conversationId 关联会话（可空 = 尚未分配）
  * @param priority       1 最高
+ * @param sourceRef      事件来源（如 Gitee 事件去重键；可空 = 人工登记）
+ * @param triggerType    触发类型（如 issue_hook；可空 = 人工登记）
  */
 public record WorkspaceTask(
         String id,
@@ -18,7 +20,9 @@ public record WorkspaceTask(
         TaskStatus status,
         int priority,
         long createdAt,
-        long updatedAt) {
+        long updatedAt,
+        String sourceRef,
+        String triggerType) {
 
     public WorkspaceTask {
         if (id == null || id.isBlank()) {

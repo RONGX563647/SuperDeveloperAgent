@@ -82,12 +82,15 @@ class DbConversationStoreTest {
         assertTrue(store.findActiveRuns(10).isEmpty(), "终态运行不再出现在看门狗扫描里");
 
         store.saveTask(new WorkspaceTask("task-1", "RY", "s-1", "补测试", "单测通过",
-                TaskStatus.TODO, 2, now, now));
+                TaskStatus.TODO, 2, now, now, "gitee:issue:1", "issue_hook"));
 
         // 模拟进程重启：同一个文件，新实例
         DbConversationStore reopened = new DbConversationStore(root.toString());
         assertEquals(RunStatus.SUCCEEDED, reopened.findRun("run-1").orElseThrow().status());
-        assertEquals("补测试", reopened.findTasksByProject("RY").get(0).goal());
+        WorkspaceTask task = reopened.findTasksByProject("RY").get(0);
+        assertEquals("补测试", task.goal());
+        assertEquals("gitee:issue:1", task.sourceRef());
+        assertEquals("issue_hook", task.triggerType());
         assertEquals(1, reopened.findRunsByProject("RY", 10).size());
         assertEquals(1, reopened.findRunsByConversation("s-1", 10).size());
     }
@@ -117,7 +120,7 @@ class DbConversationStoreTest {
         store.saveRun(new ConversationRun("run-1", "RY", "s-1", "alice", "跑一下", "key",
                 RunStatus.SUCCEEDED, "ok", "", now, now, now));
         store.saveTask(new WorkspaceTask("task-1", "RY", "s-1", "补测试", "单测通过",
-                TaskStatus.DONE, 2, now, now));
+                TaskStatus.DONE, 2, now, now, null, null));
         store.saveTranscript("s-1", "{\"messages\":[]}");
 
         assertTrue(store.delete("s-1", "alice"));

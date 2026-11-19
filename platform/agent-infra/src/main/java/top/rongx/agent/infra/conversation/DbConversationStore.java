@@ -52,7 +52,7 @@ public class DbConversationStore
 
     private static final String TASK_COLUMNS = """
             id, project_id, conversation_id, goal, expected_output, status, priority,
-            created_at, updated_at
+            created_at, updated_at, source_ref, trigger_type
             """;
 
     private final PlatformDb db;
@@ -510,8 +510,8 @@ public class DbConversationStore
         String sql = """
                 INSERT INTO workspace_tasks
                     (id, project_id, conversation_id, goal, expected_output, status, priority,
-                     created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                     created_at, updated_at, source_ref, trigger_type)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """;
         try {
             db.run(em -> PlatformDb.update(em, sql,
@@ -523,7 +523,9 @@ public class DbConversationStore
                     task.status().name(),
                     task.priority(),
                     task.createdAt(),
-                    task.updatedAt()));
+                    task.updatedAt(),
+                    task.sourceRef(),
+                    task.triggerType()));
             return task;
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "任务保存失败：" + e.getMessage(), e);
@@ -602,6 +604,8 @@ public class DbConversationStore
                 TaskStatus.valueOf((String) row[5]),
                 ((Number) row[6]).intValue(),
                 ((Number) row[7]).longValue(),
-                ((Number) row[8]).longValue());
+                ((Number) row[8]).longValue(),
+                (String) row[9],
+                (String) row[10]);
     }
 }

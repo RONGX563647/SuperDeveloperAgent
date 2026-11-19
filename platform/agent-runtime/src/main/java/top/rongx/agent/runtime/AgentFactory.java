@@ -16,6 +16,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import top.rongx.agent.domain.conversation.WorkerRole;
 import top.rongx.agent.domain.policy.PolicyDecision;
 import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -163,6 +164,13 @@ public class AgentFactory {
     public AgentSession createChat(ProjectContext ctx, List<String> requestedSkills,
                                    List<String> requestedMcp, String connectionId,
                                    String modelName) {
+        return createChat(ctx, requestedSkills, requestedMcp, connectionId, modelName, null);
+    }
+
+    /** 与上一个重载相同，额外在通用系统提示后追加角色约束（null = 纯通用会话）。 */
+    private AgentSession createChat(ProjectContext ctx, List<String> requestedSkills,
+                                    List<String> requestedMcp, String connectionId,
+                                    String modelName, String rolePrompt) {
         // 1. 权限模式按环境决定：生产 DEFAULT（写必 ASK），非生产 BYPASS
         //    非生产不能用 ACCEPT_EDITS：它只放行文件类编辑，readOnly=false 的工具仍走默认 ASK，
         //    而对话链路没有通用的“工具审批”回传通道：Toolkit 的 ASK 状态不会回到对话，
@@ -190,8 +198,12 @@ public class AgentFactory {
         ToolPluginIndex plugins = ToolPluginIndex.of(definitions, toolkit.getToolNames(),
                 ToolPlugins.CORE);
         // 3. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
+        String prompt = systemPrompt(ctx, skillIndex(requestedSkills), plugins.promptIndex());
+        if (rolePrompt != null && !rolePrompt.isBlank()) {
+            prompt = prompt + "\n\n" + rolePrompt;
+        }
         ReActAgent.Builder builder = baseBuilder("devops-agent")
-                .sysPrompt(systemPrompt(ctx, skillIndex(requestedSkills), plugins.promptIndex()))
+                .sysPrompt(prompt)
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(toolkit)
                 .permissionContext(permission)
@@ -373,6 +385,75 @@ public class AgentFactory {
                 .maxIters(maxIters(connectionId, modelName, 16))
                 .stateStore(stateStore)
                 .build();
+    }
+
+    /**
+     * 角色 Worker：一个枚举 + 一份裁剪配置，内部复用 {@link #createChat} 与
+     * {@link #createDeploy}，不复制工具装配逻辑，也不扩大任何角色的写权限。
+     *
+     * <p>角色只决定三件事：工具面、系统提示、权限模式。权限仍由环境和平台门禁决定。
+     */
+    public AgentSession createWorker(ProjectContext ctx, WorkerRole role) {
+        return createWorker(ctx, role, null, null);
+    }
+
+    public AgentSession createWorker(ProjectContext ctx, WorkerRole role, String connectionId,
+                                     String modelName) {
+        WorkerRole resolved = role == null ? WorkerRole.DEV : role;
+        return switch (resolved) {
+            // 发布 Agent 是 OPS 的特例：入口与生产审批规则保持原样
+            case OPS -> new AgentSession(createDeploy(ctx, connectionId, modelName), List.of());
+            // PRODUCT 只写任务卡/工单：管理面 + 只读面，没有任何执行类写工具
+            case PRODUCT -> new AgentSession(productWorker(ctx, connectionId, modelName), List.of());
+            case DEV -> createChat(ctx, List.of(), List.of(), connectionId, modelName,
+                    devWorkerPrompt(ctx));
+            case TEST -> createChat(ctx, List.of(), List.of(), connectionId, modelName,
+                    testWorkerPrompt(ctx));
+        };
+    }
+
+    private ReActAgent productWorker(ProjectContext ctx, String connectionId, String modelName) {
+        PermissionContextState permission = PermissionContextState.builder()
+                .mode(PermissionMode.DEFAULT)
+                .build();
+        return baseBuilder("product-worker")
+                .sysPrompt(productWorkerPrompt(ctx))
+                .model(modelProvider.current(connectionId, modelName))
+                .toolkit(supervisorToolkit.copy())
+                .permissionContext(permission)
+                .maxIters(maxIters(connectionId, modelName, 10))
+                .stateStore(stateStore)
+                .middleware(new AskUserMiddleware())
+                .build();
+    }
+
+    private String productWorkerPrompt(ProjectContext ctx) {
+        return """
+                You are the product worker for project %s; operator: %s; environment: %s.
+
+                You own requirements and the task board. Turn goals into concrete tasks with
+                task_create/workspace_plan, keep them updated, and answer scope questions.
+                You have no tools to write code, run commands or deploy; hand execution to a
+                dev/test/ops conversation through the supervisor. Never claim work you did not do.
+                """.formatted(ctx.projectId(), ctx.userId(), ctx.env());
+    }
+
+    private String devWorkerPrompt(ProjectContext ctx) {
+        return """
+                Role: DEV worker for project %s (environment %s).
+                Implement changes only through propose_patch / editor tools; every repo write needs
+                human confirmation and never pushes to a remote. Production stays read-only.
+                Verify with ci_run/run_action and report evidence (run id, log location).
+                """.formatted(ctx.projectId(), ctx.env());
+    }
+
+    private String testWorkerPrompt(ProjectContext ctx) {
+        return """
+                Role: TEST worker for project %s (environment %s).
+                Run tests with ci_run/run_action, read evidence with read_run_log, and write or fix
+                test cases through propose_patch only. Production stays read-only. Report pass/fail
+                with the run id; never declare success without evidence.
+                """.formatted(ctx.projectId(), ctx.env());
     }
 
     /**

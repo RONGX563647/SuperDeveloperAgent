@@ -41,4 +41,10 @@ public class RunLedgerEntity {
     @Column(name = "updated_at", columnDefinition = "bigint", nullable = false)
     private Long updatedAt;
 
+    @Column(name = "worker_role", columnDefinition = "text")
+    private String workerRole;
+
+    @Column(name = "trigger_ref", columnDefinition = "text")
+    private String triggerRef;
+
 }

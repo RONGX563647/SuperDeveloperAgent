@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-19T15:19:21+08:00",
-  "sourceCommit": "31da88e21f9b1da5ad9021384d0d9762167f52d0",
+  "generatedAt": "2026-11-19T18:59:54+08:00",
+  "sourceCommit": "dec43bd1e9a46ecb279c7c59d88e1c1267c63c56",
   "docs": [
     {
       "level": "L1",
@@ -164,8 +164,8 @@
       "symbol": "AgentFactory#createChat",
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
       "module": "agent-runtime",
-      "start": 163,
-      "end": 206
+      "start": 164,
+      "end": 168
     },
     {
       "id": "runtime-chat-service/stream",
@@ -174,8 +174,8 @@
       "symbol": "ChatService#stream",
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
       "module": "agent-runtime",
-      "start": 79,
-      "end": 102
+      "start": 80,
+      "end": 109
     },
     {
       "id": "state-agent-state-store/save",
