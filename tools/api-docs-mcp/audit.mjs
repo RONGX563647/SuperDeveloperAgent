@@ -259,9 +259,9 @@ export function extractCalls(sourceText, fileName) {
       const fn = node.expression.text;
       const parsed = parsePathAlternatives(node.arguments[0], sf);
       const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-      const methods = fn === "apiBlob"
-        ? { methods: ["GET"], known: true }
-        : parseMethodAlternatives(node, sf);
+      // apiBlob 与 apiFetch 同样接受 (path, init)：下载二进制也可以走 POST（如导出接口）。
+      // 曾经这里把 apiBlob 硬编码成 GET，于是 POST 下载被误报成 GET 导致契约审计失败。
+      const methods = parseMethodAlternatives(node, sf);
       const location = { file: fileName, line: line + 1, column: character + 1 };
       const responseType = node.typeArguments?.[0]?.getText(sf) ?? null;
       if (parsed.unsupported) {
