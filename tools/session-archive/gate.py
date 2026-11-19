@@ -1785,6 +1785,12 @@ def web_tests() -> int:
         "src/views/pipelineLayout.test.ts",
         # 工具入参表达口径：区分「工具无参」「还没到」「后端拿不到」
         "src/utils/toolArgs.test.ts",
+        # 发布标签状态口径：只有 PUSHED 才算远端可见（「打 tag 未生效」）
+        "src/utils/releaseTag.test.ts",
+        # 复用产物部署入口的可见性与取产物规则
+        "src/utils/reuseBuild.test.ts",
+        # 会话插图：Markdown 语法与光标插入位置
+        "src/utils/chatImage.test.ts",
     ]
     begun = time.time()
     for script in scripts:

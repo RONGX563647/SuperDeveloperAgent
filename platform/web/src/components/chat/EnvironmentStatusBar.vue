@@ -22,6 +22,13 @@ const props = defineProps<{
   projectName: string
   /** 会话是否正在生成（原 Header 的「就绪 / 生成中」移到这里）。 */
   streaming?: boolean
+  /**
+   * 首次访问时的展开状态，默认收起（FEAT-7 诉求：环境面板不能默认占地方）。
+   *
+   * <p>注意「默认」只对没点开过的设备生效：用户手动展开过就会记到
+   * localStorage，下次仍按他的选择——否则每次进页面都被强制收起，反而更烦。
+   */
+  defaultOpen?: boolean
 }>()
 
 const emit = defineEmits<{ navigate: [] }>()
@@ -30,10 +37,14 @@ const OPEN_KEY = 'agent.envBar.open'
 
 function loadOpen(): boolean {
   try {
-    return localStorage.getItem(OPEN_KEY) === '1'
+    const saved = localStorage.getItem(OPEN_KEY)
+    if (saved !== null) {
+      return saved === '1'
+    }
   } catch {
-    return false
+    // 隐私模式下不可读：按默认值处理
   }
+  return props.defaultOpen === true
 }
 
 const open = ref(loadOpen())

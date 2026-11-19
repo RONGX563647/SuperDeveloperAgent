@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown, CaretRight, ChatDotRound, Coin, Paperclip, Promotion, Setting,
+  ArrowDown, CaretRight, ChatDotRound, Coin, Loading, Paperclip, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { appStore, type PermissionMode } from '../stores/app'
 import type { ChatMessage, TraceTurn } from '../types'
@@ -27,6 +27,8 @@ import EnvBindingCard from '../components/chat/EnvBindingCard.vue'
 import ChatStatusStrip from '../components/chat/ChatStatusStrip.vue'
 import EnvironmentStatusBar from '../components/chat/EnvironmentStatusBar.vue'
 import PageHeader from '../layouts/components/PageHeader.vue'
+import { uploadIssueImage } from '../api/issues'
+import { imageMarkdown, insertAt, isImageFile } from '../utils/chatImage'
 
 /**
  * 对话页 —— 已按三层职责拆分（见 docs/项目规约 前端分层）：
@@ -245,12 +247,79 @@ const sessionCost = computed(() => projection.value.sessionCost)
 
 const listRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 const approvalCard = ref<InstanceType<typeof ApprovalRequestCard> | null>(null)
 /** 变更确认卡是否展开（由 change.created 事件自动展开；dismiss 收起但不丢 pendingChangeId）。 */
 const approvalCardOpen = ref(false)
 
-/** 上下文窗口估算：服务端暂不回精确 token，状态条里会明确标注为估算值。 */
-const CONTEXT_LIMIT = 128_000
+/* ---------------------------------------------------------------- 图片上传 */
+
+/**
+ * 会话里贴图：上传后以 Markdown 图片语法插到光标处。
+ *
+ * <p>为什么走 Markdown 而不是单独的消息类型：正文本来就是 Markdown，
+ * 模型能直接「看到」这个地址并据此回答（例如让它看图排查问题），
+ * 也不需要为图片再发明一套消息协议。
+ */
+const uploading = ref(false)
+
+function pickImage(): void {
+  fileInputRef.value?.click()
+}
+
+async function onFilePick(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 允许连续选同一张图
+  if (file) await insertImage(file)
+}
+
+async function insertImage(file: File): Promise<void> {
+  if (!isImageFile(file.type)) {
+    ElMessage.warning('只能上传图片')
+    return
+  }
+  uploading.value = true
+  try {
+    const url = await uploadIssueImage(file)
+    const el = inputRef.value
+    // 插到光标处，而不是无条件追加到末尾：用户常常写了一半再补图
+    const result = insertAt(input.value, imageMarkdown(url, file.name), el?.selectionStart)
+    input.value = result.text
+    await nextTick()
+    el?.focus()
+    el?.setSelectionRange(result.caret, result.caret)
+    ElMessage.success('图片已插入')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '图片上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+/** 粘贴图片：直接从剪贴板上传（截图后 Ctrl+V 是最高频的用法）。 */
+function onPasteImage(event: ClipboardEvent): void {
+  const items = event.clipboardData?.items
+  if (!items) return
+  for (const item of items) {
+    if (!isImageFile(item.type)) continue
+    const file = item.getAsFile()
+    if (!file) continue
+    event.preventDefault()
+    void insertImage(file)
+    return
+  }
+}
+
+/** 拖入图片。 */
+function onDropImage(event: DragEvent): void {
+  const file = event.dataTransfer?.files?.[0]
+  if (!file || !isImageFile(file.type)) return
+  event.preventDefault()
+  void insertImage(file)
+}
+
+/** 上下文窗口估算：服务端暂不回精确 token，状态条里会明确标注为估算值。 */const CONTEXT_LIMIT = 128_000
 const contextUsage = computed(() => {
   const messages = projection.value.messages
   const turn = projection.value.streamingTurn
@@ -944,12 +1013,25 @@ onBeforeUnmount(() => {
           @compositionend="composing = false"
           @keydown.enter.exact="onEnter"
           @keydown.esc="onEscape"
+          @paste="onPasteImage"
+          @dragover.prevent
+          @drop.prevent="onDropImage"
         ></textarea>
         <div class="composer-bar">
           <div class="bar-left">
-            <button type="button" class="icon-btn" disabled title="附件功能待接入">
-              <el-icon><Paperclip /></el-icon>
+            <button
+              type="button" class="icon-btn"
+              :disabled="streaming || uploading"
+              :title="uploading ? '图片上传中…' : '上传图片（也可直接粘贴或拖入）'"
+              @click="pickImage"
+            >
+              <el-icon v-if="uploading" class="is-loading"><Loading /></el-icon>
+              <el-icon v-else><Paperclip /></el-icon>
             </button>
+            <input
+              ref="fileInputRef" type="file" class="hidden-file" accept="image/*"
+              @change="onFilePick"
+            />
             <span class="bar-scope mono" :title="projectDisplayName">
               {{ envText }}
             </span>
@@ -1217,6 +1299,11 @@ onBeforeUnmount(() => {
   .session-cost {
     display: none;
   }
+}
+
+/* 隐藏的原生文件选择框：用图标按钮代理点击，避免默认按钮样式 */
+.hidden-file {
+  display: none;
 }
 
 /* 手机：底栏工具条空间有限，范围说明让位给环境选择与发送按钮 */
