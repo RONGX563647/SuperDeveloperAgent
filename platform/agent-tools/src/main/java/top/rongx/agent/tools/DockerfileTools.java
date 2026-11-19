@@ -141,6 +141,22 @@ public class DockerfileTools {
 
         boolean repoDefined = Files.isRegularFile(repo.resolve("ci").resolve("pipeline.yml"));
         List<String> notes = new ArrayList<>();
+        if (plan != null && "java".equals(plan.stack())) {
+            // 预检：target 下已经有 jar 就当场确认哪个是能 java -jar 的，
+            // 别等到容器起来、健康检查失败才发现拷错了包。
+            String jarNote;
+            try {
+                jarNote = checkRunnableJar(repo);
+            } catch (IOException e) {
+                return "err: 读取 target 目录失败：" + e.getMessage();
+            }
+            if (jarNote.startsWith("err:")) {
+                return jarNote;
+            }
+            if (!jarNote.isBlank()) {
+                notes.add(jarNote);
+            }
+        }
         String stageState;
         String recipeState;
 
@@ -283,8 +299,16 @@ public class DockerfileTools {
             df.append("FROM eclipse-temurin:").append(java).append("-jre\n");
             df.append("WORKDIR /app\n");
             df.append("ENV TZ=Asia/Shanghai\n");
+            // 可执行包可能是带 classifier 的那一个（如 *-exec.jar）；普通 jar 没有
+            // Main-Class，抓错就会在容器启动时报 no main manifest attribute。
+            String classifier = springBootJarClassifier(javaModule);
+            String jarGlob = classifier == null ? "target/*.jar" : "target/*-" + classifier + ".jar";
+            if (classifier != null) {
+                df.append("# Spring Boot 可执行包带 classifier=").append(classifier)
+                        .append("：普通 jar 无 Main-Class，不能直接 java -jar\n");
+            }
             df.append("COPY ").append(modulePath.isEmpty() ? "" : modulePath + "/")
-                    .append("target/*.jar /app/app.jar\n");
+                    .append(jarGlob).append(" /app/app.jar\n");
             if (dist != null) {
                 String distPath = relative(repo, dist);
                 df.append("# 前端产物：").append(distPath).append('\n');
@@ -310,6 +334,65 @@ public class DockerfileTools {
         }
         throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "未能识别技术栈：没有找到带 *Application.java 的 Maven 模块，也没有前端 dist。"
                         + "请先在仓库根提供 Dockerfile，或确认构建阶段会产出 target/*.jar / dist");
+    }
+
+    /**
+     * 预检 target 下的 jar 是否真的能 {@code java -jar}。
+     *
+     * <p>守的就是这次的事故：容器日志 {@code no main manifest attribute, in /app/app.jar}，
+     * 健康检查超时、退出码 1，但排查要一路翻到 Dockerfile 的 COPY 才发现拷错了包。
+     * 在生成 Dockerfile 之前确认一次，错误信息就能直接指向原因。
+     *
+     * @return 空串表示无法预检（还没构建）或一切正常；以 {@code err:} 开头表示必须修
+     */
+    static String checkRunnableJar(Path repo) throws IOException {
+        Path module = findSpringBootModule(repo);
+        if (module == null) {
+            return "";
+        }
+        Path target = module.resolve("target");
+        if (!Files.isDirectory(target)) {
+            return "";  // 还没构建，无从预检
+        }
+        List<Path> jars;
+        try (var stream = Files.list(target)) {
+            jars = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".jar"))
+                    .filter(p -> !p.getFileName().toString().endsWith("-sources.jar"))
+                    .filter(p -> !p.getFileName().toString().endsWith("-javadoc.jar"))
+                    .sorted()
+                    .toList();
+        }
+        if (jars.isEmpty()) {
+            return "";
+        }
+        List<Path> runnable = jars.stream().filter(DockerfileTools::hasMainClass).toList();
+        if (!runnable.isEmpty()) {
+            return "可执行包已就位：" + runnable.get(0).getFileName();
+        }
+        String names = jars.stream().map(p -> p.getFileName().toString())
+                .collect(java.util.stream.Collectors.joining("、"));
+        String classifier = springBootJarClassifier(module);
+        String hint = classifier == null
+                ? "先跑 mvn package（不要加 -Dspring-boot.repackage.skip），"
+                  + "确认 spring-boot-maven-plugin 的 repackage 真的执行了"
+                : "该模块 repackage 用了 <classifier>" + classifier + "</classifier>，"
+                  + "可执行包应是 *-" + classifier + ".jar；先跑 mvn package 生成它，"
+                  + "并把 Dockerfile 的 COPY 指到 *-" + classifier + ".jar";
+        return "err: target 下有 jar 但都不是可执行包（缺 Main-Class）：" + names
+                + "。直接 java -jar 会报 no main manifest attribute，容器起来就退出。" + hint;
+    }
+
+    /** jar 的 MANIFEST 是否带 Main-Class（Spring Boot 可执行包的判据）。 */
+    static boolean hasMainClass(Path jar) {
+        try (java.util.jar.JarFile file = new java.util.jar.JarFile(jar.toFile())) {
+            java.util.jar.Manifest manifest = file.getManifest();
+            return manifest != null
+                    && manifest.getMainAttributes().getValue("Main-Class") != null;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /** 已有的 Dockerfile（相对仓库根）；没有返回 null。 */
@@ -339,6 +422,39 @@ public class DockerfileTools {
             }
         }
         return null;
+    }
+
+    /**
+     * Spring Boot 可执行包的 classifier；没有则返回空。
+     *
+     * <p><b>为什么必须要它</b>：{@code spring-boot-maven-plugin} 的 repackage 若声明了
+     * {@code <classifier>exec</classifier>}，产物是两个 jar：
+     * <ul>
+     *   <li>{@code app-1.0.jar} —— 普通 jar，<b>没有 Main-Class</b>；</li>
+     *   <li>{@code app-1.0-exec.jar} —— Spring Boot 可执行包，Main-Class 是 JarLauncher。</li>
+     * </ul>
+     * 生成 {@code COPY target/*.jar /app/app.jar} 会抓到前者，容器启动即报
+     * {@code no main manifest attribute, in /app/app.jar}（实测事故）；
+     * 若两个 jar 同时存在，Docker 还会因为"多源复制到文件目标"直接构建失败。
+     * 所以必须按 classifier 精确指定要拷哪个。
+     *
+     * @return 形如 {@code exec}；未声明 classifier 时返回 null（此时普通 jar 就是可执行包）
+     */
+    static String springBootJarClassifier(Path module) throws IOException {
+        Path pom = module.resolve("pom.xml");
+        if (!Files.isRegularFile(pom)) {
+            return null;
+        }
+        String text = Files.readString(pom, java.nio.charset.StandardCharsets.UTF_8);
+        int plugin = text.indexOf("spring-boot-maven-plugin");
+        if (plugin < 0) {
+            return null;
+        }
+        // 只看该插件声明之后的 <classifier>，避免误取别的插件的 classifier
+        java.util.regex.Matcher match = java.util.regex.Pattern
+                .compile("<classifier>\\s*([A-Za-z0-9._-]+)\\s*</classifier>")
+                .matcher(text.substring(plugin));
+        return match.find() ? match.group(1) : null;
     }
 
     static Path findFrontendDist(Path repo) throws IOException {
