@@ -85,13 +85,19 @@ npm run build        # vue-tsc -b && vite build → dist/
 ```dockerfile
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-COPY platform/agent-gateway/target/*.jar /app/app.jar
+COPY platform/agent-gateway/target/*-exec.jar /app/app.jar
 COPY platform/web/dist/ /app/web/
 ENV AGENT_WEB_DIST=/app/web
 ENV SERVER_PORT=8090
 EXPOSE 8090
 ENTRYPOINT ["java","-jar","/app/app.jar"]
 ```
+
+> **为什么是 `*-exec.jar`**：gateway 的 `spring-boot-maven-plugin` repackage 声明了
+> `<classifier>exec</classifier>`，`target` 下同时存在普通包（无 `Main-Class`）与
+> `*-exec.jar`（可执行包）。写成 `target/*.jar` 会拷到普通包，容器启动即报
+> `no main manifest attribute, in /app/app.jar`；两个都匹配时 Docker 还会因
+> "多源复制到文件目标"直接构建失败。
 
 构建前置：先完成 `mvn package` 与 `npm run build`（镜像只 COPY 产物）。
 
