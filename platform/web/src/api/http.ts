@@ -39,11 +39,20 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return (await res.json()) as T
 }
 
-/** 下载二进制（带登录令牌）；调用方负责创建/释放 object URL。 */
-export async function apiBlob(path: string): Promise<Blob> {
+/**
+ * 下载二进制（带登录令牌）；调用方负责创建/释放 object URL。
+ *
+ * @param init 可选：导出类接口需要 POST + JSON body，此时必须带上 Content-Type
+ */
+export async function apiBlob(path: string, init: RequestInit = {}): Promise<Blob> {
   const token = getToken()
   const res = await fetch(path, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
+    ...init,
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers ?? {})
+    }
   })
   if (!res.ok) {
     let message = `下载失败（${res.status}）`

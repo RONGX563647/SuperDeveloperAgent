@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown, CopyDocument, Download, Search } from '@element-plus/icons-vue'
-import { fetchRunLog } from '../../api/pipeline'
+import { fetchRunLog, fetchRunLogLines } from '../../api/pipeline'
 
 /**
  * 运行日志（增量追加渲染）：
@@ -61,6 +61,26 @@ const lines = computed<LogLine[]>(() => {
 
 const errorCount = computed(() => allLines.value.filter((l) => l.error).length)
 const lineNoWidth = computed(() => `${String(allLines.value.length).length + 1}ch`)
+
+/**
+ * 服务端统计的总行数（只读，用于「共 N 行 / 已载入 M 行」）。
+ *
+ * <p>为什么单独问一次：增量接口只回文本，前端算不出服务端到底有多少行，
+ * 用户看到「加载中」时分不清是日志还没来、还是已经到底了。
+ * 这里只借用行分页接口的 total，不改变原有的增量加载方式——
+ * 换掉加载策略会牵动跟随/去重/终态补齐这套已经稳定的逻辑，不值得。
+ */
+const serverTotal = ref(0)
+
+async function refreshTotal(): Promise<void> {
+  if (!props.runId) return
+  try {
+    const page = await fetchRunLogLines(props.runId, 0, 1)
+    serverTotal.value = page.total
+  } catch {
+    // 统计失败不影响看日志：保持 0，头部不显示总行数
+  }
+}
 
 /**
  * 拉一段增量；首次调用从 offset=0 开始，等价于整段加载。
@@ -128,6 +148,7 @@ async function restart(): Promise<void> {
   lastAppendAt.value = 0
   follow.value = true
   loading.value = true
+  void refreshTotal()
   await pull()
   loading.value = false
   if (props.running) {
@@ -179,7 +200,9 @@ function download(): void {
   <section class="run-log" aria-label="运行日志">
     <div class="log-head">
       <span class="log-title">日志</span>
-      <span class="log-stat">{{ allLines.length }} 行</span>
+      <span class="log-stat">
+        {{ allLines.length }} 行<template v-if="serverTotal > allLines.length"> / 共 {{ serverTotal }} 行</template>
+      </span>
       <span v-if="errorCount" class="log-errors">{{ errorCount }} 处错误</span>
       <span
         v-if="silentSeconds >= 15" class="log-idle"

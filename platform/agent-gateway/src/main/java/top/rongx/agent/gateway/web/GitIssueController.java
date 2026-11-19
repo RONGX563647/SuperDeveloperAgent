@@ -3,13 +3,20 @@ package top.rongx.agent.gateway.web;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,6 +46,10 @@ import top.rongx.agent.gateway.gitissue.GitIssueServiceImpl;
 @RequestMapping("/api/v1/git-issues")
 public class GitIssueController {
 
+    private static final Logger log = LoggerFactory.getLogger(GitIssueController.class);
+    /** 单次导出上限：防止一次把整库任务拉进内存。 */
+    private static final int EXPORT_MAX_IDS = 2000;
+
     private final GitIssueService issues;
     private final CurrentUser currentUser;
     private final ProjectRepoLocator repoLocator;
@@ -63,6 +74,65 @@ public class GitIssueController {
             @RequestParam(required = false) String state,
             @RequestParam(required = false) String keyword) {
         return issues.list(currentUser.requireUserId(), provider, state, keyword);
+    }
+
+    /**
+     * 把「当前筛选出的任务」导出为 .xlsx。
+     *
+     * <p>用 POST 接收 id 列表而不是把筛选条件搬到后端重算：类型 / 优先级 / 版本 / 排序
+     * 都在前端过滤（见 {@code ChatIssuesView}），后端重算等于把同一套规则写两份，
+     * 迟早出现"界面看到 20 条、导出 23 条"。这里只认 id，导出内容与用户所见严格一致。
+     *
+     * <p>逐条 {@code get} 取而不是新增批量仓储方法：导出是低频操作，任务量在几百量级，
+     * 本地库单次读取是微秒级，为此改动领域接口不划算。超过 {@value #EXPORT_MAX_IDS} 条
+     * 直接拒绝，避免一次拉爆内存。
+     *
+     * @param body {@code {"ids": ["...", "..."]}}
+     * @return xlsx 字节流（附件下载）
+     */
+    @PostMapping("/export")
+    public ResponseEntity<byte[]> export(@RequestBody Map<String, Object> body) {
+        String userId = currentUser.requireUserId();
+        List<String> ids = new ArrayList<>();
+        Object raw = body == null ? null : body.get("ids");
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                if (item != null && !String.valueOf(item).isBlank()) {
+                    ids.add(String.valueOf(item));
+                }
+            }
+        }
+        if (ids.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ids 不能为空：请先筛选出要导出的任务");
+        }
+        if (ids.size() > EXPORT_MAX_IDS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "一次最多导出 " + EXPORT_MAX_IDS + " 条，请先缩小筛选范围");
+        }
+        List<GitIssue> rows = new ArrayList<>(ids.size());
+        for (String id : ids) {
+            try {
+                rows.add(issues.get(userId, id));
+            } catch (RuntimeException e) {
+                // 单个任务取不到（被并发删除等）不该让整次导出失败
+                log.debug("导出跳过任务 {}：{}", id, e.getMessage());
+            }
+        }
+        byte[] xlsx;
+        try {
+            xlsx = IssueExcelExporter.render(rows);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "生成 Excel 失败：" + e.getMessage(), e);
+        }
+        String fileName = IssueExcelExporter.fileName(Instant.now());
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + fileName + "\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .contentLength(xlsx.length)
+                .body(xlsx);
     }
 
     @GetMapping("/count")

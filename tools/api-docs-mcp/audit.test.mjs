@@ -75,6 +75,27 @@ export function getProject(projectId: string) {
   });
 });
 
+test("apiBlob 下载也要按声明的方法解析，不能一律当 GET", () => {
+  // 导出类接口是 POST + 二进制响应：apiBlob('/x', { method: 'POST' })。
+  // 曾经这里被硬编码成 GET，于是 POST 下载被误报 METHOD_NOT_FOUND。
+  const source = `
+import { apiBlob, apiFetch } from './http'
+export const exportIt = () => apiBlob('/api/v1/projects', { method: 'POST', body: '{}' })
+export const downloadIt = (projectId: string) =>
+  apiBlob(\`/api/v1/projects/\${encodeURIComponent(projectId)}\`)
+`;
+  withFixture(source, (dir) => {
+    const calls = extractCalls(source, "demo.ts");
+    const post = calls.find((call) => call.fn === "apiBlob" && call.method === "POST");
+    assert.ok(post, `POST 下载未被识别：${JSON.stringify(calls.map((c) => [c.fn, c.method]))}`);
+    const get = calls.find((call) => call.fn === "apiBlob" && call.method === "GET");
+    assert.ok(get, "不写 method 时仍应默认 GET");
+    // 两条都应在规范里找得到（POST /api/v1/projects、GET /api/v1/projects/{id}）
+    const report = auditFrontend({ openapi: OPENAPI, frontendDir: dir });
+    assert.deepEqual(report.issues, []);
+  });
+});
+
 test("路径不存在与方法未声明都报 error", () => {
   const source = `
 import { apiFetch } from './http'

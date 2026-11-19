@@ -28,6 +28,8 @@ import { appStore } from '../stores/app'
 import { useRunTracker } from '../composables/useRunTracker'
 import { formatDuration, statusLabel, statusTone } from '../utils/status'
 import { envLabel, envShort, formatBytes, pipelineLabel } from '../utils/pipelineLabels'
+import { tagNeedsAttention, tagStateText as releaseTagText } from '../utils/releaseTag'
+import { canReuseBuild, pickReusableImage } from '../utils/reuseBuild'
 
 /**
  * 流水线工作台：
@@ -636,6 +638,18 @@ const autoRepairText = computed(() => {
     : `自动修复 ${a.attempts}/${a.maxAttempts} 轮 · 仍需人工`
 })
 
+/**
+ * tag 状态文案：只有 PUSHED 才是"真的生效"。
+ *
+ * <p>这一行是为 BUG-10「打 tag 未生效」补的：后端会把 LOCAL（只在本机）
+ * 与原因码下发给界面，但界面原来完全不展示，用户只能到远端自己发现没有标签。
+ * 映射放在 utils/releaseTag，视图与回归脚本共用同一份。
+ */
+const tagStateText = computed(() => releaseTagText(run.value?.release?.tagState))
+
+/** 标签是否需要警示：只有远端可见（PUSHED）才不警示。 */
+const tagWarn = computed(() => tagNeedsAttention(run.value?.release?.tagState))
+
 const runDuration = computed(() => {
   if (!run.value) return ''
   if (!running.value) {
@@ -1204,6 +1218,42 @@ async function rerun(item: HistoryItem): Promise<void> {
   }
 }
 
+/**
+ * 复用该次运行的产物部署（BUG-12）。
+ *
+ * <p>为什么值得单独一个入口：同样的代码要发到另一个环境、或只是想重发一次，
+ * 重新构建要几分钟并且会再产出一次镜像；而这次运行已经成功、产物就在本机，
+ * 只需要跑部署与健康检查。
+ *
+ * <p>实现上走「按版本部署」而不是新开一条链路：`deployImageVersion` 传的是
+ * 镜像 tag，后端 `deploy_run` 收到 deployImage 就跳过检出与构建。
+ */
+async function reuseBuild(item: HistoryItem): Promise<void> {
+  if (!canReuseBuild(item.status)) {
+    topError.value = '只有成功完成的运行才能复用产物'
+    return
+  }
+  const run = await getRun(item.runId, false).catch(() => null)
+  const image = pickReusableImage(run?.artifacts)
+  if (!image) {
+    topError.value = '这次运行没有镜像产物（可能只跑了检查构建），无法复用；请重新构建'
+    return
+  }
+  triggerBusy.value = true
+  topError.value = ''
+  try {
+    const result = await deployImageVersion(
+      item.pipelineId, projectId.value, item.env, image, item.gitSha,
+      item.version || undefined, false)
+    attachRun(result, { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha })
+    ElMessage.success('已复用该次产物部署（跳过构建）')
+  } catch (e) {
+    topError.value = `复用部署失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    triggerBusy.value = false
+  }
+}
+
 /** 删除一条构建历史：只删记录（含磁盘上的 run yml），不动仓库与已构建镜像。 */
 async function handleDeleteHistory(item: HistoryItem): Promise<void> {
   const label = `#${item.seq || '—'} · ${item.gitSha.slice(0, 8)}`
@@ -1529,6 +1579,7 @@ async function copyDigest(digest: string): Promise<void> {
             :has-more="historyHasMore"
             @open="openedRun"
             @rerun="rerun"
+            @reuse="reuseBuild"
             @delete="handleDeleteHistory"
             @refresh="loadHistory"
             @more="loadMoreHistory"
@@ -1590,6 +1641,17 @@ async function copyDigest(digest: string): Promise<void> {
               :class="{ ok: run?.status === 'SUCCEEDED' }"
               :title="run?.autoRepair?.lastResult || ''"
             >{{ autoRepairText }}</span>
+            <!-- 首次发布：显式标出来，否则用户会把「没有上一版、跳过回滚」当成故障 -->
+            <span
+              v-if="run?.release?.firstRelease" class="rb-tag plain"
+              title="该环境没有上一版镜像：回滚预检会被跳过，这不是错误"
+            >首次发布</span>
+            <!-- tag 状态：只有 PUSHED 才算远端可见；LOCAL/FAILED 必须显形并给出原因 -->
+            <span
+              v-if="run?.release && run.release.tagState && run.release.tagState !== 'SNAPSHOT'"
+              class="rb-tag" :class="{ warn: tagWarn }"
+              :title="run.release.hint || ''"
+            >{{ tagStateText }}</span>
             <span v-if="errorText" class="rb-err">{{ errorText }}</span>
             <div class="rb-actions">
               <button
@@ -2058,12 +2120,17 @@ async function copyDigest(digest: string): Promise<void> {
   gap: var(--sp-5);
   min-height: 0;
   padding: var(--sp-6) var(--sp-6) var(--sp-8);
-  /* 产物/镜像面板高度不固定：overflow:hidden 会把超出的日志区直接裁掉且无法滚动，
-     这里改成纵向滚动，日志区保底 320px 后再由自身滚动条滚动 */
+  /* 阶段 / 产物 / 镜像面板高度不固定，外层保留纵向滚动。
+     日志区不再用 min-height 撑开（见下一条），两层滚动因此不冲突。 */
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .run-detail :deep(.run-log) {
+  /* 日志区保底高度：既有回归用例（pipelineLayout.test.ts）要求 ≥240px——
+     高度太小会让日志被挤成一条缝，用户根本看不到内容。
+     注意别把这里改成 min-height: 0 去"修"滚动问题：
+     .run-detail 是可纵向滚动的外层，日志靠自身 .log-scroll 滚动，
+     两层各司其职，压掉保底高度只会让日志变得不可用。 */
   flex: 1 1 320px;
   min-height: 320px;
 }
