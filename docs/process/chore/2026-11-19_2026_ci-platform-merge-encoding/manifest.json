@@ -10,7 +10,7 @@
     "toolCallCount": 0
   },
   "problem": "PR #21 合并后 CI 变红，报「1 条已损坏（? 不可逆）」指向 1d03365。核对后发现这条提交 committer 是 GitHub、subject 以 (PR #n) 结尾——中文是平台在网页合并 PR 时替换成问号的。统计主干：损坏提交 8 条、100% 带该标记、0 条不带。原来靠白名单逐条登记，等于给同一个系统性问题打 10 次补丁，每合并一个 PR 就多一条。",
-  "solution": "门禁加 PLATFORM_MERGE_SUBJECT 自动识别：只认 subject 结尾的 (PR #n)（正文提及不算）。平台合并提交且损坏时提示不阻断并打印出来；其它损坏照旧阻断、不给豁免。白名单 10 条全部可被覆盖，因此清空，保留文件作为将来豁免入口。新增 tools/ci/test_check_commit_messages.py（12 条断言）并接入 CI——放行逻辑最容易写宽，写宽等于关掉闸门。docs/ci-commit-encoding.md 补一节说明白名单为何退场。",
+  "solution": "门禁加 PLATFORM_MERGE_SUBJECT 自动识别：只认 subject 结尾的 (PR #n)（正文提及不算）。平台合并提交且损坏时提示不阻断并打印出来；其它损坏照旧阻断、不给豁免。白名单 10 条全部可被覆盖，因此清空，保留文件作为将来豁免入口。新增 tools/ci/test_check_commit_messages.py（12 条断言）并接入 CI——放行逻辑最容易写宽，写宽等于关掉闸门。docs/ci-commit-encoding.md 补一节说明白名单为何退场。\n\n【复核补充 2026-11-19 20:30】\n主干损坏提交已达 13 条，其中平台合并（subject 结尾 (PR #n)）13 条、非平台损坏 0 条——\n规律稳定成立，不是巧合。\n另用 CI 原位范围重放 PR #22 那次失败（--base 1d03365 --head 58c383a）：\n修复后 exit 0，58c383a 被正确识别为平台合并提交并给出提示，不再阻断。\n",
   "commits": [
     {
       "sha": "1104fb9b5b7587f162eba481b07836e0bed3c193",
@@ -76,6 +76,6 @@
   },
   "chain": {
     "prev": "b0a9d3f4e7600e4dc0acbbc8b8103ff47e1a46e2f2c30f0d265caaa8570c3691",
-    "self": "3c7fb3e374b9e0e82b0c5025846216069bcba5f03020041215fa428fbb449d5e"
+    "self": "9f2d1712fae70995ca8d4714a5d8ba5de13f65d7eaaadaa72f4b38a3fe331266"
   }
 }
