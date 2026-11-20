@@ -210,6 +210,24 @@ class PipelineEngineLifecycleTest {
     }
 
     @Test
+    @DisplayName("forceTerminate：没有执行线程（恢复的幽灵任务）→ 立即终态，不白等 10s")
+    void forceTerminateWithoutThreadDoesNotWait(@TempDir Path temp) throws Exception {
+        BuiltInPipelineEngine engine = engine(temp);
+        Object state = newState("run-no-thread");
+        set(state, "status", StageStatus.RUNNING);
+        // 重启后恢复出来的幽灵任务没有 executionFuture：线程从来没被提交过
+        runs(engine).put("run-no-thread", state);
+
+        long t0 = System.nanoTime();
+        invokeForceTerminate(engine, state, "E-302 无执行线程强制终态");
+        long joinMs = (System.nanoTime() - t0) / 1_000_000;
+
+        assertTrue(joinMs < 1_000, "没有执行线程时不该等满 10s 有界窗口（实际 " + joinMs + "ms）");
+        assertEquals(StageStatus.TIMEOUT, engine.status("run-no-thread"));
+        assertFalse(runs(engine).containsKey("run-no-thread"), "强制终态条目被回收");
+    }
+
+    @Test
     @DisplayName("forceTerminate：不可中断线程超时放行但日志明说未确认退出")
     void forceTerminateLogsWhenThreadUnkillable(@TempDir Path temp) throws Exception {
         BuiltInPipelineEngine engine = engine(temp);
