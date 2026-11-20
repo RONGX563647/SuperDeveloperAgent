@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-53 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+54 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-20 · 0.1→0.2 同步：新归档模型（ledger/views/skills）带入 0.2 线（chore `ceef158` `a163612` `813904b` `342bfd9` `352fc30` `bb27e58` `c1fc559` `c455510` `a27fe76` `2c4af50` `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8`）
+- 问题：0.2 线还停在旧归档格式，两条线门禁模型不一致；合并时暴露迁移版本撞车：两条线各自发过 V5，Flyway 拒启（Found more tha…
+- 方案：merge 0.1→0.2：39 个 manifest modify/delete 冲突以 0.2 版本覆盖同 id ledger 行后统一入 …
+- 验证：gate validate 177 份链全绿；views/handbook check 一致；迁移锁 8/8；agent-gateway 226…
 
 ## 2026-11-20 · 部署地址指向/镜像保留策略/版本区分/环境页镜像面板（bug `813904b` `342bfd9`）
 - 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；
