@@ -97,7 +97,7 @@ public class ChatService {
         RuntimeContext runtime = runtimeContext(ctx, sid, session.plugins());
         // 5. 返回事件流；每次模型调用结束都记录 token；结束后关闭本会话的 MCP 客户端
         return session.agent().streamEvents(text, runtime)
-                .doOnNext(event -> recordUsage(event, sid, ctx, active))
+                .doOnNext(event -> recordUsage(event, sid, ctx, active, runtime))
                 .doFinally(signal -> session.close());
     }
 
@@ -114,11 +114,11 @@ public class ChatService {
         return builder.build();
     }
 
-    /** 每次模型调用结束都记一条 token 用量（会话累计 + 独立日志）。 */
+    /** 每次模型调用结束都记一条 token 用量（会话累计 + 独立日志 + 分项归因）。 */
     private void recordUsage(AgentEvent event, String sessionId, ProjectContext ctx,
-                             ActiveModel model) {
+                             ActiveModel model, RuntimeContext runtime) {
         if (event instanceof ModelCallEndEvent end) {
-            tokenUsage.record(sessionId, ctx, model, end.getUsage());
+            tokenUsage.record(sessionId, ctx, model, end.getUsage(), runtime);
         }
     }
 
@@ -144,7 +144,7 @@ public class ChatService {
         ReActAgent agent = agentFactory.createSupervisor(ctx, modelConnectionId, modelName);
         RuntimeContext runtime = runtimeContext(ctx, sid, null);
         return agent.streamEvents(text, runtime)
-                .doOnNext(event -> recordUsage(event, sid, ctx, active));
+                .doOnNext(event -> recordUsage(event, sid, ctx, active, runtime));
     }
 
     /**

@@ -27,6 +27,22 @@
         <appender-ref ref="TOKEN_USAGE"/>
     </logger>
 
+    <!-- 分项归因：本轮加载了哪些插件、各占多少 schema 字符（token 代理），单独滚动便于追踪。 -->
+    <appender name="TOKEN_ATTRIBUTION" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/token-attribution.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/token-attribution.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>90</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+    <logger name="token.attribution" level="INFO" additivity="false">
+        <appender-ref ref="TOKEN_ATTRIBUTION"/>
+    </logger>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>
