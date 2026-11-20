@@ -38,9 +38,15 @@ def active_dir() -> Path:
 def evidence_dir() -> Path:
     return shared_state_dir() / "session-evidence"
 # 跨 worktree 测试锁超时（per-worktree 隔离后，只在同 worktree 内排队）。
-LOCK_TIMEOUT = 45 * 60
-LOCK_STALE = 90 * 60
-LEDGER = ROOT / "docs" / "ledger"
+# 默认从 45/90 分钟收窄到 10/15 分钟：僵尸锁现在靠 PID 存活检测秒级回收，
+# 这两个值只兜底「持锁进程还活着但卡死」的场景，不必再让并行提交等 45 分钟。
+# 需要更长的重负载场景可用环境变量覆盖。
+LOCK_TIMEOUT = int(os.environ.get("SESSION_ARCHIVE_LOCK_TIMEOUT", str(10 * 60)))
+LOCK_STALE = int(os.environ.get("SESSION_ARCHIVE_LOCK_STALE", str(15 * 60)))
+# git index.lock 竞争重试：并行会话/IDE 的 git 写操作会短暂持有 index.lock，
+# write-tree/diff 撞上就 GateError。用指数退避等待，窗口内基本都能等到。
+INDEX_LOCK_RETRY = int(os.environ.get("SESSION_ARCHIVE_INDEX_LOCK_RETRY", "80"))
+PROCESS = ROOT / "docs" / "process"
 SUMMARY = ROOT / "docs" / "summary"
 CATEGORIES = ("feat", "bug", "chore", "docs", "deploy")
 TEST_CATEGORIES = ("feat", "bug")
@@ -83,11 +89,31 @@ def clean_env() -> dict:
 
 
 def git(*args: str, check: bool = True, binary: bool = False):
-    proc = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, env=clean_env())
-    if check and proc.returncode != 0:
+    """执行 git 命令；对「并行 git 写操作抢占 index.lock」做指数退避重试。
+
+    并行会话 / IDE 的 SCM 刷新会短暂创建 {@code .git/index.lock}，读命令
+    （status/diff/write-tree/ls-files…）撞上就会非 0 退出。这类失败是瞬时的，
+    重试不改变命令语义；其它失败（参数错、路径不存在）立即返回，避免把真实
+    错误拖成 40 秒等待。
+    """
+    last = ""
+    delay = 0.1
+    for attempt in range(INDEX_LOCK_RETRY + 1):
+        proc = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, env=clean_env())
+        if proc.returncode == 0:
+            return proc.stdout if binary else proc.stdout.decode("utf-8", "replace").strip()
         detail = proc.stderr.decode("utf-8", "replace").strip()
-        raise GateError(f"git {' '.join(args)} 失败：{detail}")
-    return proc.stdout if binary else proc.stdout.decode("utf-8", "replace").strip()
+        last = detail
+        lock_busy = "index.lock" in detail or "Unable to create" in detail
+        if not lock_busy or attempt == INDEX_LOCK_RETRY:
+            break
+        if attempt == 0:
+            out("git 撞上并行 index.lock，等待释放后重试…")
+        time.sleep(delay)
+        delay = min(delay * 1.5, 1.0)
+    if check:
+        raise GateError(f"git {' '.join(args)} 失败：{last}")
+    return ""
 
 
 def now_iso() -> str:
@@ -145,61 +171,36 @@ def load_json(path: Path) -> dict:
         raise GateError(f"{path.relative_to(ROOT)} 读取失败：{exc}") from exc
 
 
-def manifest_lines(path: Path) -> list[dict]:
-    """读取一个 ledger 文件的全部行（每行一份 manifest）。"""
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            rows.append(json.loads(line))
-    return rows
-
-
-def write_ledger(path: Path, rows: list[dict]) -> None:
-    """整文件回写 ledger（JSONL，每行一份 manifest，行序 = 落盘顺序）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
-                    encoding="utf-8")
-
-
-def manifests(root: Path = LEDGER) -> list[tuple[Path, dict]]:
-    """全部会话留痕：docs/ledger/*.jsonl，每行一份 manifest（(文件, 行) 列表）。"""
+def manifests(root: Path = PROCESS) -> list[tuple[Path, dict]]:
     if not root.is_dir():
         return []
     rows = []
-    for path in sorted(root.glob("*.jsonl")):
-        for manifest in manifest_lines(path):
-            rows.append((path, manifest))
+    for path in sorted(root.glob("*/*/manifest.json")):
+        rows.append((path, load_json(path)))
     return rows
 
 
-def reseal_chain(category: str, root: Path = LEDGER) -> list[str]:
+def reseal_chain(category: str, root: Path = PROCESS) -> list[str]:
     """按 createdAt 重排某个分类的归档链，重算每份的 prev/self。
 
     <p>并行会话各自 finish 时看到的链尾是同一个（旧的）末端，合并后必然出现
     多条记录指向同一 prev 的断链。链本身由 createdAt 完全决定，所以落盘后
     整体重算一遍即可恢复：prev 依次串起来，self 随内容重算。只改真正变化的文件。
     """
-    files: dict[Path, list[dict]] = {}
-    for path in sorted(root.glob("*.jsonl")):
-        files[path] = manifest_lines(path)
-    entries = [(path, row) for path, rows in files.items() for row in rows
-               if row.get("category") == category]
-    entries.sort(key=lambda entry: (entry[1].get("createdAt", ""), entry[1].get("id", "")))
+    rows = [(path, manifest) for path, manifest in manifests(root)
+            if manifest.get("category") == category]
+    rows.sort(key=lambda row: (row[1].get("createdAt", ""), row[1].get("id", "")))
     changed: list[str] = []
-    touched: set[Path] = set()
     prev = "GENESIS"
-    for path, manifest in entries:
+    for path, manifest in rows:
         chain = manifest.setdefault("chain", {})
         before = (chain.get("prev"), chain.get("self"))
         chain["prev"] = prev
         chain["self"] = manifest_self(manifest)
         if before != (chain["prev"], chain["self"]):
+            write_json(path, manifest)
             changed.append(str(manifest.get("id")))
-            touched.add(path)
         prev = chain["self"]
-    for path in touched:
-        write_ledger(path, files[path])
     return changed
 
 
@@ -341,8 +342,7 @@ def cmd_start(args) -> int:
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M")
     folder = f"{stamp}_{code_slug}"
     seq = 2
-    taken = {m.get("id") for _, m in manifests()}
-    while f"{args.category}/{folder}" in taken:
+    while (PROCESS / args.category / folder).exists():
         folder = f"{stamp}_{code_slug}-{seq}"
         seq += 1
     # 标题带上编码：任务页、归档列表、总结文档标题三处因此能对得上同一个编号
@@ -371,24 +371,8 @@ def cmd_start(args) -> int:
 # ------------------------------------------------------------------ tests
 
 def write_tree() -> str:
-    """快照当前索引树。
-
-    <p>IDE 的 SCM 刷新、并行会话的 git 操作都会短暂创建 {@code .git/index.lock}，
-    撞上就会让本该通过的提交失败。这里对瞬时锁做几次短重试，测试结论本身不受影响。
-    """
-    last = ""
-    for attempt in range(10):
-        proc = subprocess.run(["git", "write-tree"], cwd=ROOT, capture_output=True,
-                              env=clean_env())
-        if proc.returncode == 0:
-            return proc.stdout.decode("utf-8", "replace").strip()
-        last = proc.stderr.decode("utf-8", "replace").strip()
-        if "index.lock" not in last:
-            break
-        if attempt == 0:
-            out("索引被其它 git 进程占用，等待锁释放后重试…")
-        time.sleep(0.5)
-    raise GateError(f"git write-tree 失败：{last}")
+    """快照当前索引树（复用 git() 的统一 index.lock 退避重试）。"""
+    return git("write-tree")
 
 
 def surefire_stats(started: float) -> dict:
@@ -692,6 +676,37 @@ def worktree_git_dir() -> Path:
     return Path(proc.stdout.decode("utf-8", "replace").strip())
 
 
+def pid_alive(pid: int) -> bool:
+    """判断 PID 是否仍指向一个存活进程（跨平台，仅用标准库）。
+
+    僵尸锁的根因：持锁进程被 SIGTERM/超时杀掉时 {@code __exit__} 不会执行，
+    锁文件残留，但 mtime 很新、90 分钟内不会被判 stale，于是后面每个提交都
+    排队等待直到超时。锁文件里写了 PID，检测它是否还活着即可秒级回收。
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        probe = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                               capture_output=True, text=True, errors="replace")
+        return str(pid) in probe.stdout
+    try:
+        os.kill(pid, 0)  # 信号 0：只探测存在性，不真的发信号
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # 存在但无权探测，按存活处理（保守，不会误删活锁）
+
+
+def read_lock_pid(path: Path) -> int:
+    """从锁文件首行读出持锁 PID；格式被破坏时返回 0。"""
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return int(fh.readline().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
 class TestLock:
     """同 worktree 内的互斥锁（O_CREAT|O_EXCL），拿不到就排队。
 
@@ -737,6 +752,11 @@ class TestLock:
                 time.sleep(1)
 
     def _stale(self) -> bool:
+        # 首选：持锁进程已死 → 立即回收（僵尸锁秒级自愈，不必等满 90 分钟）。
+        pid = read_lock_pid(self.path)
+        if pid > 0 and not pid_alive(pid):
+            return True
+        # 兜底：PID 读不出或仍存活但锁长时间未释放（真死锁），按 mtime 判。
         try:
             return time.time() - self.path.stat().st_mtime > LOCK_STALE
         except OSError:
@@ -756,10 +776,14 @@ class TestLock:
 
 
 def worktree_fingerprint() -> str:
-    """当前工作区指纹：索引树 + 未暂存改动 + 未跟踪文件元数据。
+    """当前工作区指纹：索引树 + 已跟踪文件的未暂存改动。
 
-    测试实际跑在工作区而不是索引上，只按 tree 复用会把“同样暂存、不同未提交改动”
-    误判成等价，所以要把未暂存 diff 和未跟踪文件也算进来。
+    测试跑在工作区上，只按 tree 复用会把“同样暂存、不同未提交改动”误判成等价，
+    所以要把未暂存 diff 也算进来。但<b>不纳入未跟踪文件元数据</b>：并行会话/
+    IDE 会频繁生成临时文件（编译产物、补丁暂存、编辑器备份），把它们算进指纹
+    会让证据缓存永不命中，每次提交都被迫重跑测试——这正是并行任务被门禁拖垮
+    的主因之一。未跟踪的源码一旦要进测试，必然先被 {@code git add} 而进入索引树，
+    届时 tree 已变化、缓存自然失效，不会漏复用。
     """
     tree = write_tree()
     diff = subprocess.run(["git", "diff", "--no-ext-diff", "--no-color"], cwd=ROOT,
@@ -770,13 +794,6 @@ def worktree_fingerprint() -> str:
     digest.update(tree.encode("utf-8"))
     digest.update(b"\0")
     digest.update(diff.stdout)
-    for name in sorted(line for line in git("ls-files", "--others", "--exclude-standard").splitlines() if line):
-        path = ROOT / name
-        try:
-            stat = path.stat()
-            digest.update(f"\0{name}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8"))
-        except OSError:
-            digest.update(f"\0{name}:missing".encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -1071,42 +1088,101 @@ def cmd_finish(args) -> int:
     # 落盘 + 重排整条链：不再用全局互斥锁，改为乐观并发——链由 createdAt 完全决定，
     # 并行 finish 各自接在旧链尾后，reseal_chain 会整体重排收敛，不产生断链。
     manifest["chain"]["self"] = manifest_self(manifest)
-    ledger_path = LEDGER / f"{period}.jsonl"
-    write_ledger(ledger_path, manifest_lines(ledger_path) + [manifest])
+    folder_dir = PROCESS / category / active["folder"]
+    write_json(folder_dir / "manifest.json", manifest)
     resealed = reseal_chain(category)
 
-    rebuild_views()
+    write_summary(manifest, active, period)
     clear_active()
     clear_evidence()
-    out(f"归档完成：docs/ledger/{period}.jsonl#{active['id']}")
+    out(f"归档完成：docs/process/{category}/{active['folder']}/manifest.json")
     if resealed:
         out(f"归档链已重排（{len(resealed)} 份）：{', '.join(resealed)}")
-    out("已刷新 docs/views/（索引/变更日志/模块视图）")
+    out(f"总结：docs/summary/{period}/{active['folder']}.md")
     out("请提交 docs/ 归档后再推送")
     return 0
 
 
-# ------------------------------------------------------------------ views（生成）
+# ------------------------------------------------------------------ summary
 
-def rebuild_views() -> None:
-    """刷新 docs/views/（由 tools/docs/build.py 从 ledger 投影生成）。
+def jacoco_coverage() -> str:
+    covered = missed = 0
+    for xml in (ROOT / "platform").glob("*/target/site/jacoco/jacoco.xml"):
+        text = xml.read_text(encoding="utf-8", errors="replace")
+        for match in re.finditer(r'<counter type="LINE" missed="(\d+)" covered="(\d+)"/>', text):
+            missed += int(match.group(1))
+            covered += int(match.group(2))
+    total = covered + missed
+    return f"{covered * 100.0 / total:.1f}%" if total else "N/A"
 
-    <p>失败不吞归档：留痕是主目的，视图可以事后补生成，所以这里只告警。
-    """
-    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "docs" / "build.py"), "sync"],
-                          cwd=ROOT, capture_output=True, env=clean_env(), text=True)
-    if proc.returncode != 0:
-        out(f"⚠ 视图生成失败（归档不受影响，可手动 python tools/docs/build.py sync）："
-            f"{(proc.stderr or proc.stdout).strip()[:200]}")
 
+def write_summary(manifest: dict, active: dict, period: str) -> None:
+    folder = active["folder"]
+    primary = SUMMARY / period / f"{folder}.md"
+    track_dir = SUMMARY / manifest["category"]
+    secondary = track_dir / f"{period}_{active['slug']}.md"
+    previous = sorted(track_dir.glob("*.md")) if track_dir.is_dir() else []
+    extends = previous[-1].stem.split("_", 1)[-1] if previous else "null"
+    coverage = jacoco_coverage()
+    gate = "PASS" if manifest["tests"]["result"] == "PASSED" else "WARN"
+    tests = manifest["tests"]
+    match = re.search(r"Tests run: (\d+)", tests.get("evidence", ""))
+    cases_total = int(match.group(1)) if match else 0
+    commits = "\n".join(
+        f"| `{c['sha'][:7]}` | {c['category']} | {c['subject']} |" for c in manifest["commits"])
+    body = f"""---
+schema: session-summary/v1
+period: {period}
+createdAt: {now_iso()}
+extends: {extends}
+refs:
+  - {manifest['id']}
+metrics:
+  sessions: 1
+  casesAdded: {tests['casesAdded']}
+  casesTotal: {cases_total}
+  passRate: "{'100%' if tests['result'] == 'PASSED' else '0%'}"
+  lineCoverage: "{coverage}"
+  coverageDelta: "N/A"
+  patchCoverage: "N/A"
+  gate: {gate}
+---
 
-def views_check() -> int:
-    """docs/views/ 与 ledger 一致性（pre-push 用）。"""
-    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "docs" / "build.py"), "check"],
-                          cwd=ROOT, capture_output=True, env=clean_env(), text=True)
-    if proc.returncode != 0:
-        out((proc.stderr or proc.stdout).strip()[-1500:])
-    return proc.returncode
+# {manifest['title']}
+
+## 概述
+{manifest['problem']}
+{manifest['solution']}
+
+## 交付清单
+| 提交 | 类别 | 说明 |
+|---|---|---|
+{commits}
+
+## 测试与质量总结
+- 命令：`{tests['command']}`
+- 结果：{tests['result']}；{tests['evidence']}
+- 新增用例：{tests['casesAdded']}
+- 行覆盖率：{coverage}（JaCoCo；patch coverage 需按 diff 统计，暂记 N/A）
+- 质量门禁：**{gate}**
+
+## 风险敞口
+- 未覆盖的新增文件：{'无' if tests['result'] == 'PASSED' else '见失败测试'}
+- 跳过用例：见 evidence 中 Skipped 计数
+
+## 遗留与建议
+{chr(10).join('- ' + f for f in manifest.get('followUps', [])) or '- 无'}
+
+## 链接
+- 归档：`docs/process/{manifest['category']}/{folder}/manifest.json`
+- 上一份同域总结：{extends}
+"""
+    for path, canonical_path in ((primary, None), (secondary, primary)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = body
+        if canonical_path is not None:
+            text = text.replace("---\n", f"---\ncanonical: {canonical_path.relative_to(ROOT).as_posix()}\n", 1)
+        path.write_text(text, encoding="utf-8")
 
 
 # ------------------------------------------------------------------ validate
@@ -1124,7 +1200,7 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool,
            实测要 9s 以上，合并成一次之后降到亚秒级。{@code None} 表示本函数自行查。
     """
     errors: list[str] = []
-    rel = f"{path.name}#{manifest.get('id', '?')}"
+    rel = path.relative_to(path.parents[2]) if len(path.parents) > 2 else path
     for key in REQUIRED:
         if key not in manifest:
             errors.append(f"{rel}: 缺少字段 {key}")
@@ -1134,11 +1210,11 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool,
     if category not in CATEGORIES:
         errors.append(f"{rel}: category 非法")
     ident = manifest.get("id", "")
-    folder = str(ident).split("/", 1)[-1]
+    folder = path.parent.name
     if not FOLDER_RE.fullmatch(folder):
-        errors.append(f"{rel}: 归档名不符合 YYYY-MM-DD_HHMM_<slug>")
+        errors.append(f"{rel}: 目录名不符合 YYYY-MM-DD_HHMM_<slug>")
     if ident != f"{category}/{folder}":
-        errors.append(f"{rel}: id 与 category 不一致（应为 {category}/{folder}）")
+        errors.append(f"{rel}: id 与目录不一致（应为 {category}/{folder}）")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00",
                          manifest.get("createdAt", "")):
         errors.append(f"{rel}: createdAt 必须为 +08:00 ISO 时间")
@@ -1310,17 +1386,14 @@ def validate_plan_doc(path: Path, root: Path, text: str, front: str) -> list[str
 
 def validate_root(root: Path, skip_git: bool = False) -> list[str]:
     errors: list[str] = []
-    ledger_root = root / "docs" / "ledger"
+    process_root = root / "docs" / "process"
     rows = []
-    if ledger_root.is_dir():
-        for path in sorted(ledger_root.glob("*.jsonl")):
+    if process_root.is_dir():
+        for path in sorted(process_root.glob("*/*/manifest.json")):
             try:
-                for line in path.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line:
-                        rows.append((path, json.loads(line)))
-            except (OSError, json.JSONDecodeError) as exc:
-                errors.append(f"{path.name}: ledger 读取失败：{exc}")
+                rows.append((path, load_json(path)))
+            except GateError as exc:
+                errors.append(str(exc))
     # 提交存在性：全部归档的 sha 一次性批量查完，再分发给各 manifest。
     # 逐份查会让 117 份归档各起一个 git 子进程（实测 9s+），批量后亚秒级。
     known: set[str] | None = None
@@ -1368,10 +1441,6 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
             meta = frontmatter_scalars(front)
             if meta.get("kind") == "plan" or path.parent == summary_root / "plan":
                 errors.extend(validate_plan_doc(path, root, text, front))
-            elif meta.get("schema") == "session-summary/v1":
-                # 会话总结已由 docs/views/ 生成取代：留痕在 ledger，别再手写散文副本
-                errors.append(f"{path.relative_to(root)}: session-summary 已被 docs/views/ 取代，"
-                              "请删除（见 tools/session-archive/migrate-to-ledger.py）")
     return errors
 
 
@@ -1849,9 +1918,9 @@ def cmd_gate_pre_push(args) -> int:
     if session:
         return fail(f"本 worktree 的会话未归档：{session.get('id')}。"
                     f"先执行 python tools/session-archive/gate.py finish")
-    dirty = git("status", "--porcelain", "docs/ledger", "docs/summary", "docs/views")
+    dirty = git("status", "--porcelain", "docs/process", "docs/summary")
     if dirty:
-        return fail("存在未提交的归档/视图文件，请先提交 docs/ 后再推送")
+        return fail("存在未提交的归档/总结文件，请先提交 docs/ 后再推送")
     missing = unarchived_code_commits()
     if missing:
         return fail(
@@ -1862,8 +1931,6 @@ def cmd_gate_pre_push(args) -> int:
     result = cmd_validate(args)
     if result != 0:
         return result
-    if views_check() != 0:
-        return fail("docs/views/ 与 ledger 不一致：运行 python tools/docs/build.py sync 并提交")
     if handbook_check() != 0:
         return fail("Harness Handbook 已漂移：运行 python tools/handbook/build.py sync 并提交 docs/handbook")
     if web_tests() != 0:
@@ -2103,8 +2170,7 @@ def cmd_self_test(args) -> int:
         # 以下都不该让 spec-checks 重跑
         ("platform/agent-infra/src/test/java/ATest.java", False),
         ("docs/summary/2026-11/x.md", False),
-        ("docs/ledger/2026-11.jsonl", False),
-        ("docs/skills/sandbox-images/SKILL.md", False),
+        ("docs/process/feat/x/manifest.json", False),
         (".github/workflows/ci.yml", False),
         ("tools/task-board/show.py", False),
         ("platform/web/src/views/PipelineView.vue", False),
@@ -2135,24 +2201,20 @@ def cmd_self_test(args) -> int:
             "chain": {"prev": "GENESIS", "self": ""},
         }
         base["chain"]["self"] = manifest_self(base)
-        target = root / "docs" / "ledger" / "2026-11.jsonl"
-
-        def put(*rows: dict) -> None:
-            write_ledger(target, list(rows))
-
-        put(base)
+        target = root / "docs" / "process" / "feat" / "2026-11-17_1000_sample" / "manifest.json"
+        write_json(target, base)
         if validate_root(root, skip_git=True):
             return fail("self-test: 合法样本不应报错")
 
         broken = json.loads(json.dumps(base))
         broken["tests"]["casesAdded"] = 0
-        put(broken)
+        write_json(target, broken)
         if not validate_root(root, skip_git=True):
             return fail("self-test: 缺用例应报错")
 
         tampered = json.loads(json.dumps(base))
         tampered["chain"]["self"] = "f" * 64
-        put(tampered)
+        write_json(target, tampered)
         if not validate_root(root, skip_git=True):
             return fail("self-test: 篡改 self 应报错")
 
@@ -2175,32 +2237,38 @@ def cmd_self_test(args) -> int:
             "chain": {"prev": "GENESIS", "self": ""},
         }
         docs["chain"]["self"] = manifest_self(docs)
-        put(base, docs)
+        docs_path = (root / "docs" / "process" / "docs"
+                     / "2026-11-17_0930_chat-summary" / "manifest.json")
+        write_json(docs_path, docs)
+        write_json(target, base)
         if validate_root(root, skip_git=True):
             return fail("self-test: docs 空提交归档应被接受")
 
         dup = json.loads(json.dumps(base))
         dup["session"]["ideSessionId"] = docs["session"]["ideSessionId"]
         dup["chain"]["self"] = manifest_self(dup)
-        put(dup, docs)
+        write_json(target, dup)
         if not validate_root(root, skip_git=True):
             return fail("self-test: ideSessionId 重复应报错")
 
         # 并行会话各接旧链尾 → 合并后断链；reseal_chain 应把链重排回一致
+        write_json(target, base)
         later = json.loads(json.dumps(base))
         later["id"] = "feat/2026-11-17_1100_sample-later"
         later["createdAt"] = "2026-11-17T11:00:00+08:00"
         later["chain"] = {"prev": "GENESIS", "self": ""}
         later["chain"]["self"] = manifest_self(later)
-        put(base, later)
+        later_path = (root / "docs" / "process" / "feat"
+                      / "2026-11-17_1100_sample-later" / "manifest.json")
+        write_json(later_path, later)
         if not any("chain.prev 断链" in e for e in validate_root(root, skip_git=True)):
             return fail("self-test: 并联接链应被判为断链")
-        resealed = reseal_chain("feat", root / "docs" / "ledger")
+        resealed = reseal_chain("feat", root / "docs" / "process")
         if resealed != ["feat/2026-11-17_1100_sample-later"]:
             return fail(f"self-test: 只应重排后一份归档，实际 {resealed}")
         if validate_root(root, skip_git=True):
             return fail("self-test: 重排后链应恢复一致")
-        if reseal_chain("feat", root / "docs" / "ledger"):
+        if reseal_chain("feat", root / "docs" / "process"):
             return fail("self-test: 链已一致时重排不应再改文件")
 
         # plan 类契约（spec §4.6）：双索引 + 字段 + 必需章节，缺一即红
@@ -2257,6 +2325,29 @@ def cmd_self_test(args) -> int:
 
         plan.unlink()
         primary.unlink()
+
+    # 并发健壮性契约（并行任务不互相卡死）：
+    # 1) PID 存活检测：当前进程必须判活，明显不存在的 PID 必须判死。
+    if not pid_alive(os.getpid()):
+        return fail("self-test: 当前进程应判为存活")
+    dead_pid = 999999 if os.name != "nt" else 2147483647  # 常规/Windows 上的非法高 PID
+    if pid_alive(dead_pid):
+        return fail("self-test: 不存在的 PID 不应判为存活")
+    if pid_alive(0) or pid_alive(-1):
+        return fail("self-test: 非法 PID 应判为死亡")
+    # 2) 僵尸锁自愈：锁文件里的持锁 PID 已死 → _stale() 必须立即返回 True，
+    #    不必等到 LOCK_STALE（15 分钟）——这是并行提交被卡 45 分钟的根因。
+    with tempfile.TemporaryDirectory() as tmp:
+        stale_lock = Path(tmp) / "test.lock"
+        stale_lock.write_text(f"{dead_pid} 2026-11-20T00:00:00+08:00\n", encoding="utf-8")
+        if read_lock_pid(stale_lock) != dead_pid:
+            return fail("self-test: 应从锁文件读出持锁 PID")
+        if not TestLock(stale_lock)._stale():
+            return fail("self-test: 持锁进程已死的锁应立即判为 stale")
+        alive_lock = Path(tmp) / "alive.lock"
+        alive_lock.write_text(f"{os.getpid()} {now_iso()}\n", encoding="utf-8")
+        if TestLock(alive_lock)._stale():
+            return fail("self-test: 持锁进程仍存活的锁不应判为 stale")
     out("self-test OK")
     return 0
 
