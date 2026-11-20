@@ -1,0 +1,45 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-20_1749_intake-fd26ec8-deploy-version",
+  "category": "chore",
+  "title": "收录 fd26ec8 生产按版本部署修复提交",
+  "createdAt": "2026-11-20T17:49:37+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "收录 fd26ec8 生产按版本部署修复提交",
+    "toolCallCount": 0
+  },
+  "problem": "远端并入了 fd26ec8（生产按版本部署选项修复），无归档 manifest 覆盖，归档链断",
+  "solution": "intake 归档收录 fd26ec8 提交",
+  "commits": [
+    {
+      "sha": "5397ecf8a2cad434b7f95cfb2cc551d944abff38",
+      "subject": "chore: 归档锚点提交（收录 fd26ec8 生产按版本部署修复）",
+      "category": "chore",
+      "files": []
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "gate.py validate 通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1749_intake-fd26ec8-deploy-version"
+    ]
+  },
+  "chain": {
+    "prev": "40414444b33913d4b943313f3d65cb54838977d89913a8eadd0b638854e5eda2",
+    "self": "d784e9944abba7b9d454effabd8e0c2f4dd655e46607978d788b7fcda967d97f"
+  }
+}
