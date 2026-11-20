@@ -44,6 +44,7 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.runtime.ChatSessionRegistry;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.PlatformException;
 import top.rongx.agent.domain.error.RunException;
 
@@ -283,6 +284,30 @@ class ConversationManagerTest {
         assertEquals(TaskStatus.DONE, done.status());
         assertThrows(PlatformException.class,
                 () -> manager.updateTask("OTHER", USER, task.id(), null, null, TaskStatus.TODO));
+    }
+
+    @Test
+    @DisplayName("派发票据：open 建 RUNNING，close 回写终态走 UPDATE 不撞主键")
+    void dispatchTicketCloseUpdatesInsteadOfInsert() {
+        ConversationManager manager = manager(new SilentChat(), 1);
+        // 真实调度流：单节点 DAG。fake store 的 send 立即落一个 SUCCEEDED run；
+        // saveTask 现在撞重复主键会抛——若 closeTicket 仍走 INSERT，本测试直接红
+        //（线上 workspace_tasks_pkey duplicate key 的复现）。
+        var node = new top.rongx.agent.domain.conversation.DispatchNode(
+                "build", null, "构建检查", "test", null,
+                "跑一次构建", List.of(), true, 60);
+        var plan = new top.rongx.agent.domain.conversation.DispatchPlan(
+                List.of(node), false, 1, 300, 1);
+
+        top.rongx.agent.domain.conversation.DispatchResult result =
+                manager.dispatch(PROJECT, USER, plan);
+
+        assertEquals("SUCCEEDED",
+                result.find("build").orElseThrow().status(), "节点应成功");
+        WorkspaceTask ticket = manager.listTasks(PROJECT, USER).stream()
+                .filter(t -> t.goal().startsWith("[build] ")).findFirst().orElseThrow();
+        assertEquals(TaskStatus.DONE, ticket.status(), "close 后票据应为 DONE");
+        assertTrue(ticket.expectedOutput().contains("SUCCEEDED"), "终态证据应回写");
     }
 
     @Test
@@ -553,12 +578,21 @@ class ConversationManagerTest {
 
         @Override
         public WorkspaceTask saveTask(WorkspaceTask task) {
-            tasks.put(task.id(), task);
+            // 模仿真库的主键语义：INSERT 撞已有 id 必须抛（否则 closeTicket 的
+            // 「INSERT 当 UPDATE 用」缺陷在测试里永远发现不了）。
+            if (tasks.putIfAbsent(task.id(), task) != null) {
+                throw new RunException(ErrorCode.RUN_INVALID_STATE,
+                        "任务保存失败：duplicate key " + task.id());
+            }
             return task;
         }
 
         @Override
         public WorkspaceTask updateTask(WorkspaceTask task) {
+            if (!tasks.containsKey(task.id())) {
+                throw new RunException(ErrorCode.RUN_INVALID_STATE,
+                        "任务更新失败：不存在 " + task.id());
+            }
             tasks.put(task.id(), task);
             return task;
         }

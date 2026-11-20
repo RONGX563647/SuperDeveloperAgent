@@ -504,7 +504,10 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                         + (result.conversationId().isBlank() ? "" : "，会话 " + result.conversationId())
                         + (result.runId().isBlank() ? "" : "，运行 " + result.runId())
                         + (result.error().isBlank() ? "" : "，错误 " + oneLine(result.error(), 200));
-                tasks.saveTask(new WorkspaceTask(task.id(), task.projectId(), task.conversationId(),
+                // 票据已存在（openTicket 落库过），这里必须 UPDATE 而不是 INSERT：
+                // 走 saveTask 会撞 workspace_tasks_pkey（duplicate key），每次关票据都失败，
+                // 任务看板上票据永远停在 RUNNING（结果/终态回写全部丢失）。
+                tasks.updateTask(new WorkspaceTask(task.id(), task.projectId(), task.conversationId(),
                         task.goal(), oneLine(task.expectedOutput() + "；" + evidence, 600),
                         status, task.priority(), task.createdAt(), System.currentTimeMillis()));
             }
