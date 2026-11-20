@@ -8541,6 +8541,9 @@
           "pid" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "server" : {
+            "type" : "string"
           }
         }
       },
