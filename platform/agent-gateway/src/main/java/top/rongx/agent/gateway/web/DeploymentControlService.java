@@ -7,9 +7,6 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -915,9 +912,6 @@ public class DeploymentControlService {
 
     /** 远端 ps 查询超时：矩阵/日志/启停都不该被一台不可达的服务器拖死。 */
     private static final long REMOTE_SSH_TIMEOUT_MS = 8_000;
-    private static final String REMOTE_PS_FORMAT = "{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"
-            + "|{{.Label \"agent.env\"}}|{{.Label \"agent.version\"}}|{{.Label \"agent.sha\"}}"
-            + "|{{.CreatedAt}}";
     private static final Pattern REMOTE_HOST_PORT = Pattern.compile(":(\\d+)->");
 
     private List<DeployServer> enabledServers() {
@@ -933,46 +927,18 @@ public class DeploymentControlService {
 
     /** 远端容器清单：容器名以 agent-deploy-&lt;project&gt; 开头（含旧版本无标签的容器）。 */
     private List<RemoteContainer> remoteContainers(DeployServer server, String projectId) {
-        String prefix = "agent-deploy-" + projectId;
-        String command = "ps -a --filter name=" + prefix + " --format '" + REMOTE_PS_FORMAT + "'";
+        String prefix = RemoteDockerPs.CONTAINER_PREFIX + projectId;
+        String command = "ps -a --filter name=" + prefix + " --format '"
+                + RemoteDockerPs.FORMAT + "'";
         SshAccess.Result result = sshDocker(server, command);
         if (!result.ok()) {
             throw new IllegalStateException(shortError(result.error()));
         }
         List<RemoteContainer> found = new ArrayList<>();
-        String output = result.output() == null ? "" : result.output();
-        for (String line : output.split("\\R")) {
-            if (line.isBlank()) {
-                continue;
-            }
-            String[] f = line.split("\\|", -1);
-            if (f.length < 8) {
-                continue;
-            }
-            String name = f[0].trim();
-            // 边界校验：agent-deploy-proj 不能误匹配 agent-deploy-proj2
-            if (!name.equals(prefix) && !name.startsWith(prefix + "-")) {
-                continue;
-            }
-            String rest = name.substring(prefix.length());
-            String env = f[4].trim();
-            if (env.isEmpty()) {
-                env = envFromName(rest);
-            }
-            if (env.isEmpty()) {
-                continue;
-            }
-            String sha = f[6].trim();
-            String version = f[5].trim();
-            if (version.isEmpty()) {
-                version = versionFromName(rest, env, sha);
-            }
-            if (version.isEmpty()) {
-                version = "latest";
-            }
-            String status = f[2].trim();
-            found.add(new RemoteContainer(server, name, f[1].trim(), env, version, sha,
-                    status, f[3].trim(), status.startsWith("Up"), parseCreatedAt(f[7].trim())));
+        for (RemoteDockerPs.Row row : RemoteDockerPs.parse(projectId, result.output())) {
+            found.add(new RemoteContainer(server, row.name(), row.image(), row.env(),
+                    row.version(), row.sha(), row.status(), row.ports(), row.running(),
+                    row.createdAt()));
         }
         return found;
     }
@@ -1025,47 +991,6 @@ public class DeploymentControlService {
             return ssh.run(server, secret, "sudo -n docker " + args, REMOTE_SSH_TIMEOUT_MS);
         }
         return plain;
-    }
-
-    private static String envFromName(String rest) {
-        for (String env : ENVS) {
-            if (rest.equals("-" + env) || rest.startsWith("-" + env + "-")) {
-                return env;
-            }
-        }
-        return "";
-    }
-
-    private static String versionFromName(String rest, String env, String sha) {
-        String marker = "-" + env + "-";
-        int index = rest.indexOf(marker);
-        if (index >= 0 && index + marker.length() < rest.length()) {
-            return rest.substring(index + marker.length());
-        }
-        if (sha == null || sha.isBlank()) {
-            return "";
-        }
-        return sha.length() > 12 ? sha.substring(0, 12) : sha;
-    }
-
-    /** docker ps 的 CreatedAt：{@code 2026-11-20 10:00:00 +0800 CST}（带时区名）。 */
-    private static long parseCreatedAt(String value) {
-        if (value == null || value.length() < 19) {
-            return 0;
-        }
-        try {
-            // 先按远端偏移解析（服务器时区可能与本机不同），失败再退回本机时区
-            if (value.length() >= 25) {
-                return java.time.OffsetDateTime.parse(value.substring(0, 25),
-                                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z"))
-                        .toInstant().toEpochMilli();
-            }
-            return LocalDateTime.parse(value.substring(0, 19),
-                            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-        } catch (RuntimeException e) {
-            return 0;
-        }
     }
 
     private static String shortError(String error) {

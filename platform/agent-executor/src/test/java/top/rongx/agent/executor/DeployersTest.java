@@ -8,12 +8,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
+import top.rongx.agent.domain.deploy.DeploySlot;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.settings.DeployServer;
 import top.rongx.agent.domain.settings.DeployServerRepository;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -208,6 +210,17 @@ class DeployersTest {
         assertEquals(prod + "-0.1.1", v2);
         assertFalse(v1.equals(v2), "两个补丁版本必须落在不同容器名（不互相删除）");
         assertEquals(prod, DockerDeployer.containerName("RY", "prod", null));
+    }
+
+    @Test
+    @DisplayName("版本槽规则：打 tag 用版本号，空版本不伪造共享槽，默认槽为 null")
+    void deploySlotRules() {
+        assertEquals("0.1.0", DeploySlot.of(true, "0.1.0"));
+        assertEquals("0.1.0", DeploySlot.of(true, " 0.1.0 "));
+        assertEquals("1-2-0", DeploySlot.of(true, "1/2/0"));
+        assertNull(DeploySlot.of(true, " "));
+        assertNull(DeploySlot.of(true, null));
+        assertNull(DeploySlot.of(false, "0.1.0"));
     }
 
     @Test
