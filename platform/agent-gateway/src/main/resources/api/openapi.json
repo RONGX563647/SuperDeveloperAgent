@@ -4881,7 +4881,8 @@
     "/api/v1/settings/sandbox/images" : {
       "get" : {
         "tags" : [ "sandbox-image-controller" ],
-        "summary" : "images",
+        "summary" : "工具链镜像就绪状态",
+        "description" : "按 host + image 列出就绪/失败与退避剩余时间；只读，不触发拉取",
         "operationId" : "images",
         "responses" : {
           "200" : {

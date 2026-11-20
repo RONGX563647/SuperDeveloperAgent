@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.web;
 
+import io.swagger.v3.oas.annotations.Operation;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +35,13 @@ public class SandboxImageController {
         this.currentUser = currentUser;
     }
 
+    /**
+     * 列出所有主机上的工具链镜像就绪状态。
+     *
+     * <p>只读：不触发拉取，也不改动状态；退避中的失败会带上剩余秒数。
+     */
+    @Operation(summary = "工具链镜像就绪状态",
+            description = "按 host + image 列出就绪/失败与退避剩余时间；只读，不触发拉取")
     @GetMapping("/images")
     public List<Map<String, Object>> images() {
         currentUser.checkPermission("settings:read");
