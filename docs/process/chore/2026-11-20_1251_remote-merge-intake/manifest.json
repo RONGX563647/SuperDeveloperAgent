@@ -1,0 +1,69 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-20_1251_remote-merge-intake",
+  "category": "chore",
+  "title": "收录远端合并进来的流水线权限/远程部署修复提交",
+  "createdAt": "2026-11-20T12:51:30+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "收录远端合并进来的流水线权限/远程部署修复提交",
+    "toolCallCount": 0
+  },
+  "problem": "rebase 收录远端 12 个未归档代码提交（fd01545..25c7716：流水线权限逻辑修复、远程部署矩阵并行探测、部署版本槽覆盖修复）；同时 handbook 锚点漂移与 DeploymentControlService 通用异常被 spec-checks 拦下",
+  "solution": "handbook build.py sync；DeploymentControlService IllegalStateException 改 DeployException(E-591)；本归档收录远端合并提交（merge intake）",
+  "commits": [
+    {
+      "sha": "fd2636d074818b425b7c2b0a31293f278cf4faa6",
+      "subject": "chore: handbook sync（executor-pipeline-engine 锚点）；DeploymentControlService 通用异常改 DeployException(E-591)",
+      "category": "chore",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "5573e61ed5c818dd760cad8ca3233964df424837"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "ddb7ce1a64fcecbf8114aab0c4b5b15314542223"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/DeploymentControlService.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "04be5b91fba01fceb2e52e2ca424e271f0f5370a"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 214, Failures: 0, Errors: 0, Skipped: 5"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "agent-gateway 214 用例 0 失败；handbook check 11/11 锚点通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1251_remote-merge-intake"
+    ]
+  },
+  "chain": {
+    "prev": "c09102d4ed523889bceb462334ce7c9027baa15bdf6a3fe8c5bd492349f3f6fe",
+    "self": "89a3a74ecf7fb7836dca2441b6dcbe899a1e6e6d0fa7a54ff3adcfe547c6deff"
+  }
+}
