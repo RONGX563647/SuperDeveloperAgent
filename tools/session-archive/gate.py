@@ -1364,6 +1364,14 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
                         rows.append((path, json.loads(line)))
             except (OSError, json.JSONDecodeError) as exc:
                 errors.append(f"{path.name}: ledger 读取失败：{exc}")
+    # 旧归档模型防回潮：docs/process 是 2026-11-20 之前的每会话目录，
+    # 合并旧基点分支时曾被整套带回来（gate.py 回退 + 500+ 文件复活）。报第一条即止。
+    legacy_root = root / "docs" / "process"
+    if legacy_root.is_dir():
+        for stale in sorted(legacy_root.glob("*/*/manifest.json")):
+            errors.append(f"{stale.relative_to(root)}: 旧归档模型回潮（docs/process 已废止），"
+                          "运行 python tools/session-archive/migrate-to-ledger.py 吸收入 ledger")
+            break
     # 提交存在性：全部归档的 sha 一次性批量查完，再分发给各 manifest。
     # 逐份查会让 117 份归档各起一个 git 子进程（实测 9s+），批量后亚秒级。
     known: set[str] | None = None
@@ -2300,6 +2308,17 @@ def cmd_self_test(args) -> int:
 
         plan.unlink()
         primary.unlink()
+    # 旧归档模型防回潮：docs/process 复活（旧基点分支合并带回）必须被拦。
+    with tempfile.TemporaryDirectory() as tmp:
+        legacy_root = Path(tmp)
+        legacy = (legacy_root / "docs" / "process" / "chore"
+                  / "2026-11-19_0000_legacy" / "manifest.json")
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("{}", encoding="utf-8")
+        if not any("旧归档模型回潮" in e for e in validate_root(legacy_root, skip_git=True)):
+            return fail("self-test: docs/process 复活应被拦")
+        legacy.unlink()
+
     # 并发健壮性契约（并行任务不互相卡死）：
     # 1) PID 存活检测：当前进程必须判活，明显不存在的 PID 必须判死。
     if not pid_alive(os.getpid()):
