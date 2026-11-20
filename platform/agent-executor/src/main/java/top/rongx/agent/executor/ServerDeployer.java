@@ -1,13 +1,18 @@
 package top.rongx.agent.executor;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeploySlot;
@@ -49,6 +54,10 @@ public class ServerDeployer implements Deployer {
     /** docker run 因端口冲突失败后，继续换端口尝试的次数。 */
     private static final int PORT_RETRY_LIMIT = 10;
 
+    /** 同一环境（服务器+项目+环境）串行部署：并发发布会互相删掉对方刚起的容器。 */
+    private static final ConcurrentHashMap<String, ReentrantLock> DEPLOY_LOCKS =
+            new ConcurrentHashMap<>();
+
     private final ProcessExecutor executor = new ProcessExecutor();
     private final DeployServerRepository servers;
     private final SshAccess ssh;
@@ -70,6 +79,26 @@ public class ServerDeployer implements Deployer {
 
     @Override
     public DeployResult deploy(DeployRequest request) {
+        // 同一环境串行：两条流水线同时发布会各自 rm -f 同一容器，最后谁在跑取决于时序。
+        String key = (request.serverId() == null || request.serverId().isBlank()
+                ? "default" : request.serverId())
+                + "|" + request.projectId() + "|" + request.envName();
+        ReentrantLock lock = DEPLOY_LOCKS.computeIfAbsent(key, k -> new ReentrantLock());
+        if (!lock.tryLock()) {
+            return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
+                    "环境 " + request.envName() + " 已有部署正在进行：请等待当前部署结束后重试", "");
+        }
+        try {
+            return deployOnce(request);
+        } catch (RuntimeException e) {
+            return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
+                    "部署异常：" + e.getMessage(), "");
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private DeployResult deployOnce(DeployRequest request) {
         Optional<DeployServer> found = request.serverId() == null || request.serverId().isBlank()
                 ? servers.findDefault()
                 : servers.find(request.serverId());
@@ -133,6 +162,8 @@ public class ServerDeployer implements Deployer {
                 + shortSha(request.gitSha()) + ".tar";
         String quotedTar = JschSsh.shellQuote(remoteTar);
         boolean uploaded = false;
+        Path localEnvFile = null;
+        String remoteEnvFile = null;
 
         try {
             Files.createDirectories(localTar.getParent());
@@ -142,47 +173,60 @@ public class ServerDeployer implements Deployer {
         }
 
         try {
-            ProcessExecutor.StepOutcome save = executor.exec(workdir, List.of(
-                    "docker", "save", "-o", localTar.toString(), image),
-                    SAVE_TIMEOUT_MS, log, BooleanSupplierNever.INSTANCE);
-            if (save.exitCode() != 0) {
-                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
-                        "docker save 失败（镜像是否存在？）：" + save.summary()
-                                + "；请重新执行 image_package 生成该版本", redact(log));
-            }
+            // 远端已有完全相同的镜像（同 Image ID）时跳过 save/传输/load：
+            // 重复发布同一提交不再传几百 MB，也不会因为临时磁盘不足而失败。
+            String localImageId = localImageId(workdir, image);
+            String remoteImageId = remoteImageId(server, secret, docker, image);
+            if (localImageId != null && localImageId.equals(remoteImageId)) {
+                log.append("[image] 远端已存在相同镜像 ").append(shortId(localImageId))
+                        .append("，跳过 save/传输/load\n");
+            } else {
+                ProcessExecutor.StepOutcome save = executor.exec(workdir, List.of(
+                        "docker", "save", "-o", localTar.toString(), image),
+                        SAVE_TIMEOUT_MS, log, BooleanSupplierNever.INSTANCE);
+                if (save.exitCode() != 0) {
+                    return DeployResult.failed(DeployTarget.SERVER,
+                            ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                            "docker save 失败（镜像是否存在？）：" + save.summary()
+                                    + "；请重新执行 image_package 生成该版本", redact(log));
+                }
 
-            // 传大镜像前先看远端空间：否则会在传一半时失败，留下半截文件和难懂的报错。
-            long tarBytes;
-            try {
-                tarBytes = Files.size(localTar);
-            } catch (IOException e) {
-                tarBytes = 0;
-            }
-            if (!ensureRemoteSpace(server, secret, remoteDir, tarBytes, log)) {
-                return DeployResult.failed(DeployTarget.SERVER,
-                        ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
-                        "远端部署目录空间不足：镜像约 " + (tarBytes / 1024 / 1024 + 1)
-                                + "MB，请清理旧镜像/日志后重试（docker image prune -f）",
-                        redact(log));
-            }
+                // 传大镜像前先看远端空间：否则会在传一半时失败，留下半截文件和难懂的报错。
+                long tarBytes;
+                try {
+                    tarBytes = Files.size(localTar);
+                } catch (IOException e) {
+                    tarBytes = 0;
+                }
+                if (!ensureRemoteSpace(server, secret, remoteDir, tarBytes, log)) {
+                    return DeployResult.failed(DeployTarget.SERVER,
+                            ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                            "远端部署目录空间不足：镜像约 " + (tarBytes / 1024 / 1024 + 1)
+                                    + "MB，请清理旧镜像/日志后重试（docker image prune -f）",
+                            redact(log));
+                }
 
-            SshAccess.Result transfer = ssh.upload(server, secret, localTar, remoteTar,
-                    TRANSFER_TIMEOUT_MS);
-            if (!transfer.ok()) {
-                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
-                        "镜像传输失败：" + transfer.error()
-                                + "（已尝试 SFTP 与 exec 上传；请检查远端磁盘空间与目录权限）",
-                        redact(log));
-            }
-            uploaded = true;
+                SshAccess.Result transfer = ssh.upload(server, secret, localTar, remoteTar,
+                        TRANSFER_TIMEOUT_MS);
+                if (!transfer.ok()) {
+                    return DeployResult.failed(DeployTarget.SERVER,
+                            ErrorCode.DEPLOY_START_FAILED.code(),
+                            "镜像传输失败：" + DockerDeployer.sanitize(transfer.error(), request.env())
+                                    + "（已尝试 SFTP 与 exec 上传；请检查远端磁盘空间与目录权限）",
+                            redact(log));
+                }
+                uploaded = true;
 
-            // 大镜像 load 比普通命令慢得多，单独预算；沿用 90s 会在生产大包上误判超时。
-            SshAccess.Result load = ssh.run(server, secret,
-                    docker + " load -i " + quotedTar, LOAD_TIMEOUT_MS);
-            if (!load.ok()) {
-                return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
-                        "远端 docker load 失败：" + load.error()
-                                + "（请确认远端磁盘空间与 docker 权限）", redact(log));
+                // 大镜像 load 比普通命令慢得多，单独预算；沿用 90s 会在生产大包上误判超时。
+                SshAccess.Result load = ssh.run(server, secret,
+                        docker + " load -i " + quotedTar, LOAD_TIMEOUT_MS);
+                if (!load.ok()) {
+                    return DeployResult.failed(DeployTarget.SERVER,
+                            ErrorCode.DEPLOY_START_FAILED.code(),
+                            "远端 docker load 失败："
+                                    + DockerDeployer.sanitize(load.error(), request.env())
+                                    + "（请确认远端磁盘空间与 docker 权限）", redact(log));
+                }
             }
 
             // 只替换「同名同版本」的容器：打 tag 时容器名带版本号，
@@ -191,6 +235,48 @@ public class ServerDeployer implements Deployer {
             PreviousContainer previous = previousContainer(server, secret, docker, container,
                     request.containerPort());
             int previousPort = previous == null ? 0 : previous.hostPort();
+            if (previous != null && previous.running() && previousPort > 0
+                    && request.runId() != null && request.runId().equals(previous.runId())
+                    && localImageId != null && localImageId.equals(previous.imageId())) {
+                // 幂等：同一次运行重试、镜像与端口都一致，不再重启（避免无谓停机）。
+                // 只比镜像不够：改过环境变量/网络也需要重启，所以这里还要求 runId 相同。
+                log.append("[deploy] 本次运行已部署且镜像一致，跳过重复重启\n");
+                return DeployResult.ok(DeployTarget.SERVER,
+                        "http://" + server.host() + ":" + previousPort
+                                + safePath(request.healthPath()),
+                        server.host() + ":" + container, redact(log));
+            }
+            // 环境变量很多时会超出 ssh 单条命令长度上限：改成上传 600 权限的 env-file。
+            String envFileArg = null;
+            if (needsEnvFile(request.env())) {
+                String envName = request.projectId() + "-" + shortSha(request.gitSha()) + ".env";
+                localEnvFile = localTar.resolveSibling(envName);
+                try {
+                    Files.writeString(localEnvFile, envFileContent(request.env()),
+                            StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    return DeployResult.failed(DeployTarget.SERVER,
+                            ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                            "无法写入环境变量文件：" + e.getMessage(), redact(log));
+                }
+                String remoteEnv = remoteDir + "/" + envName;
+                SshAccess.Result envUpload = ssh.upload(server, secret, localEnvFile, remoteEnv,
+                        TRANSFER_TIMEOUT_MS);
+                if (!envUpload.ok()) {
+                    return DeployResult.failed(DeployTarget.SERVER,
+                            ErrorCode.DEPLOY_START_FAILED.code(),
+                            "环境变量文件上传失败："
+                                    + DockerDeployer.sanitize(envUpload.error(), request.env()),
+                            redact(log));
+                }
+                // 文件里有密钥：仅 SSH 用户可读
+                ssh.run(server, secret, "chmod 600 " + JschSsh.shellQuote(remoteEnv),
+                        PROBE_TIMEOUT_MS);
+                remoteEnvFile = remoteEnv;
+                envFileArg = remoteEnv;
+                log.append("[deploy] 环境变量较多，改用 --env-file 传递\n");
+            }
+
             SshAccess.Result removed = ssh.run(server, secret, docker + " rm -f " + container,
                     SSH_TIMEOUT_MS);
             if (removed.ok()) {
@@ -222,7 +308,7 @@ public class ServerDeployer implements Deployer {
             for (int attempt = 0; attempt < PORT_RETRY_LIMIT && hostPort > 0; attempt++) {
                 run = ssh.run(server, secret,
                         runCommand(docker, image, request, container, hostPort,
-                                displayVersion(request)), SSH_TIMEOUT_MS);
+                                displayVersion(request), envFileArg), SSH_TIMEOUT_MS);
                 if (run.ok()) {
                     break;
                 }
@@ -244,7 +330,7 @@ public class ServerDeployer implements Deployer {
                 if (previous != null && restorePort > 0) {
                     SshAccess.Result restore = ssh.run(server, secret,
                             runCommand(docker, previous.image(), request, container, restorePort,
-                                    previous.version()), SSH_TIMEOUT_MS);
+                                    previous.version(), envFileArg), SSH_TIMEOUT_MS);
                     if (restore.ok()) {
                         log.append("[rollback] 新版本启动失败，已用上一版恢复：")
                                 .append(previous.image()).append("（版本 ")
@@ -271,6 +357,9 @@ public class ServerDeployer implements Deployer {
         } finally {
             try {
                 Files.deleteIfExists(localTar);
+                if (localEnvFile != null) {
+                    Files.deleteIfExists(localEnvFile);
+                }
             } catch (IOException ignored) {
                 // 暂存文件清理失败不影响部署结果
             }
@@ -278,6 +367,11 @@ public class ServerDeployer implements Deployer {
                 // 远端 tar 只在 load 时需要：不清理会在小磁盘服务器上越积越多，
                 // 最终表现为下一次上传/load 随机失败。
                 ssh.run(server, secret, "rm -f " + quotedTar, PROBE_TIMEOUT_MS);
+            }
+            if (remoteEnvFile != null) {
+                // 环境变量文件含密钥：用完立即删除，不在远端留痕
+                ssh.run(server, secret, "rm -f " + JschSsh.shellQuote(remoteEnvFile),
+                        PROBE_TIMEOUT_MS);
             }
         }
     }
@@ -462,7 +556,8 @@ public class ServerDeployer implements Deployer {
     }
 
     private static String runCommand(String docker, String image, DeployRequest request,
-                                     String container, int hostPort, String labelVersion) {
+                                     String container, int hostPort, String labelVersion,
+                                     String envFile) {
         StringBuilder command = new StringBuilder(docker)
                 .append(" run -d --name ").append(container)
                 .append(" --restart unless-stopped")
@@ -477,8 +572,43 @@ public class ServerDeployer implements Deployer {
         if (request.network() != null && !request.network().isBlank()) {
             command.append(" --network ").append(JschSsh.shellQuote(request.network().trim()));
         }
-        command.append(remoteEnvArgs(request.env())).append(' ').append(image);
+        if (envFile == null) {
+            command.append(remoteEnvArgs(request.env()));
+        } else {
+            command.append(" --env-file ").append(JschSsh.shellQuote(envFile));
+        }
+        command.append(' ').append(image);
         return command.toString();
+    }
+
+    /**
+     * 环境变量总长度超过单条 ssh 命令的安全阈值时改用 --env-file。
+     *
+     * <p>含换行的值无法写进 docker env-file 格式，继续走 {@code -e}（由 shellQuote 保证安全）。
+     */
+    static boolean needsEnvFile(Map<String, String> env) {
+        if (env == null || env.isEmpty()) {
+            return false;
+        }
+        int total = 0;
+        for (Map.Entry<String, String> e : env.entrySet()) {
+            String value = e.getValue() == null ? "" : e.getValue();
+            if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+                return false;
+            }
+            total += e.getKey().length() + value.length() + 2;
+        }
+        return total > 2_000;
+    }
+
+    /** docker env-file 内容：按 key 排序，保证同样输入产生同样文件。 */
+    static String envFileContent(Map<String, String> env) {
+        StringBuilder content = new StringBuilder();
+        for (Map.Entry<String, String> e : new TreeMap<>(env).entrySet()) {
+            content.append(e.getKey()).append('=')
+                    .append(e.getValue() == null ? "" : e.getValue()).append('\n');
+        }
+        return content.toString();
     }
 
     private String redact(StringBuilder log) {
@@ -522,8 +652,9 @@ public class ServerDeployer implements Deployer {
     private PreviousContainer previousContainer(DeployServer server, String secret, String docker,
                                                 String container, int containerPort) {
         SshAccess.Result inspect = ssh.run(server, secret,
-                docker + " inspect -f '{{.Config.Image}}|"
-                        + "{{index .Config.Labels \"agent.version\"}}' " + container,
+                docker + " inspect -f '{{.Config.Image}}|{{.Image}}|{{.State.Running}}|"
+                        + "{{index .Config.Labels \"agent.version\"}}|"
+                        + "{{index .Config.Labels \"agent.run\"}}' " + container,
                 PROBE_TIMEOUT_MS);
         if (!inspect.ok() || inspect.output() == null || inspect.output().isBlank()) {
             return null;
@@ -533,9 +664,43 @@ public class ServerDeployer implements Deployer {
         if (image.isEmpty() || "null".equals(image)) {
             return null;
         }
-        String version = parts.length > 1 ? parts[1].trim() : "";
-        return new PreviousContainer(image, version.isEmpty() ? "previous" : version,
+        String imageId = parts.length > 1 ? parts[1].trim() : "";
+        boolean running = parts.length > 2 && "true".equalsIgnoreCase(parts[2].trim());
+        String version = parts.length > 3 ? parts[3].trim() : "";
+        String runId = parts.length > 4 ? parts[4].trim() : "";
+        return new PreviousContainer(image, imageId, running,
+                version.isEmpty() ? "previous" : version, runId,
                 existingHostPort(server, secret, docker, container, containerPort));
+    }
+
+    /** 本机镜像 ID（{@code sha256:...}）；查不到返回 null。 */
+    private String localImageId(Path workdir, String image) {
+        ProcessExecutor.StepOutcome inspect = executor.exec(workdir,
+                List.of("docker", "image", "inspect", "-f", "{{.Id}}", image),
+                PROBE_TIMEOUT_MS, new StringBuilder(), BooleanSupplierNever.INSTANCE);
+        return inspect.exitCode() == 0 ? firstLine(inspect.summary()) : null;
+    }
+
+    /** 远端镜像 ID；不存在或查询失败返回 null（失败时照常走完整传输流程）。 */
+    private String remoteImageId(DeployServer server, String secret, String docker,
+                                 String image) {
+        SshAccess.Result inspect = ssh.run(server, secret,
+                docker + " image inspect -f '{{.Id}}' " + JschSsh.shellQuote(image),
+                PROBE_TIMEOUT_MS);
+        return inspect.ok() ? firstLine(inspect.output()) : null;
+    }
+
+    private static String firstLine(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String line = text.trim().split("\\R")[0].trim();
+        return line.isEmpty() ? null : line;
+    }
+
+    private static String shortId(String imageId) {
+        String value = imageId.startsWith("sha256:") ? imageId.substring(7) : imageId;
+        return value.length() > 12 ? value.substring(0, 12) : value;
     }
 
     /**
@@ -578,8 +743,9 @@ public class ServerDeployer implements Deployer {
         return text.length() > 160 ? text.substring(0, 160) + "…" : text;
     }
 
-    /** 上一版容器信息（用于启动失败后的原地恢复）。 */
-    private record PreviousContainer(String image, String version, int hostPort) {
+    /** 上一版容器信息（用于启动失败后的原地恢复与同请求幂等跳过）。 */
+    private record PreviousContainer(String image, String imageId, boolean running,
+                                     String version, String runId, int hostPort) {
     }
 
     /** 解析 {@code docker port} 输出（{@code 0.0.0.0:8080} / {@code [::]:8080}）。 */
