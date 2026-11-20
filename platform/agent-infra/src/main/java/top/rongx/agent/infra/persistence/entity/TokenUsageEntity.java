@@ -47,4 +47,12 @@ public class TokenUsageEntity {
     @Column(name = "created_at", columnDefinition = "bigint", nullable = false)
     private Long createdAt;
 
+    /** 本轮激活的插件名（逗号分隔）；分项归因，token 爆炸专项补充验收点。 */
+    @Column(name = "activated_plugins", columnDefinition = "text")
+    private String activatedPlugins;
+
+    /** 各贡献者的 schema 字符数（{@code 贡献者:字符数} 逗号分隔），token 代理口径。 */
+    @Column(name = "plugin_schema_chars", columnDefinition = "text")
+    private String pluginSchemaChars;
+
 }

@@ -58,8 +58,9 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
             db.run(em -> PlatformDb.update(em, """
                     INSERT INTO token_usage
                         (session_id, project_id, user_id, connection_id, model_name,
-                         input_tokens, cached_tokens, output_tokens, total_tokens, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                         input_tokens, cached_tokens, output_tokens, total_tokens, created_at,
+                         activated_plugins, plugin_schema_chars)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     usage.sessionId(),
                     usage.projectId(),
@@ -70,7 +71,9 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
                     Math.max(0, usage.cachedTokens()),
                     Math.max(0, usage.outputTokens()),
                     usage.totalTokens(),
-                    usage.createdAt() > 0 ? usage.createdAt() : System.currentTimeMillis()));
+                    usage.createdAt() > 0 ? usage.createdAt() : System.currentTimeMillis(),
+                    usage.activatedPlugins(),
+                    usage.pluginSchemaChars()));
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token 用量写入失败：" + e.getMessage(), e);
         }
@@ -84,7 +87,8 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
         try {
             return db.read(em -> PlatformDb.rows(em, """
                     SELECT session_id, project_id, user_id, connection_id, model_name,
-                           input_tokens, cached_tokens, output_tokens, created_at
+                           input_tokens, cached_tokens, output_tokens, created_at,
+                           activated_plugins, plugin_schema_chars
                     FROM token_usage WHERE session_id = ?
                     ORDER BY created_at DESC LIMIT ?
                     """, sessionId, Math.max(1, limit)).stream()
@@ -93,7 +97,8 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
                             (String) row[2], (String) row[3],
                             (String) row[4], ((Number) row[5]).intValue(),
                             ((Number) row[6]).intValue(), ((Number) row[7]).intValue(),
-                            ((Number) row[8]).longValue()))
+                            ((Number) row[8]).longValue(),
+                            (String) row[9], (String) row[10]))
                     .toList());
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "token 用量查询失败：" + e.getMessage(), e);
