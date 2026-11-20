@@ -32,7 +32,7 @@ refs:
 
 ## 关键状态与流转
 
-1. `ReActAgent` 依据 `Toolkit` 暴露的 schema 选择工具，框架把 `RuntimeContext` 中的 `ProjectContext` 注入 `@Tool` 方法参数。
+1. `HarnessAgent` 依据 `Toolkit` 暴露的 schema 选择工具，框架把 `RuntimeContext` 中的 `ProjectContext` 注入 `@Tool` 方法参数。
 2. `ToolCatalog` 装配四个工具面：`readOnlyToolkit`、`agentToolkit`、`deployToolkit`、`supervisorToolkit`。
 3. `AgentFactory#createChat` 先 `PolicyPort#decide(ctx.env(), ToolLevel.L2_EXECUTE_ISOLATED)`；DENY 或 `ctx.readOnly()` 时使用只读工具面，否则使用完整工具面。
 4. 工具面按会话 `copy()`，避免把本会话 MCP 工具注册进共享单例。

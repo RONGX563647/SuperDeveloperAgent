@@ -125,7 +125,7 @@ save(userId, sessionId, key, State | List<State>)
 exists / delete / listSessionIds
 ```
 
-特性：临时文件 + 原子移动；目录 700、文件 600；同一把主密钥；落盘前经 `ConversationContextTrimmer` 按预算裁剪（SYSTEM 提示永远保留）。
+特性：临时文件 + 原子移动；目录 700、文件 600；同一把主密钥；只加密落盘，不作上下文裁剪——运行期压缩由 HarnessAgent 的 `CompactionMiddleware` 写回 `AgentState` 后随状态一起落盘。
 
 ## 6. 上下文与缓存预算
 

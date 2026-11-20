@@ -55,8 +55,7 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 | `GitRepoInspector` | 仓库结构探测（Java/Node/前端） | 供配方生成与接入报告使用 |
 | `RecipeScaffolder` | 按仓库结构生成 `ci` 定义 | 产出平台侧 pipeline 定义 |
 | [SecretBox](file:///workspace/platform/agent-infra/src/main/java/top/rongx/agent/infra/security/SecretBox.java) | AES-256-GCM 加解密 | `encrypt()` / `decrypt()`；主密钥 `AGENT_SECURITY_MASTER_KEY` |
-| `EncryptedAgentStateStore` | Agent 会话状态加密落盘 | `save()` / `get()` / `getList()` / `delete()`；目录 700、文件 600 |
-| `ConversationContextTrimmer` | 落盘前按预算裁剪上下文 | `trim()`；SYSTEM 消息永远保留 |
+| `EncryptedAgentStateStore` | Agent 会话状态加密落盘 | `save()` / `get()` / `getList()` / `delete()`；目录 700、文件 600；不作上下文裁剪（压缩交给 harness CompactionMiddleware） |
 | [PlatformDb](file:///workspace/platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/PlatformDb.java) | 统一库入口 | 装配数据源与事务 |
 | `PersistenceConfig` | JPA 实体/仓储扫描 | 扫描 `infra`、`governance`、`gateway` 三包 |
 | `SqliteWalCheckpointer` / `SqliteToTargetCopier` | WAL 检查点、SQLite→PG 迁移 | 启动与热切换时使用 |

@@ -89,8 +89,8 @@ Agent（ReAct，按环境装配工具面）
 POST /api/v1/chat
   → ChatController#chat           认证 + 解析 ProjectContext + 并发闸门
   → ChatService#stream            校验输入、绑定 sessionId、解析模型
-  → AgentFactory#createChat       按环境/角色选 Toolkit、挂 MCP/Skill、建 ReActAgent
-  → ReActAgent.streamEvents       模型 ↔ 工具循环（AgentScope）
+  → AgentFactory#createChat       按环境/角色选 Toolkit、挂 MCP/Skill、建 HarnessAgent
+  → HarnessAgent.streamEvents       模型 ↔ 工具循环（AgentScope）
   → ChatController#onEvent        事件映射为 SSE（text.delta / tool.* / usage / change.created）
 ```
 

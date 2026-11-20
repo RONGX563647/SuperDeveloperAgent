@@ -9,7 +9,6 @@ refs:
   - ../l3/runtime-agent-factory.md
   - ../l3/gateway-chat-controller.md
   - ../l3/state-agent-state-store.md
-  - ../l3/state-context-trimmer.md
 ---
 
 # 一轮对话的 Agent 执行链路
@@ -36,7 +35,7 @@ refs:
 1. `ChatController#chat` 完成认证、上下文解析、模型合法性校验、会话元数据 `ConversationManager#ensureFromChat`、并发许可 `AgentStreamLimiter#acquireOrThrow`，创建 SSE 发射器。
 2. `ChatService#stream` 校验空消息，生成或复用 `sessionId`，`ChatSessionRegistry#bindOrVerify` 拒绝跨项目/环境复用。
 3. 模型解析失败立即报错，不回退默认模型。
-4. `AgentFactory#createChat` 按环境与只读角色选择工具面并构建 `ReActAgent`；`deploy` 角色走 `createDeploy`。
+4. `AgentFactory#createChat` 按环境与只读角色选择工具面并构建 `HarnessAgent`；`deploy` 角色走 `createDeploy`。
 5. 组装 `RuntimeContext`，显式放入 `ProjectContext`，调用 `streamEvents`。
 6. 每个 `ModelCallEndEvent` 经 `TokenUsageRecorder#record` 记账；`doFinally` 调用 `AgentSession#close` 关闭 MCP。
 7. SSE 断开、超时或异常统一触发上游 `Disposable#dispose` 与许可释放。
@@ -44,7 +43,7 @@ refs:
 旁路：
 
 - `ChatService#streamSupervisor`：`AgentFactory#createSupervisor`，只装配管理工具与只读工具。
-- `ChatService#structured`：以 `ReActAgent#call(text, structuredType, runtime)` 返回强类型 `Msg`。
+- `ChatService#structured`：以 `HarnessAgent#call(List<Msg>, structuredType, runtime)` 返回强类型 `Msg`（HarnessAgent 无 String 重载，需包装 UserMessage）。
 
 ## 失败与降级
 
@@ -62,11 +61,11 @@ refs:
 | 一轮对话主流程 | `ChatService#stream` | [runtime-chat-service](../l3/runtime-chat-service.md) |
 | Agent 与工具面组装 | `AgentFactory#createChat` | [runtime-agent-factory](../l3/runtime-agent-factory.md) |
 | 会话状态落盘 | `EncryptedAgentStateStore#save` | [state-agent-state-store](../l3/state-agent-state-store.md) |
-| 上下文裁剪 | `ConversationContextTrimmer#trim` | [state-context-trimmer](../l3/state-context-trimmer.md) |
+| 运行期上下文压缩 | `CompactionMiddleware`（HarnessAgent 内置） | [runtime-agent-loop](runtime-agent-loop.md) |
 
 ## 修改指引
 
 - 改入口与事件协议：先看 `platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java`、`AgentEventMapper.java`，对应 `src/test/java/top/rongx/agent/gateway/web/AgentEventMapperTest.java`、`AgentStreamLimiterTest.java`、`ProjectContextResolverTest.java`。
 - 改编排：先看 `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java`、`ChatSessionRegistry.java`，对应 `ChatSessionRegistryTest.java`。
 - 改 Agent 与模型：先看 `AgentFactory.java`、`DynamicModelProvider.java`，对应 `DynamicModelProviderTest.java`、`AgentPropertiesTest.java`。
-- 改会话持久化与裁剪：先看 `EncryptedAgentStateStore.java`、`ConversationContextTrimmer.java`，对应 `EncryptedAgentStateStoreTest.java`、`ConversationContextTrimmerTest.java`。
+- 改会话持久化：先看 `EncryptedAgentStateStore.java`，对应 `EncryptedAgentStateStoreTest.java`；压缩策略在 `AgentFactory#baseBuilder` 的 harness 开关。

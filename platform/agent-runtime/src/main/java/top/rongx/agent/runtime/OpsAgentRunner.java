@@ -1,6 +1,6 @@
 package top.rongx.agent.runtime;
 
-import io.agentscope.core.ReActAgent;
+import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
@@ -67,7 +67,7 @@ public class OpsAgentRunner implements OpsAgentPort {
                     "生产环境不启用子 Agent：生产发布必须在部署面板由人工确认。",
                     List.of(), List.of());
         }
-        ReActAgent agent = agentFactory.createDeploy(ctx);
+        HarnessAgent agent = agentFactory.createDeploy(ctx);
         String sessionId = "ops-" + ctx.projectId() + "-" + ctx.env() + "-"
                 + UUID.randomUUID().toString().substring(0, 8);
         RuntimeContext runtime = RuntimeContext.builder()
@@ -94,7 +94,7 @@ public class OpsAgentRunner implements OpsAgentPort {
     }
 
     /** 消费子 Agent 事件流：保留正文结论、工具轨迹、失败原因与待确认变更单号。 */
-    private static Report collect(ReActAgent agent, String task, RuntimeContext runtime) {
+    private static Report collect(HarnessAgent agent, String task, RuntimeContext runtime) {
         StringBuilder text = new StringBuilder();
         Set<String> tools = new LinkedHashSet<>();
         Set<String> changeIds = new LinkedHashSet<>();

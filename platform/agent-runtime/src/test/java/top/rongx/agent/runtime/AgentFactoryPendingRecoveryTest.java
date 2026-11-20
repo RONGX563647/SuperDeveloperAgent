@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.agentscope.core.ReActAgent;
+import io.agentscope.harness.agent.HarnessAgent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -27,9 +28,9 @@ class AgentFactoryPendingRecoveryTest {
     @Test
     @DisplayName("平台基线 builder 打开悬挂工具调用恢复")
     void baseBuilderEnablesPendingToolRecovery() {
-        ReActAgent agent = AgentFactory.baseBuilder("pending-recovery-probe").build();
+        HarnessAgent agent = AgentFactory.baseBuilder("pending-recovery-probe").build();
 
-        assertTrue(agent.isPendingToolRecoveryEnabled(),
+        assertTrue(agent.getDelegate().isPendingToolRecoveryEnabled(),
                 "工具调用悬挂后必须能自愈，否则该会话之后每轮都报 Pending tool calls exist");
     }
 
