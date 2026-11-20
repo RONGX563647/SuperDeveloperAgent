@@ -1,12 +1,13 @@
 <!-- 由 tools/docs/build.py 生成，勿手改；文档地图见 ../README.md -->
 # 近期变更索引
 
-留痕数据：`docs/ledger/*.jsonl`（170 个会话，截至 2026-11-20）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
+留痕数据：`docs/ledger/*.jsonl`（171 个会话，截至 2026-11-20）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
 
 ## 最近 10 个会话
 
 | 日期 | 类别 | 标题 | 模块 | 提交 |
 |---|---|---|---|---|
+| 2026-11-20 | chore | 补齐 skill 路由层：三张新卡 + 生成式路由索引 | other | `3dc7dc1` |
 | 2026-11-20 | chore | 补周报视图，校正 README 阅读成本账 | other | `bd18e87` |
 | 2026-11-20 | chore | docs 体系改造：ledger 单一写入 + skills/views/find 三层消费 | other | `a381003` |
 | 2026-11-20 | feat | 生产发布改为从测试验证版本直接部署 | web | `a27fe76` |
@@ -16,13 +17,12 @@
 | 2026-11-20 | chore | 分支清理与归档诊断工具收录 | other | `b1a8628` |
 | 2026-11-20 | chore | 面板真实渲染校验脚本 + 清掉误生成的 npm 锁文件 | web | `e1583e5` |
 | 2026-11-20 | chore | 收录 fd26ec8 生产按版本部署修复提交 | other | `fd26ec8` |
-| 2026-11-20 | feat | 设置页新增工具链镜像面板（就绪/退避可视） | web | `da6cfff` |
 
 ## 模块索引
 
 | 模块 | 会话数 | 最近变更 | 详见 |
 |---|---|---|---|
-| other | 38 | 2026-11-20 补周报视图，校正 README 阅读成本账 | [modules/other.md](modules/other.md) |
+| other | 39 | 2026-11-20 补齐 skill 路由层：三张新卡 + 生成式路由索引 | [modules/other.md](modules/other.md) |
 | web | 61 | 2026-11-20 生产发布改为从测试验证版本直接部署 | [modules/web.md](modules/web.md) |
 | agent-executor | 51 | 2026-11-20 部署地址指向/镜像保留策略/版本区分/环境页镜像面板 | [modules/agent-executor.md](modules/agent-executor.md) |
 | agent-gateway | 77 | 2026-11-20 部署地址指向/镜像保留策略/版本区分/环境页镜像面板 | [modules/agent-gateway.md](modules/agent-gateway.md) |

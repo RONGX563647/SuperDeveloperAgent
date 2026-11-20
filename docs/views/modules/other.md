@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：other
 
-38 个会话；检索用 `python tools/docs/find.py --module other`。
+39 个会话；检索用 `python tools/docs/find.py --module other`。
+
+## 2026-11-20 · 补齐 skill 路由层：三张新卡 + 生成式路由索引（chore `3dc7dc1`）
+- 问题：skill 路由层有三个高频域没有知识卡（对话运行时/治理确认/BugFix 闭环），且缺路由索引——agent 面对 9 张卡仍要逐个打开才知…
+- 方案：补 chat-runtime/governance-changes/bugfix-loop 三张卡（类名逐一核对）；docs/skills/in…
+- 验证：build.py sync/check 一致（16 个文件）；gate validate 170 份、self-test OK；skills/i…
 
 ## 2026-11-20 · 补周报视图，校正 README 阅读成本账（chore `bd18e87`）
 - 问题：G 方案实用功能清单的周报视图未落地；README 的『全树 ≈ 40 万 token』是改造前的旧账，会误导后来者做预算。
