@@ -1,0 +1,269 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-20_1620_image-readiness-provisioning",
+  "category": "feat",
+  "title": "镜像就绪自动收敛：进度感知拉取+退避重试+缓存源+运行前就绪",
+  "createdAt": "2026-11-20T16:20:10+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "镜像就绪自动收敛：进度感知拉取+退避重试+缓存源+运行前就绪",
+    "toolCallCount": 0
+  },
+  "problem": "run-66c5c523 的 frontend 阶段以 E-302 失败：node:22-bookworm 八层全部 Download complete 后被写死的 180s 总预算在解压阶段砍断。镜像就绪判断只看总时长、失败不复用结论、每次构建都重等一轮，环境问题必须人工逐个解决。",
+  "solution": "把镜像就绪收敛成一套策略：ProcessExecutor.execUntilIdle 按有无新输出判卡死；ImageProvisioner 统一 探测→源链拉取→inspect 复核→记状态与指数退避；image_readiness 表按 (host,image) 持久化 READY/FAILED 与 digest；pipeline 开跑前并行点亮所有 stage 镜像，失败记在首阶段名下并由自动修复续跑；错误码按类型还原（缺镜像 E-705）；新增 tools/registry-cache pull-through cache 配方作为网络慢的根治手段。",
+  "commits": [
+    {
+      "sha": "ea8de6eba25d2ae6aec952bbada629047f6c160e",
+      "subject": "fix(gateway): OpenAPI 快照生成统一 LF 换行",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/apidocs/ApiDocsSnapshotService.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "1b76c34d8928412bcfa7a65028b3d45e083ebb40"
+        }
+      ]
+    },
+    {
+      "sha": "370cb72551d1b37725d5b94e5cbf03db1a4c6d1e",
+      "subject": "feat(executor): 镜像就绪自动收敛（进度感知 + 退避重试 + 缓存源 + 运行前就绪）",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/README.md",
+          "status": "M",
+          "additions": 15,
+          "deletions": 5,
+          "blobHash": "45e533f822a9e3f35b4aefbc44b6d83bb7647bc7"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/image/ImageReadiness.java",
+          "status": "A",
+          "additions": 35,
+          "deletions": 0,
+          "blobHash": "366608f8bcaeb0f5d02ffdb5892c1cbf83a695c4"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/image/ImageReadinessStore.java",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "7c351b6cb058f00d2a6d94bba217250a02309abb"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 70,
+          "deletions": 1,
+          "blobHash": "b1e8562a3a34f400f9a1d7d7f882e794811a68a8"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerActionRunner.java",
+          "status": "M",
+          "additions": 34,
+          "deletions": 0,
+          "blobHash": "8f43b23ceec90e05c36f4a69a5b1c0d47c410b5d"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java",
+          "status": "M",
+          "additions": 144,
+          "deletions": 35,
+          "blobHash": "e8764b75fe3b2bbf55e91537254554b2de7e07a3"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/FailureRepair.java",
+          "status": "M",
+          "additions": 16,
+          "deletions": 1,
+          "blobHash": "5f3151ef1731eb43f8381e624de4290605c73173"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ImageProvisioner.java",
+          "status": "A",
+          "additions": 317,
+          "deletions": 0,
+          "blobHash": "ea4d52415d971c202e6fa299d369702a8e014e28"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ImagePullRepair.java",
+          "status": "M",
+          "additions": 18,
+          "deletions": 35,
+          "blobHash": "acc310bcde7d67af15eece784c725be5324a8697"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/ProcessExecutor.java",
+          "status": "M",
+          "additions": 53,
+          "deletions": 4,
+          "blobHash": "7ea3c42b5c12a85a513020f0cec6e9aa4ac3e761"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxConfig.java",
+          "status": "M",
+          "additions": 34,
+          "deletions": 1,
+          "blobHash": "d7cb0d27e012c545cf528e66dfa1adafc548bf33"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerActionRunnerPrepareTest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 2,
+          "blobHash": "592d47924d94552501decc1fc3699e8a84c1fd65"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+          "status": "M",
+          "additions": 97,
+          "deletions": 6,
+          "blobHash": "474c8cd2fe0bd9b5261053acfd1eee26c39417e2"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImageProvisionerTest.java",
+          "status": "A",
+          "additions": 261,
+          "deletions": 0,
+          "blobHash": "67e93bd3639c5b518d876e8f2e25bab85f705c83"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+          "status": "M",
+          "additions": 113,
+          "deletions": 44,
+          "blobHash": "4b0d585996723d15b5d766ad5718644d1b369823"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ProcessExecutorTimeoutTest.java",
+          "status": "M",
+          "additions": 28,
+          "deletions": 0,
+          "blobHash": "1027aa1531a9852397c78354250434fedeb5babb"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 20,
+          "deletions": 2,
+          "blobHash": "31748a841f6f8c1bd9c053fda5bfe220979f91bd"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/image/DbImageReadinessStore.java",
+          "status": "A",
+          "additions": 83,
+          "deletions": 0,
+          "blobHash": "a877d757f2fe37c7b4408393256dd881b9f669c3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/common/V6__image_readiness.sql",
+          "status": "A",
+          "additions": 22,
+          "deletions": 0,
+          "blobHash": "b76d67fb733dc245d2c55c59c587c52cc8f03a0b"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/image/DbImageReadinessStoreTest.java",
+          "status": "A",
+          "additions": 92,
+          "deletions": 0,
+          "blobHash": "4f3b38dce2a7c9c6a707a5fea45323e650652b4f"
+        },
+        {
+          "path": "tools/registry-cache/README.md",
+          "status": "A",
+          "additions": 45,
+          "deletions": 0,
+          "blobHash": "6aa69b35b3e8c9aa378f73783cc182060f3bbb62"
+        },
+        {
+          "path": "tools/registry-cache/config.yml",
+          "status": "A",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "85a0b041497839156bff1b873fe5a363ba3b81fb"
+        },
+        {
+          "path": "tools/registry-cache/docker-compose.yml",
+          "status": "A",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "21037cdd0d8ef4038c0282653bebf5416f97a6d2"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerActionRunnerPrepareTest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 2,
+        "blobHash": "592d47924d94552501decc1fc3699e8a84c1fd65"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerSandboxPrepareTest.java",
+        "status": "M",
+        "additions": 97,
+        "deletions": 6,
+        "blobHash": "474c8cd2fe0bd9b5261053acfd1eee26c39417e2"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImageProvisionerTest.java",
+        "status": "A",
+        "additions": 261,
+        "deletions": 0,
+        "blobHash": "67e93bd3639c5b518d876e8f2e25bab85f705c83"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ImagePullRepairTest.java",
+        "status": "M",
+        "additions": 113,
+        "deletions": 44,
+        "blobHash": "4b0d585996723d15b5d766ad5718644d1b369823"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/ProcessExecutorTimeoutTest.java",
+        "status": "M",
+        "additions": 28,
+        "deletions": 0,
+        "blobHash": "1027aa1531a9852397c78354250434fedeb5babb"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/image/DbImageReadinessStoreTest.java",
+        "status": "A",
+        "additions": 92,
+        "deletions": 0,
+        "blobHash": "4f3b38dce2a7c9c6a707a5fea45323e650652b4f"
+      }
+    ],
+    "casesAdded": 17,
+    "command": "mvn -B -nsu -pl agent-domain,agent-executor,agent-gateway,agent-infra,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-executor,agent-gateway,agent-infra test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 725, Failures: 0, Errors: 0, Skipped: 6"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra"
+    ],
+    "verification": "agent-domain/agent-infra/agent-executor 全量单测 282 项通过；agent-gateway ToolChainTest（含 Flyway V6 与 Spring 装配）14 项通过；ApiDocsSnapshotTest 通过（顺带修复 Windows 换行导致快照比对必失败）；pre-commit 全量门禁 511/214 项通过。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1620_image-readiness-provisioning"
+    ]
+  },
+  "chain": {
+    "prev": "56491a72daad76bdcbc43e11139ca764fe35993cdeee993b25d6afa2b17f0ad2",
+    "self": "ee3f3be3ac12c2e203a9ac06b9cfbe9e140a2791fc7a32ee7d632c010dc5d604"
+  }
+}
