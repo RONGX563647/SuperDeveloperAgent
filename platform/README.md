@@ -110,6 +110,10 @@ npm run build      # vue-tsc strict + 产物
 
 > Vite 默认绑 `::1`，用 `127.0.0.1` 打不开属正常；需 IPv4 用 `npm run dev -- --host 127.0.0.1`。
 
+界面回归脚本在 `platform/web/scripts/`（如 `login-check.mjs`、`sandbox-images-check.mjs`），
+句式统一为 `node scripts/<name>.mjs [base] [截图路径]`，需要后端与 dev server 都在跑；
+默认按种子账号 `devops` / `admin-2026` 登录，本机改过密码时用 `CHECK_USER` / `CHECK_PASS` 覆盖。
+
 种子账号：`admin`（管理员）、`devops`（运维开发）、`viewer`（只读），三者共用固定初始密码
 `admin-2026`；登录后请到「设置 → 账号安全」修改。需要区分账号或用于共享环境时，用
 `AGENT_SEED_PASSWORDS=admin=...,devops=...,viewer=...` 覆盖初始值（未指定的账号仍用默认值）。
