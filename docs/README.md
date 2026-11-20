@@ -10,7 +10,7 @@ summary: docs 树地图与消费规则：agent 从这里开始，按任务进 sk
 | 目录 | 是什么 | 谁写 | 怎么用 |
 |---|---|---|---|
 | `skills/` | 任务域知识卡（每张 ≤150 行） | 人 | **agent 从这里开始**：按 `when_to_read` 匹配，读 1–2 张 |
-| `views/` | 生成视图：近期索引 / 变更日志 / 模块档案 | `tools/docs/build.py` | 看"最近改了什么、哪个模块动过"；勿手改 |
+| `views/` | 生成视图：近期索引 / 变更日志 / 周报 / 模块档案 | `tools/docs/build.py` | 看"最近改了什么、哪个模块动过"；勿手改 |
 | `ledger/` | 会话留痕（JSONL，追加式，哈希链） | `gate.py finish` | **不整读**；用 `tools/docs/find.py` 检索 |
 | `summary/plan/` | 评审/优化方案（plan 契约，双份） | 人 | 找方案、验收契约、执行状态时读 |
 | `code-wiki/` | 架构手册（为什么这样设计） | 人 | 理解全局、改架构前读对应篇 |
@@ -23,7 +23,8 @@ summary: docs 树地图与消费规则：agent 从这里开始，按任务进 sk
 1. 本页 → 2. `skills/` 匹配任务的 1–2 张（每张标了 `budget`）→ 3. 需要历史/影响面时
    `python tools/docs/find.py "<关键词>"` 或 `--module` / `--impact` / `--recent`。
 
-**单次任务的文档预算 ≤ 3 个文件**。全树 ≈ 40 万 token，通读即浪费；`ledger/` 是审计数据不是文档。
+**单次任务的文档预算 ≤ 3 个文件**。全树 ≈ 370k token，其中 `ledger/`（约 2/3）是审计数据，
+明确不读；agent 的入口成本是本页 + 1 张 skill ≈ 5k token，需要历史才付检索的成本。
 
 ## 生成物与写入规则
 

@@ -275,6 +275,7 @@ Maven 启动与 reactor 校验占大头），因此保持串行；`forkCount=8` 
 - 视图（`docs/views/`，由 `tools/docs/build.py sync` 从 ledger 投影生成）：
   - `index.md`：最近 10 个会话 + 模块索引（agent 的变更入口）
   - `changelog.md`：按日期倒序的完整变更日志（每行一个会话）
+  - `weekly.md`：按 ISO 周聚合的周报（周会/汇报直接取用）
   - `modules/<m>.md`：按模块的问题/方案/验证档案
 - 生成物勿手改：`build.py check` 在 pre-push 强制与 ledger 一致；同样的 ledger
   必然生成同样的视图（生成物内不带时间戳）。

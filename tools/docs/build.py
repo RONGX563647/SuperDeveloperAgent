@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -107,6 +108,20 @@ def render(all_rows: list[dict]) -> dict[str, str]:
         cl.append(f"- **{m.get('category', '')}** {m.get('title', '')}"
                   f"（{commit_shas(m)}）— {first_sentence(m.get('problem', ''))}")
     out["changelog.md"] = "\n".join(cl) + "\n"
+
+    # ---- weekly.md：按 ISO 周的周报（周会/汇报直接取用）
+    wk = ["<!-- 由 tools/docs/build.py 生成，勿手改 -->", "# 周报", "",
+          "按 ISO 周聚合的会话清单；逐日明细见 [changelog.md](changelog.md)。", ""]
+    current_week = None
+    for m in ordered:
+        day = m.get("createdAt", "")[:10]
+        year, week, _ = date.fromisoformat(day).isocalendar()
+        if (year, week) != current_week:
+            wk += [f"## {year}-W{week:02d}", ""]
+            current_week = (year, week)
+        wk.append(f"- {day} **{m.get('category', '')}** {m.get('title', '')}"
+                  f"（{commit_shas(m)}）")
+    out["weekly.md"] = "\n".join(wk) + "\n"
 
     # ---- modules/<m>.md：按模块的会话档案（问题/方案/验证）
     for mod, items in by_module.items():
