@@ -1,0 +1,69 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-20_1839_panel-verify-and-lockfile",
+  "category": "chore",
+  "title": "面板真实渲染校验脚本 + 清掉误生成的 npm 锁文件",
+  "createdAt": "2026-11-20T18:39:56+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "面板真实渲染校验脚本 + 清掉误生成的 npm 锁文件",
+    "toolCallCount": 0
+  },
+  "problem": "「工具链镜像」面板只过了 build/typecheck/单测，接口字段到表格单元格这一段没有真浏览器验证；另外 platform/web/package-lock.json 作为历史遗留未跟踪文件一直挂在 git status 里。",
+  "solution": "新增 scripts/sandbox-images-check.mjs（登录 + 深链断言 3 行数据、列名、告警、汇总、退避倒计时、tag 类型、无 JS 错误，可截图，凭据可用 CHECK_USER/CHECK_PASS 覆盖），README 补脚本约定；包管理器是 pnpm，故忽略 platform/web/package-lock.json 并删除该文件（tools/api-docs-mcp 的 npm 锁文件仍提交）。",
+  "commits": [
+    {
+      "sha": "e1583e5bcb64cc88120514e319bbb987724fa9df",
+      "subject": "chore(web): 补「工具链镜像」面板的真实渲染自检，清掉误生成的 npm 锁文件",
+      "category": "chore",
+      "files": [
+        {
+          "path": ".gitignore",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "0e6785e3cf9847fc53c1bfe7b073209463209d3d"
+        },
+        {
+          "path": "platform/README.md",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "87702fae80933e4e942adf447fcb6c367e81a0aa"
+        },
+        {
+          "path": "platform/web/scripts/sandbox-images-check.mjs",
+          "status": "A",
+          "additions": 120,
+          "deletions": 0,
+          "blobHash": "af8725a00def0e5c14cdf0db4cc880b4a45203f9"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "隔离实例（8091，独立 DB，不干扰本机 8090）落 3 行真实数据后：11 项断言全绿，截图 1440x1000；清空表后空态断言同样通过（表格/告警/汇总均不渲染，显示「还没有镜像记录」）；pre-commit 前端自检 11 个脚本通过；清理后 git status 只剩本次三处改动。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1839_panel-verify-and-lockfile"
+    ]
+  },
+  "chain": {
+    "prev": "1613b83920db9a69bc50d476f38b3f09eaf3b5237f71b5e2d878c094c1b2f5b2",
+    "self": "2f7ca4a1171ac623ec0f63480ff461a84ae2d4dfaf2d177b86d145e7cf1edb2b"
+  }
+}
