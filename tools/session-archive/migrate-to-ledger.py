@@ -33,18 +33,21 @@ def main() -> int:
     args = parser.parse_args()
     moved = deleted = 0
 
-    # 1) manifests → ledger 行
+    # 1) manifests → ledger 行（幂等：按 id 合并进已有 ledger，不覆盖既有行）
     by_period: dict[str, list[dict]] = {}
     for path in sorted(PROCESS.glob("*/*/manifest.json")):
         row = json.loads(path.read_text(encoding="utf-8"))
         by_period.setdefault(row["createdAt"][:7], []).append(row)
         moved += 1
     for period, items in sorted(by_period.items()):
-        items.sort(key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
         target = LEDGER / f"{period}.jsonl"
-        print(f"ledger/{period}.jsonl ← {len(items)} 份")
+        existing = gate.manifest_lines(target) if target.is_file() else []
+        known = {row.get("id") for row in existing}
+        merged = existing + [row for row in items if row.get("id") not in known]
+        merged.sort(key=lambda m: (m.get("createdAt", ""), m.get("id", "")))
+        print(f"ledger/{period}.jsonl ← {len(items)} 份（其中新增 {len(merged) - len(existing)}）")
         if not args.dry_run:
-            gate.write_ledger(target, items)
+            gate.write_ledger(target, merged)
 
     # 2) 链自检（内容未变应零改动；有改动说明历史 manifest 本来就没对齐，顺手修）
     if not args.dry_run:
@@ -54,10 +57,10 @@ def main() -> int:
                 print(f"链重排（{category}）：{len(resealed)} 份")
 
     # 3) 删除 process/ 与 session-summary 散文副本（plan 双份保留）
-    if not args.dry_run:
+    if not args.dry_run and PROCESS.is_dir():
         shutil.rmtree(PROCESS)
     print(f"删除 docs/process/（{moved} 份 manifest 已入 ledger）")
-    for path in sorted(SUMMARY.glob("**/*.md")):
+    for path in sorted(SUMMARY.glob("**/*.md")) if SUMMARY.is_dir() else []:
         text = path.read_text(encoding="utf-8", errors="replace")
         if text.startswith("---\n") and "schema: session-summary/v1" in text.split("---", 2)[1]:
             if not args.dry_run:

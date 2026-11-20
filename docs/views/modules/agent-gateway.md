@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-76 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+77 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-20 · 部署地址指向/镜像保留策略/版本区分/环境页镜像面板（bug `813904b` `342bfd9`）
+- 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；
+- 方案：三个部署器端点改根路径；
+- 验证：agent-executor 264+3 / agent-gateway 222 全绿；
 
 ## 2026-11-20 · 生产按版本部署：选项改为测试环境成功运行的版本（bug `fd26ec8`）
 - 问题：生产按版本部署：选项改为测试环境成功运行的版本

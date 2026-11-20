@@ -1,7 +1,22 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-58 个会话；检索用 `python tools/docs/find.py --module web`。
+61 个会话；检索用 `python tools/docs/find.py --module web`。
+
+## 2026-11-20 · 生产发布改为从测试验证版本直接部署（feat `a27fe76`）
+- 问题：生产发布需按 git 版本号选择、且只显示"发布到生产"，无法从已验证版本直接部署并查看镜像/git tag
+- 方案：生产表单改为单一「直接部署」：从测试镜像账本+构建历史组装候选，展示镜像 tag 与 git tag；
+- 验证：前端 13 个测试文件全通过（含新增 9 项）；
+
+## 2026-11-20 · 修复环境卡片区因 v-else 错配而空白（bug `bb27e58`）
+- 问题：813904ba 新增镜像 section 时把原属环境网格的 v-else 留给了它，v-else 与 retainedImages.leng…
+- 方案：环境网格改独立 v-if=hasRows，镜像面板保留独立 v-if，二者互不排斥；
+- 验证：新增 DeploymentMatrix.test.ts 4 例；
+
+## 2026-11-20 · 部署地址指向/镜像保留策略/版本区分/环境页镜像面板（bug `813904b` `342bfd9`）
+- 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；
+- 方案：三个部署器端点改根路径；
+- 验证：agent-executor 264+3 / agent-gateway 222 全绿；
 
 ## 2026-11-20 · 面板真实渲染校验脚本 + 清掉误生成的 npm 锁文件（chore `e1583e5`）
 - 问题：「工具链镜像」面板只过了 build/typecheck/单测，接口字段到表格单元格这一段没有真浏览器验证；另外 platform/web/pa…
