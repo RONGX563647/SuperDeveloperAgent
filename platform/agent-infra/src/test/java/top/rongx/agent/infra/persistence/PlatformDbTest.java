@@ -43,11 +43,11 @@ class PlatformDbTest {
     void bindsNullParameters() {
         PlatformDb db = PlatformDb.sqlite(tempDir.resolve("nulls.db"));
         db.run(em -> PlatformDb.update(em, """
-                INSERT INTO project_envs (project_id, env, app_url, compose_dir) VALUES (?,?,?,?)
-                """, "p1", "test", null, null));
+                INSERT INTO project_envs (project_id, env, compose_dir) VALUES (?,?,?)
+                """, "p1", "test", null));
 
         long count = db.read(em -> PlatformDb.count(em,
-                "SELECT COUNT(*) FROM project_envs WHERE project_id = ? AND app_url IS NULL", "p1"));
+                "SELECT COUNT(*) FROM project_envs WHERE project_id = ? AND compose_dir IS NULL", "p1"));
         assertEquals(1, count);
     }
 
@@ -73,8 +73,8 @@ class PlatformDbTest {
         try {
             db.run((EntityManager em) -> {
                 PlatformDb.update(em, """
-                        INSERT INTO project_envs (project_id, env, app_url, compose_dir) VALUES (?,?,?,?)
-                        """, "p1", "test", "", "");
+                        INSERT INTO project_envs (project_id, env, compose_dir) VALUES (?,?,?)
+                        """, "p1", "test", "");
                 throw new IllegalStateException("boom");
             });
         } catch (IllegalStateException expected) {

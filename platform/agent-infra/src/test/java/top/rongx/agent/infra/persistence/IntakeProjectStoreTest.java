@@ -42,7 +42,7 @@ class IntakeProjectStoreTest {
     void upsertAndRead() {
         try (IntakeProjectStore s = newStore()) {
             s.upsert(shop(), List.of(
-                    new ProjectEnv("SHOP", "test", "http://127.0.0.1:8180", "/opt/apps/shop")));
+                    new ProjectEnv("SHOP", "test", "/opt/apps/shop")));
 
             Optional<IntakeProjectStore.IntakeProject> back = s.find("SHOP");
             assertTrue(back.isPresent());
@@ -121,8 +121,8 @@ class IntakeProjectStoreTest {
     void rejectDuplicateComposeDir() {
         try (IntakeProjectStore s = newStore()) {
             IntakeException e = assertThrows(IntakeException.class, () -> s.upsert(shop(), List.of(
-                    new ProjectEnv("SHOP", "test", "http://127.0.0.1:8180", "/opt/apps/shop"),
-                    new ProjectEnv("SHOP", "prod", "http://127.0.0.1:8181", "/opt/apps/shop"))));
+                    new ProjectEnv("SHOP", "test", "/opt/apps/shop"),
+                    new ProjectEnv("SHOP", "prod", "/opt/apps/shop"))));
             assertTrue(e.getMessage().contains("composeDir 重复"), e.getMessage());
             // 拒绝后不应留下半截数据
             assertTrue(s.find("SHOP").isEmpty());

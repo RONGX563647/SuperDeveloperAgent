@@ -62,13 +62,10 @@ class ActionUsabilityTest {
         registry.add("agent.projects.items[0].port-range-start", () -> "8100");
         registry.add("agent.projects.items[0].port-range-end", () -> "8199");
         registry.add("agent.projects.items[0].envs[0].env", () -> "dev");
-        registry.add("agent.projects.items[0].envs[0].app-url", () -> "http://127.0.0.1:8180");
         registry.add("agent.projects.items[0].envs[0].compose-dir", () -> "opt/apps/ry");
         registry.add("agent.projects.items[0].envs[1].env", () -> "test");
-        registry.add("agent.projects.items[0].envs[1].app-url", () -> "http://127.0.0.1:8180");
         registry.add("agent.projects.items[0].envs[1].compose-dir", () -> "opt/apps/ry");
         registry.add("agent.projects.items[0].envs[2].env", () -> "prod");
-        registry.add("agent.projects.items[0].envs[2].app-url", () -> "http://127.0.0.1:8181");
         registry.add("agent.projects.items[0].envs[2].compose-dir", () -> "opt/apps/ry");
     }
 

@@ -91,7 +91,7 @@ class ProjectReadinessControllerTest {
                 """);
         when(locator.repoDir("SHOP")).thenReturn(Optional.of(repo));
         when(defStore.exists("SHOP")).thenReturn(false);
-        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "", "")));
+        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "")));
         when(engine.dockerAvailable()).thenReturn(true);
         when(recipes.current("SHOP", "test")).thenReturn(Optional.empty());
 
@@ -108,7 +108,7 @@ class ProjectReadinessControllerTest {
     void missingPipelineAsksForScaffold() {
         when(locator.repoDir("SHOP")).thenReturn(Optional.of(repo));
         when(defStore.exists("SHOP")).thenReturn(false);
-        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "", "")));
+        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "")));
 
         Map<String, Object> out = controller("").readiness("SHOP", "test");
 
@@ -131,7 +131,7 @@ class ProjectReadinessControllerTest {
                 """);
         when(locator.repoDir("SHOP")).thenReturn(Optional.of(repo));
         when(defStore.exists("SHOP")).thenReturn(false);
-        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "", "")));
+        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "")));
         when(servers.findDefault()).thenReturn(Optional.empty());
 
         Map<String, Object> out = controller("").readiness("SHOP", "test");
@@ -156,7 +156,7 @@ class ProjectReadinessControllerTest {
                 """);
         when(locator.repoDir("SHOP")).thenReturn(Optional.of(repo));
         when(defStore.exists("SHOP")).thenReturn(false);
-        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "", "")));
+        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "")));
         when(envStore.effective("SHOP", "test")).thenReturn(new EffectiveEnvironment(
                 "SHOP", "test", null, 0, null, List.of(), Map.of(), List.of(), 0, 0));
         when(recipes.current("SHOP", "test")).thenReturn(Optional.of(
@@ -184,7 +184,7 @@ class ProjectReadinessControllerTest {
                 """);
         when(locator.repoDir("SHOP")).thenReturn(Optional.of(repo));
         when(defStore.exists("SHOP")).thenReturn(false);
-        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "", "")));
+        when(projects.findEnvs("SHOP")).thenReturn(List.of(new ProjectEnv("SHOP", "test", "")));
         when(engine.dockerAvailable()).thenReturn(true);
 
         Map<String, Object> out = controller("").readiness("SHOP", "test");

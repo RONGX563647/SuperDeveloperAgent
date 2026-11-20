@@ -84,8 +84,8 @@ class ConfigControllerTest {
         @Override
         public List<ProjectEnv> findEnvs(String projectId) {
             return "RY".equals(projectId)
-                    ? List.of(new ProjectEnv("RY", "dev", null, null),
-                    new ProjectEnv("RY", "test", null, null))
+                    ? List.of(new ProjectEnv("RY", "dev", null),
+                    new ProjectEnv("RY", "test", null))
                     : List.of();
         }
     }

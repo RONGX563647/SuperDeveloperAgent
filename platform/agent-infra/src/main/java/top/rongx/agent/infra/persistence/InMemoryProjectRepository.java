@@ -25,7 +25,7 @@ public class InMemoryProjectRepository implements ProjectRepository {
                     def.repoType(), def.type(), def.portRangeStart(), def.portRangeEnd());
             projects.put(project.id(), project);
             envs.put(project.id(), def.envs().stream()
-                    .map(e -> new ProjectEnv(def.id(), e.env(), e.appUrl(), e.composeDir()))
+                    .map(e -> new ProjectEnv(def.id(), e.env(), e.composeDir()))
                     .toList());
         }
     }
