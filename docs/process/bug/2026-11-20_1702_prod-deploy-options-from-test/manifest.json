@@ -13,7 +13,7 @@
   "solution": "fix(deploy): 生产按版本部署的选项改为测试环境成功运行的版本",
   "commits": [
     {
-      "sha": "94b4703002334be73b21142513ec1b4feb84b304",
+      "sha": "fd26ec8cc763c5b1dbc5653bb469da24c5579f3c",
       "subject": "fix(deploy): 生产按版本部署的选项改为测试环境成功运行的版本",
       "category": "bug",
       "files": [
@@ -102,6 +102,6 @@
   },
   "chain": {
     "prev": "888df5ba114b3c415a78d34d6d56b4d883eff2bab89368d5bacc01cee10cf5f2",
-    "self": "f6b21b8559d3ae5a916be3ed6fa4fcbc0f0cd9418138802bd5e9fdc5ead41141"
+    "self": "38ff77f6b34b66e69b7b3f0ddedf3072c805443a2a2646ac3929e8ef01565ed2"
   }
 }
