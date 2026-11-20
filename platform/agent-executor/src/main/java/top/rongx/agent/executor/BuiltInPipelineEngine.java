@@ -1118,6 +1118,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             var current = recipeStore.current(state.projectId, state.env);
             if (current.isPresent() && current.get().pipelineYaml().equals(yaml)
                     && java.util.Objects.equals(current.get().actionsYaml(), actions)) {
+                // 脚本没变，但可能是在新提交上又跑通了：证据必须跟着提交刷新，
+                // 否则生产晋升一直拿第一次跑通的旧提交比对，会拒绝新提交。
+                if (!java.util.Objects.equals(current.get().evidenceRunId(), state.runId)
+                        || !java.util.Objects.equals(current.get().gitSha(), state.gitSha)) {
+                    recipeStore.refreshEvidence(state.projectId, state.env, state.runId, state.gitSha);
+                    state.log.append("[recipe] 脚本未变，已刷新证据为 ").append(state.runId).append('\n');
+                }
                 return; // 脚本没变：沿用现有版本
             }
             var saved = recipeStore.save(new top.rongx.agent.domain.deploy.DeployRecipe(
