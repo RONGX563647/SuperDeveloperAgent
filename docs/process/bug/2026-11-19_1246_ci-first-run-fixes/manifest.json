@@ -1,0 +1,127 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-19_1246_ci-first-run-fixes",
+  "category": "bug",
+  "title": "修 CI 首次运行的 5 类失败",
+  "createdAt": "2026-11-19T12:46:50+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1-flash",
+    "promptSummary": "按 CI 日志定位并修复：平台专属测试、doc-marshal 配置、schema 过期、工具依赖缺失、dev 依赖漏洞",
+    "toolCallCount": 0
+  },
+  "problem": "修 CI 首次运行的 5 类失败",
+  "solution": "fix(ci): 修复首次 CI 运行的 5 类失败",
+  "commits": [
+    {
+      "sha": "ce7af619eaa42280cf7360cd80a6de439594a7be",
+      "subject": "fix(ci): 修复首次 CI 运行的 5 类失败",
+      "category": "bug",
+      "files": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "status": "M",
+          "additions": 5,
+          "deletions": 1,
+          "blobHash": "dc584f822e5b57a97b7406d1a58cb8bdd90eaead"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDaemonRepairTest.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 1,
+          "blobHash": "5a264eb7b7c4ea3c01e34a807fd9f9a2b046ef57"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+          "status": "M",
+          "additions": 22,
+          "deletions": 1,
+          "blobHash": "fc370ff5c62467b9ed6488815b7752337893b44d"
+        },
+        {
+          "path": "platform/web/package-lock.json",
+          "status": "D",
+          "additions": 0,
+          "deletions": 3312,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/web/package.json",
+          "status": "M",
+          "additions": 7,
+          "deletions": 2,
+          "blobHash": "c3627ce99dbd13fc30a3e107f2a5dfcba3e30b28"
+        },
+        {
+          "path": "platform/web/pnpm-lock.yaml",
+          "status": "M",
+          "additions": 243,
+          "deletions": 150,
+          "blobHash": "861740ce85a43e42da40981035d6eaae36086134"
+        },
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 169,
+          "deletions": 0,
+          "blobHash": "49fc67eb94e819bbb64900de0a1285192395676c"
+        },
+        {
+          "path": "tools/api-docs-mcp/package-lock.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "6295a5a76cd0f7fb850c8b52e6431bff30901f6f"
+        },
+        {
+          "path": "tools/api-docs-mcp/package.json",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "90523628c5541360289bf35529683a1ce8d6da11"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDaemonRepairTest.java",
+        "status": "M",
+        "additions": 14,
+        "deletions": 1,
+        "blobHash": "5a264eb7b7c4ea3c01e34a807fd9f9a2b046ef57"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineRunModeTest.java",
+        "status": "M",
+        "additions": 22,
+        "deletions": 1,
+        "blobHash": "fc370ff5c62467b9ed6488815b7752337893b44d"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -nsu -pl agent-executor,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-executor test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 285, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "web"
+    ],
+    "verification": "CI 日志定位 5 类失败并修复：Windows 专属测试加 @EnabledOnOs（Linux runner 不再跑）；doc-marshal 加 --docs-tree docs；schema.d.ts 重生成；contract job 补 npm ci；osv 11 个 dev 漏洞通过删过期 package-lock + vite5→7 + minimatch override + zod3→4 解决。本地：pnpm typecheck/test(38)/build 全绿，tools 11 passed，agent-executor 285 用例全绿。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1246_ci-first-run-fixes"
+    ]
+  },
+  "chain": {
+    "prev": "45e3feec3619b0de50fa0bce2aef19c336657f652a6b4068ce0c797e9b7bfcf4",
+    "self": "9252b0814650f0646285fd78136f44b27f1db6cd10d0604849cf8b5b2a103837"
+  }
+}

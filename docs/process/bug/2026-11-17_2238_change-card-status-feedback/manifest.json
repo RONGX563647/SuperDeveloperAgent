@@ -1,0 +1,195 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_2238_change-card-status-feedback",
+  "category": "bug",
+  "title": "变更卡：留痕单不推卡、失败回执与状态查询",
+  "createdAt": "2026-11-17T22:38:58+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "修复确认卡链路：留痕单不再弹可执行卡；执行失败回灌给 Agent（流式排队）；ChangePlan 增加 status 并提供只读查询工具；确认卡改为紧凑布局",
+    "toolCallCount": 0
+  },
+  "problem": "确认卡链路三处口径不一致：留痕单(env_ensure/deploy_save_recipe/env_mapping_draft)也会弹可执行卡导致 apply 必 400；apply 失败只弹本地 toast，Agent 收不到回执；变更单无状态，Agent 无法查询确认/执行结果",
+  "solution": "ChangePlan 增加 executable() 与 status(PENDING/CONFIRMED/APPLIED/FAILED) 并持久化，推卡前过滤不可执行变更，确认/执行/失败时更新状态；新增只读工具 change_status；卡片失败 emit failed 由 ChatView 回灌给 Agent（流式期间排队补发）；确认卡改为紧凑布局，diff/日志按需展开",
+  "commits": [
+    {
+      "sha": "898c6e0e79bcc7f01d0c39617d4b361ecc952f6d",
+      "subject": "fix(change): 留痕单不弹确认卡、失败回执回灌并支持查询变更状态",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/handbook/l2/tool-execution.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "5840c5010b28e401cbdf5ad69449392439c9729e"
+        },
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "33853d1e8795cb0158b3dcb425b2f81d23bb2c78"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "08324553086e86b6f61ed3c7dda77a20310f16bb"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/change/ChangePlan.java",
+          "status": "M",
+          "additions": 29,
+          "deletions": 1,
+          "blobHash": "2b5ee0916c039c9f49448c7072cda18294c308c4"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/ChangeStore.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "09534fdeaa6f92e2cdd243db30b61b9cb336dcdb"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/change/ChangePlanTest.java",
+          "status": "A",
+          "additions": 40,
+          "deletions": 0,
+          "blobHash": "7a0dca47618a8e97ef7a62c01970e3ab08e0b1f1"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 13,
+          "deletions": 3,
+          "blobHash": "668293ae99361e41a7310435bd5f833df40cae86"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTest.java",
+          "status": "M",
+          "additions": 51,
+          "deletions": 4,
+          "blobHash": "8f5f212f6e1fcd812f84f71fc914acc865002d63"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChangeController.java",
+          "status": "M",
+          "additions": 26,
+          "deletions": 17,
+          "blobHash": "bcac33f0a742ec9e21dff73171c2518b02427624"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "4c4ceaa007447a7792a22c1f0b43b282371752f3"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/ChangeRegistry.java",
+          "status": "M",
+          "additions": 57,
+          "deletions": 7,
+          "blobHash": "291a46a1dcc89a28ebbc8d4601bf9d9edc7d2d82"
+        },
+        {
+          "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/ChangeRegistryTest.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 0,
+          "blobHash": "f9db89dde6ffe9aee9df61121ca307789cbf6b58"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "6ef0cfb7c561987c001f98d1554a8a678fd49f90"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeTools.java",
+          "status": "M",
+          "additions": 56,
+          "deletions": 4,
+          "blobHash": "0046daa059ee89a9a4c946bf47ad6cd51435533c"
+        },
+        {
+          "path": "platform/web/src/components/chat/ApprovalRequestCard.vue",
+          "status": "M",
+          "additions": 238,
+          "deletions": 85,
+          "blobHash": "d1614c8f417c799ea1d2088b4a91b9e175de575c"
+        },
+        {
+          "path": "platform/web/src/types.ts",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "d1cfd2be0f830cd8d887de3518c281d78a5fff55"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 34,
+          "deletions": 4,
+          "blobHash": "25cbe93d0dbb80fe405366fac9245565e5dbf67f"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/change/ChangePlanTest.java",
+        "status": "A",
+        "additions": 40,
+        "deletions": 0,
+        "blobHash": "7a0dca47618a8e97ef7a62c01970e3ab08e0b1f1"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTest.java",
+        "status": "M",
+        "additions": 51,
+        "deletions": 4,
+        "blobHash": "8f5f212f6e1fcd812f84f71fc914acc865002d63"
+      },
+      {
+        "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/ChangeRegistryTest.java",
+        "status": "M",
+        "additions": 19,
+        "deletions": 0,
+        "blobHash": "f9db89dde6ffe9aee9df61121ca307789cbf6b58"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 585, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-governance",
+      "agent-runtime",
+      "agent-tools",
+      "web"
+    ],
+    "verification": "worktree 干净基线 pre-commit 全量 spec-checks 测试通过；新增 ChangePlanTest、ChangeRegistryTest 状态流转测试；前端 typecheck/build 通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_2238_change-card-status-feedback"
+    ]
+  },
+  "chain": {
+    "prev": "e26e65db46b0c314113ec4e950a3b82427b2882879fbf23f4262978aea607c06",
+    "self": "03f6e672e6257752620a07680644bbde8cee9a20f2ad89a2228fd1b085c4c93e"
+  }
+}

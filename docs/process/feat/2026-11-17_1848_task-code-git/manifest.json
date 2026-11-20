@@ -1,0 +1,122 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-17_1848_task-code-git",
+  "category": "feat",
+  "title": "任务编码生成并参与修复分支",
+  "createdAt": "2026-11-17T18:48:03+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "任务编码生成并参与修复分支",
+    "toolCallCount": 0
+  },
+  "problem": "平台任务只能看到内部 id（task-xxxx）与远端编号，没有稳定、可读、可口头引用的编码；自动修复分支是 agent/bugfix-<随机串>，从分支无法反查是哪个任务；新建任务也没有统一的编号规则，任务页与提交信息无法使用同一个标识。",
+  "solution": "GitIssue 增加 code 字段：项目内按分类自增（FEAT-1 / BUG-2），创建时由 SQLite 存储统一分配、更新时不可变；老库启动时按创建顺序回填已有任务；任务列表与任务页展示编码；自动修复分支改为 agent/bugfix-<code>-<短id>，保留 agent/bugfix- 前缀以兼容现有推送逻辑。",
+  "commits": [
+    {
+      "sha": "2b027145f5301641fd6c7268b465f3b0de5af73c",
+      "subject": "feat(task): 任务编码 FEAT-1/BUG-2 自动生成并进入修复分支名",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/gitissue/GitIssue.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 2,
+          "blobHash": "04b9a19c818592cecc41bced78b6a271540b9a53"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/bugfix/BugFixOrchestrator.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "6ad260d5cdbd0de54d8de5b964c2c3a9a6a855b3"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitissue/GitIssueServiceImpl.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 3,
+          "blobHash": "8cc49fd21e128de0802dded3f4ceeaf76c129c77"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitissue/GitIssueSyncService.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 2,
+          "blobHash": "f81513f1155352766e058853a9e619614655b420"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteGitIssueStore.java",
+          "status": "M",
+          "additions": 104,
+          "deletions": 24,
+          "blobHash": "e1f9771c0bd6c029e884e332236f39d714620a40"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/SqliteGitIssueStoreCodeTest.java",
+          "status": "A",
+          "additions": 50,
+          "deletions": 0,
+          "blobHash": "c3ecefe86e080f46939d3778196a39895c686762"
+        },
+        {
+          "path": "platform/web/src/api/issues.ts",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "47722358b46e43192258a281cbcb8a7a1f8e5dc4"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatIssuesView.vue",
+          "status": "M",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "70cac33cc7145bac7c6eb45c4f55f672ef63b92c"
+        },
+        {
+          "path": "platform/web/src/views/WorkspaceHomeView.vue",
+          "status": "M",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "9b169d4a71ebaa72d51fac2ce0b39963b349ae6f"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/SqliteGitIssueStoreCodeTest.java",
+        "status": "A",
+        "additions": 50,
+        "deletions": 0,
+        "blobHash": "c3ecefe86e080f46939d3778196a39895c686762"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 571, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "agent-infra",
+      "web"
+    ],
+    "verification": "新增 SqliteGitIssueStoreCodeTest：按项目+分类分配（BUG-1/BUG-2/FEAT-1、项目隔离）、更新不改编码、列表可查到编码；mvn -B -pl spec-checks -am test 全量通过；platform/web npm run typecheck 通过。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1848_task-code-git"
+    ]
+  },
+  "chain": {
+    "prev": "1e1c20aef8cc2aecd597beebe55bc14c9bd3b3e9dbfab796aa9cf2bbd4e78233",
+    "self": "b404e2d74fca4c13fa6ce73be0cf5b5dfa11c078d8602593a5ee723e98f35480"
+  }
+}

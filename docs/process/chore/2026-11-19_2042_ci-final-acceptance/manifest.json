@@ -1,0 +1,67 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_2042_ci-final-acceptance",
+  "category": "chore",
+  "title": "补 CI 修复的最终验收记录",
+  "createdAt": "2026-11-19T20:42:37+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "主干 CI 已从连续失败转为成功：PR #23 五项全绿、合并提交触发的主干运行 success；把这条最终验收写进归档",
+    "toolCallCount": 0
+  },
+  "problem": "CI 编码门禁的修复虽然已在 PR #23 通过并合并，但归档里缺最关键的一条证据：远端主干 CI 到底绿没绿。本地用相同范围重放能 exit 0，不等于远端真的通过——job 环境、git 版本、base/head 取值都可能不同。没有这条，下一轮看的人只能相信「应该修好了」。",
+  "solution": "把远端最终验收写进归档：PR #23 五项检查全绿（backend 2m56s / contract / docs / frontend / security）；合并提交 06bb27d 触发的主干运行 44525721043 结论 success；并给出对照——同一 job 在前两次主干推送（PR #21 的 44521071492、PR #22 的 44523852465）均为 failure，即「失败→失败→成功」的转折点正是本修复。补记录后 chore 分类链需要重排，一并处理并重算 chain.self。",
+  "commits": [
+    {
+      "sha": "70a808f1ada0a22747b7fae6810d515abfb3692c",
+      "subject": "docs(ci): 补最终验收——主干 CI 已从红转绿",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_2026_ci-platform-merge-encoding/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "6dca4a8a6408ac7cb3b756c926c6dedeb8a935e5"
+        },
+        {
+          "path": "docs/process/chore/2026-11-19_2032_ci-evidence-refresh/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "c0f8d8ecfbc3c493eb511a0fcd8727a331b2ba67"
+        },
+        {
+          "path": "tools/session-archive/append-final-acceptance.py",
+          "status": "A",
+          "additions": 50,
+          "deletions": 0,
+          "blobHash": "ae6c52f8450d2db615f960ab33f3c1dccad19d5c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "gh run view 44525721043 结论 success；gh pr checks 23 五项全 pass；gate validate 通过（125 份）"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2042_ci-final-acceptance"
+    ]
+  },
+  "chain": {
+    "prev": "4efff05be336fbfde14ba65a1a26bb71b30cbb1ad327037a7f6611610bc2da87",
+    "self": "57e64bd9287ef3a006aedcf8b785c01c7e411ff58e828a4615783bfcf4072283"
+  }
+}

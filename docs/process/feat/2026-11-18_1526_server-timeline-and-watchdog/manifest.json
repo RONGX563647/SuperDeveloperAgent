@@ -1,0 +1,290 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_1526_server-timeline-and-watchdog",
+  "category": "feat",
+  "title": "服务端时间线落盘+任务票据化与断线续传/看门狗",
+  "createdAt": "2026-11-18T15:26:36+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "继续全部做完",
+    "toolCallCount": 0
+  },
+  "problem": "会话事件只在内存总线里滚动，刷新/换端/进程重启后看不到历史；运行卡死时一直显示运行中并占着会话并发位。",
+  "solution": "新增 conversation_timeline 落盘与游标读取、派发任务票据化；新增 SSE 时间线订阅支持 Last-Event-ID 断线续传；新增运行看门狗收敛超时/排队超限运行并释放并发位。",
+  "commits": [
+    {
+      "sha": "c969d209856f01f658e659996aaf678e1fc060bf",
+      "subject": "feat(workspace): 服务端时间线、任务票据与断线续传/看门狗",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/gateway-chat-controller.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "810e281ea497e78f542a2e152aef6d35c196454e"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "04785b84c93123f281f30158329ee3b0bbb70665"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/ConversationRunRepository.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "aecc9e129d25c798b0241666dff60e19420a4254"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/ConversationTimelineRepository.java",
+          "status": "A",
+          "additions": 27,
+          "deletions": 0,
+          "blobHash": "1733ec985ec1b15d0b20b4e9164c74fc365097e2"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/DispatchNodeResult.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 1,
+          "blobHash": "97560182dad3264d8c9207337cd1a55a3190eebb"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/TimelineEntry.java",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "1147916ba62e80172f0074ce503081663cc2536d"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 2,
+          "blobHash": "c88f618fce56947d6d29ec6b6f3404ab22373fa5"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceController.java",
+          "status": "M",
+          "additions": 134,
+          "deletions": 2,
+          "blobHash": "1f57672b03de57703a97e6f8c221bbe176d6582b"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 131,
+          "deletions": 0,
+          "blobHash": "d7806b4005e595d8388a79a5d26740825b75bfab"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "8d44eee0269b38f1058d6c3008963499a54d6cbd"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DualStackPipelineTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 6,
+          "blobHash": "bb624198bdf0fd9d76086ca689041d1e41e59938"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/SessionDataCleanerImpl.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 2,
+          "blobHash": "4029aabed0517ce6fc535de5d70d3eeb3a8d160b"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/SqliteConversationStore.java",
+          "status": "M",
+          "additions": 70,
+          "deletions": 1,
+          "blobHash": "22b85c10ed073b33df3be47e62bf3c45a11d5bb3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ConversationTimelineEntity.java",
+          "status": "A",
+          "additions": 86,
+          "deletions": 0,
+          "blobHash": "6d1628aeeb00cc4d37181837b0f8deb34ee1b536"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/SqliteConversationStoreTest.java",
+          "status": "M",
+          "additions": 33,
+          "deletions": 0,
+          "blobHash": "bfec322d19a61b4d4ee13d0d035227da0c072f50"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ConversationTimelineRecorder.java",
+          "status": "A",
+          "additions": 126,
+          "deletions": 0,
+          "blobHash": "c15fb1f2f960e779c761a9e5aa2408bc7bac0f3a"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationManager.java",
+          "status": "M",
+          "additions": 62,
+          "deletions": 0,
+          "blobHash": "d01d679ce5c20fcb394aee550a130425861e8dc1"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationTimelineStream.java",
+          "status": "A",
+          "additions": 84,
+          "deletions": 0,
+          "blobHash": "602015878163666b760bc491429838614ed832e7"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/RunAborter.java",
+          "status": "A",
+          "additions": 12,
+          "deletions": 0,
+          "blobHash": "167cec5f2bae7419460d8a4c4e9741a283cf5d71"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchScheduler.java",
+          "status": "M",
+          "additions": 33,
+          "deletions": 3,
+          "blobHash": "4c3257648df506be9005fd81fe4485ef2502a7d4"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceRunExecutor.java",
+          "status": "M",
+          "additions": 39,
+          "deletions": 2,
+          "blobHash": "60580f031b189714de01004f69bb6a3f2107c17f"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceRunWatchdog.java",
+          "status": "A",
+          "additions": 136,
+          "deletions": 0,
+          "blobHash": "e33fb7f002493d3d2dc26ecc685f46c3369c2447"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/ConversationTimelineRecorderTest.java",
+          "status": "A",
+          "additions": 96,
+          "deletions": 0,
+          "blobHash": "b77ee38a9e98731acb66875fb2264cad4f8b1922"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+          "status": "M",
+          "additions": 61,
+          "deletions": 2,
+          "blobHash": "a4283f5d66111dd6c5886b87ce4cd20defeb0b07"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationTimelineStreamTest.java",
+          "status": "A",
+          "additions": 165,
+          "deletions": 0,
+          "blobHash": "3f0c021c03309b3b633862f799f2f28387e91a5e"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchSchedulerTest.java",
+          "status": "M",
+          "additions": 40,
+          "deletions": 0,
+          "blobHash": "56de531cc64489974a6d79cff5f1434e2a9bccac"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/WorkspaceRunWatchdogTest.java",
+          "status": "A",
+          "additions": 219,
+          "deletions": 0,
+          "blobHash": "587394f0772eb4d94cb08b7aa441c5e9c6a656a3"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/DualStackPipelineTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 6,
+        "blobHash": "bb624198bdf0fd9d76086ca689041d1e41e59938"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/SqliteConversationStoreTest.java",
+        "status": "M",
+        "additions": 33,
+        "deletions": 0,
+        "blobHash": "bfec322d19a61b4d4ee13d0d035227da0c072f50"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/ConversationTimelineRecorderTest.java",
+        "status": "A",
+        "additions": 96,
+        "deletions": 0,
+        "blobHash": "b77ee38a9e98731acb66875fb2264cad4f8b1922"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+        "status": "M",
+        "additions": 61,
+        "deletions": 2,
+        "blobHash": "a4283f5d66111dd6c5886b87ce4cd20defeb0b07"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationTimelineStreamTest.java",
+        "status": "A",
+        "additions": 165,
+        "deletions": 0,
+        "blobHash": "3f0c021c03309b3b633862f799f2f28387e91a5e"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchSchedulerTest.java",
+        "status": "M",
+        "additions": 40,
+        "deletions": 0,
+        "blobHash": "56de531cc64489974a6d79cff5f1434e2a9bccac"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/WorkspaceRunWatchdogTest.java",
+        "status": "A",
+        "additions": 219,
+        "deletions": 0,
+        "blobHash": "587394f0772eb4d94cb08b7aa441c5e9c6a656a3"
+      }
+    ],
+    "casesAdded": 14,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 669, Failures: 0, Errors: 0, Skipped: 1"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime"
+    ],
+    "verification": "mvn -B -pl spec-checks -am test 全量通过；新增 ConversationTimelineRecorderTest、ConversationTimelineStreamTest、WorkspaceRunWatchdogTest 等用例。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_1526_server-timeline-and-watchdog"
+    ]
+  },
+  "chain": {
+    "prev": "685e5db7830e68345d2dc5e82db379ea7a6dbb22d305edb83963b03b85df3f20",
+    "self": "8a70878da362f9988a33aed65ca2b58bbf84f72a2f040d6253bfbb452a0d0179"
+  }
+}

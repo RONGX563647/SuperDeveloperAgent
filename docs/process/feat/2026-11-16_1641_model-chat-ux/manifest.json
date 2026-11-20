@@ -1,0 +1,1144 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-16_1641_model-chat-ux",
+  "category": "feat",
+  "title": "会话级模型选择、确认卡续跑与多版本部署",
+  "createdAt": "2026-11-17T10:23:17+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "会话不能选模型且无用量统计；工具确认后需手动继续；部署只能靠 git hash 覆盖，旧版本无法保留；无 Dockerfile 时静默降级 HOST 产生孤儿进程",
+    "toolCallCount": 0
+  },
+  "problem": "会话不能选模型且无用量统计；工具确认后需手动继续；部署只能靠 git hash 覆盖，旧版本无法保留；无 Dockerfile 时静默降级 HOST 产生孤儿进程",
+  "solution": "会话级模型/网关选择、token 统计与会话时间线入库；确认卡内嵌对话并自动续跑；市场分页懒加载并兼容系统根证书；部署支持版本号+tag 多版本与单容器卷挂载；无 Dockerfile 显式阻断并提供 HOST 进程排障；前端侧栏折叠、环境 Tab 与部署矩阵",
+  "commits": [
+    {
+      "sha": "89cb898371f953d5cc2eb849b54f34ec01daa00f",
+      "subject": "feat(workspace): 任务看板上移工作区并强化调度编排",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/adr/0007-dag-context-governance.md",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "a7a12aebdff02114d90ed285ffe1fd53a2fb5ff5"
+        },
+        {
+          "path": "docs/architecture/overview.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "708b6f4170993ac13616eb6fb898241fe45f1c66"
+        },
+        {
+          "path": "docs/changelog/2026-11.md",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "4244dfeb4fbfafb429c77c2802bec2514d41198f"
+        },
+        {
+          "path": "docs/code-wiki.md",
+          "status": "M",
+          "additions": 16,
+          "deletions": 12,
+          "blobHash": "2fdc3f17fdd0f53ce7bea1b7a1a7c21effb5e8c7"
+        },
+        {
+          "path": "docs/prd-devops-agent-v1.md",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "5f951b03ba09e06d7446b6de76b9f1915a22af28"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/DispatchNode.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 1,
+          "blobHash": "94c7a64e2781b0e1e1c533ef51552fc032a3b94c"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/DispatchPlan.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 1,
+          "blobHash": "6f88dca42c083f01da0b5d05d3e508897fc5b459"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/WorkspacePlanItem.java",
+          "status": "A",
+          "additions": 24,
+          "deletions": 0,
+          "blobHash": "2428947abf41f703cb98d957d4fd8a1116b5c8b8"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/WorkspaceSupervisorPort.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "9d96936bf26343d5e1caef94e78621b8a0b045ee"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 5,
+          "blobHash": "1488642c99f4ffe36d7d8d21bbbe52cb1dc7ddec"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationManager.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 2,
+          "blobHash": "8ecd9dcd5d093305e40f236d5509e9c3a59dbd35"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchScheduler.java",
+          "status": "M",
+          "additions": 102,
+          "deletions": 17,
+          "blobHash": "bbbf08559df842df6f00ce5e498a47ff3d067532"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchSchedulerTest.java",
+          "status": "M",
+          "additions": 49,
+          "deletions": 0,
+          "blobHash": "9cdeb87a52da35809040f63d2c83852feee93b5c"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/WorkspaceSupervisorTools.java",
+          "status": "M",
+          "additions": 191,
+          "deletions": 6,
+          "blobHash": "6638a6171f2d151fb3a34eb3ef69e60c99fd78a5"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 7,
+          "deletions": 20,
+          "blobHash": "e24bc04c6ed9a1596e32ec77f9cb2cf8e4a07978"
+        },
+        {
+          "path": "platform/web/src/views/WorkspaceHomeView.vue",
+          "status": "M",
+          "additions": 168,
+          "deletions": 7,
+          "blobHash": "a4215629a10b403a73b270f7d23edff0dfde5863"
+        }
+      ]
+    },
+    {
+      "sha": "8da8302de48e4a9b7d2bc3ba20816c8959735483",
+      "subject": "feat(chat): 会话级模型选择、token 用量统计与会话时间线入库",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/Conversation.java",
+          "status": "M",
+          "additions": 25,
+          "deletions": 2,
+          "blobHash": "54f402de69ec2552f55f498752c07bc225829cc7"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/ConversationPatch.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 1,
+          "blobHash": "b81fe99952a985aa610f4c946e285644616466cc"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/ConversationTranscriptRepository.java",
+          "status": "A",
+          "additions": 16,
+          "deletions": 0,
+          "blobHash": "4fd0eeee0fabaa32e2bda7327b8af7d05d4ed41f"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/ModelRegistry.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 0,
+          "blobHash": "6af48cfded047e16ad6f77b498d039d1360b0e8b"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/ModelCatalogEntry.java",
+          "status": "A",
+          "additions": 27,
+          "deletions": 0,
+          "blobHash": "1ead528c7ffe0feed856f53d57954201abe4cfca"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/ModelCatalogRepository.java",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "3d0812e273b2025609d3088a47ad3fc81d243f79"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/TokenUsageRepository.java",
+          "status": "A",
+          "additions": 90,
+          "deletions": 0,
+          "blobHash": "961c947460465e8fa8db1b847f22d4291d64f365"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/AgentEventMapper.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 2,
+          "blobHash": "5ad85e26171912c97343bbe88fe0c769d6f60cc7"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/SettingsController.java",
+          "status": "M",
+          "additions": 133,
+          "deletions": 4,
+          "blobHash": "d464cd51fa717c31c9acf6c2b506c829bf29f864"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceController.java",
+          "status": "M",
+          "additions": 32,
+          "deletions": 4,
+          "blobHash": "90d46ae4319703d7dfc56a4f6adbad7c7fe443e2"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceSuperController.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 5,
+          "blobHash": "592ec719b9311c910bb892d288d96bf3de0369e1"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/dto/ChatRequest.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 1,
+          "blobHash": "982b960f4ae3112256fa010e1359ba75ce24307c"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/SettingsControllerTest.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "0e222cde84e297363b8c420a40a2cb7475f0cbf3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/SessionDataCleanerImpl.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 1,
+          "blobHash": "dae5eef2057481c0fed8a9eae0763c4483767fe7"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/SqliteConversationStore.java",
+          "status": "M",
+          "additions": 102,
+          "deletions": 11,
+          "blobHash": "6793ce329dab2680c9612a2c95b22ec8837ba989"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/ModelDiscoveryClient.java",
+          "status": "A",
+          "additions": 148,
+          "deletions": 0,
+          "blobHash": "01ee35e002312823c021d839b4aea6257ad09991"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteModelCatalogStore.java",
+          "status": "A",
+          "additions": 185,
+          "deletions": 0,
+          "blobHash": "66a9f4715c049131b53cb524fa30fe9ddb0ae1df"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteTokenUsageRepository.java",
+          "status": "A",
+          "additions": 299,
+          "deletions": 0,
+          "blobHash": "ae3a06028b55951ec3f6dd2c8cf90655b0c10d16"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/SqliteConversationStoreTest.java",
+          "status": "M",
+          "additions": 18,
+          "deletions": 0,
+          "blobHash": "671c6d161529f5b8fa45f317d40deea39b008be4"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 23,
+          "deletions": 3,
+          "blobHash": "d2ac38ff0dbffc73bc0347a3498a87e1d66fed72"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
+          "status": "M",
+          "additions": 45,
+          "deletions": 6,
+          "blobHash": "3217ecff655bb611e826eae7146e4839ee690166"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/DynamicModelProvider.java",
+          "status": "M",
+          "additions": 28,
+          "deletions": 18,
+          "blobHash": "81267ea1f7e50032c0cff714cfd3a63ba07e5ea0"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/SettingsModelRegistry.java",
+          "status": "M",
+          "additions": 25,
+          "deletions": 0,
+          "blobHash": "bdf99fe9f38bba16c621bd7bab03791d138a783f"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/TokenUsageRecorder.java",
+          "status": "A",
+          "additions": 51,
+          "deletions": 0,
+          "blobHash": "540f7e514566e0973806caed6c3b90692e7305ca"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationManager.java",
+          "status": "M",
+          "additions": 41,
+          "deletions": 2,
+          "blobHash": "5ebebce7a3af5db20863692e3656870413d57485"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceRunExecutor.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 1,
+          "blobHash": "275813350a2ab892241a48a76a6e79e1716f0c21"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/DynamicModelProviderTest.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "cc0645a39132730299914e02de3b21b3996637e1"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+          "status": "M",
+          "additions": 39,
+          "deletions": 8,
+          "blobHash": "e30c8232bc4d2cf460819827cc0b719733ed8131"
+        },
+        {
+          "path": "platform/web/src/api/settings.ts",
+          "status": "M",
+          "additions": 124,
+          "deletions": 8,
+          "blobHash": "78c30f7d507c1694c517cffb74238950bfa404bf"
+        },
+        {
+          "path": "platform/web/src/api/workspace.ts",
+          "status": "M",
+          "additions": 25,
+          "deletions": 0,
+          "blobHash": "c429daa2af3e2ddb5bf0e65df4d63f96de59dffd"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatStatusStrip.vue",
+          "status": "M",
+          "additions": 105,
+          "deletions": 51,
+          "blobHash": "c5eca7e5b56786915af27ccfd585cc875abe5ab9"
+        },
+        {
+          "path": "platform/web/src/composables/useAgentChat.ts",
+          "status": "M",
+          "additions": 58,
+          "deletions": 1,
+          "blobHash": "f29b931e174bf66867137a65cd19e7615b5adf0b"
+        },
+        {
+          "path": "platform/web/src/state/sessionChat.ts",
+          "status": "M",
+          "additions": 108,
+          "deletions": 12,
+          "blobHash": "4d70ecb367bd1050d21472995d38c19573fe7981"
+        },
+        {
+          "path": "platform/web/src/state/sessionHistory.ts",
+          "status": "M",
+          "additions": 33,
+          "deletions": 15,
+          "blobHash": "9b41740cf0f4ca0fdf8d03b0fcc0ca712d6244bf"
+        },
+        {
+          "path": "platform/web/src/state/workspaceChat.ts",
+          "status": "M",
+          "additions": 83,
+          "deletions": 12,
+          "blobHash": "9ca97731a0d9abd86b1c1ba610622cb2c9850512"
+        },
+        {
+          "path": "platform/web/src/types.ts",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "462edc6cd7402d7b560a742bf59e9c3684d795e6"
+        }
+      ]
+    },
+    {
+      "sha": "886e7a3df7eeeedd175125c713c2629980c43405",
+      "subject": "feat(chat): 确认卡内嵌当前对话并支持变更应用后自动续跑",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/env/EnvBindingWire.java",
+          "status": "A",
+          "additions": 52,
+          "deletions": 0,
+          "blobHash": "b2819f87d3e2ff72e49a4e2d8cd34c3fb7581e6e"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
+          "status": "M",
+          "additions": 51,
+          "deletions": 14,
+          "blobHash": "8b194683cdd68261005fb0872c5c95ab30f6d030"
+        },
+        {
+          "path": "platform/web/src/components/chat/ApprovalRequestCard.vue",
+          "status": "M",
+          "additions": 9,
+          "deletions": 2,
+          "blobHash": "1bc07bdc0054164ff5c1445afc32fee5e7b3ae58"
+        },
+        {
+          "path": "platform/web/src/components/chat/EnvBindingCard.vue",
+          "status": "M",
+          "additions": 7,
+          "deletions": 1,
+          "blobHash": "09abdbac3d4bf947fa44f9b476245bd95ec76129"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 128,
+          "deletions": 2,
+          "blobHash": "ebdbae95ae8b413fe910ae1676076e9b270e2fc7"
+        }
+      ]
+    },
+    {
+      "sha": "44e43940cea0d181254f039ef6b0c5fa452388e8",
+      "subject": "feat(settings): 模型目录同步与用量统计面板",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/UsageController.java",
+          "status": "A",
+          "additions": 53,
+          "deletions": 0,
+          "blobHash": "df9b1e84e98fc52c6e6504596ed0fc6478d8c4f8"
+        },
+        {
+          "path": "platform/web/src/components/settings/ModelPanel.vue",
+          "status": "M",
+          "additions": 82,
+          "deletions": 5,
+          "blobHash": "55995f42f8878a8cc594c2aa4df45d4e4450ca65"
+        },
+        {
+          "path": "platform/web/src/components/settings/UsagePanel.vue",
+          "status": "A",
+          "additions": 250,
+          "deletions": 0,
+          "blobHash": "219c59d14b5f9caa351addbffdc244f7f08e7194"
+        },
+        {
+          "path": "platform/web/src/views/SettingsView.vue",
+          "status": "M",
+          "additions": 8,
+          "deletions": 2,
+          "blobHash": "da2aee27df579f03d670156ebfd62c675ef3dc55"
+        }
+      ]
+    },
+    {
+      "sha": "200d1d2515e0075c2ee028707b2a516c71671952",
+      "subject": "feat(tools): 子 Agent 变更单回填与补丁白名单补充",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 2,
+          "blobHash": "36bb146d3b33a7c700cc5299fab981e203581135"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/patch/WorkspaceCodePatcher.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "35913c038d6a70d352c82c7438f7cb8338b4fa5e"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/patch/WorkspaceCodePatcherTest.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "e2974e81230c2803af0383ad06a47302d1579584"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/OpsAgentRunner.java",
+          "status": "M",
+          "additions": 41,
+          "deletions": 3,
+          "blobHash": "84d2438437d66dde78370fe6147a0aca0448a78b"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ActionService.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "139a35bee8f4798844fbc5ea00538e1e5bef90f9"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeTools.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 6,
+          "blobHash": "903167192bd6d39bcbd286706d89b7dd824d0fc0"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvCommandTools.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "d5e386a050cff4055357390880a9922d9e0d3bb4"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/PatchTools.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 7,
+          "blobHash": "32245af0747d26965d3f9f3ad459c1f73a2269cf"
+        }
+      ]
+    },
+    {
+      "sha": "f2e6ac578f7b37add21215c6fe2335877c904f95",
+      "subject": "fix(deploy): HOST 部署进程占用与构建现场清理",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 68,
+          "deletions": 3,
+          "blobHash": "03415bbe31646c872922663d5fbd17635ddeb918"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "a733cbc0c1918746d432b3bf6923d979bddc035f"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 90,
+          "deletions": 1,
+          "blobHash": "584dc3d5f879a7d7b9c687b3bc810d219b348723"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DeployToolsConfigTest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 0,
+          "blobHash": "b8279e855dff8dfaf2cafcf8dda0f0c261d43e17"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 30,
+          "deletions": 4,
+          "blobHash": "53c718c790aae58e89011d3c7237e4977863abeb"
+        }
+      ]
+    },
+    {
+      "sha": "8d3fb5ab9478d5f52b67946e3dc27b3082589baf",
+      "subject": "feat(market): 能力市场分页懒加载、技能包安装与信任库兼容",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/CapabilityMarket.java",
+          "status": "M",
+          "additions": 32,
+          "deletions": 2,
+          "blobHash": "df8227d58f1101af4f8b5283a5f65ae69da046de"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/CapabilityMarketController.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 5,
+          "blobHash": "625162aeab5f4c9d1ccc921277faa2e7d3ae278d"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "4b5c9f20c4745bd68e9d5e6722f55e6433f549a4"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/CapabilityInstallerImpl.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "655469d57943a512a6ba72c893faf3e87f441c3c"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/RemoteCapabilityMarket.java",
+          "status": "M",
+          "additions": 555,
+          "deletions": 66,
+          "blobHash": "c5fd341fa21bb7ba9889021c1307c333e586bee2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SkillsStore.java",
+          "status": "M",
+          "additions": 64,
+          "deletions": 0,
+          "blobHash": "266ef1eb0a642f7d321e4c793b4bcd9d5d5c012a"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/RemoteCapabilityMarketTest.java",
+          "status": "M",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "25ef6480ed2101917fb79f3b893a9b01297fdbc3"
+        },
+        {
+          "path": "platform/web/src/components/settings/McpPanel.vue",
+          "status": "M",
+          "additions": 104,
+          "deletions": 24,
+          "blobHash": "78602b0b739c8bb76f5be1b8155d340125f20325"
+        },
+        {
+          "path": "platform/web/src/components/settings/SkillPanel.vue",
+          "status": "M",
+          "additions": 104,
+          "deletions": 23,
+          "blobHash": "122b64a4bbb4bbb36fe7f4d12a0a4886562c2f40"
+        }
+      ]
+    },
+    {
+      "sha": "05621c22eac7e1064bf24745d72f881faad12738",
+      "subject": "fix(security): 主密钥文件权限收紧兼容 Windows ACL",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/security/SecretBox.java",
+          "status": "M",
+          "additions": 43,
+          "deletions": 5,
+          "blobHash": "ba9faabb340dd137fd6eb8ffe9cb8606713ba2cb"
+        }
+      ]
+    },
+    {
+      "sha": "0b21f44af3a656a4016703bba83448cd323c3706",
+      "subject": "chore(build): JDK 24+ native-access 放行与运行日志配置",
+      "category": "chore",
+      "files": [
+        {
+          "path": "README.md",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "31015d0e46ad160cdf5ed0628773d8b37e60f111"
+        },
+        {
+          "path": "docs/dev/overview.md",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "1ba68b8608eec8ea4409add6c9a1fecf45791b06"
+        },
+        {
+          "path": "platform/README.md",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "095eaa9757c2c08a9731017ea1ea5df924e2c664"
+        },
+        {
+          "path": "platform/agent-gateway/pom.xml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "eb064664dd416a0b77ad449de5ad4a091b9f3ffe"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/logback-spring.xml",
+          "status": "A",
+          "additions": 33,
+          "deletions": 0,
+          "blobHash": "6602c0d6053b7036f39b659f0d1ffd8b75da6b1e"
+        },
+        {
+          "path": "platform/pom.xml",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "6f7dba61c400d33d46ec52cac8dec1d88cd1c5a7"
+        }
+      ]
+    },
+    {
+      "sha": "249a2a0b79476cb155d53fc2c1f7503aede1215e",
+      "subject": "feat(ui): 侧栏可拖拽折叠与全局布局密度优化",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/components/chat/ChatStatusStrip.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "3b6180ee78a84395bdd08dd0469812c35c9385da"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatTraceView.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "643b2aa83b359cd0849c0ed30f158c0160c23179"
+        },
+        {
+          "path": "platform/web/src/components/chat/ConversationTimeline.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "ae093e242e7642899c7b8a5c91db317bbd325d3f"
+        },
+        {
+          "path": "platform/web/src/layouts/AppLayout.vue",
+          "status": "M",
+          "additions": 28,
+          "deletions": 2,
+          "blobHash": "71615db21b777c446b07ab901462b0f8a206544f"
+        },
+        {
+          "path": "platform/web/src/layouts/components/AppAside.vue",
+          "status": "M",
+          "additions": 148,
+          "deletions": 15,
+          "blobHash": "d52b575b80130dba02a8d6e1f4d72af81dc809ae"
+        },
+        {
+          "path": "platform/web/src/layouts/components/PageHeader.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "9e428f68c0d6ea326a55de42df322e9bf773e18e"
+        },
+        {
+          "path": "platform/web/src/styles.css",
+          "status": "M",
+          "additions": 8,
+          "deletions": 7,
+          "blobHash": "d0a20f29dba48040140841b18c94acae734794b4"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "cc2b8bc3c7bc85c11e647a2a9e8a2b886606c9e4"
+        },
+        {
+          "path": "platform/web/src/views/SettingsView.vue",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "7380e8ed8d237119ea39cceddc8ab399c8fce906"
+        }
+      ]
+    },
+    {
+      "sha": "844dff0f8ab401751f37395db927e04cbc9f2ded",
+      "subject": "feat(workspace): 新增环境 Tab 与版本×环境部署矩阵",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/runtime/RuntimeInspector.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "0fef5c78bf50de2771655b281c3928385776af58"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/AppRuntimeInspector.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 2,
+          "blobHash": "44b800af644c963487a1bd9559390d1a3aeb5bef"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/DeploymentControlService.java",
+          "status": "A",
+          "additions": 623,
+          "deletions": 0,
+          "blobHash": "5225f9ba3b126f8db349e2538d7da3655ab7ccf4"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceDeploymentController.java",
+          "status": "A",
+          "additions": 54,
+          "deletions": 0,
+          "blobHash": "849a90be84eb987651ebecf1059ae2884d01d1aa"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeploymentControlServiceTest.java",
+          "status": "A",
+          "additions": 158,
+          "deletions": 0,
+          "blobHash": "2ea2949f7cc5c074062df013aace055fbdc5d061"
+        },
+        {
+          "path": "platform/web/src/api/workspace.ts",
+          "status": "M",
+          "additions": 62,
+          "deletions": 0,
+          "blobHash": "25f7fa4c8c319d38fa1df2a23181bf95cb031c0a"
+        },
+        {
+          "path": "platform/web/src/components/workspace/DeploymentMatrix.vue",
+          "status": "A",
+          "additions": 483,
+          "deletions": 0,
+          "blobHash": "3042f37d830f8795bf8e4f3eea8d54ebfb6e19f7"
+        },
+        {
+          "path": "platform/web/src/views/WorkspaceHomeView.vue",
+          "status": "M",
+          "additions": 34,
+          "deletions": 11,
+          "blobHash": "68426a5e4f1cec8ee35e61de368e2aa9b90807a2"
+        }
+      ]
+    },
+    {
+      "sha": "26741f895daa237cc162e90495e2fbe32471ea37",
+      "subject": "feat(deploy): 版本号与打 tag 多版本部署，单容器支持卷挂载",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/deploy/DeployRequest.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 3,
+          "blobHash": "5f8660472ca12d14945e423ad465b0cda13d539e"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 175,
+          "deletions": 15,
+          "blobHash": "96b51ea8d1b6483b7196a76b1c593833f971ed33"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java",
+          "status": "M",
+          "additions": 57,
+          "deletions": 10,
+          "blobHash": "7ca25cce5cd9b5b3405ae42353f37922b77d38c7"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 24,
+          "deletions": 1,
+          "blobHash": "3cd3a95eee793b8da5f78244ebbfd4006b4f38b9"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineDefinition.java",
+          "status": "M",
+          "additions": 16,
+          "deletions": 4,
+          "blobHash": "86358a2d558dbdf7c26181d1880c88212df2bb9c"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 1,
+          "blobHash": "5d451a36d7ffb91068cdf5847219594fb66a1535"
+        },
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 25,
+          "deletions": 5,
+          "blobHash": "ec13572c268f68f3413e80028187cd8962e4f8e8"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/TriggerBar.vue",
+          "status": "M",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "b29e9a89e3abf6b58d64405f6fdfecd9512b9c6c"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 25,
+          "deletions": 3,
+          "blobHash": "fad62962ca4f543e8a5a784be8af10e3de84a2c9"
+        }
+      ]
+    },
+    {
+      "sha": "bddd38a4490b1dffde13dc0b11549b865122145e",
+      "subject": "fix(deploy): 无 Dockerfile 显式阻断、HOST 进程排障与 read_file 行窗口",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDeployerTest.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "a4c2a4068a88a3824b5ce5600fc050d74248a6df"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineDefinitionTest.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "d69d9a4faee72fd971c4e55d227c5d9280056774"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 5,
+          "blobHash": "68c0fe9f4b386a989f69242abc239abe409739b2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/scaffold/RecipeScaffolder.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 6,
+          "blobHash": "29bcb80c17e0433453d51609b3a4a6e00cff409c"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 150,
+          "deletions": 41,
+          "blobHash": "20a552baf07e535df5ea961a16d6d044e9e46118"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvQueryTools.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 2,
+          "blobHash": "5cd159810f20c5b293deebbbdfc31e098e97091a"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/RepoQueryTools.java",
+          "status": "M",
+          "additions": 40,
+          "deletions": 9,
+          "blobHash": "a319408767e49f7d7065d0c272fc69f75525b35d"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/RuntimeTools.java",
+          "status": "M",
+          "additions": 113,
+          "deletions": 2,
+          "blobHash": "33e409e487df8cfba50d9d60ad8ca059452018fc"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DeployToolsConfigTest.java",
+          "status": "M",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "b8f63b0ab3d0f910b69863c4edb78aadeca718a4"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/RepoQueryToolsSymlinkTest.java",
+          "status": "M",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "8a77892c2562f47f5af79ed7a94c5864679f23ef"
+        }
+      ]
+    },
+    {
+      "sha": "c6d150dec49e7371124c255f0321692b260f629e",
+      "subject": "feat(chat): 状态栏增加本会话 Skill/MCP 快捷开关",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/components/chat/ChatStatusStrip.vue",
+          "status": "M",
+          "additions": 325,
+          "deletions": 3,
+          "blobHash": "c0bf5c7bddf1c6beb9b05f91520e1c1340a8e0ce"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "e8e4bc8c586e6177d6df85c08d8e1a44c121deea"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchSchedulerTest.java",
+        "status": "M",
+        "additions": 49,
+        "deletions": 0,
+        "blobHash": "9cdeb87a52da35809040f63d2c83852feee93b5c"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/SettingsControllerTest.java",
+        "status": "M",
+        "additions": 2,
+        "deletions": 1,
+        "blobHash": "0e222cde84e297363b8c420a40a2cb7475f0cbf3"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/conversation/SqliteConversationStoreTest.java",
+        "status": "M",
+        "additions": 18,
+        "deletions": 0,
+        "blobHash": "671c6d161529f5b8fa45f317d40deea39b008be4"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/DynamicModelProviderTest.java",
+        "status": "M",
+        "additions": 6,
+        "deletions": 0,
+        "blobHash": "cc0645a39132730299914e02de3b21b3996637e1"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+        "status": "M",
+        "additions": 39,
+        "deletions": 8,
+        "blobHash": "e30c8232bc4d2cf460819827cc0b719733ed8131"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+        "status": "M",
+        "additions": 11,
+        "deletions": 2,
+        "blobHash": "36bb146d3b33a7c700cc5299fab981e203581135"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/patch/WorkspaceCodePatcherTest.java",
+        "status": "M",
+        "additions": 15,
+        "deletions": 0,
+        "blobHash": "e2974e81230c2803af0383ad06a47302d1579584"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DeployToolsConfigTest.java",
+        "status": "M",
+        "additions": 9,
+        "deletions": 0,
+        "blobHash": "b8279e855dff8dfaf2cafcf8dda0f0c261d43e17"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/RemoteCapabilityMarketTest.java",
+        "status": "M",
+        "additions": 47,
+        "deletions": 0,
+        "blobHash": "25ef6480ed2101917fb79f3b893a9b01297fdbc3"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeploymentControlServiceTest.java",
+        "status": "A",
+        "additions": 158,
+        "deletions": 0,
+        "blobHash": "2ea2949f7cc5c074062df013aace055fbdc5d061"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/DockerDeployerTest.java",
+        "status": "M",
+        "additions": 14,
+        "deletions": 0,
+        "blobHash": "a4c2a4068a88a3824b5ce5600fc050d74248a6df"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineDefinitionTest.java",
+        "status": "M",
+        "additions": 2,
+        "deletions": 0,
+        "blobHash": "d69d9a4faee72fd971c4e55d227c5d9280056774"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DeployToolsConfigTest.java",
+        "status": "M",
+        "additions": 13,
+        "deletions": 0,
+        "blobHash": "b8f63b0ab3d0f910b69863c4edb78aadeca718a4"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/RepoQueryToolsSymlinkTest.java",
+        "status": "M",
+        "additions": 15,
+        "deletions": 0,
+        "blobHash": "8a77892c2562f47f5af79ed7a94c5864679f23ef"
+      }
+    ],
+    "casesAdded": 16,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 478, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "README.md",
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools",
+      "pom.xml",
+      "web"
+    ],
+    "verification": "Tests run: 478, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [
+    "开发环境固定单槽部署，忽略 tag"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-16_1641_model-chat-ux"
+    ]
+  },
+  "chain": {
+    "prev": "43d49886473137a281d3fdf93d10d4699aa06da5fa3141d23951ee628aff8e5c",
+    "self": "abd545c07ff49123062cb1d6f8aaab697f1ad1eb9919cd3ec545ccadb2dd5632"
+  }
+}

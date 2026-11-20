@@ -1,0 +1,42 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "docs/2026-11-16_1552_session-6afaadd0",
+  "category": "docs",
+  "title": "修复能力市场不可达的TLS证书不受信bug，根因为本地SteamTools/Watt Toolkit代理工具对GitHu",
+  "createdAt": "2026-11-17T10:39:17+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "修复能力市场不可达的TLS证书不受信bug，根因为本地SteamTools/Watt Toolkit代理工具对GitHub相关域名做了TLS中间人，其根证书仅存在于Windows系统证书库，而Java HttpClient默认仅信任JVM的cacerts，导致握手失败。修改RemoteCapabilityMarket.java中的市场HttpClient配置，新增CompositeTrustMan",
+    "toolCallCount": 0,
+    "ideSessionId": "6afaadd0c7a6e66a07d2c073",
+    "autoSwept": true
+  },
+  "problem": "AI 开发会话（无代码提交）：修复能力市场不可达的TLS证书不受信bug，根因为本地SteamTools/Watt Toolkit代理工具对GitHu",
+  "solution": "修复能力市场不可达的TLS证书不受信bug，根因为本地SteamTools/Watt Toolkit代理工具对GitHub相关域名做了TLS中间人，其根证书仅存在于Windows系统证书库，而Java HttpClient默认仅信任JVM的cacerts，导致握手失败。修改RemoteCapabilityMarket.java中的市场HttpClient配置，新增CompositeTrustManager实现同时信任JVM默认信任库与系统根证书库，系统库不可用时自动回退原有校验逻辑，不改变原有安全语义。补充对应单元测试，全量测试通过，重启后端后能力市场可正常加载。",
+  "commits": [],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "n/a",
+    "result": "NOT_RUN",
+    "evidence": "会话无代码改动，按会话摘要自动补录"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "无代码改动（自动对账生成）；代码产出见 feat/2026-11-16_1456_env-binding-and-market"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [
+      "feat/2026-11-16_1456_env-binding-and-market"
+    ],
+    "summaryRefs": [
+      "2026-11/2026-11-16_1552_session-6afaadd0"
+    ]
+  },
+  "chain": {
+    "prev": "9b159faff815b401fd3a54a99641501dcbec4b65abe98f5ab22f451275e62b93",
+    "self": "62a1eeb896cad315fe9020a66ea767fdfaa9f7bec3908ac8e057fb5aa0d28c71"
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_2330_patch-guard-src-main",
+  "category": "feat",
+  "title": "补丁守卫放行 src-main 并返回结构化拒绝",
+  "createdAt": "2026-11-18T23:30:38+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "task-9779e75d91: propose_patch 路径守卫过窄，agent 无法写 src/main；放行 platform/*/src/main/** 与 src/test/**，硬拒 .git/target/node_modules 与密钥文件，拒绝返回 PATH_DENIED + 允许前缀清单",
+    "toolCallCount": 0
+  },
+  "problem": "task-9779e75d91（P0 真阻塞）：propose_patch 的路径守卫白名单过窄，agent 连自己仓库的 src/main 都写不进，所有「让 agent 自己改代码」的 FEAT 与后端 bug 修复全部空转；拒绝时只给笼统失败，模型会反复重试同一路径。",
+  "solution": "把业务源码 src/main/** 与测试代码 src/test/** 纳入允许清单；新增拒绝清单（优先级高于允许）覆盖 .git/、target/、build/、dist/、node_modules/ 与凭证文件（.env / *.pem / *.key / id_rsa* / .npmrc 等）；拒绝时抛 PatchPathDeniedException，输出结构化 PATH_DENIED + 被拒路径 + 命中规则 + 允许/禁止清单 + next；apply 阶段二次校验，绕过 stage 的补丁同样写不进危险路径；提示词与失败恢复建议同步成新的允许范围。",
+  "commits": [
+    {
+      "sha": "4e8ddfb185f88e6aae0aff26087cc697427b9152",
+      "subject": "feat(patch): 补丁守卫放行 src/main 并返回结构化 PATH_DENIED",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/error/PatchPathDeniedException.java",
+          "status": "A",
+          "additions": 67,
+          "deletions": 0,
+          "blobHash": "72ccff203e772d250ec801c966115f2f8d84f8c3"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/CodePatcher.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 1,
+          "blobHash": "4174665d1cb00e0b61aefa29e6421ac007c2df57"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/ChatRunRecoveryAdvisor.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 3,
+          "blobHash": "d36332e36c21282615e1b12b51b63301fe6e49b0"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/patch/WorkspaceCodePatcher.java",
+          "status": "M",
+          "additions": 93,
+          "deletions": 12,
+          "blobHash": "27f184c97995b97b4ef8b880cfc9a7861fdba2ca"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/patch/WorkspaceCodePatcherTest.java",
+          "status": "M",
+          "additions": 75,
+          "deletions": 7,
+          "blobHash": "de1b88343d387f6548268efcfac75bf7da1b1f38"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 8,
+          "blobHash": "64783f9b33d1616824a2bbd9e95ea297b61db614"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/PatchTools.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 2,
+          "blobHash": "9d878ffbc2c5221a1c2322d3b7a0c7783fa32a54"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalog.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "4cfe02985d72dfe63192f205aff2e710a1c2c204"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/PatchToolsTest.java",
+          "status": "A",
+          "additions": 206,
+          "deletions": 0,
+          "blobHash": "2afa9519240888bb8e5e524148a19aff80ccd301"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/patch/WorkspaceCodePatcherTest.java",
+        "status": "M",
+        "additions": 75,
+        "deletions": 7,
+        "blobHash": "de1b88343d387f6548268efcfac75bf7da1b1f38"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/PatchToolsTest.java",
+        "status": "A",
+        "additions": 206,
+        "deletions": 0,
+        "blobHash": "2afa9519240888bb8e5e524148a19aff80ccd301"
+      }
+    ],
+    "casesAdded": 8,
+    "command": "mvn -B -nsu -pl agent-domain,agent-gateway,agent-infra,agent-runtime,agent-tools,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-gateway,agent-infra,agent-runtime,agent-tools test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 424, Failures: 0, Errors: 0, Skipped: 3"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime",
+      "agent-tools"
+    ],
+    "verification": "Tests run: 424, Failures: 0, Errors: 0, Skipped: 3"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_2330_patch-guard-src-main"
+    ]
+  },
+  "chain": {
+    "prev": "055c7e5a3b56bf1d5c057ddc7df613225c81ccb03ca54389303647be6b531050",
+    "self": "e8ab1931cea1d553555b26be5b59b34e9223cb8ebb8eb3ed71b9e74808ea5dec"
+  }
+}

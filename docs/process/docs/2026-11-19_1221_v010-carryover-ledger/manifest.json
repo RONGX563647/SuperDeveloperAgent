@@ -1,0 +1,53 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "docs/2026-11-19_1221_v010-carryover-ledger",
+  "category": "docs",
+  "title": "14 条遗留项逐条对账",
+  "createdAt": "2026-11-19T12:21:21+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "汇总本轮 14 批：逐条对账清单、提交号、结构性判断落地情况与质量证据",
+    "toolCallCount": 0
+  },
+  "problem": "本轮 14 批修复完成后，14 条清单、提交号与三条结构性判断的落地情况散在 14 份归档里，没有一张能直接核对的表：想确认「某条到底修没修、落在哪个提交」只能逐份翻。",
+  "solution": "新增 docs/summary/bug/2026-11_v010-carryover-ledger.md：按 P0/P1/P2 三条清单逐条列出「任务 id → 后端实际做了什么 → 提交号」，并单列三条结构性判断的落地结果（真后端 bug 与 UI 分开、优先级重排依据、③ 先修）、附带修掉的两处（归档编码命名、两条缺失记录补建）与质量证据（748 用例全绿、62 个新增回归用例、每批都过 pre-commit 与 pre-push 全量门禁）。",
+  "commits": [
+    {
+      "sha": "6f8fc5aa047b9140a976a515d2041a397e4fa033",
+      "subject": "docs(summary): 14 条遗留项逐条对账清单",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/summary/bug/2026-11_v010-carryover-ledger.md",
+          "status": "A",
+          "additions": 86,
+          "deletions": 0,
+          "blobHash": "9b57757184f87938e4dd4c5b7aad7adf817e2990"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "python tools/session-archive/gate.py validate：92 份归档通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1221_v010-carryover-ledger"
+    ]
+  },
+  "chain": {
+    "prev": "bf26a81b5cf47f248e15c5e407e768c48ffad37d6a5036490c82ea30c306d135",
+    "self": "d1ed545e91df17d04a442d8081c08180b5e84fb29567135ea1f02b7cca516e5c"
+  }
+}

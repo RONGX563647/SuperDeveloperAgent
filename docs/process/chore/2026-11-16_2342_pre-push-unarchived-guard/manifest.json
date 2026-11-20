@@ -1,0 +1,53 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-16_2342_pre-push-unarchived-guard",
+  "category": "chore",
+  "title": "pre-push 阻止未归档代码提交",
+  "createdAt": "2026-11-16T23:42:29+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "覆盖 --no-verify 绕过场景：推送前校验最近归档之后没有未归档的代码提交",
+    "toolCallCount": 0
+  },
+  "problem": "pre-push 只校验 active 会话与归档提交状态；用 --no-verify 跳过的代码提交不会被发现，仍可推送",
+  "solution": "pre-push 增加锚点校验：取最新归档的最后一个提交，逐条检查其后提交，凡含非豁免路径改动且未被任何归档登记即拒绝推送",
+  "commits": [
+    {
+      "sha": "255874f2dfe57678b2b87c0696037b9abdea153d",
+      "subject": "chore: pre-push 阻止未归档的代码提交",
+      "category": "chore",
+      "files": [
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 33,
+          "deletions": 0,
+          "blobHash": "325b19b4501295dc47fd7f5f9f3902e1155e99b1"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "在临时 clone 中验证：干净 clone 通过；追加一个 --no-verify 代码提交后 gate-pre-push 退出码 1 并列出该提交"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-16_2342_pre-push-unarchived-guard"
+    ]
+  },
+  "chain": {
+    "prev": "e2c119c5f45799963ac55193a519138309d79d929d84c52db3272ee82c63af40",
+    "self": "604f303c9fd8202e61201868849758c1c60952ab108710b3cea019b5beb88aa6"
+  }
+}

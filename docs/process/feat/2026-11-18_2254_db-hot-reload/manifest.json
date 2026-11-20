@@ -1,0 +1,332 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_2254_db-hot-reload",
+  "category": "feat",
+  "title": "数据库后端热重载并移除旧库导入",
+  "createdAt": "2026-11-18T22:54:33+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1-flash",
+    "promptSummary": "数据库切换要热重载不重启；旧库导入需求取消，相关代码全部删除",
+    "toolCallCount": 0
+  },
+  "problem": "数据库后端切换只能改配置重启，运行中无法换库；同时旧库导入（8 个历史分域 .db）这条需求已取消，但代码仍散落在启动装配、REST 接口、前端卡片与配置项里。",
+  "solution": "PlatformDb 内部改为 volatile Holder（DataSource+EMF）承载真实后端，read/inTx 每次取当前后端，25 个 Store 注入的引用不变，换库=原子替换引用；新增 create()/swapTo()/isPostgres()。修正 swapTo 归属规则：返回独立包装的旧资源而非 this（否则调用方 close 会关掉刚切上去的新库），首次返回 null 归 Spring。新增 DatabaseHotSwapper 编排「探活→建 schema→搬数据→落配置→原子替换」，任一步失败则运行中后端与配置都不动；新增 POST /switch、DELETE 改为热切回 SQLite。整条删除旧库导入：LegacySqliteImporter 及测试、DataSourceConfig Bean、AgentDbProperties.importLegacy、GET /legacy 与 POST /legacy/import、前端卡片与 API、application.yml 配置项。",
+  "commits": [
+    {
+      "sha": "e9a646115d27c2280dcaa85d85ba5cf684a1dec1",
+      "subject": "feat(gate): CI 安全扫描、红队自审与耗时预算校准",
+      "category": "feat",
+      "files": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "status": "M",
+          "additions": 24,
+          "deletions": 0,
+          "blobHash": "000f04e19b16424a20c6c16b0426a55ac028537f"
+        },
+        {
+          "path": "docs/session-archive-spec-v1.md",
+          "status": "M",
+          "additions": 26,
+          "deletions": 0,
+          "blobHash": "a980c6053690d8c78df3355897b9914f626ab104"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_quality-gate-review.md",
+          "status": "M",
+          "additions": 21,
+          "deletions": 3,
+          "blobHash": "d68314db3df4ca2629faf0fd82a8692789b69d34"
+        },
+        {
+          "path": "docs/summary/plan/quality-gate-review-2026-11.md",
+          "status": "M",
+          "additions": 21,
+          "deletions": 3,
+          "blobHash": "37edf83e3d1e0e3a1eb6a76a329f0e0dc256dad0"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 77,
+          "deletions": 1,
+          "blobHash": "6c6209c4af9a10ab50bf3227995221377c245a82"
+        }
+      ]
+    },
+    {
+      "sha": "6b1d82b5af5881ed456260381bfed50cae5956cb",
+      "subject": "docs(process): 归档门禁安全扫描与红队自审会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-18_2308_gate-security/manifest.json",
+          "status": "A",
+          "additions": 81,
+          "deletions": 0,
+          "blobHash": "934b04f9a2c3ce37e4815acacae15d5cce7f4675"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-18_2308_gate-security.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "2514a6bf60ea358068b1125ebcb968af828d7166"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_gate-security.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "3822fe40eeea25b43f9889bd6a7c7c2dcb213c1b"
+        }
+      ]
+    },
+    {
+      "sha": "06e18113d4bdb6be5908068ae7a91d5c2138a445",
+      "subject": "fix(db): 搬行后拨正 PG identity 序列，修 token_usage_pkey 主键冲突",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/IdentitySequenceSync.java",
+          "status": "A",
+          "additions": 115,
+          "deletions": 0,
+          "blobHash": "86975d09f20058b842c46e7524a16dac799d8b72"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/SqliteToTargetCopier.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 3,
+          "blobHash": "16e35d727f64f4b1493d06a7cba174c77c4be77f"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/postgresql/V4__identity_sequence_resync.sql",
+          "status": "A",
+          "additions": 31,
+          "deletions": 0,
+          "blobHash": "680cc35bd93f419ca1f157062dba84d00fea59ef"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/IdentitySequenceSyncTest.java",
+          "status": "A",
+          "additions": 137,
+          "deletions": 0,
+          "blobHash": "21ff540f3659cc9dccfe53d889c3c885d6f0e67b"
+        }
+      ]
+    },
+    {
+      "sha": "612e6752eff9101db0885d530aaa388aaeac64ca",
+      "subject": "test(spec-checks): 补录 V4 identity 序列迁移基线",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/spec-checks/migration-baseline.txt",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "7d9f10c29975e081c3fd088c36e9c7e21b0b8ec5"
+        }
+      ]
+    },
+    {
+      "sha": "3a12b8629f0b332460a69bac1485ca2177b9d79e",
+      "subject": "feat(db): 数据库后端支持热切换，删除旧库导入",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l2/database-backend-switch.md",
+          "status": "M",
+          "additions": 72,
+          "deletions": 67,
+          "blobHash": "5d503a297647ca271e2695ddf55e93e8d3d7e546"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "9ba42ebb04b7bc6cea6550c86c18c4ce5ac0fbe8"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/DatabaseHotSwapper.java",
+          "status": "A",
+          "additions": 252,
+          "deletions": 0,
+          "blobHash": "e6ef0a908680e5361951b22af9cb0bc8fda2d7db"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/DatabaseSettingsController.java",
+          "status": "M",
+          "additions": 80,
+          "deletions": 111,
+          "blobHash": "be7edb1d456450e9f65c330392f2486b45cf2e0b"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 10,
+          "deletions": 29,
+          "blobHash": "c5275e23260153b1cb78da59c43ed2f510739a7d"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 1,
+          "deletions": 4,
+          "blobHash": "ba71ad2f292b9c7ed1bccbfc30b394046227692d"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DatabaseSettingsControllerTest.java",
+          "status": "M",
+          "additions": 70,
+          "deletions": 142,
+          "blobHash": "b508ad6364e315f5a216f7dd07be46ddb614994b"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/LegacySqliteImporter.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 385,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/PlatformDb.java",
+          "status": "M",
+          "additions": 129,
+          "deletions": 16,
+          "blobHash": "c0ba96dcae0d59dc3af01d04bcce114bfda01cd4"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/SqliteWalCheckpointer.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 2,
+          "blobHash": "1d1fa8ada17d59c4dbdb41ce6857e61c4a19f421"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/AgentDbProperties.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 5,
+          "blobHash": "8e806505179da18b8036ee5dd0532bdc81b672fc"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DataSourceConfig.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 12,
+          "blobHash": "10ed1c5b8e0284ad98c75dc029d40f17dbe9c81d"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 210,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 8,
+          "blobHash": "d6a62b33b91db99e770aa4dba8007469d7fc2ef8"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/DataSourceConfigTest.java",
+          "status": "M",
+          "additions": 53,
+          "deletions": 62,
+          "blobHash": "e316ab52cdc626998c9588586e24746ed61add1d"
+        },
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 12,
+          "deletions": 51,
+          "blobHash": "a561de08b9f7e11e78649d9f72bba2723740a2f8"
+        },
+        {
+          "path": "platform/web/src/api/settings.ts",
+          "status": "M",
+          "additions": 33,
+          "deletions": 61,
+          "blobHash": "531c225419e54e7acb2a7a32b2815026d8904890"
+        },
+        {
+          "path": "platform/web/src/components/settings/DatabasePanel.vue",
+          "status": "M",
+          "additions": 109,
+          "deletions": 172,
+          "blobHash": "820b02553cdd02de5c2f77ed1c1ccfc963dd5651"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/IdentitySequenceSyncTest.java",
+        "status": "A",
+        "additions": 137,
+        "deletions": 0,
+        "blobHash": "21ff540f3659cc9dccfe53d889c3c885d6f0e67b"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DatabaseSettingsControllerTest.java",
+        "status": "M",
+        "additions": 70,
+        "deletions": 142,
+        "blobHash": "b508ad6364e315f5a216f7dd07be46ddb614994b"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+        "status": "D",
+        "additions": 0,
+        "deletions": 210,
+        "blobHash": "-"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+        "status": "M",
+        "additions": 4,
+        "deletions": 8,
+        "blobHash": "d6a62b33b91db99e770aa4dba8007469d7fc2ef8"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/DataSourceConfigTest.java",
+        "status": "M",
+        "additions": 53,
+        "deletions": 62,
+        "blobHash": "e316ab52cdc626998c9588586e24746ed61add1d"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "mvn -B -nsu -pl !spec-checks test -Dsurefire.forkCount=4",
+    "result": "PASSED",
+    "evidence": "Tests run: 685, Failures: 0, Errors: 0, Skipped: 3"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "agent-infra",
+      "spec-checks",
+      "web"
+    ],
+    "verification": "提交后全量门禁 685 用例通过（失败 0 错误 0 跳过 3）；agent-infra 140、agent-gateway 157、spec-checks 24 全绿；vue-tsc --noEmit exit 0；handbook 11 锚点 / 11 篇 L3 通过。新增回归：DataSourceConfigTest 断言 DataSourceConfig 不再有 legacy 方法且 swapTo 归属规则正确；DatabaseSettingsControllerTest 断言状态不再暴露 legacy 字段。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_2254_db-hot-reload"
+    ]
+  },
+  "chain": {
+    "prev": "174e096aa1099a2027b1528b0d419b0558f13c3b19865e4177331b3b72d0a1a1",
+    "self": "055c7e5a3b56bf1d5c057ddc7df613225c81ccb03ca54389303647be6b531050"
+  }
+}

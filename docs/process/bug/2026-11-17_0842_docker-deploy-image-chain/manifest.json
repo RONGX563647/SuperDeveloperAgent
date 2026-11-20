@@ -1,0 +1,84 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_0842_docker-deploy-image-chain",
+  "category": "bug",
+  "title": "修复 docker 部署被降级 host / 回滚镜像缺失",
+  "createdAt": "2026-11-17T08:42:05+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "docker 目标无镜像时静默降级 host；固化脚本缺 image_package 被优先回放；回滚 docker run 缺镜像时报 exit 125",
+    "toolCallCount": 0
+  },
+  "problem": "docker 目标被静默降级为 host（固化脚本缺 image_package 却优先回放），回滚时 docker run 缺镜像只报 exit 125 且先删了在跑的容器",
+  "solution": "固化脚本按部署目标自洽校验，过期脚本退回仓库/平台定义；reconcileTarget 不再把 docker 改成 host；DockerDeployer 起容器前 docker image inspect，缺镜像直接 E-708",
+  "commits": [
+    {
+      "sha": "2b962bfc5754f5cb50691897a4321b5242e6fcd2",
+      "subject": "fix(deploy): docker 目标不再静默降级 host，过期固化脚本不再优先回放",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 4,
+          "blobHash": "b7efe09c805a5f5a6aa7200ef335e1ee00cd5778"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "595b67c9decc76fe4e80a07352c37bb068996c67"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/PipelineDefinitionResolver.java",
+          "status": "M",
+          "additions": 32,
+          "deletions": 0,
+          "blobHash": "68db077e269af86dda30a1735d84ac60e01c34eb"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineDefinitionResolverTest.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 0,
+          "blobHash": "feed296a407d9f9cd3e2bc650139de2a99cd3b2f"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineDefinitionResolverTest.java",
+        "status": "M",
+        "additions": 35,
+        "deletions": 0,
+        "blobHash": "feed296a407d9f9cd3e2bc650139de2a99cd3b2f"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 520, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor"
+    ],
+    "verification": "mvn -B -pl spec-checks -am test 全部通过（含新增 staleRecipeWithoutImageStageIsSkipped）"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_0842_docker-deploy-image-chain"
+    ]
+  },
+  "chain": {
+    "prev": "c8dbaebd207599493e20d733cfba5b345087dc056147552ef08c3951ed1386e0",
+    "self": "ffc5516b582e84ea3d3c1fb1452c024030a288b181357d4d7e4216d09caeae13"
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-20_1335_remove-tracked-tmp-files",
+  "category": "chore",
+  "title": "移除误提交的临时排查文件",
+  "createdAt": "2026-11-20T13:35:25+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "移除误提交的临时排查文件",
+    "toolCallCount": 0
+  },
+  "problem": "移除误提交的临时排查文件",
+  "solution": "chore: .gitignore 忽略 .tmp-* 临时排查文件",
+  "commits": [
+    {
+      "sha": "ce30f405f1147bc700e7d11c03c4d1e0d62a8727",
+      "subject": "chore: 移除误提交的临时排查文件（.tmp-*）",
+      "category": "chore",
+      "files": [
+        {
+          "path": ".tmp-bugmap.txt",
+          "status": "D",
+          "additions": 0,
+          "deletions": 140,
+          "blobHash": "-"
+        },
+        {
+          "path": ".tmp-diff2.txt",
+          "status": "D",
+          "additions": 0,
+          "deletions": 90,
+          "blobHash": "-"
+        },
+        {
+          "path": ".tmp-diff3.txt",
+          "status": "D",
+          "additions": 0,
+          "deletions": 110,
+          "blobHash": "-"
+        },
+        {
+          "path": ".tmp-diff4.txt",
+          "status": "D",
+          "additions": 0,
+          "deletions": 99,
+          "blobHash": "-"
+        },
+        {
+          "path": ".tmp-status.txt",
+          "status": "D",
+          "additions": 0,
+          "deletions": 57,
+          "blobHash": "-"
+        }
+      ]
+    },
+    {
+      "sha": "a3685657d00a25b1b81c549b45be7178bf46da0e",
+      "subject": "chore: .gitignore 忽略 .tmp-* 临时排查文件",
+      "category": "chore",
+      "files": [
+        {
+          "path": ".gitignore",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "1d424c2ef608eb9b43b68e53a93e0c96b5863402"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "(无需后端测试：本次改动不涉及 Maven 模块)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "删除 5 个误提交的 .tmp-* 文件（挑选性 git add），并在 .gitignore 增加 .tmp-* 规则；两笔提交均通过 pre-commit 钩子，pre-push 门禁 spec-checks 33 项测试全绿"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1335_remove-tracked-tmp-files"
+    ]
+  },
+  "chain": {
+    "prev": "86409715c9848bbcbf6763b0a55dcd5f8ad161e1df6385f31934fccbc412dd7b",
+    "self": "a1e03bf1f5a90ea11f4310c5879d59da038a8167562e18d29d85bd784dc5ae08"
+  }
+}

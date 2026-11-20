@@ -1,0 +1,55 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_1214_api-doc-baseline-refresh-2",
+  "category": "chore",
+  "title": "派发接口补文档后刷新 API 文档基线",
+  "createdAt": "2026-11-19T12:14:21+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "WorkspaceController#send 补了 Javadoc，api-doc-baseline 里对应行变成过期项，重新生成基线",
+    "toolCallCount": 0
+  },
+  "problem": "WorkspaceController#send 按新契约补了 Javadoc（说明失败抛异常而不塞假 runId），api-doc-baseline.txt 里对应行从缺口变成已文档化，ApiDocContractTest 把它判为过期项而变红，pre-push 拦住推送。",
+  "solution": "用 -Dapi.doc.baseline.update=true 重新生成基线（棘轮只允许收缩），把已补文档的行移出；spec-checks 恢复 24 用例全绿。",
+  "commits": [
+    {
+      "sha": "f3aeab3afec4cf9b5cb4693972def732baf0c0bf",
+      "subject": "chore(spec-checks): 派发接口补文档后刷新 API 文档基线",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/spec-checks/api-doc-baseline.txt",
+          "status": "M",
+          "additions": 0,
+          "deletions": 1,
+          "blobHash": "b91b050e72a1b2714bc11e18072ed39f231216aa"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "mvn -B -nsu -pl spec-checks test -Dsurefire.forkCount=4",
+    "result": "PASSED",
+    "evidence": "Tests run: 24, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "spec-checks"
+    ],
+    "verification": "mvn -pl spec-checks test：Tests run 24, Failures 0"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1214_api-doc-baseline-refresh-2"
+    ]
+  },
+  "chain": {
+    "prev": "2e1d1911841dd52c9f25d8bd6e550758996884be2310d5873bab3cb874a9a320",
+    "self": "8c1efb9bb98b4edd198ebbe48aaad990b6468f7d797c60aaca343d55c2e5138d"
+  }
+}

@@ -1,0 +1,264 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-17_1844_version-branch-release",
+  "category": "feat",
+  "title": "版本线与分支强绑定与快照发布",
+  "createdAt": "2026-11-17T18:44:47+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "版本线与分支强绑定与快照发布",
+    "toolCallCount": 0
+  },
+  "problem": "版本号与分支没有关系：流水线只能选提交、不能选分支，版本号是自由文本且允许带 v；标签不分基础版/补丁版，补丁发布与版本线无关，容易把 0.2.0 的标签打到 0.1 的分支上，也无法阻止补丁跳号或重复；快照构建与正式发布在历史里无法区分；pom.xml 版本需要人工跟随发布版本修改。",
+  "solution": "新增 domain/release/ReleaseVersion：严格 x.y.z（不带 v）、版本线 x.y 映射长期分支 x.y.0-snapshot、补丁共用同一分支、下一个补丁固定 +1；流水线触发参数新增 branch，正式发布校验「版本线=分支、提交属于该分支、标签不重复、补丁不跳号」，不满足直接拒绝；历史记录新增 branch 并在列表展示；未打 tag 的构建标记 SNAPSHOT（快照版），与正式标签区分；构建时在一次性 worktree 内把根 pom.xml 版本同步为 x.y.z（快照为 x.y.z-SNAPSHOT），跳过 parent 块、不影响用户工作区；新增本地分支列表/创建分支接口，前端触发条增加分支选择并按分支拉取提交，推荐版本按分支版本线递增；test/prod 环境都启用版本控制。",
+  "commits": [
+    {
+      "sha": "8b00f39ea938b5b1f879deef14b8a14aa0e6b6c6",
+      "subject": "feat(release): 版本线与分支强绑定，流水线可选分支并支持快照版",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "da965cd479794faa652dbb0e3402a79019fb2586"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "e45c01635ccc8b37b591893416a87a7a8f91361d"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/PipelineEngine.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "1c5bcd18ede4fcf2a1a1f17fc27b2bd6b5ca8153"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/ProjectRepoLocator.java",
+          "status": "M",
+          "additions": 28,
+          "deletions": 0,
+          "blobHash": "770b5c3acec30ea01ebfee3f3856bc18ee7c5b53"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/release/ReleaseVersion.java",
+          "status": "A",
+          "additions": 135,
+          "deletions": 0,
+          "blobHash": "9e0c8886173bc0cde8e9f9cd476958587788e598"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/release/ReleaseVersionTest.java",
+          "status": "A",
+          "additions": 61,
+          "deletions": 0,
+          "blobHash": "8fddbd99be536b196074011921342acd270fa846"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 119,
+          "deletions": 7,
+          "blobHash": "2ac6a56b31fed49f2df2778d0a120a2780a572df"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/PomVersionSync.java",
+          "status": "A",
+          "additions": 76,
+          "deletions": 0,
+          "blobHash": "2e0b4d243876ea6a07d816fd3cec71b9e534d063"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/RunHistoryStore.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 5,
+          "blobHash": "cf3a1b7068956fae43cfe5ed72c440efbba977d9"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineVersionPolicyTest.java",
+          "status": "A",
+          "additions": 49,
+          "deletions": 0,
+          "blobHash": "d4fe2fa4b95b69ff070d6b594d5c98e1cfb7243c"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PomVersionSyncTest.java",
+          "status": "A",
+          "additions": 61,
+          "deletions": 0,
+          "blobHash": "2f7320733b7e9cc1d59331388a9ea7181354c47c"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreSeqTest.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "590d0284528f3be3f13adcb1bf447d8a78678452"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "1ef5cf0f31505ecba4e26b719f8856c08a352b65"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 22,
+          "deletions": 8,
+          "blobHash": "81a0ceb8a8ce695504ff360334ddd3478483bfa3"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectIntakeController.java",
+          "status": "M",
+          "additions": 48,
+          "deletions": 3,
+          "blobHash": "1b8241a8f52965045facb4a72db93259e689a116"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 74,
+          "deletions": 0,
+          "blobHash": "d5ee6d4b2914d939ee2e1169302b6ac6f24f1457"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+          "status": "M",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "8ed338a100794d9960773cd153d6d9a13f5a1d27"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/DefaultRepoLocator.java",
+          "status": "M",
+          "additions": 42,
+          "deletions": 0,
+          "blobHash": "0e369df59a567453b8966c4e77f0abdbefbf152b"
+        },
+        {
+          "path": "platform/spec-checks/error-code-baseline.txt",
+          "status": "M",
+          "additions": 3,
+          "deletions": 2,
+          "blobHash": "662eb318f91500fe6ea5405821d8c24990488697"
+        },
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 74,
+          "deletions": 0,
+          "blobHash": "07e9effc218f36ca658dd79a075989fc1acf7809"
+        },
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 7,
+          "deletions": 3,
+          "blobHash": "0f84908aee52a66069df91a95da9efa8b09431b5"
+        },
+        {
+          "path": "platform/web/src/api/project.ts",
+          "status": "M",
+          "additions": 24,
+          "deletions": 2,
+          "blobHash": "375efb2f12ce8b35448dbbc451744510f8fd00f9"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/HistoryList.vue",
+          "status": "M",
+          "additions": 13,
+          "deletions": 2,
+          "blobHash": "4df2924121427f13d3d267236465980cac4911ab"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/TriggerBar.vue",
+          "status": "M",
+          "additions": 42,
+          "deletions": 24,
+          "blobHash": "26297319f312bbf9968a0e9e4550ca9783549dd4"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 105,
+          "deletions": 27,
+          "blobHash": "e96bc9541bccf2b2e4928994e0ad6f15c5504239"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/release/ReleaseVersionTest.java",
+        "status": "A",
+        "additions": 61,
+        "deletions": 0,
+        "blobHash": "8fddbd99be536b196074011921342acd270fa846"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineVersionPolicyTest.java",
+        "status": "A",
+        "additions": 49,
+        "deletions": 0,
+        "blobHash": "d4fe2fa4b95b69ff070d6b594d5c98e1cfb7243c"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/PomVersionSyncTest.java",
+        "status": "A",
+        "additions": 61,
+        "deletions": 0,
+        "blobHash": "2f7320733b7e9cc1d59331388a9ea7181354c47c"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreSeqTest.java",
+        "status": "M",
+        "additions": 2,
+        "deletions": 1,
+        "blobHash": "590d0284528f3be3f13adcb1bf447d8a78678452"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "1ef5cf0f31505ecba4e26b719f8856c08a352b65"
+      }
+    ],
+    "casesAdded": 10,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 571, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "spec-checks",
+      "web"
+    ],
+    "verification": "新增并跑通 ReleaseVersionTest（4）、PipelineVersionPolicyTest（3）、PomVersionSyncTest（3），更新 RunHistoryStore 两个测试；platform/web npm run typecheck 通过；openapi.json 与前端 schema.d.ts 重新生成，ApiDocsSnapshotTest 通过；mvn -B -pl spec-checks -am test 全量通过（Handbook 已 sync、通用 throw 基线已更新）。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1844_version-branch-release"
+    ]
+  },
+  "chain": {
+    "prev": "dcdfe0dd94b7d0210549c45927f1879fc0ae34f7b66f175a01c6cef8f3d30f56",
+    "self": "1e1c20aef8cc2aecd597beebe55bc14c9bd3b3e9dbfab796aa9cf2bbd4e78233"
+  }
+}

@@ -1,0 +1,739 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_0809_jpa-store-migration",
+  "category": "feat",
+  "title": "Phase 2：全部 Store 迁移到 JPA 统一持久化",
+  "createdAt": "2026-11-18T08:09:19+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "继续全部做完：完成 Phase 2（全部 Store 迁移到 JPA/Hibernate）、补测试、归档、合并到 0.1.0-snapshot",
+    "toolCallCount": 0
+  },
+  "problem": "持久化层写死 SQLite：18 个 Store 各自打开分域 .db 文件并手写连接池/事务/DDL，无法通过配置切换 PostgreSQL；阶段一仅完成装配与 platform_meta 冒烟。",
+  "solution": "43 张表全部映射为 @Entity（含 9 个复合主键 @IdClass.Key），Store 统一通过 PlatformDb / GovernanceDb 的 EntityManager 执行原生 SQL，事务与方言交给 Hibernate；两条后端共用 hbm2ddl.auto=update 生成 schema，移除 Flyway；新增 agent.db.import-legacy 一次性导入旧多文件 SQLite。",
+  "commits": [
+    {
+      "sha": "4dd3af6dfd8347cb95fdddf8893eb689893d1a72",
+      "subject": "feat(persistence): 全部 Store 迁移到 JPA 统一库",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/auth/UserStore.java",
+          "status": "M",
+          "additions": 68,
+          "deletions": 93,
+          "blobHash": "3ec7600aed7cc6fccce8d251de7936e658184fae"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitee/GiteeAccountStore.java",
+          "status": "M",
+          "additions": 69,
+          "deletions": 87,
+          "blobHash": "6dc792028a153e02523987eeffd98fa1bf6d149c"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/persistence/entity/GiteeAccountEntity.java",
+          "status": "A",
+          "additions": 32,
+          "deletions": 0,
+          "blobHash": "c6ea5ad31f2ee8321c3a691c118af6c4704221be"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/persistence/entity/StreamLeaseEntity.java",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "dce810b24f9a432d6dc6e8c2ae0293b1a9f35c5d"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/persistence/entity/UserEntity.java",
+          "status": "A",
+          "additions": 29,
+          "deletions": 0,
+          "blobHash": "56dce14094829564c47be481c61b32a3b3eff096"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/JdbcAgentStreamLimiter.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 72,
+          "blobHash": "345a3a3a6be0418d0f683ec98c7b67f88b339674"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/StreamLimiterConfig.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 5,
+          "blobHash": "c65b51f79acf45af756ab902f3d3e309552a881d"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 3,
+          "deletions": 4,
+          "blobHash": "566e6206fdd4ada22189d2b17e4e92b5710feb16"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/SqlitePoolCleanupExtension.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 7,
+          "blobHash": "30e52e99272438df356f82865c188ed916d14511"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/auth/UserStoreTest.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "97fbe2c4b3c394253a7253c764c979468da037aa"
+        },
+        {
+          "path": "platform/agent-governance/pom.xml",
+          "status": "M",
+          "additions": 9,
+          "deletions": 1,
+          "blobHash": "823c371c82b4fe8d3fd8910a6303e2d204b190f6"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/ChangeRegistry.java",
+          "status": "M",
+          "additions": 63,
+          "deletions": 82,
+          "blobHash": "a905ca82cbb6f24897ad9ba9312121af9dd44770"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/ConfirmTokenService.java",
+          "status": "M",
+          "additions": 72,
+          "deletions": 88,
+          "blobHash": "390961163deb375d3cc8cb1f3af970480a983790"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/GovernanceDb.java",
+          "status": "M",
+          "additions": 195,
+          "deletions": 22,
+          "blobHash": "1b2ef9f39633d255519d1efa02d3759d2a1b8550"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/GovernancePersistenceConfig.java",
+          "status": "A",
+          "additions": 15,
+          "deletions": 0,
+          "blobHash": "f23079705066efeb6212148e2ad9fd9dee6d18c8"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/PatchRegistry.java",
+          "status": "M",
+          "additions": 91,
+          "deletions": 176,
+          "blobHash": "6d266b04fa64045a1f2a419086ff6e422d430070"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/persistence/entity/ChangePlanEntity.java",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "5a97625ba21e8a8f55dd3bd935c67d3cfbdd14a9"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/persistence/entity/CodePatchEditEntity.java",
+          "status": "A",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "f7edf8f63499f0975adc65f492bbbe430af51fd5"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/persistence/entity/CodePatchEntity.java",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "7ffef8f7b89d88c6945a5022231ac47bf6e8807f"
+        },
+        {
+          "path": "platform/agent-governance/src/main/java/top/rongx/agent/governance/persistence/entity/ConfirmTokenEntity.java",
+          "status": "A",
+          "additions": 32,
+          "deletions": 0,
+          "blobHash": "23ef9f938e897ce29bdf5a960bcc0fa027985d00"
+        },
+        {
+          "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/ConfirmTokenServiceTest.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "6013c70b515f5bec932ec0b1b1a78b23e99a2964"
+        },
+        {
+          "path": "platform/agent-infra/pom.xml",
+          "status": "M",
+          "additions": 0,
+          "deletions": 10,
+          "blobHash": "05fbf4fa37d604f285549c0c17a19c61dd001aad"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/bugfix/SqliteBugFixStore.java",
+          "status": "M",
+          "additions": 430,
+          "deletions": 675,
+          "blobHash": "b1be2fe935990e272bfd2062b8a8fd1a35a604be"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/conversation/SqliteConversationStore.java",
+          "status": "M",
+          "additions": 251,
+          "deletions": 440,
+          "blobHash": "1fcdb3b3ad6eeb730bbe583ba45758fb5475ebe7"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/env/SqliteEnvironmentStore.java",
+          "status": "M",
+          "additions": 509,
+          "deletions": 822,
+          "blobHash": "be9f372d6d8f9499950032aeeb312d6c7c7a5db3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/IntakeProjectStore.java",
+          "status": "M",
+          "additions": 98,
+          "deletions": 175,
+          "blobHash": "23c5963b651cb3b2d6fb478de3580b37ac923585"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/LegacySqliteImporter.java",
+          "status": "A",
+          "additions": 228,
+          "deletions": 0,
+          "blobHash": "efa204e4b8bcb5a1d3028f57e9a39e05f40d4b38"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/PlatformDb.java",
+          "status": "A",
+          "additions": 250,
+          "deletions": 0,
+          "blobHash": "1cf998a6badb5e17d60d5679f94d8ecdc431f934"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/ProjectStoreConfig.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 5,
+          "blobHash": "9718de1270da3692d269a3ea13128f49e165ff6e"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DataSourceConfig.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 27,
+          "blobHash": "034638fa6f643d4b1df8173a8c9749fbc50ca26a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/PersistenceConfig.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "242041cf1e6280e82a8b15b1a2333c3d64df9c2c"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixEnvLeaseEntity.java",
+          "status": "A",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "11bc0058e009deb28f5f898aacdfeb7848bf7ebc"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixEventEntity.java",
+          "status": "A",
+          "additions": 35,
+          "deletions": 0,
+          "blobHash": "49025fe67e25421f6d8e5a6fd751a2ab7e2bf2a8"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixLeaseEntity.java",
+          "status": "A",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "d6eeb477ced0da55933c13fe9af9ff7fb9797807"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixNotificationEntity.java",
+          "status": "A",
+          "additions": 41,
+          "deletions": 0,
+          "blobHash": "23f34921f51a23f99b98e764a2ab064f487688b6"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixPolicyEntity.java",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "6827b49cff5c3b9e96f852ead0d720b93eb0502a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixProjectPolicyEntity.java",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "317cff0ae3f2915bd506cb34bf61246fa8a1f7a2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixRunEntity.java",
+          "status": "A",
+          "additions": 89,
+          "deletions": 0,
+          "blobHash": "0d7256b09cde8d9f6b2004e3cbae10a20c5cf2e3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/BugfixStageRunEntity.java",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "6a69408b21cc9f4de4c4e9208fc67f418b309cfe"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ConversationEntity.java",
+          "status": "A",
+          "additions": 65,
+          "deletions": 0,
+          "blobHash": "9eb79079d7ee6565b76335e5f67728a3274fb6b8"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ConversationMessageEntity.java",
+          "status": "A",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "bd2600807dac5de0390e0edd9631dc7d2d11bdb7"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ConversationRunEntity.java",
+          "status": "A",
+          "additions": 50,
+          "deletions": 0,
+          "blobHash": "a2391101e7f954b5eea8a32d997a42d2a1525165"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/DeployPortLeaseEntity.java",
+          "status": "A",
+          "additions": 63,
+          "deletions": 0,
+          "blobHash": "9ff0dc7875a900ce61dc7d06a63811718c1f7c50"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/DeployServerEntity.java",
+          "status": "A",
+          "additions": 65,
+          "deletions": 0,
+          "blobHash": "ae1dc8e13e783e84c798a7b7d306b74638ef5f9e"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/EnvBindingEntity.java",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "30a21f0a567627d85ea0edcc2619c73e8086b447"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/EnvResourceEntity.java",
+          "status": "A",
+          "additions": 71,
+          "deletions": 0,
+          "blobHash": "c9174dc82b0e5fded4ee82f8b730e94354229666"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/EnvTemplateEntity.java",
+          "status": "A",
+          "additions": 41,
+          "deletions": 0,
+          "blobHash": "54fd523f2269f03f62d222a17cc9f4f91f33b568"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/EnvVarEntity.java",
+          "status": "A",
+          "additions": 70,
+          "deletions": 0,
+          "blobHash": "d0a0568bca6bdb50086aaa00a7c810dd8813811d"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/GitHostingAccountEntity.java",
+          "status": "A",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "45ccaeadcccc933d327c519173b853edf455a10d"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/GitIntegrationEntity.java",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "0fa4b0e786b1cdbeae52fda4ea0c86a000991c6b"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/GitIssueCommentEntity.java",
+          "status": "A",
+          "additions": 32,
+          "deletions": 0,
+          "blobHash": "c199958bc3f9b3b5b6592dc72f4f72f696b7a2b1"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/GitIssueEntity.java",
+          "status": "A",
+          "additions": 77,
+          "deletions": 0,
+          "blobHash": "06d8282b2520a55ea2e618834575192f62f32919"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/GitIssueEventEntity.java",
+          "status": "A",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "d4bb35ce96c2ee1adc90d68cd2edcabc79da9796"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/GitOauthAppEntity.java",
+          "status": "A",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "e04daabd855b081942589150de9a4beaf9c8babb"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/McpDisabledToolEntity.java",
+          "status": "A",
+          "additions": 49,
+          "deletions": 0,
+          "blobHash": "ffeb898470f234d77e46b6b9601a6d1626274dfd"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/McpServerEntity.java",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "5b8ec2e26c13e6d93ad56d6a7feaf47aae0288bb"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ModelCatalogEntity.java",
+          "status": "A",
+          "additions": 58,
+          "deletions": 0,
+          "blobHash": "5e17bb42fad30b69733e7dc28f7508dee6a9a467"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ModelConnectionEntity.java",
+          "status": "A",
+          "additions": 65,
+          "deletions": 0,
+          "blobHash": "548a25a83ad6668ad081c6ecbb3f115658fa65aa"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ProjectEntity.java",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "f7edf2ca0104d48bc6190a27fbed92cf08936f3a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ProjectEnvEntity.java",
+          "status": "A",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "bab13f2487e749b0c4835e48cbe330934cf41248"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ProjectEnvOverrideEntity.java",
+          "status": "A",
+          "additions": 72,
+          "deletions": 0,
+          "blobHash": "92318122e4115b032142d207ab57373456db8977"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ProjectEnvVarEntity.java",
+          "status": "A",
+          "additions": 69,
+          "deletions": 0,
+          "blobHash": "593b342a00ca2b03e40f07f93e93e5e56608d78d"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/ProjectServiceLeaseEntity.java",
+          "status": "A",
+          "additions": 66,
+          "deletions": 0,
+          "blobHash": "bb6f7b42f9d5d47a074eb40da3790c90e4742460"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/RunLedgerEntity.java",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "17aa76ad9467e18178082c5a2e876a1ce2621ddd"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/SecretEntity.java",
+          "status": "A",
+          "additions": 41,
+          "deletions": 0,
+          "blobHash": "8b2e73dfd70cc99ace25328af842f944c633f5a2"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/TokenUsageEntity.java",
+          "status": "A",
+          "additions": 50,
+          "deletions": 0,
+          "blobHash": "f1e0da07de7a893a0b359405de7257ada3b39dac"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/WorkspaceTaskEntity.java",
+          "status": "A",
+          "additions": 41,
+          "deletions": 0,
+          "blobHash": "00ab8d023663a8292ef1adc975b69e191f307e90"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/run/SqliteRunLedgerRepository.java",
+          "status": "M",
+          "additions": 76,
+          "deletions": 141,
+          "blobHash": "6ac126204fcf08f8b290b3c092b227dacc8b4826"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteDeployServerStore.java",
+          "status": "M",
+          "additions": 155,
+          "deletions": 231,
+          "blobHash": "1f40b1f528595d0d983e1e47d6659b9077ddd4eb"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteGitHostingAccountStore.java",
+          "status": "M",
+          "additions": 71,
+          "deletions": 136,
+          "blobHash": "5afa64d56f206d79a361b6bcc756e7a141a8d7f1"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteGitIssueStore.java",
+          "status": "M",
+          "additions": 254,
+          "deletions": 481,
+          "blobHash": "5c21c17cbca9e3560c8efee601b13c7bb1e97873"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteGitOauthAppStore.java",
+          "status": "M",
+          "additions": 77,
+          "deletions": 125,
+          "blobHash": "87962a1cab7b35a126e44188c7dce7c60a393b94"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteMcpServerStore.java",
+          "status": "M",
+          "additions": 105,
+          "deletions": 188,
+          "blobHash": "12db79e08c0365037e0467d4b947a6f9c83b2d06"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteModelCatalogStore.java",
+          "status": "M",
+          "additions": 60,
+          "deletions": 114,
+          "blobHash": "05b86ad98e4f2f0a9522c2cf3e775579eadd577e"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteModelConnectionStore.java",
+          "status": "M",
+          "additions": 121,
+          "deletions": 231,
+          "blobHash": "3230cd215fcaa5a39c299ab4d382961c4c75f076"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteProjectEnvVarStore.java",
+          "status": "M",
+          "additions": 86,
+          "deletions": 142,
+          "blobHash": "7df435504c28bb80f38abd4527d018fb6950c28e"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteTokenUsageRepository.java",
+          "status": "M",
+          "additions": 118,
+          "deletions": 202,
+          "blobHash": "3b5ebebf65b5f924f86a10edb22676a9755f8c69"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/sqlite/SqliteConnections.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 195,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/postgresql/V1__platform_meta.sql",
+          "status": "D",
+          "additions": 0,
+          "deletions": 6,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/IntakeScaffoldTest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "861422b42265b1fc58d016a9a06304e39cd88757"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/RecipeCheckTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "8331eb135afd2314f4089d4ca8f9b26de881c8b4"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/IntakeProjectStoreTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "525c0744770b6a58fac16bc9ba4b125ee5b2a4d1"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+          "status": "A",
+          "additions": 54,
+          "deletions": 0,
+          "blobHash": "ce9c219ce3b2098806c260555c75e759ab976cb1"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/PlatformDbTest.java",
+          "status": "A",
+          "additions": 86,
+          "deletions": 0,
+          "blobHash": "9778224156cdc897a7bd2d56dcebe165d987124f"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/SqliteProjectEnvVarStoreTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "b9f1ed96cb27da1e4752280b72ef68beb3327f17"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/sqlite/SqliteConnectionsTest.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 49,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/sqlite/SqlitePoolCleanupExtension.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 7,
+          "blobHash": "9d3ff12185d7ee6c7c255c923fa0c95803c1d6a9"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/SqlitePoolCleanupExtension.java",
+        "status": "M",
+        "additions": 7,
+        "deletions": 7,
+        "blobHash": "30e52e99272438df356f82865c188ed916d14511"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/auth/UserStoreTest.java",
+        "status": "M",
+        "additions": 2,
+        "deletions": 2,
+        "blobHash": "97fbe2c4b3c394253a7253c764c979468da037aa"
+      },
+      {
+        "path": "platform/agent-governance/src/test/java/top/rongx/agent/governance/ConfirmTokenServiceTest.java",
+        "status": "M",
+        "additions": 2,
+        "deletions": 2,
+        "blobHash": "6013c70b515f5bec932ec0b1b1a78b23e99a2964"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/IntakeScaffoldTest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 3,
+        "blobHash": "861422b42265b1fc58d016a9a06304e39cd88757"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/RecipeCheckTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "8331eb135afd2314f4089d4ca8f9b26de881c8b4"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/IntakeProjectStoreTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "525c0744770b6a58fac16bc9ba4b125ee5b2a4d1"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/LegacySqliteImporterTest.java",
+        "status": "A",
+        "additions": 54,
+        "deletions": 0,
+        "blobHash": "ce9c219ce3b2098806c260555c75e759ab976cb1"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/PlatformDbTest.java",
+        "status": "A",
+        "additions": 86,
+        "deletions": 0,
+        "blobHash": "9778224156cdc897a7bd2d56dcebe165d987124f"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/SqliteProjectEnvVarStoreTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "b9f1ed96cb27da1e4752280b72ef68beb3327f17"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/sqlite/SqliteConnectionsTest.java",
+        "status": "D",
+        "additions": 0,
+        "deletions": 49,
+        "blobHash": "-"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/sqlite/SqlitePoolCleanupExtension.java",
+        "status": "M",
+        "additions": 7,
+        "deletions": 7,
+        "blobHash": "9d3ff12185d7ee6c7c255c923fa0c95803c1d6a9"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "mvn -B test -Djacoco.skip=true -Dtest='!ProcessArchiveTest,!DeployEnvPrecheckTest,!DeployRecipeFlowTest,!DockerDaemonRepairTest' -Dsurefire.failIfNoSpecifiedTests=false",
+    "result": "PASSED",
+    "evidence": "Tests run: 570, Failures: 0, Errors: 0, Skipped: 4"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "agent-governance",
+      "agent-infra"
+    ],
+    "verification": "mvn -B test -Djacoco.skip=true（排除 4 个依赖 Docker/历史归档的环境用例）：570 用例，0 失败 0 错误 4 跳过；新增 PlatformDbTest 4 例、LegacySqliteImporterTest 1 例。"
+  },
+  "followUps": [
+    "继续全部做完"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_0809_jpa-store-migration"
+    ]
+  },
+  "chain": {
+    "prev": "ca0d740c46b2518bd91cdae4b1f328852834c88fea23bdbad41f8142d53ac4b4",
+    "self": "16c33f967c26db31de7a4a8ba669bdb2c0882d814f207b8021a74bef55afda18"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "docs/2026-11-19_2308_round-status",
+  "category": "docs",
+  "title": "本轮收口结果与三类假问题",
+  "createdAt": "2026-11-19T23:08:20+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "记录本轮落地的四批代码、看板 4 条 FEAT、三类伪装成代码错误的假问题（分支落后/cherry-pick 旧 sha/上游未 install）与并行干扰处理",
+    "toolCallCount": 0
+  },
+  "problem": "本轮结束时需要一个可交接的结论，但成果散在七八个提交与四次 CI 往返里；更麻烦的是这一轮有三次「看起来是代码写错」的失败，其实都不是代码问题——分支落后主干导致缺归档文件、cherry-pick 后归档记旧 sha、多模块改了上游却没 install 让本地生成读到旧 jar。不把这三类假问题的判别方法写下来，下一轮还会重新踩一遍。",
+  "solution": "写 docs/summary/chore/2026-11_round-status.md：1) 本轮落地的四批代码与对应提交、主干 CI 连续三次 success；2) 看板 OPEN 从 23 降到 4 且全部是 FEAT；3) 三类假问题各自给出判别方法（rev-list 数落后提交 / 确认 sha 是否 cherry-pick 前 / 先 install 上游模块）与对应工具；4) 并行工作线干扰的处理原则——不替其改代码、只做隔离、stash 全部恢复。",
+  "commits": [
+    {
+      "sha": "a48c78e7d3440d4617258d392a2c30328c0ab5ea",
+      "subject": "docs(summary): 本轮收口结果与三类假问题",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/summary/chore/2026-11_round-status.md",
+          "status": "A",
+          "additions": 80,
+          "deletions": 0,
+          "blobHash": "0732c3dece2ecda96b7aaa91a2f5fd2b4ee3503c"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "git commit 成功；本文件随归档一并入库"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2308_round-status"
+    ]
+  },
+  "chain": {
+    "prev": "5c00ad4fe4fbddce6bd07d7f7ae0da24b83ed5e98bcbd0c952f6b9a68b6ecd1b",
+    "self": "6947fd6d85a840fb25abe6f62139a5630052cd46724d808a09735d0e772a8c67"
+  }
+}

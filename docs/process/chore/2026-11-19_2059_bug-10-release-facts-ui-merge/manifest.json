@@ -1,0 +1,102 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_2059_bug-10-release-facts-ui-merge",
+  "category": "chore",
+  "title": "BUG-10 把发布事实界面与复用产物入口并入主干",
+  "createdAt": "2026-11-19T20:59:51+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "feat/release-facts-ui 四个提交 cherry-pick 到最新主干：发布事实徽标、复用产物部署入口；冲突仅在 gate.py 前端自检清单（采用主干的自动发现版）",
+    "toolCallCount": 0
+  },
+  "problem": "BUG-10/BUG-11/BUG-12 的界面部分（发布事实徽标、复用产物部署入口）只落在 feat/release-facts-ui 分支上，没进主干——看板已按「已修」关闭，但用户在界面上仍看不到「首次发布」「标签仅本地」，也找不到复用产物部署入口。原因是主干期间被 PR #21/#22/#23 连续推进，该分支与主干分叉。",
+  "solution": "把该分支 4 个提交 cherry-pick 到最新主干 06bb27d 之上，形成 fix/release-facts-ui-merge。冲突只在 gate.py 的前端自检清单：主干已改为自动发现所有 *.test.ts（比手工清单更不易漏），故采用主干版本。cherry-pick 期间 pre-commit 门禁要求每步有活跃会话，按提示逐步 continue。复核：vue-tsc 通过，五套前端测试 63 个断言全过。",
+  "commits": [
+    {
+      "sha": "4fe1c130bb4270e84cba504471d510fdff3d476f",
+      "subject": "feat(pipeline): 界面展示发布事实与日志总行数",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 16,
+          "deletions": 0,
+          "blobHash": "fe2b0db360f601a4cc69c49f1cf870fa90ba961c"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/RunLog.vue",
+          "status": "M",
+          "additions": 25,
+          "deletions": 2,
+          "blobHash": "8a94311d71b516bdee6658ffe5101fe2217d7e6d"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 31,
+          "deletions": 2,
+          "blobHash": "4fef532b8477ccf81832d76440695f496d59c2cd"
+        }
+      ]
+    },
+    {
+      "sha": "35188f68044a6cf6ad094d527f2d5abad619e3fb",
+      "subject": "docs(process): 归档发布事实界面展示会话",
+      "category": "docs",
+      "files": []
+    },
+    {
+      "sha": "636a7ce9c5f95428c2968e37a329f145552c0dc9",
+      "subject": "feat(pipeline): 构建历史提供「复用产物部署」入口",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/components/pipeline/HistoryList.vue",
+          "status": "M",
+          "additions": 14,
+          "deletions": 1,
+          "blobHash": "54c2250e773c749059000ac63ba8c1e077ab9514"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 38,
+          "deletions": 0,
+          "blobHash": "8b25145e9109661afc1f86249b611b7823815551"
+        }
+      ]
+    },
+    {
+      "sha": "ef5fb2b0758a657f8e42a20614fe535087d3cb78",
+      "subject": "docs(process): 归档复用产物部署入口会话",
+      "category": "docs",
+      "files": []
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "vue-tsc 退出码 0；releaseTag 14 + reuseBuild 11 + toolArgs 20 + chatImage 15 + pipelineLayout 3"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2059_bug-10-release-facts-ui-merge"
+    ]
+  },
+  "chain": {
+    "prev": "57e64bd9287ef3a006aedcf8b785c01c7e411ff58e828a4615783bfcf4072283",
+    "self": "2e45ec023f309187a6cd5d0ce5f6387d8e02f6b80209fdf23d04e27b72139344"
+  }
+}

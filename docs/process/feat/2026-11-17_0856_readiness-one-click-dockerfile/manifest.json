@@ -1,0 +1,92 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-17_0856_readiness-one-click-dockerfile",
+  "category": "feat",
+  "title": "就绪清单一键生成 Dockerfile",
+  "createdAt": "2026-11-17T08:56:08+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "运行条件缺 Dockerfile 时给修复按钮，一键生成待确认补丁并提交到 agent/fix-* 分支",
+    "toolCallCount": 0
+  },
+  "problem": "就绪清单里「仓库没有 Dockerfile」没有修复入口，用户只能去对话或手写",
+  "solution": "新增 POST /projects/{id}/dockerfile 复用 ensure_dockerfile 生成待确认补丁；清单修复项 kind=action；前端确认后自动 confirm+apply 提交到 agent/fix-* 分支",
+  "commits": [
+    {
+      "sha": "52e05d0298d5cfd5f0ffc7b366a5e2bb8cf697ca",
+      "subject": "feat(readiness): 就绪清单支持一键生成 Dockerfile",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectReadinessController.java",
+          "status": "M",
+          "additions": 83,
+          "deletions": 1,
+          "blobHash": "9d9a3afe1461c0bbb80cfbdf21907c1fff39ade7"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 73,
+          "deletions": 0,
+          "blobHash": "8e35eed078ea68009b3e9975bbe36fe87d3c76e4"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/ProjectReadinessControllerTest.java",
+          "status": "M",
+          "additions": 54,
+          "deletions": 0,
+          "blobHash": "706667fa534b6799ecf3fd3e0df9b299d4395e4a"
+        },
+        {
+          "path": "platform/web/src/api/project.ts",
+          "status": "M",
+          "additions": 23,
+          "deletions": 2,
+          "blobHash": "f06570abbbe107db9a9ffbed1e53a599f621f278"
+        },
+        {
+          "path": "platform/web/src/components/project/ProjectReadiness.vue",
+          "status": "M",
+          "additions": 45,
+          "deletions": 2,
+          "blobHash": "7da7dbe7169d091df57969a8541621104bd4a627"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/ProjectReadinessControllerTest.java",
+        "status": "M",
+        "additions": 54,
+        "deletions": 0,
+        "blobHash": "706667fa534b6799ecf3fd3e0df9b299d4395e4a"
+      }
+    ],
+    "casesAdded": 2,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 523, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "web"
+    ],
+    "verification": "mvn -B -pl spec-checks -am test 523 通过；新增 ProjectReadinessControllerTest 两个用例；vue-tsc --noEmit 通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_0856_readiness-one-click-dockerfile"
+    ]
+  },
+  "chain": {
+    "prev": "c36afd0b5426b15b07ab583f5bba6a6bfebe379f9a15355b5bc576482dc47aff",
+    "self": "de129ace41c17afd3396469baae9bc6466e47bd523e903ee75d31577fa98652b"
+  }
+}

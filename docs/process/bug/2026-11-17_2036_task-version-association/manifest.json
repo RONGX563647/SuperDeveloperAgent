@@ -1,0 +1,165 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-17_2036_task-version-association",
+  "category": "bug",
+  "title": "任务关联版本号并在看板展示",
+  "createdAt": "2026-11-17T20:36:51+08:00",
+  "session": {
+    "agentModel": "DeepSeek-V4.1-Flash",
+    "promptSummary": "任务看板没有关联版本号：任务默认取当前分支版本、可指定下个版本，列表/详情/看板展示并同步到 Git 标签",
+    "toolCallCount": 0
+  },
+  "problem": "任务看板的任务没有关联版本号，无法区分任务属于当前版本还是计划到下个版本",
+  "solution": "任务新增 version 字段并持久化：创建时默认取当前分支版本线的下一个补丁版本，编辑可改为目标版本；历史任务读取时按默认版本展示；列表/详情/看板展示版本徽标；同步时写入 version: 标签，远端标签也能回填版本；Agent 工具支持指定版本",
+  "commits": [
+    {
+      "sha": "b9d8063065abb22c26b7b9510fe5876897ee02a6",
+      "subject": "fix(task): 任务关联版本号并按当前分支默认，看板与 Git 标签同步",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/gitissue/GitIssue.java",
+          "status": "M",
+          "additions": 60,
+          "deletions": 4,
+          "blobHash": "1af7dd92335abc4d5d8576b454f5456965614578"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/ProjectRepoLocator.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "e91562c3787d0057a3527614a10c671cbd445ccb"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitissue/GitIssueServiceImpl.java",
+          "status": "M",
+          "additions": 95,
+          "deletions": 13,
+          "blobHash": "2c4e2b8d85c2baf4707b348e1af909ab5d7b959d"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitissue/GitIssueSyncService.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 2,
+          "blobHash": "350ddb48ad16e6d9670eb9483530a4d6af502d41"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GitIssueController.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "85bbde27da2dd60bc52e60b369b3fd896c8905d4"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "e475cfc336cbb538defc81e134663cce6a9335aa"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/gitissue/GitIssueVersionSuggestionTest.java",
+          "status": "A",
+          "additions": 30,
+          "deletions": 0,
+          "blobHash": "b9fbf7835cb8dc40a771f6f50136d92b2a3cd6e0"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/DefaultRepoLocator.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "b269e80fb378382a6157987736b4414424428bb5"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/settings/SqliteGitIssueStore.java",
+          "status": "M",
+          "additions": 18,
+          "deletions": 8,
+          "blobHash": "40c1f38f3a3b4da68cfd72abd2c0618944e14ce5"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/SqliteGitIssueStoreCodeTest.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "986787ca93226964495ce18706afce847f9551e1"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/GitIssueCommandTools.java",
+          "status": "M",
+          "additions": 9,
+          "deletions": 2,
+          "blobHash": "18a5687898f209a0928b5c08647fdc08e6141f61"
+        },
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "f0f56e18da0823ce41e3f8dba7b4543275303934"
+        },
+        {
+          "path": "platform/web/src/api/issues.ts",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "efcd4c35b493ae82231f246d7e673a18c0497aff"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatIssuesView.vue",
+          "status": "M",
+          "additions": 103,
+          "deletions": 2,
+          "blobHash": "d9d1520c9bf8b87dca11b0856d33c8d5eadccd29"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/gitissue/GitIssueVersionSuggestionTest.java",
+        "status": "A",
+        "additions": 30,
+        "deletions": 0,
+        "blobHash": "b9fbf7835cb8dc40a771f6f50136d92b2a3cd6e0"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/settings/SqliteGitIssueStoreCodeTest.java",
+        "status": "M",
+        "additions": 21,
+        "deletions": 0,
+        "blobHash": "986787ca93226964495ce18706afce847f9551e1"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 582, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "agent-infra",
+      "agent-tools",
+      "web"
+    ],
+    "verification": "mvn -B -pl spec-checks -am test 通过（pre-commit 门禁）；新增 SqliteGitIssueStoreCodeTest 版本往返与 GitIssueVersionSuggestionTest；前端 typecheck/build 通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_2036_task-version-association"
+    ]
+  },
+  "chain": {
+    "prev": "4783a45abe91bfa1088f7495fe1d468af7f67cc621cd38c3fa3b4a210df6232f",
+    "self": "db102c92787bf3c4528fdaacfbf51ab430563aa8408965755ac3a7e2c9c51e69"
+  }
+}

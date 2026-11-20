@@ -1,0 +1,372 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_1747_bug-10-release-facts-in-ui",
+  "category": "feat",
+  "title": "BUG-10 界面展示发布事实：首次发布与标签是否生效",
+  "createdAt": "2026-11-19T17:47:29+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "BUG-10/BUG-11/BUG-13 前端: 后端早已下发 release{firstRelease,tagState,tagReason,hint} 与日志行分页，但界面完全不展示；补 tag 状态徽标、首次发布标记与日志总行数",
+    "toolCallCount": 0
+  },
+  "problem": "BUG-10/BUG-11/BUG-13 的后端部分此前已完成（tag 状态枚举、首次发布标记、日志行分页），但界面一处都没用：release{firstRelease,tagState,tagReason,hint} 下发到前端却没人渲染，用户只能到远端自己发现「标签没生效」；首次发布跳过回滚被当成故障；日志只显示「N 行」而不告诉服务端一共多少行，分不清「还没来」与「到底了」。",
+  "solution": "PipelineView 头部补两个徽标：首次发布（tooltip 说明这不是错误）、标签状态（PUSHED 正常，LOCAL/FAILED/REJECTED 用警示色并带 hint）；标签状态映射抽到 utils/releaseTag.ts 供视图与回归脚本共用，新增 14 个断言并接入前端自检。RunLog 借用行分页接口的 total，在头部显示「已载入 M 行 / 共 N 行」，不改变原有增量加载策略（跟随/去重/终态补齐那套逻辑不动）。同时纠正一处误判：我一度把 .run-log 的 min-height 压到 120px 去'修'滚动，被既有回归用例 pipelineLayout.test.ts 拦下（要求 ≥240px），已回退——那条约束是对的，压掉会重现「日志被挤成一条缝」。",
+  "commits": [
+    {
+      "sha": "c7e483a3e3c159ce2eebe314966323c92ba0b97f",
+      "subject": "feat: 生成项目 Code Wiki 文档",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/code-wiki/01-architecture.md",
+          "status": "A",
+          "additions": 155,
+          "deletions": 0,
+          "blobHash": "14159f93ebcd526e30467b5e06385b0a524be659"
+        },
+        {
+          "path": "docs/code-wiki/02-modules.md",
+          "status": "A",
+          "additions": 174,
+          "deletions": 0,
+          "blobHash": "b01805e1e6d82c7623e84304487f559c31ef4453"
+        },
+        {
+          "path": "docs/code-wiki/03-core-flows.md",
+          "status": "A",
+          "additions": 185,
+          "deletions": 0,
+          "blobHash": "fc4aed103ef4f965f652ce209a354da3f8dcc49d"
+        },
+        {
+          "path": "docs/code-wiki/04-domain-model.md",
+          "status": "A",
+          "additions": 177,
+          "deletions": 0,
+          "blobHash": "4d169e1098d026acbe0b1f7ef73b74b220219375"
+        },
+        {
+          "path": "docs/code-wiki/05-tools-and-governance.md",
+          "status": "A",
+          "additions": 155,
+          "deletions": 0,
+          "blobHash": "0b04a94b346bf7214917dcea1166fed40d44d266"
+        },
+        {
+          "path": "docs/code-wiki/06-execution-deploy.md",
+          "status": "A",
+          "additions": 163,
+          "deletions": 0,
+          "blobHash": "5c787520c10d32f0f858b32cc7bd438131cd7f2a"
+        },
+        {
+          "path": "docs/code-wiki/07-persistence.md",
+          "status": "A",
+          "additions": 150,
+          "deletions": 0,
+          "blobHash": "e44d3a8badb412fa445dd8803cf836cdb9aebf3b"
+        },
+        {
+          "path": "docs/code-wiki/08-http-api.md",
+          "status": "A",
+          "additions": 193,
+          "deletions": 0,
+          "blobHash": "ba2f5add52f51459798f34961fce5651021d94ab"
+        },
+        {
+          "path": "docs/code-wiki/09-frontend.md",
+          "status": "A",
+          "additions": 187,
+          "deletions": 0,
+          "blobHash": "f4b0ea2b033a7780c4614377aefc3ef271d45ae4"
+        },
+        {
+          "path": "docs/code-wiki/10-build-and-run.md",
+          "status": "A",
+          "additions": 203,
+          "deletions": 0,
+          "blobHash": "a959b2b1c791e2038b7a5040a90e30a3a6b3775d"
+        },
+        {
+          "path": "docs/code-wiki/11-quality-and-tooling.md",
+          "status": "A",
+          "additions": 199,
+          "deletions": 0,
+          "blobHash": "a011102f097e5274e0116230e29f508fec1a6ece"
+        },
+        {
+          "path": "docs/code-wiki/index.md",
+          "status": "A",
+          "additions": 78,
+          "deletions": 0,
+          "blobHash": "16cfbab1c7c8a5b53b29212b9142d97b3300d883"
+        }
+      ]
+    },
+    {
+      "sha": "232abdb85c9d00ead563cd32f2316d552521d9ef",
+      "subject": "fix(docs): 修正 bug-24 归档指向的游离提交，去掉 subject 的 BOM",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-19_1508_bug-24-pending-tool-recovery/manifest.json",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "8fbbb43f579b5f897486e66e298aba97e419bf0a"
+        }
+      ]
+    },
+    {
+      "sha": "ce483558f689cfcb7eb4e2c01730160af61d6bf3",
+      "subject": "docs(process): 归档游离提交修正会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_1603_archive-orphan-sha/manifest.json",
+          "status": "A",
+          "additions": 53,
+          "deletions": 0,
+          "blobHash": "0c7dd0ac6aea1195ea35af97160724d1ad0ca99f"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_1603_archive-orphan-sha.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "7fbf42283fac4378bed742c03800362b0c2af80d"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_archive-orphan-sha.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "0577dc7dde3788c940a92ec7f1cd1efaba028036"
+        }
+      ]
+    },
+    {
+      "sha": "fce29f979b96b24225668ef61157a1a15cdcaf19",
+      "subject": "fix(deploy): HOST 产物复制对短暂占用重试，失败时给出可操作原因",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 58,
+          "deletions": 2,
+          "blobHash": "92e95e80d56b10776a794fa1d769fcb737dbbd8f"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerCopyTest.java",
+          "status": "A",
+          "additions": 119,
+          "deletions": 0,
+          "blobHash": "3517156544be2070580c33206060428d6287a604"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTestAccess.java",
+          "status": "A",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "fac5f7fa17c19296e1c50d67eb34f7892950401d"
+        }
+      ]
+    },
+    {
+      "sha": "a03abed0d4b270379ccdf7435149afdfb4e471be",
+      "subject": "docs(process): 归档 HOST 部署复制重试会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-19_1605_bug-1-host-deploy-copy-retry/manifest.json",
+          "status": "A",
+          "additions": 84,
+          "deletions": 0,
+          "blobHash": "08ca50a6c718e12f4b1d770c074ad0b87a62b1ae"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_1605_bug-1-host-deploy-copy-retry.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "0a143f9972ab82912188d34aa4a3cfbe1982609f"
+        },
+        {
+          "path": "docs/summary/bug/2026-11_bug-1-host-deploy-copy-retry.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "30d7bd9606697eea7501dbec44ba1cb32472ea45"
+        }
+      ]
+    },
+    {
+      "sha": "5789f3a86517616f166744405cd1ad4dbd35c05e",
+      "subject": "chore(task-board): 关闭已修项并补齐只读排查脚本",
+      "category": "chore",
+      "files": [
+        {
+          "path": "tools/task-board/annotate-bug1.py",
+          "status": "A",
+          "additions": 53,
+          "deletions": 0,
+          "blobHash": "336a5a13d6f93cf77f75428d67cb3905e1ed7afd"
+        },
+        {
+          "path": "tools/task-board/close-bug3.py",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "f45109d8552b736ce878808cda7f1375e312dcc0"
+        },
+        {
+          "path": "tools/task-board/close-done.py",
+          "status": "A",
+          "additions": 106,
+          "deletions": 0,
+          "blobHash": "110206e6584f990a438fb296baff31dc603f474e"
+        },
+        {
+          "path": "tools/task-board/run-error-detail.py",
+          "status": "A",
+          "additions": 42,
+          "deletions": 0,
+          "blobHash": "7e90bf7d6af8df63f785d3c585cad70cc02facfe"
+        },
+        {
+          "path": "tools/task-board/run-failures.py",
+          "status": "A",
+          "additions": 51,
+          "deletions": 0,
+          "blobHash": "ecbf73bda452dc04dc35fd55a90a0d555f674a90"
+        }
+      ]
+    },
+    {
+      "sha": "12c6e66d70c6a86b672c3d687a88f097507084c1",
+      "subject": "docs(process): 归档看板收口与排查脚本会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_1612_task-board-closeout-tools/manifest.json",
+          "status": "A",
+          "additions": 81,
+          "deletions": 0,
+          "blobHash": "70fbe235655b2842204610b73c77719b3a9abd97"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_1612_task-board-closeout-tools.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "79404b2b61862cf4e9b80a2cbeea874239280b59"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_task-board-closeout-tools.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "a5af9537197a0bda0466f812a29cd52980e50538"
+        }
+      ]
+    },
+    {
+      "sha": "4fe1c130bb4270e84cba504471d510fdff3d476f",
+      "subject": "feat(pipeline): 界面展示发布事实与日志总行数（cherry-pick 到主干基线）",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 16,
+          "deletions": 0,
+          "blobHash": "fe2b0db360f601a4cc69c49f1cf870fa90ba961c"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/RunLog.vue",
+          "status": "M",
+          "additions": 25,
+          "deletions": 2,
+          "blobHash": "8a94311d71b516bdee6658ffe5101fe2217d7e6d"
+        },
+        {
+          "path": "platform/web/src/utils/releaseTag.test.ts",
+          "status": "A",
+          "additions": 44,
+          "deletions": 0,
+          "blobHash": "9b97f58a48cb3ba2f2cfa7ab2740f79ccd16ffc6"
+        },
+        {
+          "path": "platform/web/src/utils/releaseTag.ts",
+          "status": "A",
+          "additions": 37,
+          "deletions": 0,
+          "blobHash": "27e0c256df6b013bfa29a86a0707cc602d0a4dec"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 31,
+          "deletions": 2,
+          "blobHash": "4fef532b8477ccf81832d76440695f496d59c2cd"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "96c3dfbe25f351a2f2224b2d87a3c49490f6d862"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerCopyTest.java",
+        "status": "A",
+        "additions": 119,
+        "deletions": 0,
+        "blobHash": "3517156544be2070580c33206060428d6287a604"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/HostDeployerTestAccess.java",
+        "status": "A",
+        "additions": 21,
+        "deletions": 0,
+        "blobHash": "fac5f7fa17c19296e1c50d67eb34f7892950401d"
+      },
+      {
+        "path": "platform/web/src/utils/releaseTag.test.ts",
+        "status": "A",
+        "additions": 44,
+        "deletions": 0,
+        "blobHash": "9b97f58a48cb3ba2f2cfa7ab2740f79ccd16ffc6"
+      }
+    ],
+    "casesAdded": 17,
+    "command": "mvn -B -nsu -pl !spec-checks test -Dsurefire.forkCount=4",
+    "result": "PASSED",
+    "evidence": "Tests run: 779, Failures: 0, Errors: 0, Skipped: 7"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "web"
+    ],
+    "verification": "前端四套自检全部通过：agentEventReducer 38、toolArgs 20、releaseTag 14、pipelineLayout 3、capabilityOrder 4；vue-tsc 通过；mvn test 776 例通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_1747_bug-10-release-facts-in-ui"
+    ]
+  },
+  "chain": {
+    "prev": "c0f7fb5397326ccfbedd7878814edef32e87e05dc228a9ff2a887f4b81f4310c",
+    "self": "cd506d08e7d63f7088da2cd2f1aa65bdd477a3244c614a6f0f50ab73b3b944e9"
+  }
+}

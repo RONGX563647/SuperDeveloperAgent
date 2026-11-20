@@ -1,0 +1,67 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "docs/2026-11-19_2232_usage-hitrate-archive-doc",
+  "category": "docs",
+  "title": "提交用量命中率归档文档",
+  "createdAt": "2026-11-19T22:32:11+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "纯文档：提交 feat-5 命中率与门禁隔离两次会话的归档",
+    "toolCallCount": 0
+  },
+  "problem": "纯文档归档本身没有问题，但它必须有一个活跃会话才能提交——这是门禁的规则，与内容无关。前两次 push 都因为「存在未提交的归档/总结文件」被拦，而提交这些文件又需要新会话，形成一个看起来自相矛盾的小循环。",
+  "solution": "按规则补一个 docs 类别会话并立即 finish：docs 类别不要求新增测试用例，只要求写入 problem/solution，因此正好用来收口纯文档提交。这不算绕过门禁——归档本身仍然完整（含 manifest 与总结），只是把「提交归档」这一步也纳入会话记录。",
+  "commits": [
+    {
+      "sha": "cfaf4874fe1a0da02c17603508fea8c962e72b3d",
+      "subject": "docs(process): 归档用量命中率与门禁隔离会话",
+      "category": "docs",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_2219_usage-hitrate-archive/manifest.json",
+          "status": "A",
+          "additions": 119,
+          "deletions": 0,
+          "blobHash": "c77572103d0a3402f45c3ff04c5cada9ffd9c2cc"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-19_2219_usage-hitrate-archive.md",
+          "status": "A",
+          "additions": 46,
+          "deletions": 0,
+          "blobHash": "f14e374987894ba4700f5ac3252897f4c51b8177"
+        },
+        {
+          "path": "docs/summary/chore/2026-11_usage-hitrate-archive.md",
+          "status": "A",
+          "additions": 47,
+          "deletions": 0,
+          "blobHash": "cd9bee9d6b3b1281489b0597aa8f1360bd02bca4"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "git commit 成功；push 通过前端自检与归档校验"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2232_usage-hitrate-archive-doc"
+    ]
+  },
+  "chain": {
+    "prev": "475564b3deaa75228c74061e8eb24782c4d7764621ff162ae69279fb2414f286",
+    "self": "5c00ad4fe4fbddce6bd07d7f7ae0da24b83ed5e98bcbd0c952f6b9a68b6ecd1b"
+  }
+}

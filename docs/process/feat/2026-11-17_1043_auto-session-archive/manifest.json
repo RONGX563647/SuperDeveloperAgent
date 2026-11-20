@@ -1,0 +1,77 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-17_1043_auto-session-archive",
+  "category": "feat",
+  "title": "会话自动存档：sweep 对账 + 全局 skill + 定时任务",
+  "createdAt": "2026-11-17T10:43:02+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "会话自动存档：sweep 对账 + 全局 skill + 定时任务",
+    "toolCallCount": 0
+  },
+  "problem": "AI 开发会话只有有提交才归档，纯问答/分析会话永远进不了 docs/process，现有 hook 看不到会话",
+  "solution": "新增 sweep.py 读取 IDE 会话摘要对账补录 docs 类归档（空 commits、ideSessionId 幂等），validate 支持空提交会话并校验 ideSessionId 全局唯一；注册每 2 小时定时任务兜底",
+  "commits": [
+    {
+      "sha": "8cdc37d5f896b3e014cd3582c7548558c1870b55",
+      "subject": "feat(archive): 会话对账补录 docs 归档并支持空提交会话",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ProcessArchiveTest.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "d555ea2405f2d850c928e4aa52c0c1131d78fb4e"
+        },
+        {
+          "path": "tools/session-archive/gate.py",
+          "status": "M",
+          "additions": 58,
+          "deletions": 6,
+          "blobHash": "05fc6ab0c2a48db469b74da1c8b9fb2bbbe8b815"
+        },
+        {
+          "path": "tools/session-archive/sweep.py",
+          "status": "A",
+          "additions": 216,
+          "deletions": 0,
+          "blobHash": "ee9c60d64dcc81a0330728cafe24c02f6206e351"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ProcessArchiveTest.java",
+        "status": "M",
+        "additions": 6,
+        "deletions": 0,
+        "blobHash": "d555ea2405f2d850c928e4aa52c0c1131d78fb4e"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -pl spec-checks -am test",
+    "result": "PASSED",
+    "evidence": "Tests run: 533, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "spec-checks"
+    ],
+    "verification": "Tests run: 533, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-17_1043_auto-session-archive"
+    ]
+  },
+  "chain": {
+    "prev": "f36f06aa5c38741b37f373ae4e90060384ba8e300d3f712d057abe3e3223ad5f",
+    "self": "336efb801693b442dea71ee84930c4192a0c2f6deb4f922acdcf6121bf4f0271"
+  }
+}

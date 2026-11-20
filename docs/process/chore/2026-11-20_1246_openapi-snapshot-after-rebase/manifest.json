@@ -1,0 +1,55 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-20_1246_openapi-snapshot-after-rebase",
+  "category": "chore",
+  "title": "rebase 后同步 openapi 快照",
+  "createdAt": "2026-11-20T12:46:26+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "rebase 后同步 openapi 快照",
+    "toolCallCount": 0
+  },
+  "problem": "rebase origin/0.1.0-snapshot 后远端新增端点导致 ApiDocsSnapshotTest golden 失效",
+  "solution": "执行 -Dapi.docs.update=true 重新生成快照（+3 行）",
+  "commits": [
+    {
+      "sha": "16c6f4c8bf90b9bf664d0c4a9178fdd72c8d3f83",
+      "subject": "chore(gateway): 同步 rebase 带来的 openapi 快照差异（新增端点）",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 3,
+          "deletions": 0,
+          "blobHash": "97822567ab5f5509b1081a67de1a38b21ab5e7d8"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 214, Failures: 0, Errors: 0, Skipped: 5"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "mvn -pl agent-gateway -Dtest=ApiDocsSnapshotTest BUILD SUCCESS"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1246_openapi-snapshot-after-rebase"
+    ]
+  },
+  "chain": {
+    "prev": "30e365ff4ee580b8b7fee3c2cbe1818d43a52fd23b3fff5ea023a5519b838bc5",
+    "self": "c09102d4ed523889bceb462334ce7c9027baa15bdf6a3fe8c5bd492349f3f6fe"
+  }
+}

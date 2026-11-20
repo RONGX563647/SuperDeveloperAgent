@@ -1,0 +1,53 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-20_1929_branch-cleanup-and-diag-tool",
+  "category": "chore",
+  "title": "分支清理与归档诊断工具收录",
+  "createdAt": "2026-11-20T19:29:31+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "分支清理与归档诊断工具收录",
+    "toolCallCount": 0
+  },
+  "problem": "分支清理前：sync 分支（已落后 164 提交、树差 395 文件）上有唯一有用的 diag-chain.py 归档断链诊断工具，0.1 没有它",
+  "solution": "清理前摘取 diag-chain.py 到 0.1.0-snapshot（tools/session-archive/），实测 bug 链诊断输出正常",
+  "commits": [
+    {
+      "sha": "b1a8628733eda5957ef6567949b4dc0d57d04699",
+      "subject": "chore(archive): 收录 diag-chain.py 归档断链诊断工具（来自 sync 分支，清理该分支前摘取）",
+      "category": "chore",
+      "files": [
+        {
+          "path": "tools/session-archive/diag-chain.py",
+          "status": "A",
+          "additions": 63,
+          "deletions": 0,
+          "blobHash": "e9274ba279b97cc8f8faaee814abc02534014595"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "未执行",
+    "result": "SKIPPED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [],
+    "verification": "diag-chain.py bug 4 输出「链连续」；pre-commit 绿"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1929_branch-cleanup-and-diag-tool"
+    ]
+  },
+  "chain": {
+    "prev": "e98f0a260752ab2898da166c1bc627ac34844511d9edd2b2b31730e261e00f44",
+    "self": "f1b4f15df5a999caad4b9083243e24158499144021a7d5b0614139994daf6627"
+  }
+}

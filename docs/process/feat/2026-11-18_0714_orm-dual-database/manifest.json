@@ -1,0 +1,218 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-18_0714_orm-dual-database",
+  "category": "feat",
+  "title": "引入 JPA 统一 SQLite 与 PostgreSQL 持久化",
+  "createdAt": "2026-11-18T07:14:30+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "引入 JPA 统一 SQLite 与 PostgreSQL 持久化",
+    "toolCallCount": 0
+  },
+  "problem": "持久化层写死 SQLite：18 个 Store 直接打开 .db 文件，连接池、schema 初始化和事务均手写，无法通过配置切换到 PostgreSQL。",
+  "solution": "引入 Spring Data JPA + Hibernate 7 + HikariCP 作为统一 ORM 基座。新增 agent.db.url：留空走 SQLite 单文件，配置 jdbc:postgresql:// 走 PG；PG 由 Flyway 管理 schema，SQLite 无官方 Flyway 模块，改由 Hibernate 社区方言按实体生成/升级。新增 platform_meta 实体与仓储作为双库冒烟，并把 EntityScan/JpaRepositories 装配到 infra 与 governance 包。",
+  "commits": [
+    {
+      "sha": "e13d0ea077ed9f1e0d2a32e5bd3a2bc6efc273e4",
+      "subject": "feat(persistence): 引入 JPA 统一 SQLite 与 PostgreSQL 装配",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/AgentApplication.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "5c2205fcc22a70507d7802b244b6a54484b3d7dd"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 18,
+          "deletions": 0,
+          "blobHash": "a97cb77ec78522d36114f071954a483029b38bba"
+        },
+        {
+          "path": "platform/agent-infra/pom.xml",
+          "status": "M",
+          "additions": 25,
+          "deletions": 0,
+          "blobHash": "843590e3411a5ff8e1a8b7d6bc9e15286b81a8da"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/AgentDbProperties.java",
+          "status": "A",
+          "additions": 55,
+          "deletions": 0,
+          "blobHash": "8c00f74477c6fc16c472b059b87e14c23b552dfb"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DataSourceConfig.java",
+          "status": "A",
+          "additions": 96,
+          "deletions": 0,
+          "blobHash": "f9399bd47bc00bef65232f00c4622c277a558264"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DbBackend.java",
+          "status": "A",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "6a279f3e802775f0dd0111c8249bd56d2c907587"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/PersistenceConfig.java",
+          "status": "A",
+          "additions": 17,
+          "deletions": 0,
+          "blobHash": "9f314d2f9834c37c8f9b6219ffc61ab1b19c9da3"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/entity/PlatformMetaEntity.java",
+          "status": "A",
+          "additions": 51,
+          "deletions": 0,
+          "blobHash": "950b3a9f5105678f2f50fd1d8f97a109c3ea043b"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/repository/PlatformMetaRepository.java",
+          "status": "A",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "c5e18bc49a9fcb7a27f9068e73620c2034cfe77b"
+        },
+        {
+          "path": "platform/agent-infra/src/main/resources/db/migration/postgresql/V1__platform_meta.sql",
+          "status": "A",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "36e37419b403fe2d2ef5affcd0660c8a5af0ad39"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+          "status": "A",
+          "additions": 39,
+          "deletions": 0,
+          "blobHash": "85f9da0856aead1215437dad7a3088d0cad0108f"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/DataSourceConfigTest.java",
+          "status": "A",
+          "additions": 42,
+          "deletions": 0,
+          "blobHash": "0f45d08505378d9574cf185343f66603bbe9bd72"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/SqliteJpaSmokeTest.java",
+          "status": "A",
+          "additions": 43,
+          "deletions": 0,
+          "blobHash": "b87c250a2062082d2925ae4c8ff594ba2fe385e6"
+        }
+      ]
+    },
+    {
+      "sha": "69c336a77db749f0fbd493aedac2b347c056b774",
+      "subject": "fix(persistence): 数据库配置错误改用平台异常与错误码",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/AgentDbProperties.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 2,
+          "blobHash": "8def08926096acc19c8f86c9c9e970bbdd9df0f8"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/config/DataSourceConfig.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "32406e03c44ce9f99df784e3df13642be507d5e4"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "491f1caeac61b49ea279b426a8926d582279f6c7"
+        }
+      ]
+    },
+    {
+      "sha": "7b94e92be7feece9f944d181aeb97fb68119fbcb",
+      "subject": "test(persistence): 补充显式 SQLite URL 优先级用例",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "e945770731a9c96ec7f11fa7c33bf876c447cf24"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+        "status": "A",
+        "additions": 39,
+        "deletions": 0,
+        "blobHash": "85f9da0856aead1215437dad7a3088d0cad0108f"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/DataSourceConfigTest.java",
+        "status": "A",
+        "additions": 42,
+        "deletions": 0,
+        "blobHash": "0f45d08505378d9574cf185343f66603bbe9bd72"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/SqliteJpaSmokeTest.java",
+        "status": "A",
+        "additions": 43,
+        "deletions": 0,
+        "blobHash": "b87c250a2062082d2925ae4c8ff594ba2fe385e6"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+        "status": "M",
+        "additions": 2,
+        "deletions": 1,
+        "blobHash": "491f1caeac61b49ea279b426a8926d582279f6c7"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/config/AgentDbPropertiesTest.java",
+        "status": "M",
+        "additions": 10,
+        "deletions": 0,
+        "blobHash": "e945770731a9c96ec7f11fa7c33bf876c447cf24"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -pl spec-checks -am test -Dtest='!ProcessArchiveTest,!DeployEnvPrecheckTest,!DeployRecipeFlowTest,!DockerDaemonRepairTest' -Dsurefire.failIfNoSpecifiedTests=false",
+    "result": "PASSED",
+    "evidence": "Tests run: 567, Failures: 0, Errors: 0, Skipped: 4"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "agent-infra"
+    ],
+    "verification": "567 个用例通过（排除 1 个依赖完整 git 历史的 ProcessArchiveTest、3 个依赖 Docker 的部署测试；本沙箱无 Docker 且仓库仅 3 个提交）；覆盖 agent-infra 双库配置单测、SQLite 方言 JPA 读写、agent-gateway 完整上下文启动、架构与规约检查。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-18_0714_orm-dual-database"
+    ]
+  },
+  "chain": {
+    "prev": "fbc95ab8be3e2a104b8e08c1d9895ba949c5c346a2cbf8a6aada471da8c20bfa",
+    "self": "81f8333bdb1014e3a343ca2c9241f25629c12802eb21556e81182bee07636254"
+  }
+}

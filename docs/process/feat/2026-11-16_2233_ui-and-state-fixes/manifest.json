@@ -1,0 +1,667 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-16_2233_ui-and-state-fixes",
+  "category": "feat",
+  "title": "部署卡片历史/日志/重启、SSE 401 与状态存储修复",
+  "createdAt": "2026-11-17T10:23:19+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "部署卡片看不到历史、容器日志与重启入口；SSE 未登录时内容协商失败刷 500；匿名槽位请求 AgentState 产生告警；前端样式重复且布局割裂",
+    "toolCallCount": 0
+  },
+  "problem": "部署卡片看不到历史、容器日志与重启入口；SSE 未登录时内容协商失败刷 500；匿名槽位请求 AgentState 产生告警；前端样式重复且布局割裂",
+  "solution": "部署历史与 git 标签入库，卡片支持日志、重启与访问链接；GlobalExceptionHandler 按 Accept 分流 SSE；匿名槽位读写直接忽略；统一设计令牌并重构侧栏、聊天与项目页布局",
+  "commits": [
+    {
+      "sha": "8fc11688593c58d4920ab5dbfd1bebb4f8fd8698",
+      "subject": "feat(deploy): 新增 Dockerfile 自愈工具与部署诊断增强",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/ChatRunRecoveryAdvisor.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 4,
+          "blobHash": "2f02355feff0deba8d68fa1883bd81ce9b431d5b"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "d439ea85cf9c2c836e69111791578ed200999fe1"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/ProjectIntakeService.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "30920bc7058c238641a9352c53d21b044df2103b"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/CiQueryTools.java",
+          "status": "M",
+          "additions": 94,
+          "deletions": 17,
+          "blobHash": "6c8a48b051b9ca0afa86211867a2ca8f960a3899"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
+          "status": "M",
+          "additions": 18,
+          "deletions": 2,
+          "blobHash": "e9ad74ae26694423798debb19947e8e4c04009a1"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DockerfileTools.java",
+          "status": "A",
+          "additions": 546,
+          "deletions": 0,
+          "blobHash": "28df8b6f89e1be2f51c59ed3556a73c5747bd8db"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EffectiveEndpointResolver.java",
+          "status": "A",
+          "additions": 110,
+          "deletions": 0,
+          "blobHash": "f41a5717d7e572c8d9d50c55b95eb2f0d703a56f"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvQueryTools.java",
+          "status": "M",
+          "additions": 8,
+          "deletions": 5,
+          "blobHash": "9bf30d4e5c6898040a6ca424ed7b0a3dc7c2dc26"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ProjectTools.java",
+          "status": "M",
+          "additions": 54,
+          "deletions": 7,
+          "blobHash": "9a19af9e1b20163481929e361e1b0921ea0397eb"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/RepoQueryTools.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 1,
+          "blobHash": "5e2b5e99686cca7535bc49f342c3e2c03a17ab4d"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalog.java",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "79795c81d3516ede59ed3bf11bad20c073c55e75"
+        },
+        {
+          "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DockerfileToolsTest.java",
+          "status": "A",
+          "additions": 123,
+          "deletions": 0,
+          "blobHash": "73a610e0eb8bd54052658b7464793c85f0e44952"
+        }
+      ]
+    },
+    {
+      "sha": "23ff830a70859132244e5efb561c2e2f6aafe597",
+      "subject": "feat(deploy): 发布版本历史、git 标签与环境部署重启/日志",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/PipelineEngine.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 1,
+          "blobHash": "11c6cc80012a868867917220ff35f1a6411d4bfc"
+        },
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/ProjectRepoLocator.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "724658536aa090b1145755fb2582428385490872"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 31,
+          "deletions": 3,
+          "blobHash": "7c22b298ee0c36120fec8e5700cd0185c9bea1a9"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/HostDeployer.java",
+          "status": "M",
+          "additions": 7,
+          "deletions": 0,
+          "blobHash": "485d9d03466cfe5e07bcb649ed7b280b38a9ac8c"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/RunHistoryStore.java",
+          "status": "M",
+          "additions": 11,
+          "deletions": 5,
+          "blobHash": "60c12b0640f47bd678d9a146e27645095d10c83d"
+        },
+        {
+          "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreTest.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "6fdc6f24b292f904bf58c0f8dd1b282b5300de3f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/DeploymentControlService.java",
+          "status": "M",
+          "additions": 303,
+          "deletions": 9,
+          "blobHash": "8a6fc4b91384d49ecf7d56c1fab0f8656dec72ff"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 12,
+          "blobHash": "ef348b30c912449c418f5fe571e13bc036df131b"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/WorkspaceDeploymentController.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 0,
+          "blobHash": "81e57d492198fa66dd0a7aed835e7cd1a0b8203a"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 142,
+          "deletions": 0,
+          "blobHash": "e697ed3a89d5993d2ae94278d6e8e5453c23f7ac"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeploymentControlServiceTest.java",
+          "status": "M",
+          "additions": 113,
+          "deletions": 0,
+          "blobHash": "5ea5923d83c1d79cc62911fac126436c5ddad628"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+          "status": "M",
+          "additions": 100,
+          "deletions": 5,
+          "blobHash": "4e3834fa71b7ba8a54925d18b6af94b14ada719d"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/DefaultRepoLocator.java",
+          "status": "M",
+          "additions": 32,
+          "deletions": 0,
+          "blobHash": "61b5e508f0c0409d0a05b8c09e8dc52a0a5b83bb"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/GitWorktreeManagerTest.java",
+          "status": "M",
+          "additions": 48,
+          "deletions": 0,
+          "blobHash": "2e12dca46dcffcbcc577d9d4c4090c8ed105f9d6"
+        },
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "d084b3d05f8e14346e7887fb8a321c1840e92672"
+        },
+        {
+          "path": "platform/web/src/api/workspace.ts",
+          "status": "M",
+          "additions": 41,
+          "deletions": 0,
+          "blobHash": "2144840c989c6ac1c5131e8bb9ccc7e0f63878eb"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/HistoryList.vue",
+          "status": "M",
+          "additions": 16,
+          "deletions": 1,
+          "blobHash": "aa56c6229281c409ebb4d9f6ded0a48955631268"
+        },
+        {
+          "path": "platform/web/src/components/workspace/DeploymentMatrix.vue",
+          "status": "M",
+          "additions": 797,
+          "deletions": 208,
+          "blobHash": "441f4aaea6da82d124aa70b230edb3bafd2c69dc"
+        },
+        {
+          "path": "platform/web/src/views/WorkspaceHomeView.vue",
+          "status": "M",
+          "additions": 152,
+          "deletions": 379,
+          "blobHash": "88d498858024c4956d7d731c3b699f4e2aa4e034"
+        }
+      ]
+    },
+    {
+      "sha": "53f900956a05207c2a5f2043994ff9bb337a8692",
+      "subject": "fix(web): SSE 异常统一返回 JSON，避免内容协商失败",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GlobalExceptionHandler.java",
+          "status": "M",
+          "additions": 56,
+          "deletions": 16,
+          "blobHash": "bb9e0806297b1349f85b125e1379c0dc807fae0a"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GlobalExceptionHandlerTest.java",
+          "status": "A",
+          "additions": 62,
+          "deletions": 0,
+          "blobHash": "bfff5c7b538a1240d9684724eee3dd25ac30d5c3"
+        }
+      ]
+    },
+    {
+      "sha": "f51b1610d278571c5ec39bec6cc8d6718b8a2d7c",
+      "subject": "fix(state): 匿名槽位不再落盘，消除状态存储告警",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
+          "status": "M",
+          "additions": 30,
+          "deletions": 2,
+          "blobHash": "58d205888b994d1ad7f15f36e75d60bb0b81fae4"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/EncryptedAgentStateStoreTest.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 0,
+          "blobHash": "1b2288f0ac1b2fd06ef4fca75bf004a9c8dde8cd"
+        }
+      ]
+    },
+    {
+      "sha": "7207f81ab45147de7ad1a8487c552e063125d208",
+      "subject": "refactor(ui): 统一设计令牌并重构侧栏、聊天与项目页布局",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/web/src/components/chat/ChatCapabilitiesView.vue",
+          "status": "M",
+          "additions": 282,
+          "deletions": 38,
+          "blobHash": "2e0d777b0d0cce781f1ed6cde11d97f59cb8888d"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatStatusStrip.vue",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "ecccae4a78d8a2bdc217b1c9297373265053538c"
+        },
+        {
+          "path": "platform/web/src/components/chat/ChatTraceView.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 24,
+          "blobHash": "64a0c993a8ca414e192d7015efb5d8688aa47899"
+        },
+        {
+          "path": "platform/web/src/components/chat/ConversationTimeline.vue",
+          "status": "M",
+          "additions": 9,
+          "deletions": 4,
+          "blobHash": "f7ffe5aba240b5536af5bea1da87f6f3e9d80c48"
+        },
+        {
+          "path": "platform/web/src/components/chat/MessageItem.vue",
+          "status": "M",
+          "additions": 63,
+          "deletions": 3,
+          "blobHash": "ffb392a20914547480526faa3eab350c95623a08"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/RunLog.vue",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "e043b100a27e031d987268913e09efe48338e46f"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/TriggerBar.vue",
+          "status": "M",
+          "additions": 10,
+          "deletions": 8,
+          "blobHash": "555186a6bb0933a77377e330ee7bf87138313a2c"
+        },
+        {
+          "path": "platform/web/src/components/project/FilePreview.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "e0a1d8dda28f14433ea6a532684869d73a63fdc4"
+        },
+        {
+          "path": "platform/web/src/components/project/ProjectOverview.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "346175898e0f90cfe0e93bce88e98d992fb93253"
+        },
+        {
+          "path": "platform/web/src/components/project/ProjectTree.vue",
+          "status": "M",
+          "additions": 42,
+          "deletions": 9,
+          "blobHash": "9a2755d2434d186a7f45cb8f503e636bce0ae5a9"
+        },
+        {
+          "path": "platform/web/src/components/project/TabbedFiles.vue",
+          "status": "M",
+          "additions": 7,
+          "deletions": 1,
+          "blobHash": "0f8e25897e566ba35dce2505930fb52c33311f9b"
+        },
+        {
+          "path": "platform/web/src/components/project/TreeNodeRow.vue",
+          "status": "M",
+          "additions": 37,
+          "deletions": 3,
+          "blobHash": "4188929339aa868d320dcc80955ef3904ed33320"
+        },
+        {
+          "path": "platform/web/src/components/project/useProjectTree.ts",
+          "status": "M",
+          "additions": 53,
+          "deletions": 7,
+          "blobHash": "0032616d0a102d84b1129f2d9748aabab1ae1342"
+        },
+        {
+          "path": "platform/web/src/layouts/AppLayout.vue",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "ef12dc60e06bb365d6cba573a7db830bffd689cc"
+        },
+        {
+          "path": "platform/web/src/layouts/components/AppAside.vue",
+          "status": "M",
+          "additions": 59,
+          "deletions": 68,
+          "blobHash": "3ca8caa0ade5dfa9166e0f85ec424c38a419395c"
+        },
+        {
+          "path": "platform/web/src/layouts/components/ContextSwitcher.vue",
+          "status": "M",
+          "additions": 6,
+          "deletions": 3,
+          "blobHash": "9154d124e74257e7f645587d74a98cdc2adb8574"
+        },
+        {
+          "path": "platform/web/src/layouts/components/PageHeader.vue",
+          "status": "M",
+          "additions": 33,
+          "deletions": 25,
+          "blobHash": "75be41ba6f666c0d3d38d43d2d4f801759e57e87"
+        },
+        {
+          "path": "platform/web/src/router.ts",
+          "status": "M",
+          "additions": 18,
+          "deletions": 8,
+          "blobHash": "98b6a067e0ef0842c60f8b7bed39383c95b616f0"
+        },
+        {
+          "path": "platform/web/src/styles.css",
+          "status": "M",
+          "additions": 800,
+          "deletions": 113,
+          "blobHash": "e420d8124f3e52587062d17360abf720539eed46"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 248,
+          "deletions": 337,
+          "blobHash": "98bb547375250730ff73feb91049274fbc72ab61"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 24,
+          "deletions": 17,
+          "blobHash": "e3cfb0605381669e5cf3fae44705b43602cfaed2"
+        },
+        {
+          "path": "platform/web/src/views/ProjectIntakeView.vue",
+          "status": "M",
+          "additions": 37,
+          "deletions": 9,
+          "blobHash": "3ece847889968c064909e70d19ea226f6fb577cd"
+        },
+        {
+          "path": "platform/web/src/views/ProjectListView.vue",
+          "status": "M",
+          "additions": 21,
+          "deletions": 79,
+          "blobHash": "0020d4720721eaa66bd1598e4ca4eadef64e0876"
+        },
+        {
+          "path": "platform/web/src/views/SettingsView.vue",
+          "status": "M",
+          "additions": 22,
+          "deletions": 9,
+          "blobHash": "cac1c4b5a378cd6e9698d57c121d585536e618c7"
+        },
+        {
+          "path": "platform/web/src/views/intake-shared.css",
+          "status": "M",
+          "additions": 44,
+          "deletions": 41,
+          "blobHash": "33ce34c9e11a5f507d40901ae382b5e4ec81b751"
+        },
+        {
+          "path": "platform/web/vite.config.ts",
+          "status": "M",
+          "additions": 13,
+          "deletions": 0,
+          "blobHash": "6da7cac98f4944dc524351e57dac9f336d005af0"
+        }
+      ]
+    },
+    {
+      "sha": "dfd6290c6d19a50e147a4ac5fbe716cce0466441",
+      "subject": "fix(tools): 通过 RepoInspector 判断提交内文件，移除工具层进程调用",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/port/RepoInspector.java",
+          "status": "M",
+          "additions": 10,
+          "deletions": 0,
+          "blobHash": "fa03a49e335a82681029570a2205ba137b59dbee"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitRepoInspector.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 0,
+          "blobHash": "84d879189eb59c67a6262c71f5513c33e663325a"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
+          "status": "M",
+          "additions": 14,
+          "deletions": 0,
+          "blobHash": "97ce0ae93d106828fc0cea9ccfacf61ad94b2430"
+        },
+        {
+          "path": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DockerfileTools.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 24,
+          "blobHash": "d862bdd49514f64fd557c997a2ded44d77c34425"
+        }
+      ]
+    },
+    {
+      "sha": "3f6031753bae13100bbe5f91be449e5b3fcaa9bd",
+      "subject": "fix(spec): 错误码检查改为扫描源码，避免独立运行命中过期快照",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/specs/dev-local-deploy/spec.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 180,
+          "blobHash": "-"
+        },
+        {
+          "path": "docs/specs/dev-local-deploy/tasks.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 85,
+          "blobHash": "-"
+        },
+        {
+          "path": "docs/specs/env-inject-health/spec.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 125,
+          "blobHash": "-"
+        },
+        {
+          "path": "docs/specs/env-inject-health/tasks.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 60,
+          "blobHash": "-"
+        },
+        {
+          "path": "docs/specs/env-runtime-consistency/spec.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 150,
+          "blobHash": "-"
+        },
+        {
+          "path": "docs/specs/env-runtime-consistency/tasks.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 63,
+          "blobHash": "-"
+        },
+        {
+          "path": "docs/specs/overview.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 16,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ErrorCodeUniquenessTest.java",
+          "status": "M",
+          "additions": 33,
+          "deletions": 7,
+          "blobHash": "9aa716d744b21e417dfe793981c807c1b0ee77e9"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/ToolChainTest.java",
+        "status": "M",
+        "additions": 4,
+        "deletions": 0,
+        "blobHash": "d439ea85cf9c2c836e69111791578ed200999fe1"
+      },
+      {
+        "path": "platform/agent-tools/src/test/java/top/rongx/agent/tools/DockerfileToolsTest.java",
+        "status": "A",
+        "additions": 123,
+        "deletions": 0,
+        "blobHash": "73a610e0eb8bd54052658b7464793c85f0e44952"
+      },
+      {
+        "path": "platform/agent-executor/src/test/java/top/rongx/agent/executor/RunHistoryStoreTest.java",
+        "status": "M",
+        "additions": 4,
+        "deletions": 1,
+        "blobHash": "6fdc6f24b292f904bf58c0f8dd1b282b5300de3f"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeploymentControlServiceTest.java",
+        "status": "M",
+        "additions": 113,
+        "deletions": 0,
+        "blobHash": "5ea5923d83c1d79cc62911fac126436c5ddad628"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/git/GitWorktreeManagerTest.java",
+        "status": "M",
+        "additions": 48,
+        "deletions": 0,
+        "blobHash": "2e12dca46dcffcbcc577d9d4c4090c8ed105f9d6"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GlobalExceptionHandlerTest.java",
+        "status": "A",
+        "additions": 62,
+        "deletions": 0,
+        "blobHash": "bfff5c7b538a1240d9684724eee3dd25ac30d5c3"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/EncryptedAgentStateStoreTest.java",
+        "status": "M",
+        "additions": 17,
+        "deletions": 0,
+        "blobHash": "1b2288f0ac1b2fd06ef4fca75bf004a9c8dde8cd"
+      },
+      {
+        "path": "platform/spec-checks/src/test/java/top/rongx/agent/arch/ErrorCodeUniquenessTest.java",
+        "status": "M",
+        "additions": 33,
+        "deletions": 7,
+        "blobHash": "9aa716d744b21e417dfe793981c807c1b0ee77e9"
+      }
+    ],
+    "casesAdded": 18,
+    "command": "mvn -B -pl spec-checks -am -Dtest=!ApiDocsSnapshotTest -Dsurefire.failIfNoSpecifiedTests=false test",
+    "result": "PASSED",
+    "evidence": "Tests run: 502, Failures: 0, Errors: 0, Skipped: 2"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-executor",
+      "agent-gateway",
+      "agent-infra",
+      "agent-tools",
+      "spec-checks",
+      "web"
+    ],
+    "verification": "Tests run: 502, Failures: 0, Errors: 0, Skipped: 2（排除 ApiDocsSnapshotTest：该提交点 OpenAPI 快照未同步，已在后续会话修复）"
+  },
+  "followUps": [
+    "Element Plus 按需引入与长会话虚拟滚动待做",
+    "ApiDocsSnapshotTest 在该提交点因快照未同步失败，后续会话已修复"
+  ],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-16_2233_ui-and-state-fixes"
+    ]
+  },
+  "chain": {
+    "prev": "ca25962bf17aa929e6d558cfc17fd366a0fe6f4294c9540a2b6895bad699faa0",
+    "self": "ff890d0f9212f8b54cb7bac9e931247f18946fdd0e77aac82f32618bfe5e471f"
+  }
+}
