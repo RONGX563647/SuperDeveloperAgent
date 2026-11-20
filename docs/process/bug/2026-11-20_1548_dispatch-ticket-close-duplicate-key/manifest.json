@@ -1,0 +1,70 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-20_1548_dispatch-ticket-close-duplicate-key",
+  "category": "bug",
+  "title": "派发票据回写撞主键（closeTicket 误用 INSERT）",
+  "createdAt": "2026-11-20T15:48:16+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "派发票据回写撞主键（closeTicket 误用 INSERT）",
+    "toolCallCount": 0
+  },
+  "problem": "调度派发票据关单时 closeTicket 对已存在票据用 saveTask（INSERT），每次回写终态都撞 workspace_tasks_pkey（duplicate key），票据永远停在 RUNNING、结果丢失",
+  "solution": "closeTicket 改走 updateTask（UPDATE）；ConversationManagerTest fake store 补主键语义（saveTask putIfAbsent 撞 id 抛 / updateTask 缺失抛），新增 dispatchTicketCloseUpdatesInsteadOfInsert 调度流回归",
+  "commits": [
+    {
+      "sha": "e50b9f128ffd0b67c134ddd6ebbd09c97553f3cb",
+      "subject": "fix(runtime): 派发票据回写改走 updateTask，不再撞 workspace_tasks_pkey",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationManager.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "c363df89ad41ad0baa3e669dd357816dce59d388"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+          "status": "M",
+          "additions": 35,
+          "deletions": 1,
+          "blobHash": "d4dc73f256e6ec0de8def449ebe401d4a58cf4be"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java",
+        "status": "M",
+        "additions": 35,
+        "deletions": 1,
+        "blobHash": "d4dc73f256e6ec0de8def449ebe401d4a58cf4be"
+      }
+    ],
+    "casesAdded": 1,
+    "command": "mvn -B -nsu -pl agent-runtime,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-runtime test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 72, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "agent-runtime"
+    ],
+    "verification": "去掉修复时该测试失败（复现 duplicate key）；加上修复后 ConversationManagerTest 14/14 绿、agent-gateway 72 用例 0 失败"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1548_dispatch-ticket-close-duplicate-key"
+    ]
+  },
+  "chain": {
+    "prev": "a50667a7ea2612af0a856f434cf4876f806828655d0b28325c7f1cbf2f76be28",
+    "self": "8d12b79d49c8376175cb4615a1b0d49f7773899110734666e34e5333c3c5acdc"
+  }
+}
