@@ -1,17 +1,27 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-52 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+55 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
 
 ## 2026-11-20 · 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效（bug `a2aa87e`）
 - 问题：修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效
 - 方案：fix(deploy): 修复固化脚本重放丢失 version/tag 与部署地址指向 health JSON
 - 验证：Tests run: 489, Failures: 0, Errors: 0, Skipped: 6
 
+## 2026-11-20 · 0.1→0.2 同步：新归档模型（ledger/views/skills）带入 0.2 线（chore `ceef158` `a163612` `813904b` `342bfd9` `352fc30` `bb27e58` `c1fc559` `c455510` `a27fe76` `2c4af50` `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8`）
+- 问题：0.2 线还停在旧归档格式，两条线门禁模型不一致；合并时暴露迁移版本撞车：两条线各自发过 V5，Flyway 拒启（Found more tha…
+- 方案：merge 0.1→0.2：39 个 manifest modify/delete 冲突以 0.2 版本覆盖同 id ledger 行后统一入 …
+- 验证：gate validate 177 份链全绿；views/handbook check 一致；迁移锁 8/8；agent-gateway 226…
+
 ## 2026-11-20 · 部署地址指向/镜像保留策略/版本区分/环境页镜像面板（bug `813904b` `342bfd9`）
 - 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；
 - 方案：三个部署器端点改根路径；
 - 验证：agent-executor 264+3 / agent-gateway 222 全绿；
+
+## 2026-11-20 · 同步 0.1 分支到 0.2 分支（合并 + 重封归档链）（chore `dbeb728` `fe0b85f` `2a4591d` `cfaf487` `ac40c70` `6a8d0b9` `a054113` `9b96b52` `d6d5f25` `60accb8` `d2ce0ba` `0ef4309` `a0d886b` `f231e12` `ad02dad` `a48c78e` `6a0c837` `48a8c15` `501439d` `3e39c2c` `a3e360a` `b33cb9e` `239ee27` `ce82776` `c21e04a` `e2e69b6` `0a04b9c` `d9c2541` `25c7716` `f0a5776` `1b998b8` `1f84d49` `ab86d4e` `cc2256c` `c16ed3d` `d3cb637` `83c702f` `3f42162` `e92e7a0` `bea5a2a` `6acdb24` `b0124a9` `d103bd6` `fd01545` `d70eb9f` `16c6f4c` `0054f5f` `fd2636d` `e788458` `2674270` `ce30f40` `a368565` `3981a7c` `591cffc` `b6a0ca8` `7573c5c` `fafb765` `03f5aee` `f380411` `3bccf5c` `cc48ad1` `4c91eed` `2b50269` `976815b` `6b132e9` `7e41654` `d1e15aa` `e72ff5d` `70a395c` `fd26ec8` `c079f5d` `e57b713` `d7b3cf7` `6142e67` `631b391` `d39c02f` `da6cfff` `d1bc7cc` `b519605` `da667d4` `4656464` `c1276b1` `fc8eab2` `0e1f446` `97df414` `e1583e5` `9abc943` `616e7d1` `b1a8628` `e9a39d3`）
+- 问题：0.2 线停在 11-19，落后 0.1 线 98 个提交；两条线各自维护归档链，直接合会断链，handbook manifest 也是生成物。
+- 方案：在 0.2 线执行 merge 0.1.0-snapshot：6 个 feat manifest 与 handbook manifest 的冲突…
+- 验证：gate validate 通过（170 份归档）；handbook check 通过（11 锚点）；reactor test-compile …
 
 ## 2026-11-20 · 固化脚本缺 deploy 阶段导致健康检查必败（bug `b519605`）
 - 问题：固化脚本（RECIPE 源）有 health 阶段但没有 deploy 阶段时被当'可复现脚本'回放：run-2a5d03c9 / run-89…
@@ -47,6 +57,11 @@
 - 问题：修复中断标志泄漏导致回滚必挂；
 - 方案：fix(pipeline): 中断标志不再泄漏进回滚 DB 读取；
 - 验证：Tests run: 350, Failures: 0, Errors: 0, Skipped: 1
+
+## 2026-11-19 · 同步 0.1.0-snapshot 至 0.2.0-snapshot（chore `c7e483a` `232abdb` `ce48355` `fce29f9` `a03abed` `0bf7e38` `5789f3a` `12c6e66` `8249307` `a554923` `59dcd04` `a9335e8` `1eaaa28` `96baa9b` `e413c8f` `de14f98` `3f6d209` `3de2084` `7672d97` `02ddb88` `53293d9` `19bd8dd` `ee6c078` `a3c57e2` `028d277` `766a758` `d69773e` `3cd35a0` `7b34195` `d10be49` `e762f32` `3e38d12` `b9fab0d` `0383892` `15667f5` `abe33a1` `505bff7` `1104fb9` `c327cc1` `2e8b205` `4de0459` `70a808f` `f7c710d` `4fe1c13` `35188f6` `636a7ce` `ef5fb2b` `bcaa271` `3225462` `a24ee2e` `0f6b8f6` `172305f` `218ff86`）
+- 问题：同步 0.1.0-snapshot 至 0.2.0-snapshot
+- 方案：fix(process): 重排 chore 归档链，修复 2059 归档断链
+- 验证：冲突融合（ci.yml/gate.py）+ OpenAPI 快照重生成 + 归档链全量 reseal（19 份）+ handbook 重锚点；
 
 ## 2026-11-19 · BUG-1 缺 Dockerfile 的预检提示指向自动生成工具（bug `96baa9b`）
 - 问题：BUG-1（流水线部署问题：遇到不同环境经常中断导致运行不成功）的最后一半。

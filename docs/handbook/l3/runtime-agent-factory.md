@@ -11,7 +11,7 @@ summary: 按环境与角色裁剪工具面、权限模式与迭代上限，构�
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 按环境与角色裁剪工具面并构造 HarnessAgent | `AgentFactory#createChat` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java:186-229` | agent-runtime |
+| 按环境与角色裁剪工具面并构造 HarnessAgent | `AgentFactory#createChat` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java:187-191` | agent-runtime |
 <!-- generated:end -->
 
 ## 行为拆解

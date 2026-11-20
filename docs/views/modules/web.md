@@ -1,12 +1,22 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-65 个会话；检索用 `python tools/docs/find.py --module web`。
+71 个会话；检索用 `python tools/docs/find.py --module web`。
 
 ## 2026-11-20 · 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效（bug `a2aa87e`）
 - 问题：修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效
 - 方案：fix(deploy): 修复固化脚本重放丢失 version/tag 与部署地址指向 health JSON
 - 验证：Tests run: 489, Failures: 0, Errors: 0, Skipped: 6
+
+## 2026-11-20 · 合并 0.1 线到 0.2 线并解决台账链冲突（chore `864e974` `426e75d` `f584dd7`）
+- 问题：0.1.0-snapshot 的 4 个提交（GitIssue 版本号选择、台账合并、防回潮守卫）需要合入 0.2.0-snapshot；拉取最…
+- 方案：台账链冲突：HEAD 与 0.1 对同样 4 条 chore 条目各算了不同哈希链（各自多 1 条独有条目），保留 HEAD 的链式 5 条 c…
+- 验证：diag-chain 五分类链连续；views check 16 文件一致；MigrationGuardTest 8 项全绿（锚点 0.1.0、…
+
+## 2026-11-20 · 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6`）
+- 问题：0.2 线缺今晚后半段工作：skills 路由层、门禁并发健壮性、防回潮守卫、token/deploy 并行会话成果。
+- 方案：merge 0.1→0.2：ledger 并行落账按 id 并集（185 行）重封链，views/handbook 生成物重生成，gate.py…
+- 验证：gate validate 185 份链全绿；views check 一致；self-test OK（并发契约 + 防回潮用例）；handboo…
 
 ## 2026-11-20 · 合并 token/deploy 并行工作并移植门禁并发健壮性（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe`）
 - 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …
@@ -17,6 +27,11 @@
 - 问题：任务版本号下拉里建议值与任务类型（Feat/Bug）不匹配：选 Feat 却建议补丁版本，且可能建议已打过 tag 的版本。
 - 方案：suggestVersion 增加 kind 口径：Feat 取该 major 已发布最高次版本+1（跨过已发布版本），Bug 维持当前版本线最…
 - 验证：后端 GitIssueVersionSuggestionTest + GitIssueControllerFieldContractTest 通…
+
+## 2026-11-20 · 0.1→0.2 同步：新归档模型（ledger/views/skills）带入 0.2 线（chore `ceef158` `a163612` `813904b` `342bfd9` `352fc30` `bb27e58` `c1fc559` `c455510` `a27fe76` `2c4af50` `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8`）
+- 问题：0.2 线还停在旧归档格式，两条线门禁模型不一致；合并时暴露迁移版本撞车：两条线各自发过 V5，Flyway 拒启（Found more tha…
+- 方案：merge 0.1→0.2：39 个 manifest modify/delete 冲突以 0.2 版本覆盖同 id ledger 行后统一入 …
+- 验证：gate validate 177 份链全绿；views/handbook check 一致；迁移锁 8/8；agent-gateway 226…
 
 ## 2026-11-20 · 会话能力页增加内置工具展示并改造界面与市场多源接入（feat `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8` `b9add58` `415b525` `43eb19c` `8139279` `35611ee`）
 - 问题：会话能力页缺少内置工具展示、界面信息层级差、MCP/Skill 市场仅单一仓库来源
@@ -37,6 +52,11 @@
 - 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；
 - 方案：三个部署器端点改根路径；
 - 验证：agent-executor 264+3 / agent-gateway 222 全绿；
+
+## 2026-11-20 · 同步 0.1 分支到 0.2 分支（合并 + 重封归档链）（chore `dbeb728` `fe0b85f` `2a4591d` `cfaf487` `ac40c70` `6a8d0b9` `a054113` `9b96b52` `d6d5f25` `60accb8` `d2ce0ba` `0ef4309` `a0d886b` `f231e12` `ad02dad` `a48c78e` `6a0c837` `48a8c15` `501439d` `3e39c2c` `a3e360a` `b33cb9e` `239ee27` `ce82776` `c21e04a` `e2e69b6` `0a04b9c` `d9c2541` `25c7716` `f0a5776` `1b998b8` `1f84d49` `ab86d4e` `cc2256c` `c16ed3d` `d3cb637` `83c702f` `3f42162` `e92e7a0` `bea5a2a` `6acdb24` `b0124a9` `d103bd6` `fd01545` `d70eb9f` `16c6f4c` `0054f5f` `fd2636d` `e788458` `2674270` `ce30f40` `a368565` `3981a7c` `591cffc` `b6a0ca8` `7573c5c` `fafb765` `03f5aee` `f380411` `3bccf5c` `cc48ad1` `4c91eed` `2b50269` `976815b` `6b132e9` `7e41654` `d1e15aa` `e72ff5d` `70a395c` `fd26ec8` `c079f5d` `e57b713` `d7b3cf7` `6142e67` `631b391` `d39c02f` `da6cfff` `d1bc7cc` `b519605` `da667d4` `4656464` `c1276b1` `fc8eab2` `0e1f446` `97df414` `e1583e5` `9abc943` `616e7d1` `b1a8628` `e9a39d3`）
+- 问题：0.2 线停在 11-19，落后 0.1 线 98 个提交；两条线各自维护归档链，直接合会断链，handbook manifest 也是生成物。
+- 方案：在 0.2 线执行 merge 0.1.0-snapshot：6 个 feat manifest 与 handbook manifest 的冲突…
+- 验证：gate validate 通过（170 份归档）；handbook check 通过（11 锚点）；reactor test-compile …
 
 ## 2026-11-20 · 面板真实渲染校验脚本 + 清掉误生成的 npm 锁文件（chore `e1583e5`）
 - 问题：「工具链镜像」面板只过了 build/typecheck/单测，接口字段到表格单元格这一段没有真浏览器验证；另外 platform/web/pa…
@@ -77,6 +97,16 @@
 - 问题：PR #28 与基线冲突（dirty）：并行会话在主线实现了等价的 405 诊断（BuildFreshnessCheck 运行期提示 + Glo…
 - 方案：代码冲突取主线版本（功能等价，避免重复实现），删掉我这边重复的同名测试用例；对 feat/chore 两条归档链执行 reseal 收敛。
 - 验证：编译通过；提交门禁 265 用例 0 失败；validate 136 份通过；导出功能（ExportData / XLSX_MEDIA_TYPE…
+
+## 2026-11-19 · 修复 0.2.0-snapshot CI：PG 回切 duplicate column、孤儿 sha、schema.d.ts、actions 升级（chore `e25791b`）
+- 问题：0.2 合并 0.1 后 CI run 44544656181 三处失败：PG 回切时 V5 迁移重放报 duplicate column so…
+- 方案：createSchema 的 baselineVersion 改为 classpath 迁移最高版本（空库全量建、存量库只补记录）；
+- 验证：mvn -pl agent-gateway -Dtest=DatabaseHotSwapperTest,DatabaseHotSwapperPo…
+
+## 2026-11-19 · 同步 0.1.0-snapshot 至 0.2.0-snapshot（chore `c7e483a` `232abdb` `ce48355` `fce29f9` `a03abed` `0bf7e38` `5789f3a` `12c6e66` `8249307` `a554923` `59dcd04` `a9335e8` `1eaaa28` `96baa9b` `e413c8f` `de14f98` `3f6d209` `3de2084` `7672d97` `02ddb88` `53293d9` `19bd8dd` `ee6c078` `a3c57e2` `028d277` `766a758` `d69773e` `3cd35a0` `7b34195` `d10be49` `e762f32` `3e38d12` `b9fab0d` `0383892` `15667f5` `abe33a1` `505bff7` `1104fb9` `c327cc1` `2e8b205` `4de0459` `70a808f` `f7c710d` `4fe1c13` `35188f6` `636a7ce` `ef5fb2b` `bcaa271` `3225462` `a24ee2e` `0f6b8f6` `172305f` `218ff86`）
+- 问题：同步 0.1.0-snapshot 至 0.2.0-snapshot
+- 方案：fix(process): 重排 chore 归档链，修复 2059 归档断链
+- 验证：冲突融合（ci.yml/gate.py）+ OpenAPI 快照重生成 + 归档链全量 reseal（19 份）+ handbook 重锚点；
 
 ## 2026-11-19 · FEAT-5 汇总缓存命中率做成 OpenAPI 组件（feat `218ff86` `dbeb728` `fe0b85f`）
 - 问题：FEAT-5 第 3 项「提升 KV cache 命中率」缺度量侧：数据齐全（cachedTokens 已入库、UsageTotals.cach…
