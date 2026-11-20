@@ -7,6 +7,8 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -153,6 +155,13 @@ public class DeploymentControlService {
             acc.mergeRemote(rc);
         }
 
+        // P2：清理被容器接管的旧 HOST 残留槽。默认 HOST 槽目录（releases/current）
+        // 在改用 Docker 部署后长期留在磁盘上，进程早停了却仍被 hostSlots() 读成一张
+        // STOPPED 的 "latest" 卡，与新容器并存让用户误以为部署的是旧版本。
+        // 规则：某环境只要有一个运行中的容器，就移除该环境里「非运行、无容器、
+        // 默认槽（version=latest、无 pid）」的纯 HOST 残留。
+        pruneStaleHostSlots(cells);
+
         // 「当前」= 该环境最近部署的版本（HOST / Docker 都适用，不依赖单一 current 指针）
         Map<String, CellAcc> newest = new LinkedHashMap<>();
         for (CellAcc acc : cells.values()) {
@@ -180,6 +189,34 @@ public class DeploymentControlService {
                     + String.join("；", remoteNotes);
         }
         return new Matrix(columns, versions, list, dockerAvailable, note, retainedImages(projectId));
+    }
+
+    /**
+     * 清理被运行容器接管的旧 HOST 默认槽残留（P2）。
+     *
+     * <p>默认槽目录是持久的：项目从 HOST 部署切到 Docker 部署后，旧 releases/current
+     * 仍在磁盘上，{@code hostSlots()} 会把它读成一张 STOPPED 的 "latest" 卡。该卡与
+     * 新容器并存时，用户会误以为正在部署的是旧提交。判定为残留需同时满足：
+     * 同环境存在运行中的容器（Docker/远程）、该 cell 无容器、非运行、来自默认 HOST 槽。
+     * 只清理"默认槽"，打 tag 的版本槽保留（它们是有意并存的历史版本）。
+     */
+    private static void pruneStaleHostSlots(Map<String, CellAcc> cells) {
+        Map<String, Boolean> envHasRunningContainer = new LinkedHashMap<>();
+        for (CellAcc acc : cells.values()) {
+            if (acc.running && acc.dockerPresent) {
+                envHasRunningContainer.merge(acc.env, true, Boolean::logicalOr);
+            }
+        }
+        if (envHasRunningContainer.isEmpty()) {
+            return;
+        }
+        cells.values().removeIf(acc ->
+                Boolean.TRUE.equals(envHasRunningContainer.get(acc.env))
+                        && !acc.dockerPresent
+                        && !acc.running
+                        && acc.hostDefaultSlot
+                        && acc.pid <= 0
+                        && "latest".equalsIgnoreCase(acc.version));
     }
 
     /**
@@ -787,12 +824,33 @@ public class DeploymentControlService {
                 .toList();
     }
 
-    /** 容器展示版本：优先 agent.version 标签，旧容器回落到提交 sha。 */
+    /**
+     * 容器展示版本：优先 agent.version 标签；标签缺失或是无意义的 {@code latest} 时，
+     * 回落到提交 sha。
+     *
+     * <p>回填 latest 的容器（默认部署槽、rollback 分支传 null version）若直接以 latest
+     * 作为版本键，会与 HOST 残留槽的 {@code version=latest} 撞进同一个 CellAcc，
+     * 导致「新镜像 + 旧提交/旧时间/旧端口」被缝合成一张卡。sha 是每次部署唯一的事实，
+     * 用它做键才能把新容器与旧槽彻底分开。只有两者都没有时才退回 latest。
+     */
     private static String versionOf(ContainerStatus status) {
-        if (status.version() != null && !status.version().isBlank()) {
-            return status.version().trim();
+        String version = status.version() == null ? "" : status.version().trim();
+        if (!version.isEmpty() && !"latest".equalsIgnoreCase(version)) {
+            return version;
         }
         return status.sha() == null || status.sha().isBlank() ? "latest" : status.sha().trim();
+    }
+
+    /** 解析 docker 的 RFC3339 startedAt 为 epoch millis；读不到返回 0。 */
+    private static long startedAtMillis(String startedAt) {
+        if (startedAt == null || startedAt.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Instant.parse(startedAt.trim()).toEpochMilli();
+        } catch (DateTimeParseException e) {
+            return 0L;
+        }
     }
 
     private boolean hasHostRelease(String projectId, String env) {
@@ -1078,6 +1136,12 @@ public class DeploymentControlService {
         private String server;
         private long pid;
         private long deployedAt;
+        /** 是否见过 Docker 容器：用于决定 HOST 残留槽的细节是否混入（P2）。 */
+        private boolean dockerPresent;
+        /** HOST 槽的细节文案，延迟到 toCell 决定是否展示。 */
+        private String hostDetail;
+        /** 是否来自默认 HOST 槽（非打 tag），用于识别改用 Docker 后的残留。 */
+        private boolean hostDefaultSlot;
 
         private CellAcc(String env, String version) {
             this.env = env;
@@ -1101,11 +1165,21 @@ public class DeploymentControlService {
                 ports = "127.0.0.1:" + slot.port();
                 url = "http://127.0.0.1:" + slot.port();
             }
-            details.add(slot.tagged() ? "打 tag 版本" : "默认部署");
+            hostDetail = slot.tagged() ? "打 tag 版本" : "默认部署";
+            hostDefaultSlot = !slot.tagged();
         }
 
+        /**
+         * 合并 Docker 容器。
+         *
+         * <p>运行中的容器是元数据的权威来源：同一个 (env, version) 若先合并了旧的
+         * HOST 残留槽，这里必须用容器的提交 sha / startedAt / 端口映射覆盖旧值，
+         * 否则卡片会变成「新镜像 + 旧提交 + 旧时间 + 旧端口」的缝合怪。
+         * HOST 值只在没有运行容器时作为兜底。
+         */
         private void mergeDocker(List<ContainerStatus> statuses) {
             boolean dockerRunning = statuses.stream().anyMatch(ContainerStatus::running);
+            dockerPresent = true;
             if (target == null || dockerRunning || !running) {
                 target = "DOCKER";
             }
@@ -1116,7 +1190,34 @@ public class DeploymentControlService {
             statuses.stream().map(ContainerStatus::health)
                     .filter(v -> v != null && !v.isBlank() && !"none".equals(v))
                     .findFirst().ifPresent(v -> health = v);
-            if (ports == null) {
+
+            if (dockerRunning) {
+                // 权威值：运行容器的 sha / startedAt / 端口映射覆盖 HOST 残留。
+                statuses.stream().filter(ContainerStatus::running)
+                        .map(ContainerStatus::sha).filter(v -> v != null && !v.isBlank())
+                        .findFirst().ifPresent(v -> release = v);
+                long newestStart = 0L;
+                for (ContainerStatus status : statuses) {
+                    if (status.running()) {
+                        newestStart = Math.max(newestStart, startedAtMillis(status.startedAt()));
+                    }
+                }
+                if (newestStart > 0) {
+                    deployedAt = newestStart;
+                }
+                for (ContainerStatus status : statuses) {
+                    String p = status.ports();
+                    if (status.running() && p != null && !p.isBlank() && !"无端口映射".equals(p)) {
+                        ports = p;
+                        Matcher matcher = DOCKER_HOST_PORT.matcher(p);
+                        if (matcher.find()) {
+                            url = "http://127.0.0.1:" + matcher.group(1);
+                        }
+                        break;
+                    }
+                }
+            } else if (ports == null) {
+                // 容器已停止且 HOST 也没给端口：用容器记录兜底。
                 statuses.stream().map(ContainerStatus::ports)
                         .filter(v -> v != null && !v.isBlank() && !"无端口映射".equals(v))
                         .findFirst().ifPresent(v -> {
@@ -1135,19 +1236,21 @@ public class DeploymentControlService {
             if (target == null || rc.running() || !running) {
                 target = "DOCKER";
             }
-            running = running || rc.running();
+            boolean remoteRunning = rc.running();
+            running = running || remoteRunning;
+            dockerPresent = true;
             containers.add(rc.name());
             if ((image == null || image.isBlank()) && rc.image() != null && !rc.image().isBlank()) {
                 image = rc.image();
             }
-            if (ports == null && rc.ports() != null && !rc.ports().isBlank()) {
+            if ((ports == null || remoteRunning) && rc.ports() != null && !rc.ports().isBlank()) {
                 ports = rc.ports();
                 Matcher matcher = REMOTE_HOST_PORT.matcher(rc.ports());
                 if (matcher.find() && rc.server().host() != null) {
                     url = "http://" + rc.server().host() + ":" + matcher.group(1);
                 }
             }
-            if (release == null && rc.sha() != null && !rc.sha().isBlank()) {
+            if ((release == null || remoteRunning) && rc.sha() != null && !rc.sha().isBlank()) {
                 release = rc.sha();
             }
             deployedAt = Math.max(deployedAt, rc.createdAt());
@@ -1158,6 +1261,11 @@ public class DeploymentControlService {
 
         private Cell toCell() {
             String state = running ? "RUNNING" : "STOPPED";
+            // P2：同 key 已经由容器接管时，不再混入 HOST 残留槽的「默认部署/打 tag 版本」
+            // 细节，避免给用户「这里既有 HOST 又有容器」的错觉。
+            if (hostDetail != null && !dockerPresent) {
+                details.add(hostDetail);
+            }
             return new Cell(env, version, state, target == null ? "HOST" : target,
                     running, current, List.copyOf(containers), image, health, ports, url,
                     deployedAt, String.join("；", new LinkedHashSet<>(details)), release, pid,
