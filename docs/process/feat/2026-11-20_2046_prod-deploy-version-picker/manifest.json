@@ -1,0 +1,91 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-20_2046_prod-deploy-version-picker",
+  "category": "feat",
+  "title": "生产发布改为从测试验证版本直接部署",
+  "createdAt": "2026-11-20T20:46:11+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "生产发布改为从测试验证版本直接部署",
+    "toolCallCount": 0
+  },
+  "problem": "生产发布需按 git 版本号选择、且只显示\"发布到生产\"，无法从已验证版本直接部署并查看镜像/git tag",
+  "solution": "生产表单改为单一「直接部署」：从测试镜像账本+构建历史组装候选，展示镜像 tag 与 git tag；触发复用 deployImage+server 目标，不重建不重打 tag；新增 releaseCandidates 纯函数与单测",
+  "commits": [
+    {
+      "sha": "a27fe7610b0da43a0a257f83baf4889b05d6a925",
+      "subject": "feat(pipeline): 生产发布改为从测试验证版本直接部署",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 4,
+          "deletions": 1,
+          "blobHash": "8161b54a572febe4595065866fa86f56e3dc087d"
+        },
+        {
+          "path": "platform/web/src/components/pipeline/TriggerBar.vue",
+          "status": "M",
+          "additions": 125,
+          "deletions": 12,
+          "blobHash": "bb0957cd4d07ed233b5555cf100f939d0c1913bf"
+        },
+        {
+          "path": "platform/web/src/utils/releaseCandidates.test.ts",
+          "status": "A",
+          "additions": 63,
+          "deletions": 0,
+          "blobHash": "f132d14a71f8f186a30898c2b02db4adb128f568"
+        },
+        {
+          "path": "platform/web/src/utils/releaseCandidates.ts",
+          "status": "A",
+          "additions": 92,
+          "deletions": 0,
+          "blobHash": "dfaceee3477771ed8c2b961fbff72e2bdf33005e"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 104,
+          "deletions": 20,
+          "blobHash": "4b1163d7cfbb38efc7e7c3251198026a275a7602"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/web/src/utils/releaseCandidates.test.ts",
+        "status": "A",
+        "additions": 63,
+        "deletions": 0,
+        "blobHash": "f132d14a71f8f186a30898c2b02db4adb128f568"
+      }
+    ],
+    "casesAdded": 9,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "前端 13 个测试文件全通过（含新增 9 项）；vue-tsc --noEmit 通过；浏览器实测生产仅显示直接部署与 deploy/health 两阶段，测试环境表单无回归；pre-commit 前端自检通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_2046_prod-deploy-version-picker"
+    ]
+  },
+  "chain": {
+    "prev": "7243b318fe655743277c0629f63143a32b9b4e14f44e10a4f4dc0c1aa07b3409",
+    "self": "53f5c7ad0645c5fb3d55982d55d2ef65ec20d80613dbe17f2a931adc62b239a1"
+  }
+}
