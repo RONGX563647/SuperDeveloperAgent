@@ -875,6 +875,7 @@ onBeforeUnmount(() => {
         :env="env"
         :project-name="projectDisplayName"
         :streaming="streaming"
+        :default-open="false"
         @navigate="goSettings"
       />
     </div>
