@@ -17,4 +17,7 @@ public interface ImageReadinessStore {
 
     /** 某主机上的全部状态（运行前就绪阶段一次性读出来，避免逐镜像查询）。 */
     List<ImageReadiness> list(String host);
+
+    /** 全部主机的状态：运维视图，用来看"哪台机器上哪些镜像卡住了"。 */
+    List<ImageReadiness> listAll();
 }

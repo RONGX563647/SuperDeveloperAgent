@@ -88,5 +88,8 @@ class DbImageReadinessStoreTest {
         assertEquals(List.of("node:22"), store.list("host-a").stream()
                 .map(ImageReadiness::image).toList());
         assertEquals(1, store.list("host-b").size());
+        // 运维视图按主机汇总，两台主机两条都要看得到
+        assertEquals(List.of("host-a", "host-b"), store.listAll().stream()
+                .map(ImageReadiness::host).toList());
     }
 }

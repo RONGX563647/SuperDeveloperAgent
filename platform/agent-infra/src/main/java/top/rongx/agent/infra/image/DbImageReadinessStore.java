@@ -63,6 +63,18 @@ public class DbImageReadinessStore implements ImageReadinessStore {
                 .toList());
     }
 
+    @Override
+    public List<ImageReadiness> listAll() {
+        return db.read(em -> PlatformDb.rows(em, """
+                SELECT host, image, status, source, digest, attempts, last_error,
+                       next_retry_at, updated_at
+                FROM image_readiness ORDER BY host, image
+                """).stream()
+                .map(row -> toReadiness(str(row[0]), str(row[1]),
+                        new Object[] {row[2], row[3], row[4], row[5], row[6], row[7], row[8]}))
+                .toList());
+    }
+
     private static ImageReadiness toReadiness(String host, String image, Object[] row) {
         return new ImageReadiness(host, image,
                 "READY".equals(str(row[0])) ? ImageReadiness.Status.READY : ImageReadiness.Status.FAILED,

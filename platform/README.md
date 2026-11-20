@@ -69,6 +69,14 @@ platform/
 | `agent.pipeline.auto-repair.agent-fallback` | `true` | 确定性修复失败后是否调用发布 Agent |
 | `agent.pipeline.auto-repair.auto-resume` | `true` | 关闭后只验证、不自动续跑 |
 
+镜像就绪状态落库后可直接查（只读，不触发拉取），不用翻历史日志：
+
+```bash
+curl -s -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/settings/sandbox/images
+# [{ "host": "build-01", "image": "node:22-bookworm", "status": "FAILED",
+#    "attempts": 3, "lastError": "E-302 执行停滞（60s 无输出）", "retryInSeconds": 118 }]
+```
+
 ### 后端
 
 ```bash

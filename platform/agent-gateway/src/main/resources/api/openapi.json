@@ -4878,6 +4878,29 @@
         }
       }
     },
+    "/api/v1/settings/sandbox/images" : {
+      "get" : {
+        "tags" : [ "sandbox-image-controller" ],
+        "summary" : "images",
+        "operationId" : "images",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "object",
+                    "additionalProperties" : { }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/projects/{projectId}/services" : {
       "get" : {
         "tags" : [ "environment-controller" ],

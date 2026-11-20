@@ -76,6 +76,11 @@ class ImagePullRepairTest {
         public List<ImageReadiness> list(String host) {
             return rows.values().stream().filter(r -> r.host().equals(host)).toList();
         }
+
+        @Override
+        public List<ImageReadiness> listAll() {
+            return List.copyOf(rows.values());
+        }
     }
 
     private static FailureRepair.Diagnosis diagnosis(String image) {
