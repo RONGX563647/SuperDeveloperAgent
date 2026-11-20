@@ -2455,7 +2455,8 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 sandbox == null ? null : sandbox.image(),
                 recoveryAdvisor, state.projectId, state.env, state.pipelineId,
                 state.gitSha, state.actor, stageTail(state, stageId, 20_000),
-                () -> preconditionsOk(state));
+                () -> preconditionsOk(state),
+                sandbox == null ? null : sandbox.provisioner());
     }
 
     /**
@@ -2802,6 +2803,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         List<PipelineDefinition.StageDef> all = definition.stages();
         // +1 = 引擎内置的 checkout 阶段（forDeployOnly 跳过检出时不计）
         state.stageTotal = state.deployImage == null ? all.size() + 1 : all.size();
+        // 开跑前把本次要用的工具链镜像一次性点亮：缺镜像在第一个阶段之前就暴露，
+        // 而不是跑到第三个阶段才炸（run-66c5c523 白跑了两段构建才撞上 node 镜像缺失）
+        if (!provisionImages(state, definition)) {
+            state.status = StageStatus.FAILED;
+            return;
+        }
         for (int i = from; i < all.size(); i++) {
             if (state.forceTerminated) {
                 return; // 看护已置终态，执行线程不得再改状态
@@ -2843,6 +2850,68 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.status = StageStatus.SUCCEEDED;
         // worktree 马上会被清理：先把文件产物搬出来，否则历史里的 ref 会立刻失效
         preserveArtifacts(state, runDir);
+    }
+
+    /**
+     * 运行前统一就绪：把本次要用到的工具链镜像一次性准备到位（并行，各自独立超时）。
+     *
+     * <p>以前只有每个动作前的懒加载，缺 node 镜像会拖到 frontend 阶段才失败，前面的构建
+     * 时间全白花。现在失败发生在第一阶段之前，且失败信息按「构建镜像未就绪（image）」措辞
+     * 记账——自动修复能从同一个镜像名解析出目标，拉取成功后直接从第一阶段续跑。
+     */
+    private boolean provisionImages(RunState state, PipelineDefinition definition) {
+        if (!(sandboxed instanceof DockerActionRunner dockerRunner) || definition.stages().isEmpty()) {
+            return true;
+        }
+        DockerSandbox base = dockerRunner.sandbox();
+        java.util.Set<String> images = new java.util.LinkedHashSet<>();
+        for (PipelineDefinition.StageDef stage : definition.stages()) {
+            images.add(stage.image() == null || stage.image().isBlank()
+                    ? base.image() : stage.image().trim());
+        }
+        appendLog(state, "[env] 运行前就绪检查：" + images.size() + " 个工具链镜像（"
+                + String.join(", ", images) + "）\n");
+
+        // 并行准备：不同镜像的下载互不依赖，串行只会把启动前半段拖成串行等待。
+        // 虚拟线程按镜像数创建，每个镜像内部仍有静默阈值与总上限兜底。
+        java.util.Map<String, ImageProvisioner.Result> results =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            for (String image : images) {
+                pool.submit(() -> {
+                    try {
+                        results.put(image, base.withImage(image).provisioner()
+                                .provision(() -> state.cancelled || state.forceTerminated,
+                                        line -> appendLog(state, line)));
+                    } catch (RuntimeException e) {
+                        results.put(image, ImageProvisioner.Result.failed(
+                                ErrorCode.ENVIRONMENT_INVALID_STATE.code(),
+                                e.getMessage() == null ? e.toString() : e.getMessage(), "", false));
+                    }
+                });
+            }
+        }
+
+        List<String> failures = new ArrayList<>();
+        for (String image : images) {
+            ImageProvisioner.Result result = results.get(image);
+            if (result != null && result.ready()) {
+                appendLog(state, "[env] ✅ " + image + "（" + result.source() + "）\n");
+                continue;
+            }
+            failures.add("构建镜像未就绪（" + image + "）："
+                    + (result == null ? "未执行" : result.summary() + "；诊断：" + result.diagnosis()));
+        }
+        if (failures.isEmpty()) {
+            return true;
+        }
+        String message = "运行前环境不就绪：" + String.join(" | ", failures);
+        appendLog(state, "[env] ❌ " + message + "\n");
+        // 记在第一个阶段名下：自动修复拉取成功后 resume(第一阶段) 即可续跑，
+        // 用"env-ready"这类合成 id 会让续跑找不到阶段而被迫整条重跑。
+        state.stages.add(StageResult.failed(definition.stages().get(0).id(), 1,
+                ErrorCode.ENVIRONMENT_INVALID_STATE.code(), message, elapsed(0)));
+        return false;
     }
 
     /**

@@ -137,7 +137,33 @@ final class ProcessExecutor {
      */
     StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
                      BooleanSupplier cancelled, Consumer<String> live, FailureKind failureKind) {
-        long deadline = System.nanoTime() + Math.max(1, budgetMillis) * 1_000_000L;
+        return run(dir, argv, 0L, Math.max(1, budgetMillis), sink, cancelled, live, failureKind);
+    }
+
+    /**
+     * 进度感知执行：只要还有新输出就继续跑，连续 {@code idleMillis} 无输出才判定卡死。
+     *
+     * <p>用于 {@code docker pull} 这类「慢但一直有进度」的长任务：固定总预算会把
+     * 「层已下载完成、正在解压」误判成网络故障（实测 node:22-bookworm 在忙时超过 180s，
+     * 报 E-302 而全部层其实已 Download complete）。{@code idleMillis <= 0} 时退回固定预算语义。
+     * {@code maxTotalMillis > 0} 时另有总时长兜底，防止「一直有零星输出」的任务无限跑。
+     */
+    StepOutcome execUntilIdle(Path dir, List<String> argv, long idleMillis, long maxTotalMillis,
+                              StringBuilder sink, BooleanSupplier cancelled, Consumer<String> live) {
+        if (idleMillis <= 0) {
+            return run(dir, argv, 0L, Math.max(1, maxTotalMillis), sink, cancelled, live, null);
+        }
+        return run(dir, argv, idleMillis, maxTotalMillis, sink, cancelled, live, null);
+    }
+
+    private StepOutcome run(Path dir, List<String> argv, long idleMillis, long maxTotalMillis,
+                            StringBuilder sink, BooleanSupplier cancelled, Consumer<String> live,
+                            FailureKind failureKind) {
+        long startedAt = System.nanoTime();
+        long deadline = maxTotalMillis > 0
+                ? startedAt + maxTotalMillis * 1_000_000L : Long.MAX_VALUE;
+        java.util.concurrent.atomic.AtomicLong lastOutputAt =
+                new java.util.concurrent.atomic.AtomicLong(startedAt);
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(dir.toFile())
                 .redirectErrorStream(true);
@@ -151,9 +177,19 @@ final class ProcessExecutor {
                     "无法启动命令 " + argv.get(0) + "：" + e.getMessage());
         }
 
-        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink, live));
+        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink, chunk -> {
+            lastOutputAt.set(System.nanoTime());
+            if (live != null) {
+                live.accept(chunk);
+            }
+        }));
 
         boolean finished;
+        // 终止原因要能区分「一直有进度但太久」和「彻底没动静」，否则读日志的人无法判断
+        // 是网络卡死还是单纯慢——这正是 E-302 那次被误读成 registry 故障的原因。
+        String stopReason = null;
+        long stopBudgetMillis = maxTotalMillis;
+        boolean stalled = false;
         try {
             while (true) {
                 if (cancelled != null && cancelled.getAsBoolean()) {
@@ -165,8 +201,18 @@ final class ProcessExecutor {
                     finished = true;
                     break;
                 }
-                if (System.nanoTime() - deadline > 0) {
+                long now = System.nanoTime();
+                if (now - deadline > 0) {
                     finished = false;
+                    stopReason = "总时长已达上限";
+                    break;
+                }
+                if (idleMillis > 0
+                        && now - lastOutputAt.get() > idleMillis * 1_000_000L) {
+                    finished = false;
+                    stopReason = "无任何输出";
+                    stopBudgetMillis = idleMillis;
+                    stalled = true;
                     break;
                 }
             }
@@ -190,8 +236,11 @@ final class ProcessExecutor {
             joinQuietly(reader);
             // 预算可能是秒级碎片（多步配方里前一步吃掉大半预算），按整秒显示会变成
             // "执行超时（0s）"，读日志的人无法判断到底是超时还是命令本身有问题。
+            String verdict = stalled
+                    ? "执行停滞（" + human(stopBudgetMillis) + " 无输出），已终止："
+                    : "执行超时（" + human(stopBudgetMillis) + "，" + stopReason + "），已终止：";
             return StepOutcome.failed(124, ErrorCode.TIMEOUT.code(),
-                    "执行超时（" + human(budgetMillis) + "），已终止：" + String.join(" ", argv));
+                    verdict + String.join(" ", argv));
         }
 
         joinQuietly(reader);

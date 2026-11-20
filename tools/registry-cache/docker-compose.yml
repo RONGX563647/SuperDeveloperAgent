@@ -1,0 +1,23 @@
+# 本地 pull-through cache：把 Docker Hub 的层缓存在本机，构建不再每次冷拉。
+#
+# 用法见同目录 README.md；平台侧只需 AGENT_SANDBOX_PULL_MIRRORS=localhost:5000。
+services:
+  registry-cache:
+    image: registry:2
+    container_name: agent-registry-cache
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      # 只代理 Docker Hub；私有 registry 请另起一个实例并改 remoteurl
+      REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
+    volumes:
+      - registry-cache:/var/lib/registry
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/v2/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  registry-cache:

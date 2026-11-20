@@ -51,7 +51,7 @@ class DockerActionRunnerPrepareTest {
     }
 
     @Test
-    @DisplayName("镜像缺失 → E-209 并提示 pull / 换镜像")
+    @DisplayName("镜像缺失 → E-705（本机镜像不可用）并提示 pull / 换镜像")
     void missingImageIsActionable(@TempDir Path dir) {
         DockerSandbox sandbox = sandbox((cmd, timeout, cancelled, live) ->
                 ProcessExecutor.StepOutcome.failed(1, "E-101", "命令失败（exit 1）"));
@@ -59,7 +59,8 @@ class DockerActionRunnerPrepareTest {
         ActionResult result = new DockerActionRunner(sandbox).run(dir, spec(), () -> false, null);
 
         assertEquals(StageStatus.FAILED, result.result().status());
-        assertEquals("E-209", result.result().errorCode());
+        // 错误码要指向"补本机镜像"，而不是 E-209（可执行文件不存在）——后者会让自愈查错方向
+        assertEquals("E-705", result.result().errorCode());
         assertTrue(result.logTail().contains("构建镜像未就绪"), result.logTail());
         assertTrue(result.logTail().contains("docker pull"), result.logTail());
     }
