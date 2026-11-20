@@ -187,12 +187,25 @@ export interface DeploymentCell {
   server?: string | null
 }
 
+/** 保留的镜像版本（来自镜像账本，可按版本重新部署）。 */
+export interface RetainedImage {
+  tag: string
+  version: string
+  gitSha: string
+  runId: string
+  sizeBytes: number
+  status: string
+  createdAt: number
+  deployedAt: number
+}
+
 export interface DeploymentMatrix {
   environments: DeploymentEnvColumn[]
   versions: string[]
   cells: DeploymentCell[]
   dockerAvailable: boolean
   note: string
+  images?: RetainedImage[]
 }
 
 export interface DeploymentActionResult {

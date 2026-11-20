@@ -5,6 +5,7 @@ import { CopyDocument, Download, Refresh, VideoPlay } from '@element-plus/icons-
 import type { GitCommit } from '../../api/project'
 import type { DryRunReportView, PreviewStage } from '../../api/pipeline'
 import { previewLabel } from '../../utils/pipelineLabels'
+import { releaseCandidateLabel, type ReleaseCandidate } from '../../utils/releaseCandidates'
 
 /**
  * 运行卡：一次运行只需要三件事——提交、选部署方式、点运行。
@@ -15,10 +16,18 @@ import { previewLabel } from '../../utils/pipelineLabels'
  */
 interface Props {
   envLabel: string
+  /** 生产环境：只做直接部署，发布对象从测试验证过的版本里选。 */
+  isProd?: boolean
   primaryLabel: string
   sha: string
   commits: GitCommit[]
   commitsLoading?: boolean
+  /** 生产发布候选（来自测试环境镜像账本，含镜像 tag 与对应 git tag）。 */
+  releaseCandidates?: ReleaseCandidate[]
+  releaseCandidateKey?: string
+  releaseCandidatesLoading?: boolean
+  /** 版本来源环境名（生产固定 test），用于说明文案。 */
+  sourceEnvLabel?: string
   /** docker / host / server（prod 固定 server，不展示切换）。 */
   deployTarget: string
   /** 本机 Docker 是否可用：不可用时禁用「打包成镜像」，避免触发后失败。 */
@@ -68,6 +77,7 @@ const emit = defineEmits<{
   (e: 'update:version', v: string): void
   (e: 'update:tagged', v: boolean): void
   (e: 'update:branch', v: string): void
+  (e: 'update:releaseCandidateKey', v: string): void
   (e: 'run'): void
   (e: 'dryrun'): void
   (e: 'refreshCommits'): void
@@ -213,8 +223,18 @@ function useSuggestedTag(): void {
   emit('update:version', suggestedTag.value)
 }
 
-const runLabel = computed(() =>
-  props.action === 'verify' ? '开始检查构建' : props.primaryLabel)
+const runLabel = computed(() => {
+  if (props.isProd) return '直接部署'
+  return props.action === 'verify' ? '开始检查构建' : props.primaryLabel
+})
+
+/** 选中的候选：下拉只显示摘要，下面单独把版本 / 镜像 tag / git tag 展开。 */
+const selectedCandidate = computed<ReleaseCandidate | null>(() =>
+  (props.releaseCandidates ?? []).find((c) => c.imageTag === props.releaseCandidateKey) ?? null)
+
+function onCandidateChange(value: string): void {
+  emit('update:releaseCandidateKey', value)
+}
 </script>
 
 <template>
@@ -225,8 +245,54 @@ const runLabel = computed(() =>
       <span v-if="hint" class="rc-hint">{{ hint }}</span>
     </header>
 
-    <div class="rc-commit">
-      <label class="rc-label" for="branch-select">分支</label>
+    <!-- 生产：不按 git 分支/提交选发布对象，只从测试验证过的版本里选 -->
+    <template v-if="isProd">
+      <div class="rc-commit rc-commit-wide">
+        <label class="rc-label" for="release-candidate-select">测试版本</label>
+        <el-select
+          id="release-candidate-select"
+          :model-value="releaseCandidateKey"
+          class="rc-sha" size="default" filterable
+          placeholder="选择测试环境构建并部署过的版本"
+          :loading="releaseCandidatesLoading"
+          @update:model-value="(v: string) => onCandidateChange(v)"
+        >
+          <el-option
+            v-for="c in releaseCandidates ?? []" :key="c.imageTag"
+            :label="releaseCandidateLabel(c)" :value="c.imageTag"
+          />
+        </el-select>
+      </div>
+      <div v-if="selectedCandidate" class="rc-release-tags">
+        <span class="rc-rel-item">
+          <span class="rc-rel-key">测试版本</span>
+          <code class="mono">{{ selectedCandidate.version || '—' }}</code>
+        </span>
+        <span class="rc-rel-item">
+          <span class="rc-rel-key">镜像 tag</span>
+          <code class="mono">{{ selectedCandidate.imageTag }}</code>
+        </span>
+        <span class="rc-rel-item">
+          <span class="rc-rel-key">git 标签</span>
+          <code class="mono" :class="{ 'rc-rel-warn': selectedCandidate.tagStatus === 'LOCAL' }">
+            {{ selectedCandidate.gitTag || '未打正式标签' }}
+          </code>
+          <span v-if="selectedCandidate.tagStatus === 'LOCAL'" class="rc-rel-warn">仅本地</span>
+        </span>
+        <span class="rc-rel-item">
+          <span class="rc-rel-key">提交</span>
+          <code class="mono">{{ selectedCandidate.gitSha.slice(0, 8) }}</code>
+        </span>
+      </div>
+      <p v-else class="rc-release-empty">
+        {{ releaseCandidatesLoading ? '正在读取测试环境版本…'
+          : `测试环境还没有可发布的版本：请先在${sourceEnvLabel || '测试'}环境构建并部署一次` }}
+      </p>
+    </template>
+
+    <template v-else>
+      <div class="rc-commit">
+        <label class="rc-label" for="branch-select">分支</label>
       <el-select
         id="branch-select"
         :model-value="branch"
@@ -270,21 +336,25 @@ const runLabel = computed(() =>
       >
         <el-icon :class="{ 'is-loading': commitsLoading }"><Refresh /></el-icon>
       </button>
-    </div>
+      </div>
+    </template>
 
-    <div class="rc-pick" role="group" aria-label="选择动作">
+    <div class="rc-pick" :class="{ solo: isProd }" role="group" aria-label="选择动作">
       <button
-        type="button" class="pick-card" :class="{ active: action === 'release' }"
+        type="button" class="pick-card" :class="{ active: action === 'release' || isProd }"
         @click="emit('update:action', 'release')"
       >
         <span class="pc-head">
-          <span class="pc-title">{{ primaryLabel }}</span>
-          <span v-if="action === 'release'" class="pc-check">已选</span>
+          <span class="pc-title">{{ isProd ? '直接部署' : primaryLabel }}</span>
+          <span v-if="isProd || action === 'release'" class="pc-check">已选</span>
         </span>
-        <span class="pc-desc">构建并部署到当前环境</span>
+        <span class="pc-desc">
+          {{ isProd ? '把测试验证过的版本发布到生产，不重新构建' : '构建并部署到当前环境' }}
+        </span>
         <span class="pc-meta">{{ releaseMeta.count }} 步 · {{ releaseMeta.image ? '产镜像' : '不产镜像' }}</span>
       </button>
       <button
+        v-if="!isProd"
         type="button" class="pick-card" :class="{ active: action === 'verify' }"
         @click="emit('update:action', 'verify')"
       >
@@ -366,7 +436,7 @@ const runLabel = computed(() =>
     <span v-else-if="modeNote && action === 'release'" class="rc-mode-note solo">{{ modeNote }}</span>
 
     <!-- 版本控制：打 tag = 独立版本槽（旧版本继续运行）；不打 tag = 覆盖默认部署 -->
-    <div v-if="showVersion && action === 'release'" class="rc-version">
+    <div v-if="showVersion && !isProd && action === 'release'" class="rc-version">
       <span class="rc-label">版本</span>
       <el-select
         :model-value="version"
@@ -426,6 +496,7 @@ const runLabel = computed(() =>
         预检
       </el-button>
       <el-button
+        v-if="!isProd"
         size="large" :loading="agentBusy" :disabled="!canRun || agentDisabled"
         :title="agentHint || '由发布 Agent 自动执行：自检 → 构建 → 部署 → 验证；执行过程实时展示'"
         @click="emit('agent')"
@@ -433,7 +504,7 @@ const runLabel = computed(() =>
         发布 Agent
       </el-button>
       <button
-        v-if="lastGoodSha"
+        v-if="lastGoodSha && !isProd"
         type="button" class="rc-last mono"
         title="填入最近一次成功部署的提交"
         @click="emit('update:sha', lastGoodSha.slice(0, 8))"
@@ -511,6 +582,9 @@ const runLabel = computed(() =>
   align-items: center;
   gap: 8px;
 }
+.rc-commit-wide .rc-label {
+  width: 60px;
+}
 .rc-label {
   flex: none;
   width: 42px;
@@ -554,6 +628,45 @@ const runLabel = computed(() =>
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+.rc-pick.solo {
+  grid-template-columns: minmax(0, 1fr);
+}
+/* 生产候选的版本/tag 明细：不发 Token，一眼核对发布对象 */
+.rc-release-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 7px 9px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+.rc-rel-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+.rc-rel-key {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.rc-rel-item code {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rc-rel-warn {
+  color: var(--warn-ink) !important;
+}
+.rc-release-empty {
+  margin: -2px 0 0 50px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--warn-ink);
 }
 .pick-card {
   display: flex;

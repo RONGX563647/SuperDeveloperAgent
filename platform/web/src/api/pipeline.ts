@@ -268,7 +268,9 @@ export function deployImageVersion(
   tagged?: boolean,
   branch?: string,
   /** 生产必填：DeployGate 校验测试证据后签发的一次性令牌，不带则 400 CONFIRM_REQUIRED。 */
-  confirmToken?: string
+  confirmToken?: string,
+  /** 生产固定 server：版本账本里的镜像在测试环境是按 docker/host 跑的，不显式指定会被脚本目标带走。 */
+  deployTarget?: string
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
@@ -280,6 +282,7 @@ export function deployImageVersion(
       version: version ?? null,
       tag: tagged === true,
       branch: branch ?? null,
+      deployTarget: deployTarget ?? null,
       confirmToken: confirmToken ?? null
     })
   })

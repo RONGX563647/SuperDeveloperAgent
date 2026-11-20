@@ -8582,6 +8582,38 @@
           }
         }
       },
+      "ImageInfo" : {
+        "type" : "object",
+        "properties" : {
+          "tag" : {
+            "type" : "string"
+          },
+          "version" : {
+            "type" : "string"
+          },
+          "gitSha" : {
+            "type" : "string"
+          },
+          "runId" : {
+            "type" : "string"
+          },
+          "sizeBytes" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "deployedAt" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        }
+      },
       "Matrix" : {
         "type" : "object",
         "properties" : {
@@ -8608,6 +8640,12 @@
           },
           "note" : {
             "type" : "string"
+          },
+          "images" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ImageInfo"
+            }
           }
         }
       },

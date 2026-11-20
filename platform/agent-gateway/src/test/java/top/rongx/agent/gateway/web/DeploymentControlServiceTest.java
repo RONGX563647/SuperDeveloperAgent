@@ -36,13 +36,15 @@ class DeploymentControlServiceTest {
     private DeploymentControlService service(RuntimeInspector inspector) {
         return new DeploymentControlService(inspector, mock(EnvironmentStore.class),
                 mock(top.rongx.agent.domain.settings.DeployServerRepository.class),
-                mock(top.rongx.agent.domain.settings.SshAccess.class), root.toString());
+                mock(top.rongx.agent.domain.settings.SshAccess.class),
+                mock(top.rongx.agent.domain.port.PipelineEngine.class), root.toString());
     }
 
     private DeploymentControlService service(RuntimeInspector inspector, EnvironmentStore store) {
         return new DeploymentControlService(inspector, store,
                 mock(top.rongx.agent.domain.settings.DeployServerRepository.class),
-                mock(top.rongx.agent.domain.settings.SshAccess.class), root.toString());
+                mock(top.rongx.agent.domain.settings.SshAccess.class),
+                mock(top.rongx.agent.domain.port.PipelineEngine.class), root.toString());
     }
 
     @Test
@@ -282,7 +284,8 @@ class DeploymentControlServiceTest {
                                 + "2026-11-20 10:00:00 +0800 CST"));
 
         DeploymentControlService service = new DeploymentControlService(inspector,
-                mock(EnvironmentStore.class), servers, ssh, root.toString());
+                mock(EnvironmentStore.class), servers, ssh,
+                mock(top.rongx.agent.domain.port.PipelineEngine.class), root.toString());
         Matrix matrix = service.matrix("proj");
 
         Cell cell = matrix.cells().stream()

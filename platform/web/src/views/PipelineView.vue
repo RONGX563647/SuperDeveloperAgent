@@ -30,6 +30,7 @@ import { formatDuration, statusLabel, statusTone } from '../utils/status'
 import { envLabel, envShort, formatBytes, pipelineLabel } from '../utils/pipelineLabels'
 import { tagNeedsAttention, tagStateText as releaseTagText } from '../utils/releaseTag'
 import { canReuseBuild, pickReusableImage } from '../utils/reuseBuild'
+import { buildReleaseCandidates, type ReleaseCandidate } from '../utils/releaseCandidates'
 
 /**
  * 流水线工作台：
@@ -206,8 +207,8 @@ async function loadTags(): Promise<void> {
     gitTags.value = []
   }
 }
-/** 只有非开发环境走版本发布（dev 固定本机单槽；test/prod 都按版本+分支发布）。 */
-const showVersionControls = computed(() => env.value !== 'dev')
+/** 生产不填版本号/不打 tag：发布对象是测试验证过的版本，tag 只是展示信息。 */
+const showVersionControls = computed(() => env.value === 'test')
 /** 用户是否手动切过部署方式：切过后不再被 pipeline 定义的默认值覆盖。 */
 const targetTouched = ref(false)
 /** 当前生效的流水线定义里写的部署目标（用于提示"你的选择和脚本不一致"）。 */
@@ -224,6 +225,19 @@ function targetForTrigger(): string | undefined {
 }
 
 const preview = ref<PreviewStage[]>([])
+/**
+ * 生产按镜像直接部署时，后端执行的是 forDeployOnly（deploy + health）切片；
+ * 预览接口暂不带 deployImage 参数，这里按同一份 stage type 把构建类阶段标成跳过，
+ * 避免界面说"5 步"、实际只跑 2 步。
+ */
+const displayPreview = computed<PreviewStage[]>(() => {
+  if (env.value !== 'prod') return preview.value
+  return preview.value.map((s) => (
+    s.type === 'deploy' || s.type === 'health'
+      ? { ...s, skipReason: '' }
+      : { ...s, skipReason: s.skipReason || '按版本直接部署：不重新构建' }
+  ))
+})
 /** verify 流水线的预览：展示「只检查构建会跑几步、跳过什么」。 */
 const verifyPreview = ref<PreviewStage[]>([])
 const previewLoading = ref(false)
@@ -254,6 +268,31 @@ const historyHasMore = ref(false)
 const HISTORY_PAGE = 50
 
 const localStopping = ref(false)
+
+/** 生产发布候选：只来自测试环境已构建并部署的版本（镜像账本 + 历史/git tag）。 */
+const releaseCandidateKey = ref('')
+const releaseCandidates = computed<ReleaseCandidate[]>(() =>
+  env.value === 'prod'
+    ? buildReleaseCandidates(imageVersions.value, history.value, gitTags.value)
+    : [])
+/** 版本账本读取中：供候选下拉展示 loading。 */
+const releaseCandidatesLoading = ref(false)
+const sourceEnvLabel = computed(() => imageSourceEnv.value || '测试')
+
+watch(releaseCandidates, (rows) => {
+  if (!rows.some((c) => c.imageTag === releaseCandidateKey.value)) {
+    releaseCandidateKey.value = rows[0]?.imageTag ?? ''
+  }
+}, { immediate: true })
+
+/** 选中候选后，提交与分支跟着版本走：预览与生产证据校验都按这条版本的事实执行。 */
+watch(releaseCandidateKey, (key) => {
+  if (env.value !== 'prod') return
+  const c = releaseCandidates.value.find((row) => row.imageTag === key)
+  if (!c) return
+  sha.value = c.gitSha
+  if (c.branch) branch.value = c.branch
+})
 
 /** 从失败阶段继续：重试进行中。 */
 const retrying = ref(false)
@@ -346,11 +385,14 @@ const runHint = computed(() => {
   }
   if (!shaValid.value) return '提交需为 7–40 位十六进制（可直接粘贴完整 sha）'
   if (!preview.value.length) return '正在读取本次会执行的阶段…'
+  if (env.value === 'prod' && !releaseCandidates.value.length) {
+    return '测试环境还没有可发布的版本：先在测试环境构建并部署一次'
+  }
   return ''
 })
 
 const primaryLabel = computed(() => {
-  if (env.value === 'prod') return '发布到生产'
+  if (env.value === 'prod') return '直接部署'
   if (env.value === 'dev') return '启动本机前后端'
   // 选了方式就以方式为准：此前 docker 被「重放到…」文案盖住，
   // 主按钮看起来和部署方式无关，实际也确实没把 target 发下去。
@@ -606,7 +648,8 @@ function formatClock(ts: number): string {
 const canStopLocal = computed(() => env.value === 'dev')
 
 const canRun = computed(() =>
-  !!pipelineId.value && shaValid.value && !triggerBusy.value && !pipelinesLoading.value)
+  !!pipelineId.value && shaValid.value && !triggerBusy.value && !pipelinesLoading.value
+  && (env.value !== 'prod' || !!releaseCandidateKey.value))
 
 /** 运行中阶段占位：后端 stages 只含已结束阶段，进度由 progress 单独下发。 */
 const displayStages = computed<StageView[]>(() => {
@@ -767,6 +810,7 @@ function loadMoreHistory(): void {
 
 /** 镜像版本列表：读失败只清空，不影响主流程。 */
 async function loadImages(): Promise<void> {
+  if (env.value === 'prod') releaseCandidatesLoading.value = true
   try {
     const res = await deployImages(projectId.value, env.value)
     imageVersions.value = res.images
@@ -775,6 +819,8 @@ async function loadImages(): Promise<void> {
   } catch {
     imageVersions.value = []
     imageSourceEnv.value = ''
+  } finally {
+    releaseCandidatesLoading.value = false
   }
 }
 
@@ -868,6 +914,11 @@ function branchLine(name: string): string {
 async function loadCommits(): Promise<void> {
   commitsLoading.value = true
   try {
+    // 生产不按提交选对象：提交由选中的测试版本带出，这里拉列表只会把 sha 覆盖掉
+    if (env.value === 'prod') {
+      commits.value = []
+      return
+    }
     const page = await gitCommits(projectId.value, 30, 0, branch.value)
     commits.value = page.commits
     if (page.commits.length && !page.commits.some((c) => c.sha === sha.value)) {
@@ -881,6 +932,8 @@ async function loadCommits(): Promise<void> {
 }
 
 watch(branch, () => {
+  // 生产：分支是候选版本带出的展示信息，不能再反向把候选对应的提交清掉
+  if (env.value === 'prod') return
   sha.value = ''
   void loadCommits()
 })
@@ -969,30 +1022,50 @@ async function replayEnv(): Promise<void> {
   ElMessage.success('已按环境脚本重放')
 }
 
-/** 生产发布：测试证据 + 一次性确认令牌（与后端 DeployGate 同一套规则）。 */
-async function promoteProd(): Promise<void> {
-  const plan = await deployConfirm(projectId.value, 'prod', sha.value)
+/**
+ * 生产「直接部署」：发布对象来自测试环境验证过的版本，不再按 git 版本/提交现拼。
+ *
+ * <p>仍然走同一套 DeployGate：先按该版本的提交查测试证据并申请一次性令牌，
+ * 触发时 deployImage 指定镜像 tag（跳过构建）+ deployTarget=server（生产固定远程）。
+ */
+async function promoteProdVersion(): Promise<void> {
+  const c = releaseCandidates.value.find((row) => row.imageTag === releaseCandidateKey.value)
+  if (!c) {
+    ElMessage.warning('请先选择一个测试环境已部署的版本')
+    return
+  }
+  const plan = await deployConfirm(projectId.value, 'prod', c.gitSha)
   if (!plan.allowed) {
-    ElMessage.warning(plan.reason ?? '测试环境还没有成功案例')
+    ElMessage.warning(plan.reason ?? '这个版本还没有测试环境成功记录，不能发布到生产')
     return
   }
   const evidence = plan.evidence
   const ok = await ElMessageBox.confirm(
-    `即将发布提交 ${sha.value.slice(0, 7)} 到生产环境。\n`
-    + `依据：测试环境 v${evidence?.version ?? '?'} · 证据运行 ${evidence?.runId ?? '?'}`
-    + `（${evidence?.status ?? '?'}）\n这是高危操作，确认后立即执行。`,
-    '确认发布到生产',
+    `即将把 ${c.version || c.imageTag}（提交 ${c.gitSha.slice(0, 7)}）直接部署到生产环境。\n`
+    + `镜像 tag：${c.imageTag}\n`
+    + `git 标签：${c.gitTag || '未打正式标签'}\n`
+    + `依据：测试环境 v${evidence?.version ?? '?'} · 证据运行 ${evidence?.runId ?? '?'}（${evidence?.status ?? '?'}）\n`
+    + '不重新构建；这是高危操作，确认后立即执行。',
+    '确认直接部署到生产',
     { confirmButtonText: '确认发布', cancelButtonText: '取消', type: 'warning' },
   ).then(() => true).catch(() => false)
   if (!ok) {
     ElMessage.info('已取消')
     return
   }
-  // 生产固定 server 目标：必须显式下发，否则沿用测试脚本里的 host，生产会被部署到本机
-  const result = await deployReplay(
-    projectId.value, 'prod', sha.value, plan.confirmToken, 'server')
-  attachRun(result, { env: 'prod', pipelineId: 'release', sha: sha.value })
-  ElMessage.success('已触发生产发布')
+  // 已有 git 标签只作为展示：不传 tag=true，避免重打标签 / 版本线冲突；
+  // 非 x.y.z 的 test-vN 更不能传给后端的 ReleaseVersion.parse。
+  const result = await deployImageVersion(
+    pipelineId.value || 'release', projectId.value, 'prod', c.imageTag, c.gitSha,
+    c.gitTag || undefined, false, c.branch || undefined, plan.confirmToken, 'server')
+  attachRun(result, {
+    env: 'prod', pipelineId: pipelineId.value || 'release', sha: c.gitSha,
+    version: c.gitTag || undefined,
+    tagStatus: c.tagStatus || undefined,
+    branch: c.branch || undefined,
+  })
+  ElMessage.success('已触发生产直接部署')
+  void loadImages()
 }
 
 async function doPrimary(): Promise<void> {
@@ -1001,7 +1074,7 @@ async function doPrimary(): Promise<void> {
   topError.value = ''
   try {
     if (env.value === 'prod') {
-      await promoteProd()
+      await promoteProdVersion()
     } else if (env.value === 'dev') {
       // dev 固定本机：当前工作区代码直接构建运行，不走固化脚本重放（脚本里的 docker 步骤不适用）
       await triggerSelected()
@@ -1042,6 +1115,11 @@ async function doVerify(): Promise<void> {
 
 /** 主按钮：按当前选择分发到「发布」或「只检查构建」。 */
 async function doAction(): Promise<void> {
+  // 生产只有一条路：把选中的测试版本直接部署，不按 git 版本现构建
+  if (env.value === 'prod') {
+    await doPrimary()
+    return
+  }
   if (action.value === 'verify') {
     await doVerify()
     return
@@ -1391,6 +1469,7 @@ watch(env, () => {
   targetTouched.value = false
   deployTarget.value = ''
   definedTarget.value = ''
+  if (env.value === 'prod') action.value = 'release'
   choosePipeline()
   void loadEnvs()
   void loadHistory()
@@ -1527,12 +1606,17 @@ async function copyDigest(digest: string): Promise<void> {
 
           <TriggerBar
             v-model:sha="sha"
+            :is-prod="env === 'prod'"
             :deploy-target="deployTarget"
             @update:deploy-target="onTargetChange"
             v-model:action="action"
             v-model:version="deployVersionInput"
             v-model:tagged="deployTagged"
             v-model:branch="branch"
+            v-model:release-candidate-key="releaseCandidateKey"
+            :release-candidates="releaseCandidates"
+            :release-candidates-loading="releaseCandidatesLoading"
+            :source-env-label="sourceEnvLabel"
             :branches="branches"
             :show-version="showVersionControls"
             :existing-tags="gitTags"
@@ -1545,7 +1629,7 @@ async function copyDigest(digest: string): Promise<void> {
             :mode-note="modeNote"
             :local-hint="localHint"
             :can-stop-local="canStopLocal"
-            :preview="preview"
+            :preview="displayPreview"
             :verify-preview="verifyPreview"
             :preview-loading="previewLoading"
             :busy="triggerBusy || pipelinesLoading || localStopping"
@@ -1632,7 +1716,7 @@ async function copyDigest(digest: string): Promise<void> {
 
         <div v-if="!run && !runLoading" class="run-empty">
           <p class="re-title">
-            选择提交后点「{{ action === 'verify' ? '开始检查构建' : primaryLabel }}」</p>
+            选择{{ env === 'prod' ? '测试版本' : '提交' }}后点「{{ action === 'verify' ? '开始检查构建' : primaryLabel }}」</p>
           <p class="re-sub">
             运行详情会实时显示阶段、产物与日志；也可以从左侧历史打开一次旧运行。
           </p>

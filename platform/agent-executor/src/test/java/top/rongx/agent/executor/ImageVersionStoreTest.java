@@ -68,4 +68,34 @@ class ImageVersionStoreTest {
         assertTrue(reopened.find("RY", "test", "ci-test-b").isEmpty());
         assertFalse(reopened.list("RY", "test").isEmpty());
     }
+
+    @Test
+    @DisplayName("清理名单：当前/上一版本与运行中镜像豁免，规则外保留最近 5 个")
+    void staleImagesRespectsProtectionAndKeepLimit() {
+        // rows 已按最近部署在前排序（list() 的口径）
+        List<ImageVersion> rows = List.of(
+                version("ci-test-v44", "sha4444", 500, "ui"),
+                version("ci-test-v43", "sha4343", 400, "ui"),
+                version("ci-test-v42", "sha4242", 300, "ui"),
+                version("ci-test-v41", "sha4141", 200, "ui"),
+                version("ci-test-v40", "sha4040", 150, "ui"),
+                version("ci-test-v39", "sha3939", 100, "ui"),
+                version("ci-test-v31", "sha3131", 50, "agent"));
+
+        // 无运行中镜像：保护当前(v44) + 上一版本(v43)，规则外保留 5 个 → v39/v31 进清理名单
+        var stale = BuiltInPipelineEngine.staleImages(
+                rows, java.util.Set.of("ci-test-v44", "ci-test-v43"), 5);
+        assertEquals(List.of("ci-test-v39", "ci-test-v31"),
+                stale.stream().map(ImageVersion::tag).toList());
+
+        // 运行中容器引用 v31：即使它在规则外也被豁免
+        stale = BuiltInPipelineEngine.staleImages(
+                rows, java.util.Set.of("ci-test-v44", "ci-test-v43", "ci-test-v31"), 5);
+        assertEquals(List.of("ci-test-v39"),
+                stale.stream().map(ImageVersion::tag).toList());
+
+        // 条目不足 keep 时不产生清理名单
+        assertTrue(BuiltInPipelineEngine.staleImages(
+                rows.subList(0, 5), java.util.Set.of(), 5).isEmpty());
+    }
 }
