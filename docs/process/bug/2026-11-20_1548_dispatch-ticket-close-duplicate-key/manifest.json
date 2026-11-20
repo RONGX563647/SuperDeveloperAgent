@@ -13,7 +13,7 @@
   "solution": "closeTicket 改走 updateTask（UPDATE）；ConversationManagerTest fake store 补主键语义（saveTask putIfAbsent 撞 id 抛 / updateTask 缺失抛），新增 dispatchTicketCloseUpdatesInsteadOfInsert 调度流回归",
   "commits": [
     {
-      "sha": "e50b9f128ffd0b67c134ddd6ebbd09c97553f3cb",
+      "sha": "03f5aeee62eda1e979ecf1f5a198f1615c985e9f",
       "subject": "fix(runtime): 派发票据回写改走 updateTask，不再撞 workspace_tasks_pkey",
       "category": "bug",
       "files": [
@@ -65,6 +65,6 @@
   },
   "chain": {
     "prev": "0823a22ec7d8e3ba8bcfb5f0f1277db701e10ba3c55ab13d08ce2ceb9ab9e2b8",
-    "self": "132115be87366d0eba774717e1819753be36640d858e5c61257b439857d416b8"
+    "self": "888df5ba114b3c415a78d34d6d56b4d883eff2bab89368d5bacc01cee10cf5f2"
   }
 }
