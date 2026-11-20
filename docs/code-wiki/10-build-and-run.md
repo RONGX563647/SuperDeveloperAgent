@@ -149,6 +149,13 @@ docker run -d --name agent-platform \
 | `AGENT_SANDBOX_RUNTIME` | 空 | 如 gVisor `runsc` |
 | `AGENT_SANDBOX_NPM_REGISTRY` | `https://registry.npmmirror.com` | npm 源 |
 | `AGENT_SANDBOX_CACHE_VOLUME` | `agent-cache` | 依赖缓存卷前缀 |
+| `AGENT_SANDBOX_PULL_TIMEOUT_SECONDS` | `900` | 镜像拉取总时长上限（秒） |
+| `AGENT_SANDBOX_PULL_IDLE_TIMEOUT_SECONDS` | `60` | 拉取停滞上限（秒无输出即判停滞） |
+| `AGENT_SANDBOX_PULL_ATTEMPTS` | `2` | 每次供给的尝试次数 |
+| `AGENT_SANDBOX_PULL_BACKOFF_SECONDS` | `60` | 失败退避起始值（按镜像指数增长） |
+| `AGENT_SANDBOX_PULL_BACKOFF_MAX_SECONDS` | `900` | 退避上限；窗口内本机直接失败返回 |
+| `AGENT_SANDBOX_PULL_MIRRORS` | 空 | 拉取加速源（逗号分隔，只对 Docker Hub 镜像生效） |
+| `AGENT_SANDBOX_HOST` | 空 | 镜像就绪状态的主机维度键，多机共用一库时用来区分 |
 | `AGENT_PIPELINE_AUTO_REPAIR` | `true` | 失败自动修复 |
 | `AGENT_PIPELINE_AUTO_REPAIR_ATTEMPTS` | `2` | 修复轮次上限 |
 | `AGENT_PIPELINE_AUTO_RESUME` | `true` | 修复后自动续跑 |

@@ -89,16 +89,19 @@ python tools/handbook/build.py check    # 校验锚点/行号/生成区/文档�
 
 ## 3. 会话归档门禁
 
-`docs/session-archive/` 保存会话交接记录；[tools/session-archive/gate.py](file:///workspace/tools/session-archive/gate.py) 负责校验。
+`docs/process/<category>/` 保存每次会话的 manifest，`docs/summary/` 按月份归档总结；[tools/session-archive/gate.py](file:///workspace/tools/session-archive/gate.py) 负责校验。
 
 ```bash
 python tools/session-archive/gate.py start     # 开新会话记录
 python tools/session-archive/gate.py finish    # 收尾
 python tools/session-archive/gate.py validate  # 校验完整性
 python tools/session-archive/gate.py self-test # 自检
+python tools/session-archive/diag-chain.py bug # 归档断链诊断（分类，默认 bug）
 ```
 
 `.githooks/pre-commit` / `pre-push` 挂接该门禁（`install-hooks.ps1` 安装）。规范见 `docs/session-archive-spec-v1.md`。
+
+每个分类的归档是一条哈希链（`chain.prev` → `chain.self`），按 `(createdAt, id)` 排序。**rebase / 并行会话合并后必然断链**，`validate` 只报“chain.prev 断链”，`diag-chain.py` 会逐份打印指针指到具体哪两份对不上；修完要重算后续每份的 `self`。
 
 ## 4. 任务看板脚本
 

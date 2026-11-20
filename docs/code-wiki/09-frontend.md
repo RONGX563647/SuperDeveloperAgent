@@ -161,7 +161,11 @@ reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent): AgentProjectio
 
 ### 设置
 
-`ModelPanel`、`ServerPanel`、`DatabasePanel`（热切换）、`McpPanel`、`SkillPanel`、`SecretPanel`、`AccountPanel`、`EnvTemplatePanel`、`ProjectEnvPanel`、`RepoPanel`、`GitOauthAppsPanel`、`UsagePanel`。
+`ModelPanel`、`ServerPanel`、`DatabasePanel`（热切换）、`McpPanel`、`SkillPanel`、`SecretPanel`、`AccountPanel`、`EnvTemplatePanel`、`ProjectEnvPanel`、`RepoPanel`、`GitOauthAppsPanel`、`UsagePanel`、`SandboxImagePanel`（工具链镜像就绪/退避）。
+
+`SandboxImagePanel` 的展示逻辑单独放在 `components/settings/imageReadiness.ts`（状态标签、退避倒计时、来源文案、失败计数），因此能脱离 Vue 单测——**`retryInSeconds = 0` 只代表“现在可以重试”，不代表已就绪**，这条判断是纯函数测试锁住的。
+
+界面回归脚本在 `platform/web/scripts/*-check.mjs`（`login-check`、`layout-check`、`interaction-check`、`pipeline-ux-check`、`sandbox-images-check` 等），句式统一 `node scripts/<name>.mjs [base] [截图路径]`，需要后端与 dev server 同时在跑。
 
 ## 8. 开发与构建
 

@@ -54,12 +54,29 @@ ci/actions.yml（仓库显式声明）
 
 其它能力：
 
-- `ensureImageReady()`：镜像预检与拉取（带超时、可取消）。
+- `ensureImageReady()`：镜像就绪入口，内部委托给统一的 `ImageProvisioner`（见 §3.1）。
 - `prepareCacheVolume()`：依赖缓存卷，归属与运行用户一致。
 - `beginContainer()` / `--name`：长驻容器（如前后端 dev server）。
 - 可选 `--runtime`（如 gVisor）、npm registry、init 镜像。
 
 > 沙箱**不注入凭据**。需要私服时手工挂载只读 `settings.xml`，避免构建期泄露。
+
+### 3.1 镜像就绪自动收敛
+
+镜像缺失不再靠“某次 `docker run` 报错”才暴露，而是开跑前统一点亮：
+
+| 环节 | 实现 |
+|---|---|
+| 唯一策略 | [ImageProvisioner](file:///workspace/platform/agent-executor/src/main/java/top/rongx/agent/executor/ImageProvisioner.java)：预检与自动修复共用同一份实现，避免两套判定标准 |
+| 开跑前供给 | `BuiltInPipelineEngine.provisionImages`：阶段循环之前取出全部 `stage.image()` 去重并行供给，任一失败即整体失败并把原因落成该 run 的首个阶段结果 |
+| 状态记录 | 按 **(host, image)** 存 `image_readiness`（`ImageReadinessStore` / `DbImageReadinessStore`），跨 run 复用；`READY` 时只花一次 `image inspect` 复核，不重复拉取 |
+| 失败退避 | 指数退避（`pull-backoff-seconds` → 上限 `pull-backoff-max-seconds`），窗口内本机直接失败返回，不逐次重拉重等 |
+| 判定依据 | 只看平台侧 `image.inspect`，**不看 `docker pull` 退出码**（退出码 0 不代表镜像真的在本地可用） |
+| 超时两档 | 停滞（`pull-idle-timeout-seconds` 内无输出）与总量上限（`pull-timeout-seconds`）——前者通常是源慢、后者多为网络不可达 |
+| 观测 | `GET /api/v1/settings/sandbox/images` + 设置页「工具链镜像」面板 |
+
+所有阈值都可配置（`agent.sandbox.pull-*` / `pull-mirrors` / `host`），不写死在代码里；加速源只是“可选加成”，未配置时仍走守护进程自带 mirrors。
+
 
 ## 4. 流水线引擎
 

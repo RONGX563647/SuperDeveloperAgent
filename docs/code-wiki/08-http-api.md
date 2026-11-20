@@ -153,6 +153,7 @@ SSE 请求（`Accept` 只有 `text/event-stream`）出错时返回**无 body 的
 | `/api/v1/settings/mcp-servers` | MCP 服务器 |
 | `/api/v1/settings/skills` | Skill 仓库/安装 |
 | `/api/v1/settings/capabilities` | 能力市场 |
+| `/api/v1/settings/sandbox/images` | 工具链镜像就绪状态（按 host + image，只读，不触发拉取） |
 | `/api/v1/policies` | 当前环境策略矩阵（只读） |
 | `/api/v1/run-ledger` | 统一运行账本 |
 | `/api/v1/usage` | token 用量（按会话/汇总） |
