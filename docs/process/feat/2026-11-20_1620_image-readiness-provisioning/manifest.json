@@ -13,7 +13,7 @@
   "solution": "把镜像就绪收敛成一套策略：ProcessExecutor.execUntilIdle 按有无新输出判卡死；ImageProvisioner 统一 探测→源链拉取→inspect 复核→记状态与指数退避；image_readiness 表按 (host,image) 持久化 READY/FAILED 与 digest；pipeline 开跑前并行点亮所有 stage 镜像，失败记在首阶段名下并由自动修复续跑；错误码按类型还原（缺镜像 E-705）；新增 tools/registry-cache pull-through cache 配方作为网络慢的根治手段。",
   "commits": [
     {
-      "sha": "ea8de6eba25d2ae6aec952bbada629047f6c160e",
+      "sha": "cc48ad1bf64e6ae2eeb292ceeb7956dc872befba",
       "subject": "fix(gateway): OpenAPI 快照生成统一 LF 换行",
       "category": "bug",
       "files": [
@@ -27,7 +27,7 @@
       ]
     },
     {
-      "sha": "370cb72551d1b37725d5b94e5cbf03db1a4c6d1e",
+      "sha": "4c91eedd373bf12ca0a819b89d8acd55a4d0aac3",
       "subject": "feat(executor): 镜像就绪自动收敛（进度感知 + 退避重试 + 缓存源 + 运行前就绪）",
       "category": "feat",
       "files": [
@@ -264,6 +264,6 @@
   },
   "chain": {
     "prev": "56491a72daad76bdcbc43e11139ca764fe35993cdeee993b25d6afa2b17f0ad2",
-    "self": "ee3f3be3ac12c2e203a9ac06b9cfbe9e140a2791fc7a32ee7d632c010dc5d604"
+    "self": "bc4f1f9a18d7e9a34d7a2b7fa0a274f5b356bdfe15d08c5ac7a1e9ab36aa37a4"
   }
 }
