@@ -17,9 +17,14 @@ name: ci
 
 on:
   push:
-    branches: [main, "0.1.0-snapshot"]
+    branches: [main, "0.1.0-snapshot", "0.2.0-snapshot"]
   pull_request:
-    branches: [main, "0.1.0-snapshot"]
+    branches: [main, "0.1.0-snapshot", "0.2.0-snapshot"]
+
+# 最小权限：只读仓库内容；paths-filter 在 PR 上还需要读取变更文件列表。
+permissions:
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -40,8 +45,45 @@ env:
   LC_ALL: C.UTF-8
 
 jobs:
+  # 先算路径：文档/前端改动不再触发后端全量，后端改动也不白跑前端。
+  # 被跳过的 job 在分支保护里记为 skipped，不会阻塞对应类型的 PR。
+  changes:
+    name: changes (路径过滤)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docs: ${{ steps.filter.outputs.docs }}
+      contract: ${{ steps.filter.outputs.contract }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'platform/**'
+              - '!platform/web/**'
+            frontend:
+              - 'platform/web/**'
+              - 'platform/agent-gateway/src/main/resources/api/openapi.json'
+            docs:
+              - 'docs/**'
+              - 'tools/session-archive/**'
+              - 'tools/handbook/**'
+              - '.githooks/**'
+              - '.github/workflows/**'
+            contract:
+              - 'platform/agent-gateway/src/main/resources/api/openapi.json'
+              - 'tools/api-docs-mcp/**'
+
   backend:
     name: backend (mvn verify)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # 真 PG 让 hot-switch 与 identity 序列的端到端用例在 CI 上也跑起来，而不是只 skip。
@@ -107,6 +149,8 @@ jobs:
 
   frontend:
     name: frontend (typecheck + api contract + vitest)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -143,6 +187,8 @@ jobs:
 
   docs:
     name: docs (doc-marshal + 会话归档)
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -192,6 +238,8 @@ jobs:
 
   contract:
     name: contract (api-docs-mcp)
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -212,6 +260,7 @@ jobs:
 
   security:
     name: security (secrets + dependencies)
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

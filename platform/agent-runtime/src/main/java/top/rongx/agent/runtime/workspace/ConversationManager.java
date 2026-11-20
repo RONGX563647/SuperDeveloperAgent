@@ -477,7 +477,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                             "[" + node.id() + "] " + node.message(),
                             "验收依据：会话 " + conversationId + " 的最终结论（超时 "
                                     + node.timeoutSeconds() + "s，重试 " + node.retries() + " 次）",
-                            TaskStatus.RUNNING, 0, now, now));
+                            TaskStatus.RUNNING, 0, now, now, null, null));
                     return ticket.id();
                 } catch (RuntimeException e) {
                     // 票据是旁路：登记失败不能阻断派发
@@ -509,7 +509,8 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 // 任务看板上票据永远停在 RUNNING（结果/终态回写全部丢失）。
                 tasks.updateTask(new WorkspaceTask(task.id(), task.projectId(), task.conversationId(),
                         task.goal(), oneLine(task.expectedOutput() + "；" + evidence, 600),
-                        status, task.priority(), task.createdAt(), System.currentTimeMillis()));
+                        status, task.priority(), task.createdAt(), System.currentTimeMillis(),
+                        task.sourceRef(), task.triggerType()));
             }
         };
         // 服务端配置兜底：收紧模型给的并行度、总时长与熔断阈值，避免一次派发把工作区配额吃满
@@ -607,7 +608,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         long now = System.currentTimeMillis();
         return tasks.saveTask(new WorkspaceTask("task-" + shortId(), projectId,
                 conversationId == null || conversationId.isBlank() ? null : conversationId,
-                goal, expectedOutput, TaskStatus.TODO, priority, now, now));
+                goal, expectedOutput, TaskStatus.TODO, priority, now, now, null, null));
     }
 
     @Override
@@ -626,7 +627,8 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 task.conversationId(), nextGoal,
                 expectedOutput == null ? task.expectedOutput() : expectedOutput.trim(),
                 status == null ? task.status() : status, task.priority(),
-                task.createdAt(), System.currentTimeMillis());
+                task.createdAt(), System.currentTimeMillis(),
+                task.sourceRef(), task.triggerType());
         return tasks.updateTask(updated);
     }
 

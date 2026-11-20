@@ -24,6 +24,7 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 | [ErrorCode](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/error/ErrorCode.java) | 对外错误码字典 | `E-1xx` 构建、`E-2xx` 配方/参数、`E-3xx` 运行时、`E-4xx` 产物、`E-5xx` 部署、`E-6xx` 晋升/门禁、`E-7xx` 环境/策略、`E-8xx` 接入 |
 | [BugFixStage](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/bugfix/BugFixStage.java) | Bug 修复状态机 | `ANALYZE → REPRO_DEPLOY → REPRODUCE → FIX → VERIFY_DEPLOY → VERIFY → PULL_REQUEST → DONE` |
 | [ToolPlugins](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/tool/ToolPlugins.java) | 工具插件目录 | `CORE` 8 个常驻工具 + 10 个插件 |
+| [WorkerRole](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/WorkerRole.java) | 工作区角色 Worker（0.2 线引入） | `PRODUCT / DEV / TEST / OPS`；`parse()` 未知值返回 null 退回通用 Agent；角色只决定工具面/系统提示/权限模式 |
 
 ### 端口（`domain/port`）
 
@@ -40,7 +41,7 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 | `ModelRegistry` | `SettingsModelRegistry` | 当前可用模型 |
 | `PolicyPort` | `EnvPolicyService` | 环境策略 |
 | `EnvProvisioner` / `EnvRuntime` | `DockerEnvProvisioner` / `DockerEnvRuntime` | 中间件供给与运行时 |
-| `RunLedgerRepository` | `DbRunLedgerRepository` | 统一运行账本 |
+| `RunLedgerRepository` | `DbRunLedgerRepository` | 统一运行账本（UPSERT 语义，带 `worker_role`/`trigger_ref` 归因） |
 
 ## 2. agent-infra（基础设施层）
 
@@ -104,12 +105,12 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 
 ## 5. agent-tools（工具层）
 
-**定位**：模型能调用的所有能力都在这里，共 **91 个 `@Tool` 方法 / 24 个工具类**。
+**定位**：模型能调用的所有能力都在这里，共 **90 个 `@Tool` 方法 / 24 个工具类**。
 
 | 分类 | 类（工具数） |
 |---|---|
-| 只读查询 | `CiQueryTools`(7)、`RepoQueryTools`(6)、`EnvQueryTools`(3)、`RuntimeTools`(3)、`ActionQueryTools`(2)、`GitIssueQueryTools`(2)、`ChangeQueryTools`(1)、`ProjectTools`(2)、`ConfigTools`(1)、`ApiDocTools`(3)、`ToolCatalogTools`(5) |
-| 写/执行 | `CiCommandTools`(3)、`ActionCommandTools`(1)、`DeployTools`(5)、`DockerfileTools`(1)、`EnvCommandTools`(4)、`GitIssueCommandTools`(6)、`ChangeTools`(3)、`PatchTools`(1)、`EditorTools`(7)、`OpsAgentTools`(1)、`CapabilityMarketTools`(2) |
+| 只读查询 | `CiQueryTools`(7)、`RepoQueryTools`(6)、`EnvQueryTools`(3)、`RuntimeTools`(3)、`ActionQueryTools`(2)、`GitIssueQueryTools`(2)、`ChangeStatusTool`(1)、`ProjectTools`(2)、`ConfigTools`(1)、`ApiDocTools`(3)、`ToolCatalogTools`(5) |
+| 写/执行 | `CiCommandTools`(3)、`ActionCommandTools`(1)、`DeployTools`(5)、`DockerfileTools`(1)、`EnvCommandTools`(4)、`GitIssueCommandTools`(6)、`ChangeTools`(2)、`ChangeStatusTool`(1)、`PatchTools`(1)、`EditorTools`(7)、`OpsAgentTools`(1)、`CapabilityMarketTools`(2) |
 | 交互/调度 | `AskUserTools`(1，`ask_user`)、`WorkspaceSupervisorTools`(21) |
 | 编排/缓存 | [ActionService](file:///workspace/platform/agent-tools/src/main/java/top/rongx/agent/tools/ActionService.java)、`CachingAgentTool`、`ToolResultCache`、`SecretRedactor` |
 
@@ -128,7 +129,7 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 
 | 类 | 职责 | 关键方法 |
 |---|---|---|
-| [AgentFactory](file:///workspace/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java) | 按上下文构造 Agent | `createChat()`、`createDeploy()`、`createSupervisor()`、`systemPrompt()` |
+| [AgentFactory](file:///workspace/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java) | 按上下文构造 Agent | `createChat()`、`createDeploy()`（OPS 特例：dev/test 权限 BYPASS、生产 DEFAULT 直接拒绝）、`createSupervisor()`、`createWorker(ctx, role)`（角色→工具面/提示/权限：OPS→deployToolkit、PRODUCT→supervisorToolkit 只写任务卡、DEV/TEST→全量工具面+角色提示）、`systemPrompt()` |
 | [ChatService](file:///workspace/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java) | 把输入变成事件流 | `stream()`（4 个重载）、`streamSupervisor()`、`structured()` |
 | `AgentSession` | Agent + 可关闭资源 | `close()` 关闭本轮 MCP/临时资源 |
 | `DynamicModelProvider` | 每次请求解析当前模型（设置页热切换） | `current()`、`activeConfig()` |
@@ -136,18 +137,18 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 | `ProgressiveToolMiddleware` | 工具渐进披露：核心工具常驻，插件按需加载 | 首轮路由只做一次 |
 | `AskUserMiddleware` | `ask_user` 入参 → `ask.requested` 事件 | |
 | `TokenUsageRecorder` / `ConversationTimelineRecorder` | token 用量、服务端时间线 | |
-| `workspace/*` | 工作区调度：`ConversationManager`、`WorkspaceDispatchScheduler`、`WorkspaceRunExecutor`、`WorkspaceEventBus`、`WorkspaceRunWatchdog`、`RunAborter` | DAG 并行派发、超时熔断、事件订阅 |
+| `workspace/*` | 工作区调度：`ConversationManager`（实现 SupervisorPort：会话/派发/票据/幂等）、`WorkspaceDispatchScheduler`（DAG 并行派发、重试、熔断、环检测、runId 形状契约）、`WorkspaceRunExecutor`（每项目虚拟线程池，默认并发 3、队列 100；终态前先补写时间线；账本双写带 `worker_role`/`trigger_ref`）、`WorkspaceEventBus`（内存 best-effort SSE）、`WorkspaceRunWatchdog`（30s 扫描，运行/排队各默认 600s 超时，句柄丢失直接收敛库态）、`RunAborter` |
 
 ## 7. agent-gateway（接入层）
 
 | 子包 | 内容 |
 |---|---|
 | `gateway` | [AgentApplication](file:///workspace/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/AgentApplication.java)：`.env` 加载、数据库后端配置预注入、Boot 启动 |
-| `gateway/web` | 40 个 Controller（对话、流水线、部署、环境、设置、项目、Issue、工作区…） |
+| `gateway/web` | 41 个 Controller（对话、流水线、部署、环境、设置、项目、Issue、工作区、Webhook…） |
 | `gateway/auth` | Sa-Token 配置、登录、角色与权限码、`CurrentUser`、`UserStore` |
 | `gateway/deploy` | `DeployGate`、`ChatRunRecoveryAdvisor` |
 | `gateway/bugfix` | Bug 自动修复编排器、7 个阶段处理器、结构化输出、PR、通知 |
-| `gateway/gitissue`、`gateway/gitee` | Issue 同步、Gitee OAuth/PAT、Webhook |
+| `gateway/gitissue`、`gateway/gitee` | Issue 同步、Gitee OAuth/PAT、Webhook（`/push` 触发 verify 流水线、`/event` 走零 LLM Fast Path 建工作区任务；端点豁免登录，靠 `agent.webhook.gitee-secret` token/HMAC 验签） |
 | `gateway/settings` | 数据库热切换、模型探测、环境发现、本机服务管理 |
 | `gateway/config` | 构建新鲜度检查、治理清理任务、Jackson 配置 |
 | `gateway/persistence` | 用户、Gitee 账号、流租约实体 |
@@ -165,6 +166,9 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 | `HandbookDriftTest` | Handbook 锚点与行号漂移 |
 | `ProcessArchiveTest` | 会话归档完整性 |
 | `ToolSchemaBudgetTest` | 工具 schema token 预算 |
+| `TokenBaselineTest` | token 量化基线（按需 schema 下降 ≥40%） |
+| `ToolkitAssemblyTest` / `SupervisorToolkitWiringTest` | 工具面超集关系与角色裁剪防回退 |
+| `HostToolExclusionTest` | 宿主 shell 工具不得进工具面 |
 | `ConfigCredentialScanTest` | 配置/代码中的明文凭证 |
 | `ApiDocContractTest` | OpenAPI 快照与控制器一致 |
 

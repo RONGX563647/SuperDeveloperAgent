@@ -109,6 +109,22 @@ QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED
 | `RunStatus` | `QUEUED / RUNNING / SUCCEEDED / FAILED / CANCELLED` |
 | `TaskStatus` | `TODO / RUNNING / BLOCKED / DONE / CANCELLED` |
 
+### WorkerRole（0.2 线引入）
+
+工作区角色 Worker（[WorkerRole](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/conversation/WorkerRole.java)）：`PRODUCT / DEV / TEST / OPS`。`parse()` 大小写不敏感，`ops`/`deploy` 归一为 OPS，未知值（如 `chat`/`supervisor`）返回 null、调用方退回通用 Agent。角色只决定三件事：**工具面、系统提示、权限模式**——权限仍由环境与平台门禁把关，角色不扩权。
+
+> 现状口径：角色裁剪已在 `ChatService`/`AgentFactory` 接线，但当前会话创建路径只写 `chat`/`supervisor`，`run_ledger.worker_role` 实际多为 null；DAG 派发节点尚不能指定角色。属"已接线、待启用"。
+
+### 运行归因与事件来源（V9 维度）
+
+| 字段 | 载体 | 语义 |
+|---|---|---|
+| `workerRole` | `RunRecord` / `run_ledger.worker_role` | 运行由哪个角色发起（仅工作区运行有值） |
+| `triggerRef` | `RunRecord` / `run_ledger.trigger_ref` | 因哪个触发源发起（派发/事件任务 id） |
+| `sourceRef` | `WorkspaceTask` / `workspace_tasks.source_ref` | 事件去重键 `projectId:event:number:action`，可空=人工登记 |
+| `triggerType` | `WorkspaceTask` / `workspace_tasks.trigger_type` | 事件类型（如 `issue_hook`），可空=人工登记 |
+| `activatedPlugins` / `pluginSchemaChars` | `token_usage`（V8） | 插件分项归因：本轮激活插件与各插件贡献的 schema 字符数（`core` 为兜底桶名）；可空=老记录 |
+
 ### BugFixStage / BugFixStatus
 
 阶段：`ANALYZE → REPRO_DEPLOY → REPRODUCE → FIX → VERIFY_DEPLOY → VERIFY → PULL_REQUEST → DONE`。

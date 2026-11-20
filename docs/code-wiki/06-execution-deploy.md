@@ -140,6 +140,35 @@ DeployResult deploy(DeployRequest)
 
 未注册目标 **fail-closed**：`DEPLOY_TARGET_UNCONFIGURED (E-505)`；目标无法判定 `E-504`；前置条件缺失 `E-501`；回滚版本缺失 `E-507`。
 
+**部署地址 vs 探活**：`DeployResult.endpoint` 统一为**根路径**（用户点「打开部署地址」跳转的页面入口，根路径→前端首页）；`healthPath`（如 `/actuator/health`）只用于健康探测判定。三个部署器行为一致——曾经把 endpoint 指到 healthPath，返回一段 JSON 让人误以为部署错了地方。
+
+### 5.1 镜像保留策略（分级保护）
+
+发布成功后 `pruneOldImages` 按账本清理历史镜像（`BuiltInPipelineEngine`）：
+
+| 要素 | 内容 |
+|---|---|
+| 永不清理 | 账本第一条（**当前版本=回滚锚点**）、第二条（**上一版本=回滚的回滚锚点**）、正在运行容器引用的镜像（`docker ps --filter label=agent.project=<id>` 收集） |
+| 规则外 | 按部署时间保留最近 `KEEP_IMAGES=5` 个，其余 `docker rmi -f`；删除失败只记日志，**不阻断发布**；账本条目无论删没删掉都同步移除，防止列表无限增长 |
+| 清理名单 | 纯函数 `staleImages(rows, protectedTags, keep)` 计算（可单测）；回归测试 `ImageVersionStoreTest` 3 例 |
+| 账本 | `ImageVersionStore`（`<workspaceRoot>/_images/<project>-<env>.yml`），与构建历史职责分离——删历史不丢版本 |
+
+### 5.2 版本与部署槽
+
+- `DeploySlot`：`tagged` → 版本号槽（独立容器名/端口，旧版本继续跑）；`untagged` → 默认槽。槽语义收口在 domain 一处实现，避免部署器/引擎各写一遍导致漂移。
+- 展示版本 `versionLabel`：用户填写的版本号 → `env-vN`（构建序号）→ 短 sha；写入容器 label `agent.version`，部署矩阵按它分组（不再都挤在 "latest"）。
+- 打 tag 发布：必须带严格 `x.y.z` 版本号且分支与版本线一致；`tagStatus` 四态 `PUSHED/LOCAL/FAILED/SNAPSHOT`。
+- **测试验证版本 vs 生产部署版本**：账本按环境分账。生产（需测试证据的环境）的版本选项从 **test 账本**读（`ledgerEnv` 映射），放行仍由 `EnvironmentPromotion` 校验。
+
+### 5.3 部署矩阵元数据权威规则
+
+`DeploymentControlService.matrix()` 合并三类数据源（HOST 槽目录 / 本地 Docker 标签巡检 / 远程 SERVER SSH 探测），按 `(env, version)` 组卡。防"缝合怪"规则：
+
+- **运行容器是元数据的权威来源**：容器的 sha / RFC3339 startedAt / 端口映射覆盖 HOST 残留值，HOST 仅在无容器时兜底。
+- `agent.version=latest` 视为无意义，回落到提交 sha 做版本键。
+- 同环境有运行容器时，清理"无容器、非运行、默认槽、pid≤0"的纯 HOST 残留槽；打 tag 的历史版本槽保留。
+- 「当前」按 `deployedAt` 最新判定，不依赖单一 current 指针；远程 SERVER 容器并行探测，单台不可达不影响全局。
+
 ## 6. 环境供给（中间件）
 
 - `DockerEnvProvisioner`：按配方为项目创建 Redis/MySQL 等容器（端口、卷、网络、健康检查）。
@@ -164,9 +193,9 @@ DeployResult deploy(DeployRequest)
 
 | 组件 | 作用 |
 |---|---|
-| `RunHistoryStore` | 每 run 的 stage、日志尾部、产物、心跳、修复记录 |
-| `ImageVersionStore` | 镜像版本与回滚候选 |
-| `DbRunLedgerRepository` | 统一账本（CHAT/DEPLOY/WORKSPACE/BUGFIX/PIPELINE） |
+| `RunHistoryStore` | 每 run 的 stage、日志尾部、产物、心跳、修复记录；快照持久化 version/tagStatus/branch |
+| `ImageVersionStore` | 镜像版本与回滚候选（`_images/<project>-<env>.yml`）；生产版本的候选来源 |
+| `DbRunLedgerRepository` | 统一账本（CHAT/DEPLOY/WORKSPACE/BUGFIX/PIPELINE），UPSERT；`worker_role`/`trigger_ref` 归因 |
 | `TriggerScheduler` | 同项目同环境串行触发，避免并发踩踏 |
 | `PomVersionSync` / `ReleaseVersion` | 版本号同步与发布标签 |
 
@@ -178,3 +207,5 @@ DeployResult deploy(DeployRequest)
 - 超时、资源、日志脱敏。
 - 失败可归因（错误码 + 证据）。
 - 部署目标明确，不静默降级。
+
+生产晋升的领域规则在 `EnvironmentPromotion`（domain）：test 有固化脚本 + 证据运行仍 SUCCEEDED + **证据提交与本次发布提交一致**，缺一拒绝；HTTP 层与引擎内共用同一份规则，避免两处口径不一致形成绕过路径。流水线失败后是否让部署 Agent 介入由 `RunRecoveryAdvisor` 端口决定（仅 UI 触发诊断，防递归）。

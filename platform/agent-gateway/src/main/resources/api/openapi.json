@@ -1258,6 +1258,58 @@
         }
       }
     },
+    "/api/v1/webhooks/gitee/event" : {
+      "post" : {
+        "tags" : [ "gitee-webhook-controller" ],
+        "summary" : "event",
+        "operationId" : "event",
+        "parameters" : [ {
+          "name" : "X-Gitee-Token",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Gitee-Signature",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Gitee-Event",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "string"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/webhooks/git/{provider}/issues" : {
       "post" : {
         "tags" : [ "git-issue-webhook-controller" ],

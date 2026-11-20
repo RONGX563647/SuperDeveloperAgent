@@ -135,10 +135,21 @@ SSE 请求（`Accept` 只有 `text/event-stream`）出错时返回**无 body 的
 ### 3.7 Issue 与集成
 
 - `/api/v1/git-issues`：列表、计数、详情、创建、更新、关闭/重开、同步、评论、版本。
+- `/api/v1/git-issues/versions?projectId&kind`：版本建议（`{branch, suggested, tags}`）；`kind=FEAT` 建议下一个次版本、`BUG` 建议下一个补丁（后端推导，前端不自算）。
+- `/api/v1/git-issues/export`：按 ids 导出 xlsx（响应媒体类型入契约）；`/api/v1/git-issues/images`：配图 multipart 上传。
 - `/api/v1/git-issue-images`：Issue 图片。
 - `/api/v1/settings/git-integration`：Issue 集成设置。
-- `/api/v1/webhooks/git`、`/api/v1/webhooks/gitee`：Webhook（按签名/密钥校验）。
+- `/api/v1/webhooks/git/{provider}/issues`：Gitee/GitHub/GitLab Issue 同步回调（验签→去重→入队，异步解析）。
+- `/api/v1/webhooks/gitee/push|event|history`：Gitee Webhook（见下表）。
 - `/api/v1/settings/git-hosts`、`/api/v1/settings/git-hosts/oauth`、`/api/v1/settings/git-oauth-apps`、`/api/v1/gitee`：Git 托管授权与 OAuth。
+
+Webhook 端点（在登录拦截中**显式豁免**，安全靠各端点自带密钥校验；`agent.webhook.gitee-secret` 未配置直接 401）：
+
+| 方法 | 路径 | 鉴权头 | 行为 |
+|---|---|---|---|
+| POST | `/webhooks/gitee/push` | `X-Gitee-Token` 或 `X-Gitee-Signature` | 按 `projectId:sha` 去重后触发 verify 流水线；重复返回 `{duplicate}`；未托管仓库 400 |
+| POST | `/webhooks/gitee/event` | 同上 + `X-Gitee-Event` | issue/PR 事件零 LLM Fast Path：白名单外 `{ignored:true}`，重复 `{duplicate, sourceRef}`，命中落任务返回 `{taskId, projectId, triggerType, sourceRef}` |
+| GET | `/webhooks/gitee/history` | 同上 | 最近 50 条构建历史 |
 
 ### 3.8 BugFix
 
@@ -154,6 +165,10 @@ SSE 请求（`Accept` 只有 `text/event-stream`）出错时返回**无 body 的
 | `/api/v1/settings/skills` | Skill 仓库/安装 |
 | `/api/v1/settings/capabilities` | 能力市场 |
 | `/api/v1/settings/sandbox/images` | 工具链镜像就绪状态（按 host + image，只读，不触发拉取） |
+| `/api/v1/settings/builtin-tools` | 内置工具目录（真实 Toolkit 投影：名称/描述/只读/所属工具面） |
+| `/api/v1/settings/capabilities/sources` | 能力市场来源清单（kind=mcp|skill） |
+| `/api/v1/settings/capabilities/market` | 市场检索（kind/q/source/offset/limit/refresh，分页懒加载） |
+| `/api/v1/settings/capabilities/market/install` | 一键接入市场条目 |
 | `/api/v1/policies` | 当前环境策略矩阵（只读） |
 | `/api/v1/run-ledger` | 统一运行账本 |
 | `/api/v1/usage` | token 用量（按会话/汇总） |

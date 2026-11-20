@@ -33,6 +33,9 @@ import top.rongx.agent.domain.conversation.ConversationRunRepository;
 import top.rongx.agent.domain.conversation.ConversationStatus;
 import top.rongx.agent.domain.conversation.ConversationTranscriptRepository;
 import top.rongx.agent.domain.conversation.RunStatus;
+import top.rongx.agent.domain.conversation.WorkerRole;
+import top.rongx.agent.domain.conversation.WorkspaceTask;
+import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.run.RunKind;
 import top.rongx.agent.domain.run.RunLedgerRepository;
@@ -68,12 +71,16 @@ public class WorkspaceRunExecutor implements RunAborter {
         private final CountDownLatch streamDone = new CountDownLatch(1);
         private final CountDownLatch done = new CountDownLatch(1);
         private volatile Future<?> future;
+        /** 角色与触发来源在提交时解析一次，账本每次双写都复用（避免重复查库）。 */
+        private volatile WorkerRole workerRole;
+        private volatile String triggerRef;
     }
 
     private final ObjectProvider<ChatService> chatService;
     private final ConversationRunRepository runs;
     private final ConversationRepository conversations;
     private final ConversationTranscriptRepository transcripts;
+    private final WorkspaceTaskRepository tasks;
     private final WorkspaceEventBus events;
     private final RunLedgerRepository ledger;
     private final int maxConcurrent;
@@ -85,6 +92,7 @@ public class WorkspaceRunExecutor implements RunAborter {
                                 ConversationRunRepository runs,
                                 ConversationRepository conversations,
                                 ConversationTranscriptRepository transcripts,
+                                WorkspaceTaskRepository tasks,
                                 WorkspaceEventBus events,
                                 RunLedgerRepository ledger,
                                 @Value("${agent.workspace.supervisor.max-concurrent:3}") int maxConcurrent) {
@@ -92,6 +100,7 @@ public class WorkspaceRunExecutor implements RunAborter {
         this.runs = runs;
         this.conversations = conversations;
         this.transcripts = transcripts;
+        this.tasks = tasks;
         this.events = events;
         this.ledger = ledger;
         this.maxConcurrent = Math.max(1, Math.min(maxConcurrent, 10));
@@ -100,8 +109,10 @@ public class WorkspaceRunExecutor implements RunAborter {
     /** 提交一次运行；队列满时直接把运行标记为失败，不抛给调用方。 */
     public void submit(ProjectContext ctx, ConversationRun run, String text) {
         Handle handle = new Handle();
+        handle.workerRole = workerRoleOf(run);
+        handle.triggerRef = triggerRefOf(run);
         handles.put(run.id(), handle);
-        track(run, RunState.QUEUED, "已入队", "");
+        track(run, handle, RunState.QUEUED, "已入队", "");
         try {
             handle.future = pool(run.projectId()).submit(
                     () -> execute(ctx, run, text, handle));
@@ -201,7 +212,7 @@ public class WorkspaceRunExecutor implements RunAborter {
             events.publish(new WorkspaceEventBus.WorkspaceEvent(run.projectId(),
                     run.conversationId(), run.id(), run.ownerUserId(),
                     "run.status", "RUNNING", "", now));
-            track(run, RunState.RUNNING, "正在执行", "");
+            track(run, handle, RunState.RUNNING, "正在执行", "");
         }
 
         Results results = stream(ctx, run, text, handle);
@@ -287,7 +298,7 @@ public class WorkspaceRunExecutor implements RunAborter {
             events.publish(new WorkspaceEventBus.WorkspaceEvent(updated.projectId(),
                     updated.conversationId(), updated.id(), updated.ownerUserId(),
                     "run.status", status.name(), updated.result(), now));
-            track(updated, ledgerState(status), summaryOf(updated), updated.error());
+            track(updated, handle, ledgerState(status), summaryOf(updated), updated.error());
             handles.remove(updated.id());
             handle.streamDone.countDown();
             handle.done.countDown();
@@ -392,14 +403,37 @@ public class WorkspaceRunExecutor implements RunAborter {
     }
 
     /** 统一运行账本双写：失败只记日志，绝不影响会话运行本身。 */
-    private void track(ConversationRun run, RunState state, String summary, String error) {
+    private void track(ConversationRun run, Handle handle, RunState state, String summary,
+                       String error) {
         try {
             long now = System.currentTimeMillis();
             ledger.save(new RunRecord(run.id(), RunKind.WORKSPACE, run.projectId(),
                     run.conversationId(), run.ownerUserId(), state, summary, error,
-                    run.createdAt(), now));
+                    run.createdAt(), now,
+                    handle == null ? null : handle.workerRole,
+                    handle == null ? null : handle.triggerRef));
         } catch (RuntimeException e) {
             log.warn("运行账本写入失败 run={}：{}", run.id(), e.getMessage());
+        }
+    }
+
+    /** 会话角色 → WorkerRole（普通 chat 会话返回 null，不冒认角色）。 */
+    private WorkerRole workerRoleOf(ConversationRun run) {
+        try {
+            return conversations.find(run.conversationId())
+                    .map(c -> WorkerRole.parse(c.role())).orElse(null);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** 触发来源：派发时登记的票据 id（用户直接发起的运行没有票据，返回 null）。 */
+    private String triggerRefOf(ConversationRun run) {
+        try {
+            return tasks.findTasksByConversation(run.conversationId()).stream()
+                    .map(WorkspaceTask::id).findFirst().orElse(null);
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 

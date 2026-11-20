@@ -8,6 +8,7 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import java.util.List;
 import java.util.UUID;
+import top.rongx.agent.domain.conversation.WorkerRole;
 import top.rongx.agent.domain.port.ModelRegistry.ActiveModel;
 import top.rongx.agent.domain.project.ProjectContext;
 import org.springframework.stereotype.Service;
@@ -90,10 +91,16 @@ public class ChatService {
         // 2.1 解析实际生效模型：非法选择在这里直接失败，不回退到默认模型
         ActiveModel active = modelProvider.activeConfig(modelConnectionId, modelName);
         // 3. 按项目上下文构造 Agent（角色决定工具面与系统提示；能力按本会话选择挂载）
-        AgentFactory.AgentSession session = "deploy".equalsIgnoreCase(role)
-                ? new AgentFactory.AgentSession(
-                        agentFactory.createDeploy(ctx, modelConnectionId, modelName), List.of())
-                : agentFactory.createChat(ctx, skills, mcpServers, modelConnectionId, modelName);
+        WorkerRole workerRole = WorkerRole.parse(role);
+        AgentFactory.AgentSession session;
+        if ("deploy".equalsIgnoreCase(role)) {
+            session = new AgentFactory.AgentSession(
+                    agentFactory.createDeploy(ctx, modelConnectionId, modelName), List.of());
+        } else if (workerRole != null) {
+            session = agentFactory.createWorker(ctx, workerRole, modelConnectionId, modelName);
+        } else {
+            session = agentFactory.createChat(ctx, skills, mcpServers, modelConnectionId, modelName);
+        }
         // 4. 显式传递运行时上下文（含项目上下文与工具插件索引，非 ThreadLocal）
         RuntimeContext runtime = runtimeContext(ctx, sid, session.plugins());
         // 5. 返回事件流；每次模型调用结束都记录 token；结束后关闭本会话的 MCP 客户端

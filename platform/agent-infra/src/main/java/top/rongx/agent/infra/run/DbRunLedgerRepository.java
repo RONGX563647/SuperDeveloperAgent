@@ -6,6 +6,7 @@ import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
+import top.rongx.agent.domain.conversation.WorkerRole;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
 import top.rongx.agent.domain.run.RunKind;
@@ -26,17 +27,20 @@ public class DbRunLedgerRepository implements RunLedgerRepository {
 
     private static final String COLUMNS = """
             id, kind, project_id, subject_id, owner_user_id, state, summary, error,
-            created_at, updated_at
+            created_at, updated_at, worker_role, trigger_ref
             """;
 
     private static final String SAVE_SQL = """
             INSERT INTO run_ledger (id, kind, project_id, subject_id, owner_user_id,
-                                    state, summary, error, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                                    state, summary, error, created_at, updated_at,
+                                    worker_role, trigger_ref)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 state = excluded.state,
                 summary = excluded.summary,
                 error = excluded.error,
+                worker_role = excluded.worker_role,
+                trigger_ref = excluded.trigger_ref,
                 updated_at = excluded.updated_at
             """;
 
@@ -66,7 +70,9 @@ public class DbRunLedgerRepository implements RunLedgerRepository {
                     record.summary() == null ? "" : record.summary(),
                     record.error() == null ? "" : record.error(),
                     record.createdAt(),
-                    record.updatedAt()));
+                    record.updatedAt(),
+                    record.workerRole() == null ? null : record.workerRole().name(),
+                    record.triggerRef()));
         } catch (RuntimeException e) {
             throw new RunException(ErrorCode.RUN_INVALID_STATE, "运行账本写入失败：" + e.getMessage(), e);
         }
@@ -158,6 +164,8 @@ public class DbRunLedgerRepository implements RunLedgerRepository {
                 (String) row[6],
                 (String) row[7],
                 ((Number) row[8]).longValue(),
-                ((Number) row[9]).longValue());
+                ((Number) row[9]).longValue(),
+                row[10] == null ? null : WorkerRole.valueOf((String) row[10]),
+                (String) row[11]);
     }
 }

@@ -154,7 +154,16 @@ public class DatabaseHotSwapper {
         }
     }
 
-    /** 用同一套迁移脚本把目标库建到当前版本。SQLite 与 PG 走各自的 vendor 目录。 */
+    /**
+     * 用同一套迁移脚本把目标库建到当前版本。SQLite 与 PG 走各自的 vendor 目录。
+     *
+     * <p>「非空库但缺 flyway_schema_history」的处理：自持后端（{@link PlatformDb#create}）
+     * 由 Hibernate {@code hbm2ddl.auto=update} 直接把实体建/补成最新列——那套库<b>没有
+     * Flyway 版本记录</b>。切回它时若按 baseline=1 补历史脚本，V5 的
+     * {@code ALTER TABLE ADD COLUMN} 会对已存在的列重放而报 duplicate column。
+     * 这类库的 schema 实际已在最新版本，把 baseline 直接打到当前最高迁移版本，
+     * 让 Flyway 只补记录、不重放脚本。
+     */
     private void createSchema(String url, String username, String password) {
         boolean sqlite = url.startsWith("jdbc:sqlite:");
         String vendor = sqlite ? "sqlite" : "postgresql";
@@ -163,13 +172,107 @@ public class DatabaseHotSwapper {
                     .dataSource(url, username, password)
                     .locations("classpath:db/migration/common", "classpath:db/migration/" + vendor)
                     .baselineOnMigrate(true)
-                    .baselineVersion("1")
+                    .baselineVersion(latestMigrationVersion(vendor))
                     .load()
                     .migrate();
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
                     "目标库建表失败（检查账号是否有 DDL 权限）：" + rootMessage(e), e);
         }
+    }
+
+    /**
+     * classpath 里该 vendor 相关迁移的最高版本号（common + vendor 两处目录）。
+     *
+     * <p>空库场景：没有任何用户表 → baseline-on-migrate 不生效，从 V1 全量建到最新，
+     * 语义不变。已有表场景：无论表是老版本脚本建的还是 Hibernate update 补出来的，
+     * 都视为已到最新——历史脚本不可安全重放（V2 自增表、V5 加列都会撞已有结构），
+     * 缺列由 Hibernate update 安全网兜底（与 {@code DataSourceConfig} 的约定一致）。
+     *
+     * <p>资源可能在目录（本地 IDE / 解包运行）也可能在 agent-infra 的 jar 里
+     * （Maven 依赖 classpath，CI 就是这种），两种协议都要扫。
+     */
+    private static String latestMigrationVersion(String vendor) {
+        try {
+            ClassLoader loader = DatabaseHotSwapper.class.getClassLoader();
+            int latest = scanMigrationVersions(loader.getResources("db/migration/common"));
+            latest = Math.max(latest,
+                    scanMigrationVersions(loader.getResources("db/migration/" + vendor)));
+            // 扫不到（理论不可达）按 1 兜底：等价于修复前的行为
+            return String.valueOf(Math.max(latest, 1));
+        } catch (java.io.IOException e) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL,
+                    "扫描迁移脚本版本失败：" + rootMessage(e), e);
+        }
+    }
+
+    /**
+     * 扫一个 classpath 根（目录或 jar 内目录）下所有 {@code V&lt;n&gt;__*.sql} 的最大 n。
+     *
+     * <p>失败只告警不抛：单个根扫不进去时其余根（common 目录）通常仍能给出可用版本；
+     * 全部失败由调用方兜底到 1。
+     */
+    private static int scanMigrationVersions(java.util.Enumeration<java.net.URL> roots) {
+        int latest = 0;
+        while (roots.hasMoreElements()) {
+            java.net.URL root = roots.nextElement();
+            String protocol = root.getProtocol();
+            if ("file".equalsIgnoreCase(protocol)) {
+                latest = Math.max(latest, scanDirectoryQuietly(root));
+            } else if ("jar".equalsIgnoreCase(protocol)) {
+                latest = Math.max(latest, scanJarQuietly(root));
+            }
+        }
+        return latest;
+    }
+
+    private static int scanDirectoryQuietly(java.net.URL root) {
+        try (var paths = java.nio.file.Files.list(java.nio.file.Path.of(root.toURI()))) {
+            int max = 0;
+            for (java.nio.file.Path p : paths.toList()) {
+                max = Math.max(max, migrationVersionOf(p.getFileName().toString()));
+            }
+            return max;
+        } catch (java.io.IOException | java.net.URISyntaxException | RuntimeException e) {
+            log.warn("扫描迁移目录失败（{}）：{}", root, e.getMessage());
+            return 0;
+        }
+    }
+
+    private static int scanJarQuietly(java.net.URL root) {
+        String url = root.toString();
+        int bang = url.lastIndexOf("!/");
+        if (bang < 0) {
+            return 0;
+        }
+        String entryPrefix = url.substring(bang + 2);
+        String jarPath = url.substring("jar:".length(), bang);
+        if (jarPath.startsWith("file:")) {
+            jarPath = java.nio.file.Path.of(java.net.URI.create(jarPath)).toString();
+        }
+        try (java.util.jar.JarFile jar = new java.util.jar.JarFile(jarPath)) {
+            int max = 0;
+            for (java.util.jar.JarEntry entry : java.util.Collections.list(jar.entries())) {
+                String name = entry.getName();
+                if (!name.startsWith(entryPrefix + "/")) {
+                    continue;
+                }
+                String rest = name.substring(entryPrefix.length() + 1);
+                if (!rest.isEmpty() && !rest.contains("/")) {
+                    max = Math.max(max, migrationVersionOf(rest));
+                }
+            }
+            return max;
+        } catch (java.io.IOException | RuntimeException e) {
+            log.warn("扫描迁移 jar 失败（{}）：{}", jarPath, e.getMessage());
+            return 0;
+        }
+    }
+
+    /** {@code V9__worker_role_and_trigger.sql} → 9；不匹配返回 0。 */
+    private static int migrationVersionOf(String fileName) {
+        var matcher = java.util.regex.Pattern.compile("^V(\\d+)__").matcher(fileName);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
     }
 
     private top.rongx.agent.infra.persistence.SqliteToTargetCopier.Report copyRows(

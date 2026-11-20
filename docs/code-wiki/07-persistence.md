@@ -20,6 +20,9 @@ summary: 双数据库策略、Flyway 迁移、实体与表清单、工作区目�
 - **只认"未配置"时回落 SQLite**；配置了 PG 却连不上 → 启动失败，避免数据分裂。
 - 密码支持密文：设置页写入的密文在启动时解密注入 `AGENT_DB_PASSWORD`；环境变量优先。
 - SQLite 使用 WAL；迁移前用 `SqliteWalCheckpointer` 做检查点；`SqliteToTargetCopier` 支持 SQLite → PG 搬迁。
+- **热切换五步顺序不可调**（[DatabaseHotSwapper](file:///workspace/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/settings/DatabaseHotSwapper.java)）：探活 → Flyway 建 schema → 搬数据 → 写 `db-backend.yml` → 原子替换 `PlatformDb` 的 volatile Holder；前四步任一失败，运行中后端不动。回切 SQLite 先对空文件建 schema 再换，PG 数据原样保留。
+- 自持后端（Hibernate update 建的库）没有 `flyway_schema_history`：回切时 baseline 直接打到**当前最高迁移版本**，Flyway 只补记录不重放脚本，缺列由 `ddl-auto=update` 兜底。
+- 迁移版本扫描同时支持 `file:` 与 `jar:` classpath 协议——CI 上迁移脚本在 agent-infra 依赖 jar 里，只扫 `file:` 会扫不到版本、导致回切从 V1 全量重放报 duplicate column。
 
 配置项（[application.yml](file:///workspace/platform/agent-gateway/src/main/resources/application.yml)）：
 
@@ -36,13 +39,20 @@ agent.db:
 
 ```text
 common/       V1__platform_schema.sql       建表
-              V3__platform_indexes.sql      索引
-              V5__audit_event.sql           审计事件
+              V3__platform_indexes.sql      索引（含 run_ledger 看门狗部分索引）
+              V5__audit_event.sql           审计事件（append-only）
               V6__image_readiness.sql       镜像就绪状态（host + image）
+              V7__drop_project_env_app_url.sql  删除 project_envs.app_url 登记列（生效端口由 EffectiveEndpointResolver 实时解析）
+              V8__token_usage_attribution.sql   token_usage 加 activated_plugins / plugin_schema_chars（插件分项归因）
+              V9__worker_role_and_trigger.sql   workspace_tasks 加 source_ref/trigger_type；run_ledger 加 worker_role/trigger_ref（只加列，不建新表）
 sqlite/       V2__identity_tables.sql       自增表（SQLite 方言）
 postgresql/   V2__identity_tables.sql       自增表（PG 方言）
-              V4__identity_sequence_resync.sql
+              V4__identity_sequence_resync.sql  搬行后 identity 序列重拨（幂等）
 ```
+
+> 版本号撞车的教训（2026-11-20 合并 0.2）：两条线各自发过 `V5`，合并后 Flyway 直接拒启
+> （`Found more than one migration with version 5`）。并行分支发迁移前先看目标线的
+> 最大版本号，或合并后立即重排未发布迁移（tag 之后的迁移允许改名，改完重算基线）。
 
 规则：
 
@@ -70,8 +80,11 @@ postgresql/   V2__identity_tables.sql       自增表（PG 方言）
 
 - 大量"文件型"实现同时提供 DB 版（如 `ChangeRegistry` 两个构造器：`GovernanceDb` 或 `workspaceRoot`），便于无库单测。
 - `stream_lease` / `project_service_leases` 用于多实例场景下的并发租约。
-- `run_ledger` 是跨引擎统一账本，`RunKind` 为分类维度。
-- `image_readiness` 主键是 `(host, image)`：镜像层缓存属于某台机器的 Docker 守护，换一台机器就该重新判定，不能按 image 全局共享。
+- `run_ledger` 是跨引擎统一账本，`RunKind` 为分类维度；`worker_role` / `trigger_ref`（V9）记录运行由哪个角色、因哪个触发源发起。
+- `workspace_tasks` 的 `source_ref` / `trigger_type`（V9）是事件接入的幂等键：Gitee issue/PR 事件按 `projectId:event:number:action` 去重建任务。
+- `token_usage` 的 `activated_plugins` / `plugin_schema_chars`（V8）做插件分项归因，两列可空（老记录为 NULL）。
+- `image_readiness` **有表无实体**：由 `DbImageReadinessStore` 原生 SQL 读写；主键是 `(host, image)`——镜像层缓存属于某台机器的 Docker 守护，换一台机器就该重新判定，不能按 image 全局共享。
+- `project_envs` 已无 `app_url`（V7 删除）：生效端口一律实时解析，不再登记。
 
 ## 4. 工作区目录布局
 

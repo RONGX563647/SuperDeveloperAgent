@@ -73,9 +73,9 @@ Agent（ReAct，按环境装配工具面）
 | `agent-infra` | Git/worktree、项目接入、JPA 持久化、Flyway、AES-GCM 加解密、会话状态、配方存储 | `ProjectIntakeService`、`GitWorktreeManager`、`SecretBox`、`EncryptedAgentStateStore` |
 | `agent-governance` | 环境策略矩阵、变更单登记、确认令牌签发/消费、补丁登记 | `EnvPolicyService`、`ChangeRegistry`、`ConfirmTokenService` |
 | `agent-executor` | 流水线引擎、动作执行器、Docker 沙箱、部署器、环境供给、自动修复 | `BuiltInPipelineEngine`、`DockerSandbox`、`Deployers` |
-| `agent-tools` | 91 个 `@Tool` 方法、4 套 Toolkit、工具目录导出 | `ToolCatalog`、`ActionService` |
+| `agent-tools` | 90 个 `@Tool` 方法、4 套 Toolkit、工具目录导出 | `ToolCatalog`、`ActionService` |
 | `agent-runtime` | Agent 构造、工具面裁剪、模型热切换、SSE 事件源、工作区 DAG | `AgentFactory`、`ChatService`、`WorkspaceDispatchScheduler` |
-| `agent-gateway` | Boot 入口、40 个 Controller、认证鉴权、项目上下文、BugFix 编排 | `AgentApplication`、`ChatController`、`BugFixOrchestrator` |
+| `agent-gateway` | Boot 入口、41 个 Controller、认证鉴权、项目上下文、BugFix 编排 | `AgentApplication`、`ChatController`、`BugFixOrchestrator` |
 | `spec-checks` | 构建期规约检查 | `ArchitectureRulesTest`、`ForbiddenPatternScanTest` |
 | `web` | Vue3 单页应用 | `router.ts`、`views/ChatView.vue`、`api/http.ts` |
 

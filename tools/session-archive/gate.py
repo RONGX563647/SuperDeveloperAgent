@@ -639,18 +639,107 @@ def changed_modules(staged_files: list[str]) -> tuple[list[str], bool]:
     return sorted(mods), web
 
 
-def incremental_test_command(staged_files: list[str]) -> str:
-    """pre-commit 增量测试：受影响模块先编译，再只跑变更模块的测试。
+# 定向测试上限：超过这个数量，surefire 启动/筛选成本与模块全量已经接近，
+# 而且更容易漏掉隐性依赖，直接退回模块全量更稳。
+MAX_TARGETED_TESTS = 24
 
-    <p><b>为什么不再用 {@code -pl <mods> -amd test}</b>：{@code -amd} 会把全部下游模块
-    的<b>测试</b>一起跑起来。改 agent-domain 这种被所有模块依赖的基座时，命令退化成
-    全 reactor 测试（实测 166.9s），"增量"名存实亡。
+# 影响面横跨多个模块的路径：即使能映射到单测，也按模块全量跑。
+# 这些地方改错的代价远高于多跑的几十秒（权限/安全/工具面/数据库迁移）。
+HIGH_RISK_HINTS = (
+    "/security/",
+    "/policy/",
+    "/permission/",
+    "ToolCatalog.java",
+    "ToolPlugins.java",
+    "/db/migration/",
+)
 
-    <p>拆成两步后语义不变、成本骤降：
+
+def _test_sources(module: str, root: Path = ROOT) -> list[Path]:
+    test_root = root / "platform" / module / "src" / "test" / "java"
+    if not test_root.is_dir():
+        return []
+    return [p for p in test_root.rglob("*.java")
+            if p.name.endswith(("Test.java", "Tests.java", "IT.java"))]
+
+
+def targeted_test_scope(staged_files: list[str],
+                        root: Path = ROOT) -> tuple[list[str], str] | None:
+    """把改动的类映射到最相关的测试类；映射不全就返回 None（调用方退回模块全量）。
+
+    <p>质量优先的保守策略：
+    <ul>
+      <li>只处理 {@code src/main/java} 下的 Java 类；资源 / pom / SQL / 前端改动无法
+          从类名推断影响面，直接模块全量；</li>
+      <li>类名约定（FooTest/FooTests/FooIT）+ 测试源码里出现该类名，两种方式取并集；</li>
+      <li>任一类找不到测试、命中高风险路径、或并集超过 {@link MAX_TARGETED_TESTS}
+          都退回模块全量，宁可慢也不漏。</li>
+    </ul>
+    返回 {@code (测试类名列表, 说明)}。
+    """
+    modules: dict[str, set[str]] = {}
+    selected: set[str] = set()
+    for path in staged_files:
+        if not path.startswith("platform/"):
+            continue
+        parts = path.split("/")
+        if len(parts) < 3 or parts[1] == "web":
+            continue
+        module = parts[1]
+        if path.endswith(".java") and "/src/main/java/" in path:
+            name = Path(path).stem
+            # 内部类 / 非公开类不做类名映射（$ 或小写开头）
+            if "$" in name or not name[:1].isupper():
+                return None
+            modules.setdefault(module, set()).add(name)
+        elif path.endswith(".java") and "/src/test/java/" in path:
+            name = Path(path).stem
+            if not name.endswith(("Test", "Tests", "IT")):
+                return None
+            selected.add(name)
+        elif "/src/" in path or path.endswith((".xml", ".sql", ".yml", ".yaml")):
+            return None
+    if not modules and not selected:
+        return None
+    if any(hint in path for path in staged_files for hint in HIGH_RISK_HINTS):
+        return None
+
+    notes = []
+    for module, names in sorted(modules.items()):
+        files = _test_sources(module, root)
+        corpus = {}
+        for test_file in files:
+            try:
+                corpus[test_file.stem] = test_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+        known = set(corpus)
+        for name in sorted(names):
+            pattern = re.compile(rf"\b{re.escape(name)}\b")
+            hits = {stem for stem, text in corpus.items() if pattern.search(text)}
+            hits |= {candidate for candidate in (f"{name}Test", f"{name}Tests", f"{name}IT")
+                     if candidate in known}
+            if not hits:
+                return None
+            selected |= hits
+            notes.append(f"{module}:{name}→{len(hits)}")
+    if not selected or len(selected) > MAX_TARGETED_TESTS:
+        return None
+    return sorted(selected), "；".join(notes)
+
+
+def incremental_test_plan(staged_files: list[str]) -> tuple[str, bool, str]:
+    """pre-commit 增量测试计划：返回 (命令, 是否模块全量, 范围说明)。
+
+    <p><b>为什么不直接用 {@code -pl <mods> -amd test}</b>：{@code -amd} 会把全部下游
+    模块的<b>测试</b>一起跑起来，改基座时退化成全 reactor（实测 166.9s）。
+
+    <p>拆成三步后语义不变、成本骤降：
     <ol>
-      <li>{@code -pl <mods> -amd test-compile -DskipTests}：编译全部受影响模块（含下游），
-          编译期破坏仍然当场发现；实测 4.2s。</li>
-      <li>{@code -pl <mods> test}：只跑变更模块自己的测试；domain 实测 8.4s。</li>
+      <li>类级映射：改 {@code Foo.java} 只跑 {@code FooTest} 与源码里引用 Foo 的测试
+          （见 {@link targeted_test_scope}）；</li>
+      <li>映射不完整时退回模块全量，保证不漏测；</li>
+      <li>受影响模块（含下游）始终先 {@code test-compile}，编译期破坏仍然当场发现。</li>
     </ol>
     下游模块的测试交给 pre-push（{@code SESSION_ARCHIVE_FULL_TEST=1}）或 CI 全量兜底：
     提交时求快、推送/CI 求全，两层职责分开。
@@ -665,26 +754,42 @@ def incremental_test_command(staged_files: list[str]) -> str:
       <li>其它（工具脚本、CI 配置等）→ 什么都不跑。</li>
     </ul>
     判定"全跑"的唯一正当理由是根 pom 变了，而不是"我没认出这些文件"。
+    只有「模块全量」才登记模块绿色证据；定向跑过的模块不登记，避免 pre-push 误跳过。
     """
     mvn = maven_binary()
+
+    def join(*parts: str) -> str:
+        return " ".join(part for part in parts if part)
+
     mods, web = changed_modules(staged_files)
     if not mods:
         if web:
-            return ""  # 前端自检是 Python 函数不是 shell 命令，由 pre-commit 直接调用
+            # 前端自检是 Python 函数不是 shell 命令，由 pre-commit 直接调用
+            return "", False, "仅前端改动，走前端自检"
         if ROOT_POM in staged_files:
             # 根 pom 改的是依赖/插件版本，全 reactor 都要重新解析：编译即可，
             # 测试交给 CI（与"提交求快、推送/CI 求全"的分层一致）。
             return (f"{mvn} -B -nsu -pl !spec-checks -DskipTests "
-                    f"-Djacoco.skip=true test-compile")
-        return ""
+                    f"-Djacoco.skip=true test-compile", False, "根 pom 变更，全 reactor 编译验证")
+        return "", False, "无 Maven 模块受影响，跳过后端测试"
     if "spec-checks" in mods:
-        return f"{mvn} -B -nsu -pl spec-checks test {surefire_parallel_flag()}".strip()
+        return (join(mvn, "-B -nsu -pl spec-checks test", surefire_parallel_flag()),
+                True, "spec-checks 规则变更，全量")
     pl = ",".join(mods)
     compile_step = (f"{mvn} -B -nsu -pl {pl},!spec-checks -amd "
                     f"-DskipTests -Djacoco.skip=true test-compile")
-    test_step = (f"{mvn} -B -nsu -pl {pl} test {surefire_parallel_flag()} "
-                 f"{SLOW_GROUP_FLAG}".strip())
-    return f"{compile_step} && {test_step}"
+    scope = targeted_test_scope(staged_files)
+    if scope is None:
+        test_step = join(mvn, f"-B -nsu -pl {pl} test",
+                         surefire_parallel_flag(), SLOW_GROUP_FLAG)
+        return (f"{compile_step} && {test_step}", True,
+                "未找到完整类级映射（资源/高风险/无测试），按模块全量")
+    tests, note = scope
+    test_step = join(mvn,
+                     f"-B -nsu -pl {pl} test -Dtest={','.join(tests)}",
+                     "-Dsurefire.failIfNoSpecifiedTests=false",
+                     surefire_parallel_flag(), SLOW_GROUP_FLAG)
+    return f"{compile_step} && {test_step}", False, f"定向 {len(tests)} 个测试类（{note}）"
 
 # 说明（为什么不按模块并行）：不同模块各起一个 mvn 并行跑过一版，实测
 # 「executor(12s) + tools(11s)」并行 28.2s、串行 25.3s —— Maven 启动与 reactor
@@ -886,7 +991,12 @@ def cmd_gate_pre_commit(args) -> int:
             "（docs 类纯文档提交免此限制）"
         )
     _, web = changed_modules(staged)
-    command = (os.environ.get("SESSION_ARCHIVE_TEST_CMD") or incremental_test_command(staged)).strip()
+    override = os.environ.get("SESSION_ARCHIVE_TEST_CMD")
+    if override:
+        command, module_scope, _ = override.strip(), True, "外部 SESSION_ARCHIVE_TEST_CMD"
+    else:
+        command, module_scope, scope_note = incremental_test_plan(staged)
+    out(f"测试范围：{scope_note}")
     if not command:
         # 没有任何 Maven 模块受影响：前端跑轻量自检，其余直接放行。
         # 关键是不能退化成"全 reactor 775 个用例"——纯前端或纯工具改动跑后端全量
@@ -927,10 +1037,12 @@ def cmd_gate_pre_commit(args) -> int:
         f"错误 {evidence['errors']}，跳过 {evidence['skipped']}"
     )
     # 记下"这些模块在当前闭包哈希下已跑绿"，供 pre-push 全量兜底按模块跳过。
-    try:
-        record_module_green(changed_modules(staged)[0])
-    except (GateError, OSError):
-        pass
+    # 只有模块全量才登记；定向测试覆盖不到全模块，登记会误导 pre-push 跳过。
+    if module_scope:
+        try:
+            record_module_green(changed_modules(staged)[0])
+        except (GateError, OSError):
+            pass
     # 前后端混合改动：Maven 那半已经跑过，前端自检还差一次（<1s，不做"要不要跑"的
     # 判断反而更省心——漏跑的代价是一次坏提交，多跑的代价是一次亚秒级脚本）。
     if web and web_tests() != 0:
@@ -2130,7 +2242,7 @@ def cmd_self_test(args) -> int:
         if mods != want_mods or web != want_web:
             return fail(f"self-test: {label} 的 changed_modules 判定错误 "
                         f"(mods={mods} web={web})")
-        cmd = incremental_test_command(staged)
+        cmd, module_scope, _note = incremental_test_plan(staged)
         kind = ("empty" if not cmd
                 else "compile" if "test-compile" in cmd and "&&" not in cmd
                 else "test")
@@ -2305,6 +2417,34 @@ def cmd_self_test(args) -> int:
                         encoding="utf-8")
         if not any("updatedAt 早于 createdAt" in e for e in validate_root(root, skip_git=True)):
             return fail("self-test: plan updatedAt 倒退应报错")
+
+        # 增量测试选择器：类名映射、无测试/资源/高风险回退
+        demo_main = (root / "platform" / "demo" / "src" / "main" / "java"
+                     / "top" / "rongx" / "agent" / "demo")
+        demo_test = (root / "platform" / "demo" / "src" / "test" / "java"
+                     / "top" / "rongx" / "agent" / "demo")
+        demo_main.mkdir(parents=True, exist_ok=True)
+        demo_test.mkdir(parents=True, exist_ok=True)
+        (demo_main / "Foo.java").write_text("class Foo {}", encoding="utf-8")
+        (demo_test / "FooTest.java").write_text("class FooTest { Foo f; }", encoding="utf-8")
+        (demo_test / "FooUsageTest.java").write_text("class FooUsageTest { Foo f; }",
+                                                     encoding="utf-8")
+        scope = targeted_test_scope(
+            ["platform/demo/src/main/java/top/rongx/agent/demo/Foo.java"], root=root)
+        if scope is None or set(scope[0]) != {"FooTest", "FooUsageTest"}:
+            return fail(f"self-test: 类级测试映射不正确：{scope}")
+        if targeted_test_scope(
+                ["platform/demo/src/main/resources/application.yml"], root=root) is not None:
+            return fail("self-test: 资源改动应退回模块全量")
+        (demo_main / "NoTest.java").write_text("class NoTest {}", encoding="utf-8")
+        if targeted_test_scope(
+                ["platform/demo/src/main/java/top/rongx/agent/demo/NoTest.java"],
+                root=root) is not None:
+            return fail("self-test: 无对应测试应退回模块全量")
+        if targeted_test_scope(
+                ["platform/agent-domain/src/main/java/top/rongx/agent/domain/security/Auth.java"],
+                root=root) is not None:
+            return fail("self-test: 高风险路径应退回模块全量")
 
         plan.unlink()
         primary.unlink()

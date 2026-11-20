@@ -1,7 +1,7 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：other
 
-40 个会话；检索用 `python tools/docs/find.py --module other`。
+41 个会话；检索用 `python tools/docs/find.py --module other`。
 
 ## 2026-11-20 · 防旧归档模型回潮：validate 拦截 docs/process 复活（chore `dc587a0`）
 - 问题：旧归档模型可被旧基点分支合并静默带回（今晚已实际发生，gate.py 被回退、500+ 文件复活），validate 不拦。
@@ -127,6 +127,11 @@
 - 问题：本轮把 BUG 从 17 条收口到 1 条，但缺少一份能一眼看懂的收尾结论：看板变化、四批新增里哪些已进主干哪些还在分支、BUG-1 为什么仍 …
 - 方案：新增 docs/summary/chore/2026-11_final-status.md：看板 23→7 / BUG 17→1 的变化表、本轮…
 - 验证：python tools/session-archive/gate.py validate 通过；
+
+## 2026-11-19 · 门禁增量测试与CI优化（chore `10c7f2c`）
+- 问题：门禁 pre-commit 按模块全量跑测试，改一个类要等整个模块（gateway 239 用例）跑完；GitHub CI 未覆盖 0.2.0-…
+- 方案：gate.py 增加类级定向测试选择：改 Foo.java 只跑 FooTest 及源码引用 Foo 的测试，资源/高风险路径/无测试/超上限一…
+- 验证：gate.py self-test 通过；
 
 ## 2026-11-19 · Dockerfile 提示会话归档与看板脚本入库（chore `e413c8f`）
 - 问题：两件事：1) 提交 Dockerfile 预检提示的归档时，pre-commit 直接抛 TypeError: unhashable type:…

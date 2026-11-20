@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-tools
 
-33 个会话；检索用 `python tools/docs/find.py --module agent-tools`。
+36 个会话；检索用 `python tools/docs/find.py --module agent-tools`。
+
+## 2026-11-20 · 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6`）
+- 问题：0.2 线缺今晚后半段工作：skills 路由层、门禁并发健壮性、防回潮守卫、token/deploy 并行会话成果。
+- 方案：merge 0.1→0.2：ledger 并行落账按 id 并集（185 行）重封链，views/handbook 生成物重生成，gate.py…
+- 验证：gate validate 185 份链全绿；views check 一致；self-test OK（并发契约 + 防回潮用例）；handboo…
 
 ## 2026-11-20 · 合并 token/deploy 并行工作并移植门禁并发健壮性（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe`）
 - 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …
@@ -13,10 +18,20 @@
 - 方案：能力页新增内置工具区（复用 AgentToolCatalog 投影）并重做三卡概览界面；
 - 验证：独立跑通 spec-checks 35 例、市场相关 10 例、前端 13 个测试文件 23 例、vue-tsc 类型检查全绿；
 
+## 2026-11-20 · 同步 0.1 分支到 0.2 分支（合并 + 重封归档链）（chore `dbeb728` `fe0b85f` `2a4591d` `cfaf487` `ac40c70` `6a8d0b9` `a054113` `9b96b52` `d6d5f25` `60accb8` `d2ce0ba` `0ef4309` `a0d886b` `f231e12` `ad02dad` `a48c78e` `6a0c837` `48a8c15` `501439d` `3e39c2c` `a3e360a` `b33cb9e` `239ee27` `ce82776` `c21e04a` `e2e69b6` `0a04b9c` `d9c2541` `25c7716` `f0a5776` `1b998b8` `1f84d49` `ab86d4e` `cc2256c` `c16ed3d` `d3cb637` `83c702f` `3f42162` `e92e7a0` `bea5a2a` `6acdb24` `b0124a9` `d103bd6` `fd01545` `d70eb9f` `16c6f4c` `0054f5f` `fd2636d` `e788458` `2674270` `ce30f40` `a368565` `3981a7c` `591cffc` `b6a0ca8` `7573c5c` `fafb765` `03f5aee` `f380411` `3bccf5c` `cc48ad1` `4c91eed` `2b50269` `976815b` `6b132e9` `7e41654` `d1e15aa` `e72ff5d` `70a395c` `fd26ec8` `c079f5d` `e57b713` `d7b3cf7` `6142e67` `631b391` `d39c02f` `da6cfff` `d1bc7cc` `b519605` `da667d4` `4656464` `c1276b1` `fc8eab2` `0e1f446` `97df414` `e1583e5` `9abc943` `616e7d1` `b1a8628` `e9a39d3`）
+- 问题：0.2 线停在 11-19，落后 0.1 线 98 个提交；两条线各自维护归档链，直接合会断链，handbook manifest 也是生成物。
+- 方案：在 0.2 线执行 merge 0.1.0-snapshot：6 个 feat manifest 与 handbook manifest 的冲突…
+- 验证：gate validate 通过（170 份归档）；handbook check 通过（11 锚点）；reactor test-compile …
+
 ## 2026-11-20 · 0.1.1 OPEN bug 批量修复（27+3 条）（bug `6acdb24`）
 - 问题：PG 工单 30 条 OPEN BUG（0.1.1 的 27 条 + 无版本 3 条）逐一按根因分析修复
 - 方案：7 个并行修复域：工具面收敛（28/29/30/31）、执行器（32/35/38/39/41/46）、进程管理（40/42/43）、gitiss…
 - 验证：agent-domain 97 / agent-infra 162 / agent-executor 258 / agent-tools 85 …
+
+## 2026-11-19 · 同步 0.1.0-snapshot 至 0.2.0-snapshot（chore `c7e483a` `232abdb` `ce48355` `fce29f9` `a03abed` `0bf7e38` `5789f3a` `12c6e66` `8249307` `a554923` `59dcd04` `a9335e8` `1eaaa28` `96baa9b` `e413c8f` `de14f98` `3f6d209` `3de2084` `7672d97` `02ddb88` `53293d9` `19bd8dd` `ee6c078` `a3c57e2` `028d277` `766a758` `d69773e` `3cd35a0` `7b34195` `d10be49` `e762f32` `3e38d12` `b9fab0d` `0383892` `15667f5` `abe33a1` `505bff7` `1104fb9` `c327cc1` `2e8b205` `4de0459` `70a808f` `f7c710d` `4fe1c13` `35188f6` `636a7ce` `ef5fb2b` `bcaa271` `3225462` `a24ee2e` `0f6b8f6` `172305f` `218ff86`）
+- 问题：同步 0.1.0-snapshot 至 0.2.0-snapshot
+- 方案：fix(process): 重排 chore 归档链，修复 2059 归档断链
+- 验证：冲突融合（ci.yml/gate.py）+ OpenAPI 快照重生成 + 归档链全量 reseal（19 份）+ handbook 重锚点；
 
 ## 2026-11-19 · 修部署失败：拷错 jar 导致无 Main-Class，且容器内沙箱模式不可用（bug `b9fab0d` `0383892`）
 - 问题：run-0d8832ee 在 health 阶段失败（退出码 1 / E-401，body 为空），容器日志 no main manifest …
