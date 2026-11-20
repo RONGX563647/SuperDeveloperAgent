@@ -1,0 +1,70 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-20_2154_deploy-matrix-metadata-staple",
+  "category": "bug",
+  "title": "修复部署矩阵历史元数据与实际容器缝合",
+  "createdAt": "2026-11-20T21:54:21+08:00",
+  "session": {
+    "agentModel": "Tencent Hunyuan Hy",
+    "promptSummary": "P0 运行容器为元数据权威覆盖 HOST 残留；P1 version=latest 回落 sha 避免撞 key；P2 清理被容器接管的默认 HOST 残留槽",
+    "toolCallCount": 0
+  },
+  "problem": "部署详情把历史构建元数据与实际容器缝合成一张卡：旧 HOST 残留槽 version=latest/sha=ec462cb/端口8183/11-18 与新运行容器 sha=e9a39d31/端口8184/11-20 被合并显示",
+  "solution": "P0 运行容器为元数据权威：容器 sha/RFC3339 startedAt/端口映射覆盖 HOST 残留，HOST 仅兜底，容器接管 key 不混入 HOST 细节；P1 versionOf 在 agent.version 缺失或为 latest 且 sha 有效时回落 sha，避免新容器与旧 latest HOST 槽撞 key；P2 pruneStaleHostSlots 在同环境有运行容器时清理已停进程的默认 HOST 残留槽，打 tag 历史槽保留",
+  "commits": [
+    {
+      "sha": "3f973781316bd7b5f0e8f04c8ee2b0760aae2f87",
+      "subject": "fix(deploy): 修复部署矩阵历史元数据与实际容器缝合",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/DeploymentControlService.java",
+          "status": "M",
+          "additions": 118,
+          "deletions": 10,
+          "blobHash": "c5916b7b2c4618ad446c0fd49ad609fa0fe0c798"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeploymentControlServiceTest.java",
+          "status": "M",
+          "additions": 92,
+          "deletions": 0,
+          "blobHash": "fefdc4d54f523af43dc1d289a48bbfdb75b2de1e"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/DeploymentControlServiceTest.java",
+        "status": "M",
+        "additions": 92,
+        "deletions": 0,
+        "blobHash": "fefdc4d54f523af43dc1d289a48bbfdb75b2de1e"
+      }
+    ],
+    "casesAdded": 3,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 221, Failures: 0, Errors: 0, Skipped: 5"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "隔离 worktree gateway 253 例全绿(0失败/5跳过)+依赖链合计589例0失败；pre-commit 门禁221例全绿；端到端实测输出 version/release=e9a39d31、端口8184、时间11-20、旧latest卡已清理"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_2154_deploy-matrix-metadata-staple"
+    ]
+  },
+  "chain": {
+    "prev": "0d73e6799cd2639e86347e73e96455bff9d30d14bc311554cf9a69e8f2d2e48c",
+    "self": "35421cf86fc6b995e4408563d5cbd2029d59b8d9b2afe7147eae786ca3a09b7f"
+  }
+}
