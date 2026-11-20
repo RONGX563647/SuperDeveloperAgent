@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-91 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+92 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-20 · 合并 0.1 线到 0.2 线并解决台账链冲突（chore `864e974` `426e75d` `f584dd7`）
+- 问题：0.1.0-snapshot 的 4 个提交（GitIssue 版本号选择、台账合并、防回潮守卫）需要合入 0.2.0-snapshot；拉取最…
+- 方案：台账链冲突：HEAD 与 0.1 对同样 4 条 chore 条目各算了不同哈希链（各自多 1 条独有条目），保留 HEAD 的链式 5 条 c…
+- 验证：diag-chain 五分类链连续；views check 16 文件一致；MigrationGuardTest 8 项全绿（锚点 0.1.0、…
 
 ## 2026-11-20 · 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6`）
 - 问题：0.2 线缺今晚后半段工作：skills 路由层、门禁并发健壮性、防回潮守卫、token/deploy 并行会话成果。
