@@ -1,7 +1,7 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-82 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+83 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
 
 ## 2026-11-20 · 合并 token/deploy 并行工作并移植门禁并发健壮性（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe`）
 - 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …
@@ -12,6 +12,11 @@
 - 问题：需把 feat/token-quantified-baseline 与 fix/deploy-matrix-metadata-staple 合并…
 - 方案：隔离 worktree 基于 d630a8c8 用 --no-ff 合并两分支（ ort 自动合并无冲突）；
 - 验证：合并后全量 verify 1000 例（token 13+deploy 2 文件叠加 capability-market）修复后全绿；
+
+## 2026-11-20 · 任务版本号选择：建议值进下拉并按类型给目标版本（bug `864e974`）
+- 问题：任务版本号下拉里建议值与任务类型（Feat/Bug）不匹配：选 Feat 却建议补丁版本，且可能建议已打过 tag 的版本。
+- 方案：suggestVersion 增加 kind 口径：Feat 取该 major 已发布最高次版本+1（跨过已发布版本），Bug 维持当前版本线最…
+- 验证：后端 GitIssueVersionSuggestionTest + GitIssueControllerFieldContractTest 通…
 
 ## 2026-11-20 · 修复部署矩阵历史元数据与实际容器缝合（bug `3f97378`）
 - 问题：部署详情把历史构建元数据与实际容器缝合成一张卡：旧 HOST 残留槽 version=latest/sha=ec462cb/端口8183/11-…
