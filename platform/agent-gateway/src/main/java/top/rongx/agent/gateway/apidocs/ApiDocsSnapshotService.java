@@ -75,7 +75,10 @@ public class ApiDocsSnapshotService {
         try {
             OpenAPI spec = (OpenAPI) GET_OPEN_API.invoke(resource, Locale.ROOT);
             ObjectMapper mapper = provider.jsonMapper();
-            json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(spec);
+            // 行分隔符统一成 \n：Jackson 默认缩进用系统换行，Windows 上生成 CRLF，
+            // 与仓库按 eol=lf 提交的快照逐字节比对必然失败（且每次刷新都会污染 diff）。
+            json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(spec)
+                    .replace("\r\n", "\n");
         }
         catch (ReflectiveOperationException | IOException e) {
             throw new ArtifactException(ErrorCode.ARTIFACT_INVALID_STATE, "OpenAPI 生成失败", e);
