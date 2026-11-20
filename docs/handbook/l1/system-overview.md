@@ -32,7 +32,7 @@ summary: 平台定位、九个模块的职责与依赖方向，以及三条主�
 
 ## 三条主干链路
 
-1. **对话**：`ChatController#chat`（SSE）→ `ChatService#stream` → `AgentFactory#createChat` → `ReActAgent.streamEvents`。
+1. **对话**：`ChatController#chat`（SSE）→ `ChatService#stream` → `AgentFactory#createChat` → `HarnessAgent.streamEvents`。
    工具面按环境与角色裁剪，写操作在生产被策略拒绝，详见 [执行模型](execution-model.md)。
 2. **执行**：`BuiltInPipelineEngine#trigger` 把 `ci/pipeline.yml` 的阶段交给 ActionRunner，
    阶段状态、证据、日志与产物留在运行记录里。

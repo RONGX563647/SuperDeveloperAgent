@@ -49,10 +49,6 @@ public class EncryptedAgentStateStore implements AgentStateStore {
 
     private final Path root;
     private final SecretBox cipher;
-    private final int contextMaxChars;
-    private final int contextKeepMessages;
-    /** 被裁掉的旧历史折叠成一条摘要的字符上限；0 = 不生成摘要（旧行为）。 */
-    private final int contextSummaryChars;
     private final JsonCodec codec = JsonUtils.getJsonCodec();
     /**
      * 会话级互斥：同一 sessionId 并发两轮对话时，不能出现"读-改-写"互相覆盖。
@@ -61,18 +57,9 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>
             sessionLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public EncryptedAgentStateStore(Path root, SecretBox cipher,
-                                    int contextMaxChars, int contextKeepMessages) {
-        this(root, cipher, contextMaxChars, contextKeepMessages, 4_000);
-    }
-
-    public EncryptedAgentStateStore(Path root, SecretBox cipher, int contextMaxChars,
-                                    int contextKeepMessages, int contextSummaryChars) {
+    public EncryptedAgentStateStore(Path root, SecretBox cipher) {
         this.root = root.toAbsolutePath().normalize();
         this.cipher = cipher;
-        this.contextMaxChars = contextMaxChars;
-        this.contextKeepMessages = contextKeepMessages;
-        this.contextSummaryChars = contextSummaryChars;
     }
 
     @Override
@@ -81,20 +68,11 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         if (state == null || isAnonymous(userId)) {
             return;
         }
-        State toSave = state;
-        if (state instanceof io.agentscope.core.state.AgentState agentState) {
-            toSave = ConversationContextTrimmer.trim(agentState, contextMaxChars,
-                    contextKeepMessages, contextSummaryChars);
-            if (toSave != state) {
-                log.debug("会话上下文已裁剪：session={} before={} after={}", sessionId,
-                        agentState.getContext().size(),
-                        ((io.agentscope.core.state.AgentState) toSave).getContext().size());
-            }
-        }
-        State serialized = toSave;
+        // 上下文压缩由 HarnessAgent 的 CompactionMiddleware 在运行期接管（写回 AgentState），
+        // 这里只负责加密落盘，不再做二次裁剪，避免两套裁剪口径互相干扰。
         withSessionLock(userId, sessionId, () -> write(
                 file(userId, sessionId, key, VALUE_SUFFIX),
-                encrypt(codec.toJson(serialized)) + System.lineSeparator()));
+                encrypt(codec.toJson(state)) + System.lineSeparator()));
     }
 
     @Override

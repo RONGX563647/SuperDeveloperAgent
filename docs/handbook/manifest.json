@@ -89,10 +89,6 @@
     },
     {
       "level": "L3",
-      "path": "docs/handbook/l3/state-context-trimmer.md"
-    },
-    {
-      "level": "L3",
       "path": "docs/handbook/l3/tools-deploy-tools.md"
     }
   ],
@@ -160,12 +156,12 @@
     {
       "id": "runtime-agent-factory/create-chat",
       "doc": "runtime-agent-factory",
-      "label": "按环境与角色裁剪工具面并构造 ReActAgent",
+      "label": "按环境与角色裁剪工具面并构造 HarnessAgent",
       "symbol": "AgentFactory#createChat",
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
       "module": "agent-runtime",
-      "start": 163,
-      "end": 206
+      "start": 186,
+      "end": 229
     },
     {
       "id": "runtime-chat-service/stream",
@@ -174,8 +170,8 @@
       "symbol": "ChatService#stream",
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
       "module": "agent-runtime",
-      "start": 79,
-      "end": 102
+      "start": 80,
+      "end": 103
     },
     {
       "id": "state-agent-state-store/save",
@@ -184,18 +180,8 @@
       "symbol": "EncryptedAgentStateStore#save",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
       "module": "agent-infra",
-      "start": 80,
-      "end": 98
-    },
-    {
-      "id": "state-context-trimmer/trim",
-      "doc": "state-context-trimmer",
-      "label": "上下文预算裁剪",
-      "symbol": "ConversationContextTrimmer#trim",
-      "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java",
-      "module": "agent-infra",
-      "start": 61,
-      "end": 128
+      "start": 67,
+      "end": 76
     },
     {
       "id": "tools-deploy-tools/env-status",

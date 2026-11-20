@@ -28,7 +28,7 @@ summary: 工作区目录、会话状态、运行记录与证据的存储位置�
 1. 网关解析 `ProjectContext`（项目、环境、用户、只读角色），作为显式参数向下传递，不用 ThreadLocal。
 2. `ChatService` 用 `sessionId` 绑定/校验会话归属，防止跨项目复用会话。
 3. Agent 状态由 `EncryptedAgentStateStore` 加密写盘；恢复时解密读回，重启可续接。
-4. 落盘前 `ConversationContextTrimmer` 按 `maxChars` + `keepMessages` 裁剪，SYSTEM 消息永远保留。
+4. 运行期上下文压缩由 HarnessAgent 的 `CompactionMiddleware` 写回 `AgentState`，落盘层只加密不二次裁剪。
 
 ## 执行与证据数据流
 

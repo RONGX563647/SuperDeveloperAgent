@@ -53,7 +53,6 @@ L3 的"行为 → 源码位置"表由代码锚点生成，行号不需要手工�
 | [gateway-deploy-gate](l3/gateway-deploy-gate.md) | 部署证据与确认令牌 |
 | [executor-pipeline-engine](l3/executor-pipeline-engine.md) | 流水线触发 |
 | [state-agent-state-store](l3/state-agent-state-store.md) | 会话状态落盘 |
-| [state-context-trimmer](l3/state-context-trimmer.md) | 上下文裁剪 |
 | [infra-project-intake](l3/infra-project-intake.md) | 项目接入入口 |
 | [infra-git-worktree](l3/infra-git-worktree.md) | Worktree 创建 |
 | [tools-deploy-tools](l3/tools-deploy-tools.md) | 部署状态查询 |

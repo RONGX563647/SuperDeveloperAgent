@@ -1,10 +1,11 @@
 package top.rongx.agent.runtime;
 
-import io.agentscope.core.ReActAgent;
+import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.ModelCallEndEvent;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.UserMessage;
 import java.util.List;
 import java.util.UUID;
 import top.rongx.agent.domain.port.ModelRegistry.ActiveModel;
@@ -141,7 +142,7 @@ public class ChatService {
                 ? UUID.randomUUID().toString() : sessionId;
         sessions.bindOrVerify(sid, ctx);
         ActiveModel active = modelProvider.activeConfig(modelConnectionId, modelName);
-        ReActAgent agent = agentFactory.createSupervisor(ctx, modelConnectionId, modelName);
+        HarnessAgent agent = agentFactory.createSupervisor(ctx, modelConnectionId, modelName);
         RuntimeContext runtime = runtimeContext(ctx, sid, null);
         return agent.streamEvents(text, runtime)
                 .doOnNext(event -> recordUsage(event, sid, ctx, active, runtime));
@@ -172,7 +173,8 @@ public class ChatService {
         sessions.bindOrVerify(sid, ctx);
         AgentFactory.AgentSession session = agentFactory.createChat(ctx, null, null);
         RuntimeContext runtime = runtimeContext(ctx, sid, session.plugins());
-        return session.agent().call(text, structuredType, runtime)
+        // HarnessAgent 提供 call(List<Msg>, Class, ctx)，无 String 重载：显式包装成 UserMessage。
+        return session.agent().call(List.of(new UserMessage(text)), structuredType, runtime)
                 .doFinally(signal -> session.close());
     }
 }

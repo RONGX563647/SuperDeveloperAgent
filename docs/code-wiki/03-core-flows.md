@@ -19,7 +19,7 @@ summary: 六条关键运行链路的分步说明：对话 SSE、流水线、治�
 5. AgentFactory.createChat(ctx, skills, attachments, model, connectionId)
    - 选择 Toolkit：prod 或只读 → readOnlyToolkit；否则 agentToolkit
    - 追踪中间件：tool 调用、token 用量、时间线
-6. ReActAgent.streamEvents(text, RuntimeContext(ctx))
+6. HarnessAgent.streamEvents(text, RuntimeContext(ctx))
 7. AgentEventMapper.toDto() → SSE "agent" 事件（带递增 id，支持 Last-Event-ID 续传）
 8. run.completed / error 后释放闸门与 MCP 资源
 ```

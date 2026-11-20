@@ -1,6 +1,6 @@
 package top.rongx.agent.runtime;
 
-import io.agentscope.core.ReActAgent;
+import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionMode;
 import io.agentscope.core.state.AgentStateStore;
@@ -104,9 +104,9 @@ public class AgentFactory {
      * <p>{@code plugins} 是本轮工具面的插件索引：调用方要放进 RuntimeContext，
      * 供渐进式工具中间件与 {@code tool_load} 共用同一份事实。
      */
-    public record AgentSession(ReActAgent agent, List<AutoCloseable> closeables,
+    public record AgentSession(HarnessAgent agent, List<AutoCloseable> closeables,
                                ToolPluginIndex plugins) {
-        public AgentSession(ReActAgent agent, List<AutoCloseable> closeables) {
+        public AgentSession(HarnessAgent agent, List<AutoCloseable> closeables) {
             this(agent, closeables, null);
         }
 
@@ -122,7 +122,14 @@ public class AgentFactory {
     }
 
     /**
-     * 所有角色共用的 builder 基线。
+     * 所有角色共用的 HarnessAgent builder 基线。
+     *
+     * <p>HarnessAgent 是 ReActAgent 的增强封装，默认会装配一整套编排（workspace 上下文、
+     * 文件系统/shell 工具、subagent、skill 自学习、memory、plan mode、tools.json……）。
+     * 本平台把这些职责留在自己手里：执行隔离由 DockerSandbox 负责（A3 规约：执行面不依赖
+     * LLM SDK），门禁由治理层负责，工具面由环境策略裁剪。因此这里统一关掉与平台职责冲突的
+     * 默认编排，只保留两点：① 悬挂工具调用恢复（见下）；② harness 的上下文压缩与工具结果
+     * 驱逐——它们写回 AgentState，与平台自建的裁剪/截断形成替换关系。
      *
      * <p><b>为什么必须开 {@code enablePendingToolRecovery}</b>：工具调用"发出去了但没拿到结果"
      * 是必然事件（进程重启、SSE 看门狗掐流、用户点停止、工具超时）。框架默认不开恢复，
@@ -131,14 +138,30 @@ public class AgentFactory {
      * 表现就是「会话卡死」。开启后框架在下一轮把这些悬挂调用补成错误结果并继续，
      * 与生产环境只读工具面（不存在 ASK 审批通道）的设计一致。
      */
-    static ReActAgent.Builder baseBuilder(String name) {
-        return ReActAgent.builder()
+    static HarnessAgent.Builder baseBuilder(String name) {
+        return HarnessAgent.builder()
                 .name(name)
-                .enablePendingToolRecovery(true);
+                .enablePendingToolRecovery(true)
+                .enableAgentTracingLog(false)
+                // 平台自建执行隔离/门禁/工具面，关闭 harness 的默认编排以免职责重叠或绕过
+                .disableWorkspaceContext()
+                .disableAtPathExpansion()
+                .disableFilesystemTools()
+                .disableShellTool()
+                .disableSubagents()
+                .disableDynamicSubagents()
+                .disableDynamicSkills()
+                .disableDefaultWorkspaceSkills()
+                .disableMemoryTools()
+                .disableMemoryHooks()
+                .disableSessionPersistence()
+                .disableToolsConfig();
+        // 刻意不 disableCompaction()/disableToolResultEviction()：这两项纳入 harness 替换范围，
+        // 结果写回 AgentState（由 EncryptedAgentStateStore 接管落盘），见阶段2说明。
     }
 
     /** 为一个会话构造 Agent（不挂载额外能力；保留给只读调用方）。Agent 无状态，可每次新建。 */
-    public ReActAgent create(ProjectContext ctx) {
+    public HarnessAgent create(ProjectContext ctx) {
         return createChat(ctx, List.of(), List.of()).agent();
     }
 
@@ -159,7 +182,7 @@ public class AgentFactory {
      * @param connectionId 模型连接 id；null = 设置页默认连接
      * @param modelName    模型名；null = 该连接配置里的模型名
      */
-    // @handbook runtime-agent-factory/create-chat | 按环境与角色裁剪工具面并构造 ReActAgent
+    // @handbook runtime-agent-factory/create-chat | 按环境与角色裁剪工具面并构造 HarnessAgent
     public AgentSession createChat(ProjectContext ctx, List<String> requestedSkills,
                                    List<String> requestedMcp, String connectionId,
                                    String modelName) {
@@ -190,7 +213,7 @@ public class AgentFactory {
         ToolPluginIndex plugins = ToolPluginIndex.of(definitions, toolkit.getToolNames(),
                 ToolPlugins.CORE);
         // 3. 组装 Agent：系统提示仅描述角色，安全职责在工具/门禁层
-        ReActAgent.Builder builder = baseBuilder("devops-agent")
+        HarnessAgent.Builder builder = baseBuilder("devops-agent")
                 .sysPrompt(systemPrompt(ctx, skillIndex(requestedSkills), plugins.promptIndex()))
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(toolkit)
@@ -354,11 +377,11 @@ public class AgentFactory {
      *   <li>非生产环境允许它反复试错（预算内），生产环境只允许重放。</li>
      * </ul>
      */
-    public ReActAgent createDeploy(ProjectContext ctx) {
+    public HarnessAgent createDeploy(ProjectContext ctx) {
         return createDeploy(ctx, null, null);
     }
 
-    public ReActAgent createDeploy(ProjectContext ctx, String connectionId, String modelName) {
+    public HarnessAgent createDeploy(ProjectContext ctx, String connectionId, String modelName) {
         // 发布 Agent 的入口已由操作人在流水线工作台显式确认（生成并确认环境绑定），
         // 且控制器只放行 dev/test；这里用 BYPASS 避免 Agent 停在"等待确认"，
         // 否则一键自动部署会在 deploy_run 处中断。生产仍保持 DEFAULT（且控制器直接拒绝）。
@@ -474,11 +497,11 @@ public class AgentFactory {
      * <p>只读工具用于直接回答"状态/日志/配置"类问题，减少不必要的子会话；
      * 它不挂 MCP、不挂 Skill、没有任何写工具，真正动手仍交给子会话。
      */
-    public ReActAgent createSupervisor(ProjectContext ctx) {
+    public HarnessAgent createSupervisor(ProjectContext ctx) {
         return createSupervisor(ctx, null, null);
     }
 
-    public ReActAgent createSupervisor(ProjectContext ctx, String connectionId, String modelName) {
+    public HarnessAgent createSupervisor(ProjectContext ctx, String connectionId, String modelName) {
         PermissionContextState permission = PermissionContextState.builder()
                 .mode(PermissionMode.DEFAULT)
                 .build();

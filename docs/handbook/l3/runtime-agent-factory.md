@@ -3,7 +3,7 @@ type: handbook-l3
 level: L3
 module: agent-runtime
 title: Agent 装配与工具面
-summary: 按环境与角色裁剪工具面、权限模式与迭代上限，构造 ReActAgent
+summary: 按环境与角色裁剪工具面、权限模式与迭代上限，构造 HarnessAgent
 ---
 
 # AgentFactory 装配
@@ -11,7 +11,7 @@ summary: 按环境与角色裁剪工具面、权限模式与迭代上限，构�
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 按环境与角色裁剪工具面并构造 ReActAgent | `AgentFactory#createChat` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java:163-206` | agent-runtime |
+| 按环境与角色裁剪工具面并构造 HarnessAgent | `AgentFactory#createChat` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java:186-229` | agent-runtime |
 <!-- generated:end -->
 
 ## 行为拆解

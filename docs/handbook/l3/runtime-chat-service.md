@@ -11,7 +11,7 @@ summary: 一轮对话的校验、会话绑定、Agent 组装与事件流
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 聊天主流程：校验输入 → 绑定会话 → 组装 Agent → 事件流 | `ChatService#stream` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java:79-102` | agent-runtime |
+| 聊天主流程：校验输入 → 绑定会话 → 组装 Agent → 事件流 | `ChatService#stream` | `platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java:80-103` | agent-runtime |
 <!-- generated:end -->
 
 ## 行为拆解
@@ -20,7 +20,7 @@ summary: 一轮对话的校验、会话绑定、Agent 组装与事件流
 2. `sessionId` 缺失时生成新值，`ChatSessionRegistry#bindOrVerify` 校验它没有被绑定到别的项目/环境。
 3. 解析实际生效的模型；非法选择在这里失败，不回退到默认模型。
 4. `role=deploy` 走部署 Agent，其余走 `AgentFactory#createChat`。
-5. 事件流由 `ReActAgent#streamEvents` 驱动，`doFinally` 负责关闭本会话的 MCP 客户端。
+5. 事件流由 `HarnessAgent#streamEvents` 驱动，`doFinally` 负责关闭本会话的 MCP 客户端。
 
 ## 状态与副作用
 

@@ -28,6 +28,12 @@
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-core</artifactId>
         </dependency>
+        <!-- 官方 HarnessAgent：ReActAgent 的增强封装，负责 Agent 循环与可复用中间件；
+             执行隔离/门禁仍由平台自建组件负责（A3 规约：执行面不依赖 LLM SDK） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-harness</artifactId>
+        </dependency>
         <!-- 模型扩展：OpenAI 兼容端点（通义 / DeepSeek / 自建 vLLM 均可复用） -->
         <dependency>
             <groupId>io.agentscope</groupId>
