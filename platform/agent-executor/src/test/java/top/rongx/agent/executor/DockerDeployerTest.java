@@ -112,6 +112,10 @@ class DockerDeployerTest {
         DeployResult first = local.deploy(request("run-1", Map.of("SMOKE_VALUE", "hello-env")));
         assertTrue(first.success(), "首次部署应成功：" + first.summary() + "\n" + first.log());
         assertTrue(first.endpoint().contains(":" + HOST_PORT), first.endpoint());
+        // 打开部署地址必须是页面入口（根路径），不是探活路径——否则用户点开看到的是 health JSON。
+        assertTrue(first.endpoint().endsWith("/"), "部署地址应是根路径：" + first.endpoint());
+        assertTrue(!first.endpoint().contains("health") && !first.endpoint().contains("actuator"),
+                "部署地址不能指向探活路径：" + first.endpoint());
         assertEquals(CONTAINER, first.resource());
 
         assertEquals("OK", httpGet("http://127.0.0.1:" + HOST_PORT + "/healthz"),

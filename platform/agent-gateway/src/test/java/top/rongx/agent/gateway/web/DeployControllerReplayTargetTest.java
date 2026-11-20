@@ -90,6 +90,37 @@ class DeployControllerReplayTargetTest {
         assertTrue(error.getMessage().contains("docker"));
     }
 
+    @Test
+    @DisplayName("重放带 version + tag → 引擎收到版本与打 tag 参数（打 tag 显示为空的回归）")
+    void replayForwardsVersionAndTag() {
+        PipelineEngine engine = engine();
+        controller(engine).replay(PROJECT, "test", SHA, null, "docker", "0.1.2", "true");
+
+        assertTriggeredWithVersionAndTag(engine, "0.1.2", "true");
+    }
+
+    @Test
+    @DisplayName("重放只带 version 不打 tag → 引擎收到版本、tag=false 不下发")
+    void replayForwardsVersionWithoutTag() {
+        PipelineEngine engine = engine();
+        controller(engine).replay(PROJECT, "test", SHA, null, null, "0.1.2-snapshot", null);
+
+        assertTriggeredWithVersionAndTag(engine, "0.1.2-snapshot", null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertTriggeredWithVersionAndTag(PipelineEngine engine, String version, String tag) {
+        var captor = ArgumentCaptor.forClass(Map.class);
+        org.mockito.Mockito.verify(engine).trigger(eq(PROJECT), eq("release"), captor.capture());
+        Map<String, String> sent = (Map<String, String>) captor.getValue();
+        assertEquals(version, sent.get("version"));
+        if (tag == null) {
+            assertFalse(sent.containsKey("tag"));
+        } else {
+            assertEquals(tag, sent.get("tag"));
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private void assertTriggeredWith(PipelineEngine engine, String expected) {
         var captor = ArgumentCaptor.forClass(Map.class);

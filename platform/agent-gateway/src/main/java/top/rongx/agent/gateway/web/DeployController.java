@@ -136,12 +136,31 @@ public class DeployController {
      * <p>{@code deployTarget} 必须跟着重放一起进来：固化脚本里记的是"当初跑通时的目标"，
      * 用户在面板上选了「打包成镜像」，若这里不接收就会被静默丢弃、按脚本里的 host 执行。
      */
+    /** 兼容旧调用（不携带版本信息）：委托给带版本参数的重载。 */
+    public Map<String, Object> replay(String projectId,
+                                      String env,
+                                      String sha,
+                                      String confirmToken,
+                                      String deployTarget) {
+        return replay(projectId, env, sha, confirmToken, deployTarget, null, null);
+    }
+
+    /**
+     * 重放并携带发布版本信息。
+     *
+     * <p>{@code version} / {@code tag} 必须跟着重放一起下发：test 环境点主发布按钮时，
+     * 有固化脚本会走重放路径（{@code replayEnv}），若这里不接收，用户填的版本号与
+     * 打 tag 开关就在网关这段被丢掉——引擎按快照构建跑，git tag 不打、历史里
+     * version/tagStatus 全空，表现就是「打了 tag 却显示是空的」。
+     */
     @PostMapping("/{projectId}/replay")
     public Map<String, Object> replay(@PathVariable String projectId,
                                       @RequestParam String env,
                                       @RequestParam String sha,
                                       @RequestParam(required = false) String confirmToken,
-                                      @RequestParam(required = false) String deployTarget) {
+                                      @RequestParam(required = false) String deployTarget,
+                                      @RequestParam(required = false) String version,
+                                      @RequestParam(required = false) String tag) {
         currentUser.requireUserId();
         String target = normalizeTarget(deployTarget);
         // prod 允许用"测试环境固化脚本"晋升（证据由 DeployGate 校验）；其他环境必须自己有脚本
@@ -157,6 +176,13 @@ public class DeployController {
         // 目标随重放下发：不传时引擎按固化脚本里的 target 走
         if (target != null) {
             params.put("deployTarget", target);
+        }
+        // 版本号 + 打 tag：与 /ci/pipelines/{id}/run 同一套参数名，引擎统一在 trigger 里读。
+        if (version != null && !version.isBlank()) {
+            params.put("version", version.trim());
+        }
+        if (tag != null && !tag.isBlank()) {
+            params.put("tag", tag);
         }
         String runId = engine.trigger(projectId, releasePipeline(projectId), params);
         return Map.of("runId", runId, "env", env, "status", engine.status(runId).name(),

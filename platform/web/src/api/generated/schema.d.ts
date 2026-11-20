@@ -6732,6 +6732,8 @@ export interface operations {
                 sha: string;
                 confirmToken?: string;
                 deployTarget?: string;
+                version?: string;
+                tag?: string;
             };
             header?: never;
             path: {
