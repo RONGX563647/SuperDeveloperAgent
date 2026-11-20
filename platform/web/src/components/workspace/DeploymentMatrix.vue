@@ -295,38 +295,7 @@ onUnmounted(() => {
       <p>在流水线里完成一次 dev / test / prod 部署后，版本会出现在这里，并可按环境一键启停。</p>
     </div>
 
-    <!-- 最近保留的镜像：来自镜像版本账本（保留策略内），可直接按提交重新构建 -->
-    <section v-if="retainedImages.length" class="dv-images">
-      <header class="dv-images-head">
-        <h3>最近保留的镜像</h3>
-        <p>保留策略内的版本（当前/上一版本 + 最近 5 个）；点「重新构建」按该提交再跑一次流水线。</p>
-      </header>
-      <div class="dv-image-list">
-        <article v-for="img in retainedImages" :key="img.tag" class="dv-image-card">
-          <div class="dv-image-main">
-            <code class="dv-image-tag" :title="img.tag">{{ img.tag }}</code>
-            <span v-if="img.version" class="dv-chip">{{ img.version }}</span>
-            <span v-if="img.gitSha" class="dv-chip mono">{{ img.gitSha.slice(0, 7) }}</span>
-            <span class="dv-chip">{{ sizeLabel(img.sizeBytes) }}</span>
-          </div>
-          <div class="dv-image-foot">
-            <span class="dv-time" :title="absoluteTime(img.deployedAt)">
-              {{ img.deployedAt ? `${relativeTime(img.deployedAt)}部署` : '未部署' }}
-            </span>
-            <button
-              type="button"
-              class="dv-btn primary"
-              :disabled="building === img.tag"
-              @click.stop="rebuild(img)"
-            >
-              {{ building === img.tag ? '构建中…' : '重新构建' }}
-            </button>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <div v-else class="dv-grid">
+    <div v-if="hasRows" class="dv-grid">
       <section v-for="env in envs" :key="env.key" class="dv-env">
         <header class="dv-env-head">
           <div class="dv-env-name">
@@ -397,6 +366,37 @@ onUnmounted(() => {
         </div>
       </section>
     </div>
+
+    <!-- 最近保留的镜像：来自镜像版本账本（保留策略内），可直接按提交重新构建 -->
+    <section v-if="retainedImages.length" class="dv-images">
+      <header class="dv-images-head">
+        <h3>最近保留的镜像</h3>
+        <p>保留策略内的版本（当前/上一版本 + 最近 5 个）；点「重新构建」按该提交再跑一次流水线。</p>
+      </header>
+      <div class="dv-image-list">
+        <article v-for="img in retainedImages" :key="img.tag" class="dv-image-card">
+          <div class="dv-image-main">
+            <code class="dv-image-tag" :title="img.tag">{{ img.tag }}</code>
+            <span v-if="img.version" class="dv-chip">{{ img.version }}</span>
+            <span v-if="img.gitSha" class="dv-chip mono">{{ img.gitSha.slice(0, 7) }}</span>
+            <span class="dv-chip">{{ sizeLabel(img.sizeBytes) }}</span>
+          </div>
+          <div class="dv-image-foot">
+            <span class="dv-time" :title="absoluteTime(img.deployedAt)">
+              {{ img.deployedAt ? `${relativeTime(img.deployedAt)}部署` : '未部署' }}
+            </span>
+            <button
+              type="button"
+              class="dv-btn primary"
+              :disabled="building === img.tag"
+              @click.stop="rebuild(img)"
+            >
+              {{ building === img.tag ? '构建中…' : '重新构建' }}
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <!-- 详情面板：完整部署信息 + 启停 / 重启 + 运行日志 -->
     <Teleport to="body">
