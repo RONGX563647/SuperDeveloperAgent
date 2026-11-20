@@ -772,11 +772,43 @@ public class DockerSandbox {
     }
 
     /**
+     * prepare 阶段的网络就绪保证（BUG-35）：
+     * {@code agent.sandbox.network} 配置成自定义网络（如 build-net）时先确保存在，
+     * 否则构建会在 {@code docker run --network} 处以 {@code network not found} 失败
+     * 且被误归因为代码问题。bridge/host/none 是内置网络，跳过。
+     *
+     * @throws EnvironmentException 网络检查/创建失败（错误信息含 {@code docker network create} 可复制命令）
+     */
+    public void prepareNetwork(BooleanSupplier cancelled, Consumer<String> live) {
+        if ("bridge".equalsIgnoreCase(network) || "host".equalsIgnoreCase(network)
+                || "none".equalsIgnoreCase(network) || network == null || network.isBlank()) {
+            return;
+        }
+        StringBuilder log = new StringBuilder();
+        DockerCli cli = new DockerCli(dockerBinary);
+        // 走注入的 commandExecutor：单测可用 fake runner 断言 inspect → create 序列
+        DockerNetwork.Exec exec = (cmd, timeoutMs, abort, out) ->
+                commandExecutor.run(cmd, timeoutMs, abort == null ? () -> false : abort, out);
+        boolean ready = DockerNetwork.ensure(exec, cli, Path.of("."), network, log);
+        if (!ready) {
+            throw new EnvironmentException(ErrorCode.ENV_PREPARE_FAILED,
+                    "沙箱网络未就绪（agent.sandbox.network=" + network + "）："
+                            + "自动创建失败——" + ProcessExecutor.redact(log.toString())
+                            + "。请手动执行 docker network create " + network
+                            + " 后重试，或改用 bridge 档位");
+        }
+        notify(live, "[sandbox] ✅ 沙箱网络已就绪：" + network + "\n");
+    }
+
+    /**
      * 网络档位校验：声明要外联但策略把网络关掉时必须拒绝，而不是静默让它失败。
      *
      * <p>典型误用：流水线定义里写了「需要下载依赖」，平台却配了
      * {@code agent.sandbox.network=none}；不在这里拒绝的话，构建跑几十秒后死于
      * 一句 {@code Could not resolve host}，没人知道是策略而不是代码的问题。
+     *
+     * <p>修复建议动态生成（BUG-35）：不再硬编码推荐 {@code build-net}——
+     * 只有该网络确实存在时才推荐，否则引导先创建，避免"按文档配置即炸"。
      *
      * @param needsNetwork 该动作是否声明需要外联
      * @throws SandboxDeniedException 策略不允许外联但动作要求外联
@@ -788,8 +820,16 @@ public class DockerSandbox {
         throw new SandboxDeniedException(SandboxDeniedException.Rule.NETWORK,
                 "阶段 " + stageName + " 需要外联，但沙箱网络档位是 none",
                 isolationSnapshot(),
-                "改用 agent.sandbox.network=bridge（或专用 build-net），"
-                        + "或把该阶段改成只用已预热缓存的动作");
+                networkSuggestion());
+    }
+
+    /** 动态生成网络档位建议：内置网络直接推荐；自定义网络先确认存在再推荐。 */
+    private String networkSuggestion() {
+        // bridge 永远存在，直接推荐；自定义网络（build-net 等）由 prepareNetwork 在
+        // prepare 阶段保证过存在，这里只推荐"换档位"而不是凭空点名一个不存在的网络。
+        return "改用 agent.sandbox.network=bridge（平台会自动确保网络就绪），"
+                + "或把该阶段改成只用已预热缓存的动作；"
+                + "确需专用网络时先执行 docker network create build-net";
     }
 
     /**

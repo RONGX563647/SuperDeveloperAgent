@@ -63,6 +63,12 @@ sa-token:
   # 未配置时回退环境变量 AGENT_MODEL_API_KEY；两者都没有也能启动，仅调用模型时提示去配置。
   # 明文凭证不入配置库（规约 §8）。
 agent:
+  # 治理数据保留期（BUG-37）：与审计表 audit_event 的追溯窗口对齐。
+  # change-hours：变更单/补丁保留时长（默认 2160h = 90 天）；run-days：运行账本保留天数（默认 90）。
+  governance:
+    retention:
+      change-hours: ${AGENT_GOVERNANCE_CHANGE_HOURS:2160}
+      run-days: ${AGENT_GOVERNANCE_RUN_DAYS:90}
   # 数据库：留空走 SQLite（单文件、零运维）；配置 PG URL 后所有持久化切换过去。
   # 只认“未配置”时回落 SQLite；配置了 PG 但连不上会启动失败，避免数据分裂。
   # 运行中换后端不必改这里：设置页的「热切换」会替换连接池并写回 db-backend.yml。

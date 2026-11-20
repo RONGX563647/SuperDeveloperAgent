@@ -133,21 +133,7 @@ public class DockerDeployer implements Deployer {
      * @return true = 已存在或创建成功
      */
     public boolean ensureNetwork(Path dir, String network, StringBuilder log) {
-        BooleanSupplier never = () -> false;
-        ProcessExecutor.StepOutcome inspect =
-                executor.exec(dir, docker.cmd("network", "inspect", network), 15_000,
-                        log, never);
-        if (inspect.exitCode() == 0) {
-            return true;
-        }
-        ProcessExecutor.StepOutcome created =
-                executor.exec(dir, docker.cmd("network", "create", network), 30_000,
-                        log, never);
-        if (created.exitCode() == 0) {
-            log.append("[deploy] 已创建环境网络 ").append(network).append('\n');
-            return true;
-        }
-        return false;
+        return DockerNetwork.ensure(executor, docker, dir, network, log);
     }
 
     /**

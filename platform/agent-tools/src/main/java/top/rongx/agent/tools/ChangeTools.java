@@ -204,61 +204,6 @@ public class ChangeTools {
                 plan.changeId());
     }
 
-    /**
-     * 只读查询变更单状态：让 Agent 能轮询「人确认了没、执行了没」。
-     *
-     * <p>为什么必须与 {@link #confirm} 分开：{@code confirm} 会<b>推送确认卡片</b>，
-     * 是有副作用的动作。模型只想问一句状态时如果必须调它，就会出现
-     * 「人已经确认过、卡片又被推一遍」——这正是原来反复推卡的成因之一。
-     * 本工具不推卡、不签发令牌、不执行任何动作。
-     *
-     * <p>返回里同时给出 {@code next}：未确认该等还是该提醒、已确认该去执行、
-     * 失败该带原因重试、留痕单该直接继续。模型不用自己推断语义。
-     */
-    @Tool(name = "change_status", description = "Read a change status, no side effects.",
-            readOnly = true, concurrencySafe = true)
-    public String changeStatus(@ToolParam(name = "change_id",
-                    description = "request_confirmation 或 propose_patch 返回的 changeId")
-            String changeId,
-            ProjectContext ctx) {
-        if (changeId == null || changeId.isBlank()) {
-            return "err: change_id 不能为空";
-        }
-        ChangePlan plan = registry.find(changeId.trim()).orElse(null);
-        if (plan == null) {
-            return "err: 变更不存在或已过期：" + changeId
-                    + "（只保留最近一批变更单；需要时重新登记）";
-        }
-        // 与 confirm 同一套越权校验：模型编造单号也读不到别的项目/环境的变更
-        if (!plan.projectId().equals(ctx.projectId())) {
-            return "err: 该变更不属于当前项目（" + plan.projectId() + "），拒绝查询";
-        }
-        if (!plan.env().equalsIgnoreCase(ctx.env())) {
-            return "err: 该变更的目标环境是 " + plan.env() + "，与当前会话环境 "
-                    + ctx.env() + " 不一致，拒绝查询";
-        }
-        boolean manual = MANUAL_KINDS.contains(plan.kind());
-        String status = manual ? "RECORDED" : plan.status().name();
-        String next = switch (manual ? "RECORDED" : plan.status().name()) {
-            case "APPLIED" -> "已执行完成：直接汇报结果，不要再次推卡。";
-            case "CONFIRMED" -> "操作人已确认但尚未执行：可调用 apply 执行，不要再推卡。";
-            case "FAILED" -> "上次执行失败：先向操作人说明原因，需要重试时登记新的变更。";
-            case "RECORDED" -> "留痕单：无需确认也不会推卡，直接继续后续步骤。";
-            default -> "尚未确认：确认卡片已在对话中，请等操作人本人确认。"
-                    + "可以调用 confirm 重推卡片，但不要假设已经确认。";
-        };
-        return """
-                status: %s
-                %s
-                planHash: %s
-                kind: %s
-                env: %s
-                highRisk: %s
-                executable: %s
-                summary: %s
-                next: %s
-                note: 本工具只读：不推确认卡、不签发令牌、不执行动作。
-                """.formatted(status, ChangeWire.line(plan.changeId()), plan.planHash(), plan.kind(),
-                plan.env(), plan.highRisk(), plan.executable(), plan.summary(), next);
-    }
+    // change_status 不在这里声明（BUG-28）：唯一实现在 ChangeStatusTool，
+    // agentToolkit / readOnlyToolkit 复用同一个 bean，避免重名冲突与越权校验口径漂移。
 }

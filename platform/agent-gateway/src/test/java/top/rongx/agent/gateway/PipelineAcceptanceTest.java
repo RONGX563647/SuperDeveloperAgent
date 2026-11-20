@@ -208,7 +208,8 @@ class PipelineAcceptanceTest {
 
         StageResult failedTest = current.stages(badRun).stream()
                 .filter(s -> s.stageId().equals("test")).findFirst().orElseThrow();
-        assertEquals("E-101", failedTest.errorCode(), "测试失败应分类为用户代码失败");
+        // BUG-39：测试动作失败细分到 E-102（TEST_FAILED），不再与编译失败 E-101 混用
+        assertEquals("E-102", failedTest.errorCode(), "测试失败应分类为测试未通过");
     }
 
     // ---------------------------------------------------------------- 验收 3：指定提交构建

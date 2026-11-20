@@ -15,6 +15,7 @@ import top.rongx.agent.domain.conversation.DispatchNode;
 import top.rongx.agent.domain.conversation.DispatchNodeResult;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
+import top.rongx.agent.domain.conversation.RunIds;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspacePlanItem;
 import top.rongx.agent.domain.conversation.WorkspaceSupervisorPort;
@@ -157,8 +158,11 @@ public class WorkspaceSupervisorTools {
                        String message) {
         return guard(() -> {
             String runId = supervisor.send(conversationId, ctx.userId(), message);
-            return runId.startsWith("err:") ? runId
-                    : "ok: dispatched runId=" + runId + "  conversation=" + conversationId;
+            // BUG-29：send 契约是「返回 runId 或抛异常」，不再按 "err:" 前缀猜错误；
+            // 非 run- 形状的返回值视为契约破坏，如实转告而不是当成 runId 回报
+            return RunIds.isRunId(runId)
+                    ? "ok: dispatched runId=" + runId + "  conversation=" + conversationId
+                    : "err: send 返回值不是合法 runId（" + runId + "）；这是一个契约缺陷，请报告";
         });
     }
 
@@ -345,8 +349,9 @@ public class WorkspaceSupervisorTools {
                     issueTitle(issue), env, worktree);
             String message = issueMessage(issue);
             String runId = supervisor.send(conversation.id(), ctx.userId(), message);
-            if (runId.startsWith("err:")) {
-                return runId;
+            // BUG-29：send 契约是「返回 runId 或抛异常」，不再按 "err:" 前缀猜错误
+            if (!RunIds.isRunId(runId)) {
+                return "err: send 返回值不是合法 runId（" + runId + "）；这是一个契约缺陷，请报告";
             }
             return "ok: issue=" + issue.id()
                     + "  conversation=" + conversation.id()

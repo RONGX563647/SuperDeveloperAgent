@@ -32,6 +32,7 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.env.StackAdapter;
+import top.rongx.agent.domain.port.AuditTrail;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.settings.DeployServer;
@@ -65,6 +66,7 @@ public class EnvironmentController {
     private final LocalServiceManager localServices;
     private final CurrentUser currentUser;
     private final PipelineEngine pipelineEngine;
+    private final AuditTrail audit;
 
     /** 发现候选暂存：密码留在后端，前端只拿 candidateId。 */
     private final Map<String, EnvResource> candidates = new ConcurrentHashMap<>();
@@ -73,7 +75,7 @@ public class EnvironmentController {
                                  EnvBindingService bindings, DeployServerRepository servers,
                                  SshAccess ssh, EnvRuntime envRuntime,
                                  LocalServiceManager localServices, CurrentUser currentUser,
-                                 PipelineEngine pipelineEngine) {
+                                 PipelineEngine pipelineEngine, AuditTrail audit) {
         this.envStore = envStore;
         this.discovery = discovery;
         this.bindings = bindings;
@@ -83,6 +85,7 @@ public class EnvironmentController {
         this.localServices = localServices;
         this.currentUser = currentUser;
         this.pipelineEngine = pipelineEngine;
+        this.audit = audit;
     }
 
     // ---------------------------------------------------------------- 模板
@@ -356,6 +359,9 @@ public class EnvironmentController {
                 new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量不存在：" + key));
         log.info("[audit] 查看环境变量明文 env={} key={} by={}", env, key,
                 currentUser.requireUserId());
+        // BUG-37 审计落库：明文查看要能事后追溯（日志会被轮转覆盖）
+        audit.record(currentUser.requireUserId(), null, "settings:reveal", "env_var", key,
+                null, env, "OK", "模板变量明文查看");
         return Map.of("env", env, "key", key, "value", value);
     }
 
@@ -531,6 +537,9 @@ public class EnvironmentController {
         }
         log.info("[audit] 查看项目注入变量 env={} project={} key={} by={}", env, projectId, key,
                 currentUser.requireUserId());
+        // BUG-37 审计落库：明文查看要能事后追溯（日志会被轮转覆盖）
+        audit.record(currentUser.requireUserId(), null, "settings:reveal", "effective_env", key,
+                projectId, env, "OK", "项目注入值明文查看");
         return Map.of("projectId", projectId, "env", env, "key", key, "value", value);
     }
 

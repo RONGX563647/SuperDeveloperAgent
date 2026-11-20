@@ -1,0 +1,90 @@
+﻿diff --git a/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectReadinessController.java b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectReadinessController.java
+index 85b02c2..6c42439 100644
+--- a/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectReadinessController.java
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectReadinessController.java
+@@ -62,6 +62,7 @@ public class ProjectReadinessController {
+     private final PipelineDefinitionInspector definitions;
+     private final RepoInspector repoInspector;
+     private final DockerfileTools dockerfileTools;
++    private final ProjectContextResolver contextResolver;
+     private final CurrentUser currentUser;
+     private final boolean legacyServerConfigured;
+ 
+@@ -75,6 +76,7 @@ public class ProjectReadinessController {
+                                       PipelineDefinitionInspector definitions,
+                                       RepoInspector repoInspector,
+                                       DockerfileTools dockerfileTools,
++                                      ProjectContextResolver contextResolver,
+                                       CurrentUser currentUser,
+                                       @Value("${agent.deploy.server.host:}") String legacyServerHost) {
+         this.repoLocator = repoLocator;
+@@ -87,6 +89,7 @@ public class ProjectReadinessController {
+         this.definitions = definitions;
+         this.repoInspector = repoInspector;
+         this.dockerfileTools = dockerfileTools;
++        this.contextResolver = contextResolver;
+         this.currentUser = currentUser;
+         this.legacyServerConfigured = legacyServerHost != null && !legacyServerHost.isBlank();
+     }
+@@ -159,7 +162,8 @@ public class ProjectReadinessController {
+         if (baseSha == null || baseSha.isBlank()) {
+             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "仓库没有可用提交：请先把代码提交一次再修复");
+         }
+-        ProjectContext ctx = new ProjectContext(id, target, userId, null, null);
++        // BUG-27 入口5收敛：环境校验统一走 resolver，不再自行 new ProjectContext
++        ProjectContext ctx = contextResolver.resolve(id, target, userId);
+         String report = dockerfileTools.ensure(baseSha, null, ctx);
+         if (report.startsWith("err:")) {
+             throw new RunException(ErrorCode.RUN_INVALID_INPUT, report.substring(4).trim());
+diff --git a/platform/agent-tools/src/main/java/top/rongx/agent/tools/ProjectTools.java b/platform/agent-tools/src/main/java/top/rongx/agent/tools/ProjectTools.java
+index 9b2d598..4e76128 100644
+--- a/platform/agent-tools/src/main/java/top/rongx/agent/tools/ProjectTools.java
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/ProjectTools.java
+@@ -2,10 +2,7 @@ package top.rongx.agent.tools;
+ 
+ import io.agentscope.core.tool.Tool;
+ import java.net.URI;
+-import java.util.ArrayList;
+-import java.util.LinkedHashMap;
+ import java.util.List;
+-import java.util.Map;
+ import top.rongx.agent.domain.port.ProjectRepository;
+ import top.rongx.agent.domain.project.Project;
+ import top.rongx.agent.domain.project.ProjectContext;
+@@ -55,7 +52,6 @@ public class ProjectTools {
+             return "当前项目没有配置环境。evidence: project:" + ctx.projectId();
+         }
+         StringBuilder out = new StringBuilder("envs:\n");
+-        Map<String, List<String>> byDir = new LinkedHashMap<>();
+         for (ProjectEnv e : envs) {
+             EffectiveEndpointResolver.Endpoint endpoint = endpoints.resolve(ctx.projectId(), e.env());
+             out.append("- ").append(e.env())
+@@ -65,24 +61,17 @@ public class ProjectTools {
+                     .append(endpoint.healthPath())
+                     .append("（来源：").append(endpoint.source()).append("）")
+                     .append("  composeDir=").append(e.composeDir() == null ? "未登记" : e.composeDir())
++                    .append("（仅登记，未参与部署：reserved）")
+                     .append('\n');
+             int registeredPort = portOf(e.appUrl());
+             if (registeredPort > 0 && registeredPort != endpoint.port()) {
+                 out.append("  warning: 登记地址端口 ").append(registeredPort)
+                         .append(" 与生效端口 ").append(endpoint.port())
+-                        .append(" 不一致，以 effective 为准\n");
+-            }
+-            if (e.composeDir() != null && !e.composeDir().isBlank()) {
+-                byDir.computeIfAbsent(e.composeDir(), k -> new ArrayList<>()).add(e.env());
++                        .append(" 不一致，真实端口以租约为准（当前 ")
++                        .append(endpoint.port()).append("），不要通过改登记地址来对齐\n");
+             }
+         }
+-        byDir.forEach((dir, names) -> {
+-            if (names.size() > 1) {
+-                out.append("warning: 环境 ").append(String.join("/", names))
+-                        .append(" 共用 composeDir=").append(dir)
+-                        .append("；若在同一宿主机部署会互相覆盖\n");
+-            }
+-        });
++        out.append("note: composeDir 只是登记信息，当前部署由流水线 deploy 段与容器命名决定，修改它不会改变部署落点\n");
+         out.append("evidence: project:").append(ctx.projectId());
+         return out.toString();
+     }

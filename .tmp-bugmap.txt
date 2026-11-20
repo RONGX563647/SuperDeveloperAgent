@@ -1,0 +1,140 @@
+﻿+++ b/platform/README.md
++++ b/platform/agent-domain/src/main/java/top/rongx/agent/domain/error/ErrorCode.java
++++ b/platform/agent-domain/src/main/java/top/rongx/agent/domain/policy/DangerousActionPolicy.java
++++ b/platform/agent-domain/src/main/java/top/rongx/agent/domain/policy/PolicyPort.java
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/AbstractActionRunner.java
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java
++        // 终态收尾后内存不持有条目：从 history 兜底（BUG-38）
++            // 终态运行被移出内存（BUG-38）：progress 用 history 摘要渲染一份终态视图，
++        // history 兜底：终态运行被移出内存后阶段列表仍可查（BUG-38）
++        // history 兜底：终态运行被移出内存后产物仍可查（BUG-38）
++            // history 兜底：meta 里有定义来源与触发者（BUG-38 后终态不驻内存）
++            // 终态运行不灌内存（BUG-38）：重启后堆占用与历史长度解耦，
++        // 终态已落盘：按 BUG-38 的回收路径把强制终态条目从内存热表移除。
++     * 内存热表条数上限（BUG-38 兜底）：超过即按 createdAt 淘汰最旧的终态条目。
++            // 避免 runs 随构建次数线性涨内存（BUG-38）。
++            // history 兜底：终态失败运行被移出内存后仍可重试（BUG-38）。
++            // 终态收尾：从内存热表移除（BUG-38，与 execute 的 finally 一致）
++            // 过渡期方案（BUG-32）：多服务回滚能力未实现，但不能复用"版本缺失"码误导
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerActionRunner.java
++            // 网络先就绪（BUG-35）：配置了自定义网络（build-net）但不存在时，
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerDeployer.java
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java
++     * prepare 阶段的网络就绪保证（BUG-35）：
++     * <p>修复建议动态生成（BUG-35）：不再硬编码推荐 {@code build-net}——
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/LocalDevHostDeployer.java
++            // BUG-40：写入 JSON 身份记录（pid + startInstant + token + 命令行摘要），
++            // BUG-43：双账本对账。租约表里还挂着 pid（设置页链路或历史残留）时，
++    /** 按租约表停止（BUG-43：与 pid 文件账本互认，租约与 pid 文件不一致时以租约为准清理双方）。 */
++     * 登记本机服务租约（BUG-43：覆盖前探活旧 pid）。
++            // BUG-40 收益点 6：结束失败要说话，"停不掉"不能再静默吞掉
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/ProcessExecutor.java
++++ b/platform/agent-executor/src/main/java/top/rongx/agent/executor/RunHistoryStore.java
++++ b/platform/agent-executor/src/test/java/top/rongx/agent/executor/PipelineWatchdogTest.java
++        // BUG-38：强制终态条目已从内存移出，progress 走 history 兜底仍可查询（终态视图）
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/auth/UserStore.java
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/config/GovernanceCleanupJob.java
++ * 治理数据保留策略：确认令牌过期即删；变更单/运行账本按配置保留（BUG-37）。
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/gitissue/GitIssueAgentWaker.java
++ * <p>显式指令判定（BUG-50）：命令词必须出现在显式指令位——行首（可带 {@code /} 前缀）、
++ * <p>角色（BUG-48）：readOnly 按 {@code issue.userId()} 的真实角色推导
++        // BUG-27：环境口径不按 findEnvs 顺序猜测。任务本身没有环境选择，评论区触发统一按 test，
++        // BUG-48：按 issue 用户的真实角色推导 readOnly（未知用户 fail-closed = 只读）
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChangeController.java
++            // BUG-37 审计落库：谁应用了哪个变更（变更单 24h 清理后仍可追溯）
++            // BUG-37 审计落库：执行失败同样留痕（result=FAILED）
++                // BUG-37 审计落库：被拒的确认也要留痕
++        // BUG-37 审计落库：谁确认了哪个变更（人工闸门的持久记录，规约 §4.10）
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ConfigController.java
++        // BUG-27 入口5收敛：环境校验（环境必须属于项目）统一走 resolver，不再自行 new ProjectContext
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/EnvironmentController.java
++        // BUG-37 审计落库：明文查看要能事后追溯（日志会被轮转覆盖）
++        // BUG-37 审计落库：明文查看要能事后追溯（日志会被轮转覆盖）
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectContextResolver.java
++++ b/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ProjectReadinessController.java
++        // BUG-27 入口5收敛：环境校验统一走 resolver，不再自行 new ProjectContext
++++ b/platform/agent-gateway/src/main/resources/application.yml
++  # 治理数据保留期（BUG-37）：与审计表 audit_event 的追溯窗口对齐。
++++ b/platform/agent-gateway/src/test/java/top/rongx/agent/gateway/PipelineAcceptanceTest.java
++        // BUG-39：测试动作失败细分到 E-102（TEST_FAILED），不再与编译失败 E-101 混用
++++ b/platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/ProjectContextResolverTest.java
++++ b/platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/ProjectReadinessControllerTest.java
++    /** BUG-27：控制器环境校验收敛到 resolver；测试桩不做用户校验，只校验 env 属于项目。 */
++++ b/platform/agent-governance/src/main/java/top/rongx/agent/governance/EnvPolicyService.java
++++ b/platform/agent-governance/src/test/java/top/rongx/agent/governance/DangerousActionPolicyTest.java
++    // ================================================================ BUG-51 回归
++    /** BUG-51 绕过样例：每个等价写法都必须命中（归一化后匹配）。 */
++                "rm -r -f 必须命中（BUG-51 绕过样例 1）");
++                "git push --force 必须命中（BUG-51 绕过样例 2）");
++                "find -delete 必须命中（BUG-51 绕过样例 3）");
++                "DROP  TABLE（多空格）必须命中（BUG-51 绕过样例 4）");
++++ b/platform/agent-governance/src/test/java/top/rongx/agent/governance/EnvPolicyServiceTest.java
++    // ================================================================ BUG-52
++++ b/platform/agent-infra/src/main/java/top/rongx/agent/infra/env/DbEnvironmentStore.java
++        // BUG-43：覆盖 RUNNING 租约（pid 变化）要可见——并发实例/静默覆盖是排障黑洞
++++ b/platform/agent-infra/src/main/java/top/rongx/agent/infra/env/LocalProcessServiceRuntime.java
++        // BUG-42/40：注入唯一身份标记，写入部署目录的 JSON 身份记录（双账本互认）
++            // BUG-43：设置页链路也写 JSON 身份记录到部署目录，流水线停止端可凭它识别
++            // BUG-43：租约没有 pid，但部署目录里可能有流水线链路的 pid 身份记录 → 顺手对账
++        // pid 复用/跨项目防护：身份对不上说明不是本项目进程，绝不误杀（BUG-42）
++        // BUG-43：停掉租约进程后清掉部署目录的 pid 身份记录，两本账保持一致
++     * BUG-43：租约没有 pid 时探测部署目录 pid 身份记录并按身份终止（双账本对账）。
++        // pid 死了或身份不符：不再报假绿（BUG-40 收益点 5）
++     * pid 是否仍是本项目（租约）对应的那个进程（BUG-42：身份校验，防跨项目误杀）。
++    /** 端口子串只允许 {@code --server.port=N} / {@code -Dserver.port=N} 形式（BUG-42）。 */
++++ b/platform/agent-infra/src/main/java/top/rongx/agent/infra/persistence/IntakeProjectStore.java
++        // BUG-45：composeDir 目前只登记、不参与部署落点，但同一项目内填成同一个目录
++     * <p>BUG-45：{@code composeDir} 只登记、不参与部署落点（部署落点由流水线 deploy 段与
++++ b/platform/agent-infra/src/test/java/top/rongx/agent/infra/persistence/IntakeProjectStoreTest.java
++++ b/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/ConversationManager.java
++        // BUG-27 入口3收敛：同一 patch 同时改 env+worktree 时，worktree 必须按**新** env 校验，
++        // BUG-27 入口2收敛：未指定环境时不再继承调度会话的历史 env（那常常是上次派发的
++++ b/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchScheduler.java
++     * <p>用它代替"以 err: 开头就当失败"的文本猜测（BUG-29）。口径收敛到
++                    // 与首次派发同一口径（BUG-29）：send 的契约是「返回 runId 或抛异常」，
++++ b/platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/ConversationManagerTest.java
++    @DisplayName("调度会话按用户唯一；新建会话不传 env 时落默认 test（BUG-27：不再继承调度会话历史 env）")
++                "BUG-27：新建会话不传 env 时不得继承调度会话历史 env");
++    @DisplayName("BUG-27：显式传 env 的新会话仍按传入环境创建")
++    @DisplayName("BUG-27：同一 patch 同时改 env+worktree 时，worktree 按新 env 校验且保存后 env 生效")
++    @DisplayName("BUG-27：patch 里的未知环境被拒绝（含改 env+worktree 的组合）")
++++ b/platform/agent-runtime/src/test/java/top/rongx/agent/runtime/workspace/WorkspaceDispatchSchedulerTest.java
++    @DisplayName("send 返回非 run- 形状字符串：节点直接失败、错误带原文、不重试（BUG-29）")
++        /** 重试 send 需要返回的坏返回值队列（BUG-29 回归用例）。 */
++            //（BUG-29 回归用例），坏返回值不计入 sent
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeQueryTools.java
++ * <p><b>历史遗留说明（BUG-28）</b>：本类不再声明 {@code @Tool}——
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/ChangeTools.java
++    // change_status 不在这里声明（BUG-28）：唯一实现在 ChangeStatusTool，
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java
++        // 统一环境策略门（BUG-52）：prod L2=DENY 直接拒绝；策略异常 fail-closed
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/EditorTools.java
++        // 统一环境策略门（BUG-52）：prod L2=DENY 直接拒绝；test L2=ALLOW 放行；
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/EffectiveEndpointResolver.java
++ * <p>历史问题（BUG-44）：本口径只读 {@code ci/pipeline.yml} 的期望端口，从不读部署
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/EnvCommandTools.java
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/PatchTools.java
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/ProjectTools.java
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/SecretRedactor.java
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/ToolCatalog.java
++        // （BUG-28：与 agentToolkit 复用同一个 ChangeStatusTool bean，全局只有一份实现）
++        // 选项卡片：只读、无副作用（BUG-30）——AskUserMiddleware 以 ask_user 为拦截锚点，
++++ b/platform/agent-tools/src/main/java/top/rongx/agent/tools/WorkspaceSupervisorTools.java
++            // BUG-29：send 契约是「返回 runId 或抛异常」，不再按 "err:" 前缀猜错误；
++            // BUG-29：send 契约是「返回 runId 或抛异常」，不再按 "err:" 前缀猜错误
++++ b/platform/agent-tools/src/test/java/top/rongx/agent/tools/ChangeStatusToolTest.java
++    @DisplayName("跨环境必须拒绝且不回显 status（BUG-28 唯一实现的验收口径）")
++                "change_status 的 @Tool 声明必须全局唯一（BUG-28）");
++++ b/platform/agent-tools/src/test/java/top/rongx/agent/tools/EditorToolsTest.java
++    @DisplayName("BUG-52：workspace_commit 走统一环境策略门（prod DENY / test ALLOW）")
++    @DisplayName("BUG-52：dev 环境 workspace_commit 自动放行（L2 ALLOW）")
++++ b/platform/agent-tools/src/test/java/top/rongx/agent/tools/EnvCommandToolsTest.java
++    @DisplayName("BUG-52：env_var_set 走统一环境策略门（prod DENY / test ALLOW）")
++++ b/platform/agent-tools/src/test/java/top/rongx/agent/tools/PatchToolsTest.java
++    @DisplayName("BUG-52：test 环境策略 CONFIRM 时，没有确认单则拒绝且不进补丁器")
++++ b/platform/agent-tools/src/test/java/top/rongx/agent/tools/SecretRedactorTest.java
++    // ===== BUG-47 补充用例 =====
++++ b/platform/spec-checks/src/test/java/top/rongx/agent/arch/ToolSchemaBudgetTest.java
++    @DisplayName("@Tool name 全局唯一：重名会导致装配顺序漂移与越权口径静默丢失（BUG-28）")
++++ b/platform/web/src/api/chat.ts
++ * 从文本里识别变更单号——与后端 ChangeWire 同一口径（BUG-31）。

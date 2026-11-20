@@ -29,8 +29,10 @@ import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.run.StageStatus;
+import top.rongx.agent.domain.tool.ToolLevel;
 import top.rongx.agent.domain.error.DeployException;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.domain.policy.PolicyPort;
 
 /**
  * 部署 Agent 的工具：**专用于"把某个环境跑通并固化"**。
@@ -54,17 +56,19 @@ public class DeployTools {
     private final EnvBindingPort bindings;
     private final PipelineDefStore defStore;
     private final ProjectRepoLocator locator;
+    private final PolicyPort policy;
     /** HOST 部署状态根，与 {@code PipelineConfig} 里 HostDeployer 的 deployRoot 保持一致。 */
     private final Path hostDeployRoot;
 
     public DeployTools(RecipeStore recipes, PipelineEngine engine, EnvBindingPort bindings,
-                       PipelineDefStore defStore, ProjectRepoLocator locator,
+                       PipelineDefStore defStore, ProjectRepoLocator locator, PolicyPort policy,
                        @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.recipes = recipes;
         this.engine = engine;
         this.bindings = bindings;
         this.defStore = defStore;
         this.locator = locator;
+        this.policy = policy;
         this.hostDeployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("deploy");
     }
@@ -110,6 +114,7 @@ public class DeployTools {
                                      String version,
                                      ProjectContext ctx) {
         String target = normalize(env);
+        policy.requireAllowed(ctx, ToolLevel.L2_EXECUTE_ISOLATED, "deploy_host_stop", null);
         if ("prod".equals(target)) {
             return "err: 生产环境不允许停止本机进程";
         }
@@ -199,6 +204,7 @@ public class DeployTools {
                                           description = "单容器持久化路径（例如 /app/data）；传空字符串 = 移除卷挂载")
                                   String volume,
                                   ProjectContext ctx) {
+        policy.requireAllowed(ctx, ToolLevel.L2_EXECUTE_ISOLATED, "ci_configure_deploy", null);
         if (ctx.isProduction()) {
             return "err: 生产环境不允许修改流水线配置；请先在 dev/test 验证";
         }
@@ -368,8 +374,13 @@ public class DeployTools {
                       @ToolParam(name = "build_run_id", required = false,
                               description = "复用某次已成功运行的产物（commit+version 必须一致），跳过构建")
                       String buildRunId,
+                      @ToolParam(name = "confirmed_change_id", required = false,
+                              description = "已确认的变更单号（chg-...）；目标环境策略为 CONFIRM 时必填")
+                      String confirmedChangeId,
                       ProjectContext ctx) {
         String target = normalize(env);
+        // 统一环境策略门（BUG-52）：prod L2=DENY 直接拒绝；策略异常 fail-closed
+        policy.requireAllowed(ctx, ToolLevel.L2_EXECUTE_ISOLATED, "deploy_run", confirmedChangeId);
         if ("prod".equals(target)) {
             return "err: prod 不能用工具触发：先在测试环境跑通并固化，再到部署面板点「确认发布」";
         }
@@ -498,6 +509,7 @@ public class DeployTools {
                                      description = "部署端口（缺省取流水线定义）") String port,
                              ProjectContext ctx) {
         String targetEnv = normalize(env);
+        policy.requireAllowed(ctx, ToolLevel.L2_EXECUTE_ISOLATED, "deploy_save_recipe", null);
         if ("prod".equals(targetEnv)) {
             return "err: 不要把生产环境当探索目标；测试环境跑通后直接 replay 到生产即可";
         }

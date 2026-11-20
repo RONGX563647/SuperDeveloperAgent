@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.governance.EnvPolicyService;
 
 /**
  * 环境绑定草案：变量齐全时平台自动确认（不再要求人工点一张无事可做的卡），
@@ -55,7 +56,23 @@ class EnvCommandToolsTest {
     }
 
     private static EnvCommandTools tools(EnvBindingPort bindings) {
-        return new EnvCommandTools(bindings, null, null);
+        return new EnvCommandTools(bindings, null, null, new EnvPolicyService());
+    }
+
+    @Test
+    @DisplayName("BUG-52：env_var_set 走统一环境策略门（prod DENY / test ALLOW）")
+    void setVarGoesThroughEnvPolicyGate() {
+        FakeBindings bindings = new FakeBindings(READY_MAPPING, true);
+        EnvCommandTools commandTools = new EnvCommandTools(bindings, null, null,
+                new EnvPolicyService());
+
+        // test 环境 L2=ALLOW：正常放行（envStore=null 会在写入处 NPE，但策略门必须先过——
+        // 用 prod 的拒绝来验证门存在）
+        top.rongx.agent.domain.project.ProjectContext prod =
+                new top.rongx.agent.domain.project.ProjectContext("P", "prod", "u", "repo", null, false);
+        org.junit.jupiter.api.Assertions.assertThrows(
+                top.rongx.agent.domain.policy.PolicyDeniedException.class,
+                () -> commandTools.setVar("prod", "SERVER_PORT", "8080", null, null, prod));
     }
 
     @Test

@@ -13,8 +13,14 @@ package top.rongx.agent.domain.error;
  */
 public enum ErrorCode {
 
-    /** 构建/执行失败（进程非零退出）。 */
+    /** 构建/执行失败（进程非零退出，真正的编译动作）。 */
     COMPILE_FAILED("E-101", ErrorKind.INPUT),
+    /** 测试未通过（backend_test / frontend_test 断言失败）。 */
+    TEST_FAILED("E-102", ErrorKind.INPUT),
+    /** 镜像构建失败（docker build / image_package 非零退出）。 */
+    IMAGE_BUILD_FAILED("E-103", ErrorKind.INPUT),
+    /** 脚本/任意非 mvn、pnpm、docker build 命令非零退出。 */
+    SCRIPT_FAILED("E-104", ErrorKind.INPUT),
     /** 构建阶段输入非法。 */
     BUILD_INVALID_INPUT("E-190", ErrorKind.INPUT),
     /** 构建阶段状态冲突。 */
@@ -77,6 +83,8 @@ public enum ErrorCode {
     DEPLOY_SECTION_MISSING("E-506", ErrorKind.INTERNAL),
     /** 缺少可回滚的历史版本。 */
     ROLLBACK_VERSION_MISSING("E-507", ErrorKind.INTERNAL),
+    /** 部署形态声明的能力当前引擎未实现（例如多服务回滚）：不要与"版本缺失"混用。 */
+    CAPABILITY_UNSUPPORTED("E-510", ErrorKind.INTERNAL),
     /** 部署定义与默认分支不一致。 */
     PIPELINE_DEFINITION_UNMERGED("E-508", ErrorKind.INTERNAL),
     /** 缺少 deploy.env-required 声明的必填变量。 */

@@ -22,6 +22,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -1421,7 +1422,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         runs.put(runId, state);
         history.save(state.snapshot());
         recordLedger(state);
-        scheduler.submit(projectId, env, () -> workers.submit(() -> execute(state)));
+        java.util.concurrent.Future<?> future =
+                workers.submit(() -> execute(state));
+        state.executionFuture = future;
+        scheduler.submit(projectId, env, () -> { });
         return runId;
     }
 
@@ -1455,7 +1459,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     @Override
     public StageStatus status(String runId) {
         RunState s = runs.get(runId);
-        return s == null ? StageStatus.PENDING : s.status;
+        if (s != null) {
+            return s.status;
+        }
+        // 终态收尾后内存不持有条目：从 history 兜底（BUG-38）
+        return history.list().stream()
+                .filter(h -> h.runId().equals(runId))
+                .findFirst().map(RunSnapshot::status).orElse(StageStatus.PENDING);
     }
 
     /** 运行中阶段进度：供工作台渲染「当前阶段 / 总阶段」与运行中占位。 */
@@ -1463,7 +1473,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public PipelineEngine.RunProgress progress(String runId) {
         RunState s = runs.get(runId);
         if (s == null) {
-            return null;
+            // 终态运行被移出内存（BUG-38）：progress 用 history 摘要渲染一份终态视图，
+            // 前端轮询在收尾瞬间不会把"已结束"误判成"消失了"。
+            return history.summary(runId)
+                    .map(h -> new PipelineEngine.RunProgress(null, h.stageCount(), h.stageCount(),
+                            h.durationMs(), 0, false, false))
+                    .orElse(null);
         }
         long now = System.currentTimeMillis();
         return new PipelineEngine.RunProgress(s.currentStageId, s.stageTotal, s.stages.size(),
@@ -1487,19 +1502,38 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     /** 该 runId 是否真实存在（用于把"不存在"与"排队中"区分开）。 */
     public boolean hasRun(String runId) {
-        return runId != null && runs.containsKey(runId);
+        if (runId == null) {
+            return false;
+        }
+        return runs.containsKey(runId) || history.summary(runId).isPresent();
     }
 
     @Override
     public List<StageResult> stages(String runId) {
         RunState s = runs.get(runId);
-        return s == null ? List.of() : List.copyOf(s.stages);
+        if (s != null) {
+            return List.copyOf(s.stages);
+        }
+        // history 兜底：终态运行被移出内存后阶段列表仍可查（BUG-38）
+        return history.list().stream()
+                .filter(h -> h.runId().equals(runId))
+                .findFirst().map(RunSnapshot::stages).orElse(List.of());
     }
 
     @Override
     public void cancel(String runId) {
         RunState s = runs.get(runId);
-        if (s != null && !s.status.isTerminal()) {
+        if (s == null) {
+            // 已不在内存（终态被移出）：按 history 状态判断——已终态直接返回"已结束"
+            boolean terminal = history.list().stream()
+                    .filter(h -> h.runId().equals(runId))
+                    .findFirst().map(h -> h.status().isTerminal()).orElse(false);
+            if (!terminal) {
+                log.warn("cancel 目标运行不在内存且无历史状态 run={}", runId);
+            }
+            return;
+        }
+        if (!s.status.isTerminal()) {
             s.cancelled = true;
             s.cancelRequestedAt = System.currentTimeMillis();
             // 立即给出可见反馈；真正的终止由各阻塞点的 200ms 取消检查完成，
@@ -1512,7 +1546,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     @Override
     public List<ArtifactRef> artifacts(String runId) {
         RunState s = runs.get(runId);
-        return s == null ? List.of() : List.copyOf(s.artifacts);
+        if (s != null) {
+            return List.copyOf(s.artifacts);
+        }
+        // history 兜底：终态运行被移出内存后产物仍可查（BUG-38）
+        return history.list().stream()
+                .filter(h -> h.runId().equals(runId))
+                .findFirst().map(RunSnapshot::artifacts).orElse(List.of());
     }
 
     /**
@@ -1845,7 +1885,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public RunMeta runMeta(String runId) {
         RunState s = runs.get(runId);
         if (s == null) {
-            return null;
+            // history 兜底：meta 里有定义来源与触发者（BUG-38 后终态不驻内存）
+            return history.list().stream()
+                    .filter(h -> h.runId().equals(runId))
+                    .findFirst()
+                    .map(h -> new RunMeta(null, null, null, h.definitionSource(), h.definitionNote()))
+                    .orElse(null);
         }
         return new RunMeta(s.actor, s.bindingId, s.confirmedBy,
                 s.definitionSource == null ? null : s.definitionSource.name(), s.definitionNote);
@@ -1854,6 +1899,24 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private void restoreHistory() {
         for (RunHistoryStore.RunSnapshot snap : history.list()) {
             if (runs.containsKey(snap.runId())) {
+                continue;
+            }
+            // 终态运行不灌内存（BUG-38）：重启后堆占用与历史长度解耦，
+            // 读路径走 history 兜底。只恢复"进行中"的幽灵任务，
+            // 把它们标记为 CANCELLED 后短暂持有，供看护/查询收敛。
+            if (snap.status().isTerminal()) {
+                // 升级兼容：账本里没有的旧版本仍要导入一次，保证回滚锚点/按版本部署不丢数据
+                if (snap.status() == StageStatus.SUCCEEDED) {
+                    snap.artifacts().stream()
+                            .filter(a -> "image".equals(a.kind()))
+                            .filter(a -> imageVersions.find(snap.projectId(), snap.env(), a.ref()).isEmpty())
+                            .forEach(a -> imageVersions.upsert(snap.projectId(), snap.env(),
+                                    new ImageVersion(
+                                            a.ref(), a.digest(), a.sizeBytes(),
+                                            a.meta().getOrDefault("version", ""),
+                                            snap.gitSha(), snap.runId(), "SUCCEEDED",
+                                            snap.createdAt(), snap.createdAt(), "history", snap.seq())));
+                }
                 continue;
             }
             RunState restored = new RunState(snap.runId(), snap.projectId(), snap.env(),
@@ -1882,18 +1945,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 history.save(restored.snapshot());
             }
             runs.put(snap.runId(), restored);
-            if (restored.status == StageStatus.SUCCEEDED) {
-                // 升级兼容：账本里没有的旧版本从历史导入一次，保证回滚锚点/按版本部署不丢数据
-                snap.artifacts().stream()
-                        .filter(a -> "image".equals(a.kind()))
-                        .filter(a -> imageVersions.find(snap.projectId(), snap.env(), a.ref()).isEmpty())
-                        .forEach(a -> imageVersions.upsert(snap.projectId(), snap.env(),
-                                new top.rongx.agent.domain.port.PipelineEngine.ImageVersion(
-                                        a.ref(), a.digest(), a.sizeBytes(),
-                                        a.meta().getOrDefault("version", ""),
-                                        snap.gitSha(), snap.runId(), "SUCCEEDED",
-                                        snap.createdAt(), snap.createdAt(), "history", snap.seq())));
-            }
         }
     }
 
@@ -1960,6 +2011,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
     }
 
+    /** 强制终态后等待执行线程退出的有界窗口；超时也放行（记录日志），但不无限卡看护线程。 */
+    private static final long FORCE_TERMINATE_JOIN_MS = 10_000L;
+
     private void forceTerminate(RunState s, String reason) {
         synchronized (s) {
             if (s.status.isTerminal()) {
@@ -1972,12 +2026,68 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 s.log.append("[watchdog] ").append(reason).append('\n');
             }
             s.stages.add(StageResult.failed("watchdog", 124, ErrorCode.TIMEOUT.code(), reason, 0));
+            // 真正中断执行线程（虚拟线程对 interrupt 响应良好），
+            // 而不是只改状态就放行调度闸门——否则旧执行体仍在跑 docker/占端口。
+            java.util.concurrent.Future<?> future = s.executionFuture;
+            if (future != null) {
+                future.cancel(true);
+            }
             history.save(s.snapshot());
             recordLedger(s);
-            // 部署槽不在这里释放：公平锁由持锁线程在自己的收尾里释放（releaseDeploySlot）。
-            // 强杀线程不持锁，直接解锁会抛 IllegalMonitorStateException；持锁线程被强杀后
-            // 会在自己的 finally 感知 forceTerminated 并释放。
         }
+        // 有界等待执行线程退出（线程是否真正结束由 execute 的 finally 发出信号；
+        // Future.cancel 会立刻把 Future 置为 CANCELLED，get 不再代表线程状态）：
+        // 确认退出后才算"已结束"；超时也继续（不卡看护），
+        // 但必须明说"线程未确认退出"，而不是让日志宣称"已强制结束"却仍在跑。
+        boolean exited = s.executionFuture == null;
+        if (s.executionFuture != null) {
+            try {
+                exited = s.executionDone.await(FORCE_TERMINATE_JOIN_MS, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                exited = false;
+            }
+        }
+        if (!exited) {
+            synchronized (s.log) {
+                s.log.append("[watchdog] ⚠ 执行线程在 ").append(FORCE_TERMINATE_JOIN_MS / 1000)
+                        .append("s 内未确认退出：同环境的下一次部署可能与之竞争，请先确认旧容器/端口已释放\n");
+            }
+            log.warn("forceTerminate 后执行线程未退出 run={} project={} env={}",
+                    s.runId, s.projectId, s.env);
+        }
+        // 终态已落盘：按 BUG-38 的回收路径把强制终态条目从内存热表移除。
+        evictIfTerminal(s);
+        enforceHotLimit();
+        // 部署槽不在这里释放：公平锁由持锁线程在自己的收尾里释放（releaseDeploySlot）。
+        // 强杀线程不持锁，直接解锁会抛 IllegalMonitorStateException；持锁线程被强杀后
+        // 会在自己的 finally 感知 forceTerminated 并释放。
+    }
+
+    /** 终态收尾统一出口：把终态运行从内存热表移除（history/DB 为权威）。 */
+    private void evictIfTerminal(RunState state) {
+        // history 关闭时没有权威存储兜底（单测/临时装配），条目必须留在内存，
+        // 否则 status()/stages() 会把已结束的运行读成 PENDING。
+        if (state.status.isTerminal() && history.isEnabled()) {
+            runs.remove(state.runId);
+        }
+    }
+
+    /**
+     * 内存热表条数上限（BUG-38 兜底）：超过即按 createdAt 淘汰最旧的终态条目。
+     * 正常路径下终态收尾就会移除，这里只防漏网（如崩溃后恢复的残留）。
+     */
+    private static final int RUNS_HOT_LIMIT = 64;
+
+    private void enforceHotLimit() {
+        if (runs.size() <= RUNS_HOT_LIMIT) {
+            return;
+        }
+        runs.values().stream()
+                .filter(s -> s.status.isTerminal())
+                .sorted(java.util.Comparator.comparingLong(s -> s.createdAt))
+                .limit(runs.size() - RUNS_HOT_LIMIT)
+                .forEach(s -> runs.remove(s.runId));
     }
 
     private void execute(RunState state) {
@@ -2011,6 +2121,11 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             // 部署槽无条件释放（幂等；未持有时是无操作）：
             // 成功、失败、取消、被强杀都走到这里——持有者本人释放，公平锁语义安全。
             releaseDeploySlot(state);
+            // 终态收尾：从内存热表移除（history 已先落盘，读路径会兜底），
+            // 避免 runs 随构建次数线性涨内存（BUG-38）。
+            evictIfTerminal(state);
+            enforceHotLimit();
+            state.executionDone.countDown();
         }
     }
 
@@ -2808,6 +2923,33 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     public String retryStage(String runId, String stageId) {
         RunState state = runs.get(runId);
         if (state == null) {
+            // history 兜底：终态失败运行被移出内存后仍可重试（BUG-38）。
+            // keptRunDir 在历史快照里没有——恢复的条目 keptRunDir 为 null，
+            // 走原路径校验会得到"构建现场已清理"的明确提示，整条重跑不受影响。
+            state = history.list().stream()
+                    .filter(h -> h.runId().equals(runId))
+                    .findFirst().map(snap -> {
+                        RunState restored = new RunState(snap.runId(), snap.projectId(), snap.env(),
+                                snap.pipelineId(), snap.gitSha());
+                        restored.status = snap.status();
+                        restored.seq = snap.seq();
+                        restored.stages.addAll(snap.stages());
+                        restored.artifacts.addAll(snap.artifacts());
+                        restored.log.append(snap.log());
+                        restored.deployVersion = snap.version();
+                        if (snap.definitionSource() != null) {
+                            try {
+                                restored.definitionSource = PipelineDefinitionResolver.Source
+                                        .valueOf(snap.definitionSource());
+                            } catch (IllegalArgumentException ignored) {
+                                // 未知来源（旧文件或枚举演进）：保持 null
+                            }
+                        }
+                        restored.definitionNote = snap.definitionNote();
+                        return restored;
+                    }).orElse(null);
+        }
+        if (state == null) {
             throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "运行不存在：" + runId);
         }
         if (!state.status.isTerminal()) {
@@ -2825,7 +2967,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.status = StageStatus.RUNNING;
             state.cancelled = false;
             history.save(state.snapshot());
-            scheduler.submit(state.projectId, state.env, () -> workers.submit(() -> execute(state)));
+            RunState finalState = state;
+            java.util.concurrent.Future<?> future = workers.submit(() -> execute(finalState));
+            state.executionFuture = future;
+            runs.putIfAbsent(runId, state);
             return runId;
         }
         PipelineDefinition definition = state.definition;
@@ -2860,9 +3005,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.cancelled = false;
         state.log.append("[retry] 从阶段 ").append(stageId).append(" 继续（复用构建现场）\n");
         history.save(state.snapshot());
+        RunState retryState = state;
         int from = idx;
-        scheduler.submit(state.projectId, state.env, () -> workers.submit(
-                () -> executeRetry(state, definition, runDir, vars, from)));
+        java.util.concurrent.Future<?> future = workers.submit(
+                () -> executeRetry(retryState, definition, runDir, vars, from));
+        state.executionFuture = future;
+        runs.putIfAbsent(runId, state);
         return runId;
     }
 
@@ -2893,6 +3041,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             history.save(state.snapshot());
             // 部署槽无条件释放（幂等；未持有时是无操作）——持有者本人释放，公平锁语义安全。
             releaseDeploySlot(state);
+            // 终态收尾：从内存热表移除（BUG-38，与 execute 的 finally 一致）
+            evictIfTerminal(state);
+            enforceHotLimit();
         }
     }
 
@@ -4481,8 +4632,24 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                                      top.rongx.agent.domain.env.EnvTemplate template,
                                      boolean rollback, String image) {
         if (rollback) {
-            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.ROLLBACK_VERSION_MISSING.code(),
-                    "多服务部署暂不支持回滚：请重新发布或手动回退镜像", elapsed(start)));
+            // 过渡期方案（BUG-32）：多服务回滚能力未实现，但不能复用"版本缺失"码误导
+            // 运维去翻镜像仓库。报独立的能力缺失码，并给出当前环境下所有已部署镜像
+            // （引擎已有 deployImages 账本）作为可回退清单。
+            List<ImageVersion> deployed = imageVersions.list(state.projectId, state.env);
+            String fallbackList = deployed.isEmpty()
+                    ? "（当前环境没有已登记的镜像版本）"
+                    : deployed.stream()
+                            .map(v -> v.tag() + (v.version() == null || v.version().isBlank()
+                                    ? "" : "（版本 " + v.version() + "）"))
+                            .collect(Collectors.joining("、"));
+            String summary = "多服务部署暂不支持回滚（能力未实现，不是版本缺失）："
+                    + "请重新发布目标版本，或手动回退：docker pull <repo>:<tag> 后在 deploy 段为"
+                    + "各服务指定目标 tag 再触发 deployTarget。可回退镜像清单："
+                    + fallbackList;
+            state.log.append("[rollback] ").append(ErrorCode.CAPABILITY_UNSUPPORTED.code())
+                    .append(" 多服务回滚未实现；可回退镜像：").append(fallbackList).append('\n');
+            state.stages.add(StageResult.failed(stageId, 1, ErrorCode.CAPABILITY_UNSUPPORTED.code(),
+                    summary, elapsed(start)));
             return false;
         }
         String namespace = template == null ? "agent-" + state.env : template.namespace();
@@ -5355,6 +5522,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         volatile long maxRunMillis = WATCHDOG_GRACE_MS;
         /** 看护已强制置终态：执行线程不得再覆盖状态或重复 complete。 */
         volatile boolean forceTerminated;
+        /**
+         * 执行线程句柄（workers.submit 返回的 Future）：
+         * forceTerminate 用它 cancel(true) 真正中断执行线程，
+         * 并在线程退出（有界等待）后才算"已结束"，避免调度闸门被旧执行体击穿。
+         */
+        volatile java.util.concurrent.Future<?> executionFuture;
+        /**
+         * 执行线程退出信号：forceTerminate 的 cancel(true) 会立刻把 Future 置为
+         * CANCELLED（get 不再等待），线程是否真正退出只能由 execute 的 finally 发出；
+         * forceTerminate 据此做有界等待后才放行。
+         */
+        final CountDownLatch executionDone = new CountDownLatch(1);
         volatile String currentStageId;
         volatile int currentStageIndex;
         volatile int stageTotal;

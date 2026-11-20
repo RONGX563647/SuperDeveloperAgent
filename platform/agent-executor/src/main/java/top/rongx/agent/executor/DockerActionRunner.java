@@ -56,6 +56,9 @@ public class DockerActionRunner extends AbstractActionRunner {
             long prepareStart = System.nanoTime();
             // 隔离参数先落日志：出问题时第一句话永远是「这次到底隔离了什么」
             sandbox.logIsolation(live);
+            // 网络先就绪（BUG-35）：配置了自定义网络（build-net）但不存在时，
+            // 在跑构建前就明确报"网络未就绪"，而不是等 docker run 报 network not found。
+            sandbox.prepareNetwork(cancelled, live);
             // 先确认工具链镜像在本机，再动缓存卷：缺镜像是配置问题，应在数秒内明确报出
             sandbox.ensureImageReady(cancelled, live);
             // tag 会被重新 pull 覆盖，同名 tag 在不同时间可能对应不同镜像；

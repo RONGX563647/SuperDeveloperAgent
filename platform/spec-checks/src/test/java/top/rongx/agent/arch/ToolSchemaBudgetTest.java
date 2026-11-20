@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,6 +35,11 @@ class ToolSchemaBudgetTest {
 
     private static final Pattern TOOL_DESCRIPTION = Pattern.compile(
             "@Tool\\(name\\s*=\\s*\"([A-Za-z0-9_]+)\",\\s*description\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+
+    /** 所有 @Tool 声明（不限带 description 的形态），用于重名检查。
+     *  锚定行首：Javadoc 里的 {@code @Tool(...)} 文本引用不能算声明。 */
+    private static final Pattern TOOL_NAME = Pattern.compile(
+            "(?m)^\\s*@Tool\\(\\s*name\\s*=\\s*\"([A-Za-z0-9_]+)\"");
 
     @Test
     @DisplayName("每个 @Tool description 是 ≤40 字符的英文一句话")
@@ -82,6 +88,38 @@ class ToolSchemaBudgetTest {
         assertFalse(index.visible("ci_run", Set.of()));
         assertTrue(index.visible("conversation_list", Set.of("dispatch")));
         assertTrue(index.visible("ci_run", Set.of("ci")));
+    }
+
+    @Test
+    @DisplayName("@Tool name 全局唯一：重名会导致装配顺序漂移与越权口径静默丢失（BUG-28）")
+    void toolNamesAreGloballyUnique() throws IOException {
+        // 用 List 收集而不是 Set：重名会被 LinkedHashSet 静默折叠，检查就形同虚设
+        record Declaration(String name, String file) {
+        }
+        List<Declaration> all = new ArrayList<>();
+        for (Path file : toolSources()) {
+            String source = Files.readString(file);
+            Matcher matcher = TOOL_NAME.matcher(source);
+            while (matcher.find()) {
+                all.add(new Declaration(matcher.group(1), file.toString()));
+            }
+        }
+        List<String> names = all.stream().map(Declaration::name).toList();
+        Set<String> distinct = new LinkedHashSet<>(names);
+        if (distinct.size() != names.size()) {
+            Map<String, List<String>> duplicates = new java.util.LinkedHashMap<>();
+            for (Declaration d : all) {
+                duplicates.computeIfAbsent(d.name(), k -> new ArrayList<>()).add(d.file());
+            }
+            String detail = duplicates.entrySet().stream()
+                    .filter(e -> e.getValue().size() > 1)
+                    .map(e -> e.getKey() + " -> " + e.getValue())
+                    .reduce((a, b) -> a + "; " + b)
+                    .orElse("unknown");
+            throw new AssertionError(
+                    "@Tool name 必须全局唯一（冲突时同名工具谁生效随装配顺序漂移）：\n" + detail);
+        }
+        assertTrue(distinct.size() == names.size());
     }
 
     /** 插件目录里声明的全部工具名 + 核心工具，用来构造「真实工具面」。 */

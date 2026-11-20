@@ -1104,6 +1104,20 @@ public class DbEnvironmentStore implements EnvironmentStore {
         requireProject(lease.projectId());
         requireEnv(lease.env());
         requireService(lease.service());
+        // BUG-43：覆盖 RUNNING 租约（pid 变化）要可见——并发实例/静默覆盖是排障黑洞
+        try {
+            serviceLeases(lease.projectId(), lease.env()).stream()
+                    .filter(l -> l.service().equals(lease.service()))
+                    .findFirst()
+                    .filter(ServiceLease::running)
+                    .filter(l -> l.pid() > 0 && lease.pid() > 0 && l.pid() != lease.pid())
+                    .ifPresent(old -> log.warn(
+                            "本地服务租约被覆盖：project={} env={} service={} 旧 pid={} port={} → 新 pid={} port={}",
+                            lease.projectId(), lease.env(), lease.service(),
+                            old.pid(), old.hostPort(), lease.pid(), lease.hostPort()));
+        } catch (RuntimeException ignored) {
+            // 预检失败不阻塞正常保存
+        }
         try {
             db.run(em -> PlatformDb.update(em, """
                     INSERT INTO project_service_leases

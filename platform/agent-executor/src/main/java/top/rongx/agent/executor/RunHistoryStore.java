@@ -64,6 +64,11 @@ public class RunHistoryStore {
         return new RunHistoryStore(Path.of("."), false);
     }
 
+    /** 历史是否启用（disabled 时引擎不能把终态运行移出内存，否则读路径无兜底）。 */
+    public boolean isEnabled() {
+        return enabled;
+    }
+
     /**
      * 把历史序号按创建时间重排为 1..N。
      *

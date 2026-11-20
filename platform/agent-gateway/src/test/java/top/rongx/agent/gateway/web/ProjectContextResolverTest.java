@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import top.rongx.agent.domain.error.PlatformException;
 
 /**
- * 项目上下文解析：不做项目级 RBAC、只读角色标记、工作树逃逸拒绝。
+ * 项目上下文解析：users.projects 项目级校验、只读角色标记、工作树逃逸拒绝。
  *
  * <p>用真实的 SQLite UserStore（临时目录）+ 内存项目仓库，验证的是接线而不是 mock 行为。
  */
@@ -49,10 +49,35 @@ class ProjectContextResolverTest {
     }
 
     @Test
-    @DisplayName("不做项目级 RBAC：已登录用户可访问任一已接入项目")
-    void nonMemberCanAccessAnyProject() {
-        ProjectContext ctx = resolver.resolve("NEW", "dev", "devops");
-        assertEquals("NEW", ctx.projectId());
+    @DisplayName("projects=[RY] 的用户可访问成员项目 RY")
+    void memberCanAccessOwnProject() {
+        ProjectContext ctx = resolver.resolve("RY", "test", "devops");
+        assertEquals("RY", ctx.projectId());
+        assertFalse(ctx.readOnly());
+    }
+
+    @Test
+    @DisplayName("projects=[RY] 的用户访问其它项目被拒绝")
+    void nonMemberProjectRejected() {
+        PlatformException ex = assertThrows(PlatformException.class,
+                () -> resolver.resolve("NEW", "dev", "devops"));
+        assertTrue(ex.getMessage().contains("无权访问该项目"), ex.getMessage());
+        assertEquals("E-390", ex.code());
+    }
+
+    @Test
+    @DisplayName("VIEWER 访问非成员项目同样被拒绝（只读不豁免 RBAC）")
+    void viewerNonMemberProjectRejected() {
+        PlatformException ex = assertThrows(PlatformException.class,
+                () -> resolver.resolve("NEW", "dev", "viewer"));
+        assertTrue(ex.getMessage().contains("无权访问该项目"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("projects=[*] 的用户可访问任意已接入项目")
+    void allProjectsWildcardGrantsAccess() {
+        assertEquals("RY", resolver.resolve("RY", "test", "admin").projectId());
+        assertEquals("NEW", resolver.resolve("NEW", "dev", "admin").projectId());
     }
 
     @Test

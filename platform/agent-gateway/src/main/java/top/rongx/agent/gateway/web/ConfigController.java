@@ -24,10 +24,13 @@ import top.rongx.agent.tools.ConfigResolver;
 public class ConfigController {
 
     private final ConfigResolver resolver;
+    private final ProjectContextResolver contexts;
     private final CurrentUser currentUser;
 
-    public ConfigController(ConfigResolver resolver, CurrentUser currentUser) {
+    public ConfigController(ConfigResolver resolver, ProjectContextResolver contexts,
+                            CurrentUser currentUser) {
         this.resolver = resolver;
+        this.contexts = contexts;
         this.currentUser = currentUser;
     }
 
@@ -41,8 +44,8 @@ public class ConfigController {
                 ? List.of()
                 : Arrays.stream(keys.split(",")).map(String::trim)
                         .filter(s -> !s.isEmpty()).toList();
-        ProjectContext ctx = new ProjectContext(projectId, target,
-                currentUser.requireUserId(), null, null);
+        // BUG-27 入口5收敛：环境校验（环境必须属于项目）统一走 resolver，不再自行 new ProjectContext
+        ProjectContext ctx = contexts.resolve(projectId, target, currentUser.requireUserId());
         ConfigResolver.Resolution r = resolver.resolve(ctx, target, requested);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", r.needsUserInput() ? "NEED_USER_INPUT" : "READY");

@@ -38,9 +38,89 @@ final class ProcessExecutor {
         }
     }
 
+    /**
+     * 失败动作类型：退出码非 0 时决定错误码与摘要模板。
+     *
+     * <p>过去所有非 0 退出码一律标 E-101"编译失败"——测试失败、镜像构建失败、脚本失败
+     * 在 UI 与自动修复里都被当成编译错误处理，自愈动作与人的判断同时被误导。
+     * 现在调用方按动作语义传入类型；未传入时按命令首参数特征推断，兜底 SCRIPT_FAILED。
+     */
+    enum FailureKind {
+        /** 真正的编译动作（backend_build 等编译段）：保持 E-101。 */
+        COMPILE,
+        /** 测试动作（backend_test / frontend_test）：E-102。 */
+        TEST,
+        /** 镜像构建（docker build）：E-103。 */
+        IMAGE_BUILD,
+        /** 其它任意命令 / 脚本：E-104。 */
+        SCRIPT;
+
+        /** 按动作 wireName 映射；未知动作返回 null（由命令特征推断）。 */
+        static FailureKind ofAction(String actionWireName) {
+            if (actionWireName == null) {
+                return null;
+            }
+            return switch (actionWireName) {
+                case "backend_test", "frontend_test" -> TEST;
+                case "image_package" -> IMAGE_BUILD;
+                case "backend_build", "frontend_build" -> COMPILE;
+                default -> null;
+            };
+        }
+
+        /** 按命令首参数特征推断（mvn/pnpm 的 test 目标、docker build、其余脚本）。 */
+        static FailureKind fromArgv(List<String> argv) {
+            if (argv == null || argv.isEmpty()) {
+                return SCRIPT;
+            }
+            String head = argv.get(0);
+            String base = head == null ? "" : Path.of(head).getFileName().toString()
+                    .toLowerCase(java.util.Locale.ROOT);
+            if (base.contains(".")) {
+                base = base.substring(0, base.indexOf('.'));
+            }
+            boolean isMaven = base.equals("mvn") || base.equals("mvnw");
+            boolean isPnpmLike = base.equals("pnpm") || base.equals("npm") || base.equals("yarn")
+                    || base.equals("node") || base.equals("vitest") || base.equals("jest");
+            if (isMaven || isPnpmLike) {
+                boolean isTest = argv.stream().skip(1).limit(4).anyMatch(
+                        a -> "test".equalsIgnoreCase(a) || "verify".equalsIgnoreCase(a)
+                                || "-t".equalsIgnoreCase(a));
+                return isTest ? TEST : COMPILE;
+            }
+            if (base.equals("docker") && argv.stream().anyMatch(a -> "build".equals(a))) {
+                return IMAGE_BUILD;
+            }
+            return SCRIPT;
+        }
+
+        String errorCode() {
+            return switch (this) {
+                case COMPILE -> ErrorCode.COMPILE_FAILED.code();
+                case TEST -> ErrorCode.TEST_FAILED.code();
+                case IMAGE_BUILD -> ErrorCode.IMAGE_BUILD_FAILED.code();
+                case SCRIPT -> ErrorCode.SCRIPT_FAILED.code();
+            };
+        }
+
+        String summary(int exit, List<String> argv) {
+            String cmd = String.join(" ", argv);
+            String base = switch (this) {
+                case TEST -> "测试未通过（exit " + exit + "）：" + cmd + "；见 surefire/vitest 测试报告";
+                case IMAGE_BUILD -> "镜像/产物打包失败（exit " + exit + "）：" + cmd + "；检查 Dockerfile 与网络";
+                case COMPILE -> "编译失败（exit " + exit + "）：" + cmd + "；见编译诊断";
+                case SCRIPT -> "命令失败（exit " + exit + "）：" + cmd + "；见日志尾部";
+            };
+            // exit >= 128 = 被信号终止（137 = OOM/kill -9，143 = SIGTERM）：高频排障线索，单独点出
+            return exit >= 128
+                    ? base + "（被信号终止，exit-128=信号号；137 通常是内存不足被 OOM kill）"
+                    : base;
+        }
+    }
+
     StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
                      BooleanSupplier cancelled) {
-        return exec(dir, argv, budgetMillis, sink, cancelled, null);
+        return exec(dir, argv, budgetMillis, sink, cancelled, null, null);
     }
 
     /**
@@ -49,6 +129,14 @@ final class ProcessExecutor {
      */
     StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
                      BooleanSupplier cancelled, Consumer<String> live) {
+        return exec(dir, argv, budgetMillis, sink, cancelled, live, null);
+    }
+
+    /**
+     * 带动作语义的执行：失败时按 {@code failureKind}（缺省按 argv 推断）选错误码。
+     */
+    StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
+                     BooleanSupplier cancelled, Consumer<String> live, FailureKind failureKind) {
         long deadline = System.nanoTime() + Math.max(1, budgetMillis) * 1_000_000L;
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(dir.toFile())
@@ -109,8 +197,8 @@ final class ProcessExecutor {
         joinQuietly(reader);
         int exit = process.exitValue();
         if (exit != 0) {
-            return StepOutcome.failed(exit, ErrorCode.COMPILE_FAILED.code(),
-                    "命令失败（exit " + exit + "）：" + String.join(" ", argv) + "；见日志尾部");
+            FailureKind kind = failureKind != null ? failureKind : FailureKind.fromArgv(argv);
+            return StepOutcome.failed(exit, kind.errorCode(), kind.summary(exit, argv));
         }
         return StepOutcome.ok();
     }
@@ -210,14 +298,25 @@ final class ProcessExecutor {
             return text;
         }
         // 1. Authorization / Bearer / token 赋值
-        text = text.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._-]{16,}", "$1***");
+        //    Bearer 阈值 8：与 agent-tools SecretRedactor 对齐（7 位以下不构成有效凭证，
+        //    统一阈值才能保证同一段密钥在所有出口的行为一致）。
+        text = text.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._-]{8,}", "$1***");
         text = text.replaceAll("(?i)((?:" + "token|secret|password|passwd|api[_-]?key|access[_-]?key"
                 + "|authorization" + ")\\s*[=:]\\s*)[^\\s\"']{8,}", "$1***");
+        // 1a. TOKEN_PREFIX：OpenAI/Anthropic、GitHub、GitLab、Slack、AWS 等前缀形凭证。
+        //     与 SecretRedactor 的 TOKEN_PREFIX 规则对齐；sk-proj- / sk-ant- 由 sk- 覆盖。
+        text = text.replaceAll("(?i)(sk-[A-Za-z0-9_-]{4,}"
+                + "|gh[pousr]_[A-Za-z0-9]{4,}"
+                + "|glpat-[A-Za-z0-9_-]{4,}"
+                + "|xox[baprs]-[A-Za-z0-9_-]{4,}"
+                + "|AKIA[0-9A-Z]{8,})", "***");
         // 2. 长十六进制串（jwt 第二段等）按行内孤立 token 处理；
         //    但 `sha256:<hex>` 是镜像/产物的公开指纹，属于构建证据，必须保留（否则页面上只剩 ***）。
         text = text.replaceAll("(?<!sha256:)(?<!sha512:)\\b[0-9a-fA-F]{64}\\b", "***");
         // 3. 形如 -----BEGIN ... PRIVATE KEY----- 的 PEM 块
         text = text.replaceAll("(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "***PEM***");
+        // 4. Cookie / Set-Cookie 整行（与 SecretRedactor 对齐：整行都是会话凭证）
+        text = text.replaceAll("(?im)^\\s*(?:set-)?cookie\\s*:.*$", "***COOKIE***");
         return text;
     }
 

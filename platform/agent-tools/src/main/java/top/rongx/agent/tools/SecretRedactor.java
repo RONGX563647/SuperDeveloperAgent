@@ -40,10 +40,20 @@ public class SecretRedactor {
     /** KEY=value / "key": "value" 形态，键名命中敏感词时只保留键名。 */
     private static final Pattern SECRET_ASSIGN = Pattern.compile(
             "(?i)([\\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|credential|authorization)[\\w.-]*)"
-                    + "(\"?\\s*[:=]\\s*\"?)([^\\s\"',;]+)");
+                    + "(\"?\\s*[:=]\\s*\"?)"
+                    // 值：引号闭合（可含空格）或贪婪到行尾/分隔符，避免多词口令被空格截断
+                    + "(?:\"[^\"]*\"|'[^']*'|[^,;}\\r\\n]+)");
 
+    /** URL userinfo：允许空用户名（redis://:pass@host）。 */
     private static final Pattern URL_USERINFO = Pattern.compile(
-            "([a-z][a-z0-9+.-]*://)[^/\\s:@]+:[^/\\s@]+@", Pattern.CASE_INSENSITIVE);
+            "([a-z][a-z0-9+.-]*://)[^/\\s@]*:[^/\\s@]*@", Pattern.CASE_INSENSITIVE);
+
+    /** PEM 单行标记：BEGIN/END 界定行。 */
+    private static final Pattern PEM_BOUNDARY = Pattern.compile(
+            "-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|-----END [A-Z0-9 ]*PRIVATE KEY-----");
+
+    /** PEM base64 主体行（在 BEGIN 之后、END 之前的纯 base64 行）。 */
+    private static final Pattern PEM_BODY_LINE = Pattern.compile("[A-Za-z0-9+/=]{16,}");
 
     /** Authorization 头：{@code Bearer xxx} 里真正敏感的是后面的 token，单独处理否则只抹掉 "Bearer"。 */
     private static final Pattern BEARER = Pattern.compile(
@@ -81,7 +91,7 @@ public class SecretRedactor {
         String normalized = relativePath.replace('\\', '/');
         int slash = normalized.lastIndexOf('/');
         String name = (slash >= 0 ? normalized.substring(slash + 1) : normalized).toLowerCase(Locale.ROOT);
-        if (name.equals(".env") || name.equals("env")) {
+        if (name.endsWith(".env") || name.equals("env")) {
             return true;
         }
         if (name.startsWith(".env.")) {
@@ -89,16 +99,19 @@ public class SecretRedactor {
                     || name.endsWith(".template") || name.endsWith(".dist"));
         }
         if (name.endsWith(".pem") || name.endsWith(".key") || name.endsWith(".p12")
-                || name.endsWith(".pfx") || name.endsWith(".jks") || name.endsWith(".keystore")) {
+                || name.endsWith(".pfx") || name.endsWith(".jks") || name.endsWith(".keystore")
+                || name.endsWith(".p8") || name.endsWith(".tfvars") || name.endsWith(".ovpn")) {
             return true;
         }
         return name.equals("id_rsa") || name.equals("id_dsa") || name.equals("id_ecdsa")
                 || name.equals("id_ed25519")
                 || name.equals("credentials") || name.equals("credentials.json")
-                || name.equals(".pgpass") || name.equals(".netrc") || name.equals(".npmrc")
-                || name.equals(".pypirc") || name.equals(".htpasswd")
+                || name.equals(".git-credentials") || name.equals(".pgpass") || name.equals(".netrc")
+                || name.equals(".npmrc") || name.equals(".pypirc") || name.equals(".htpasswd")
+                || name.equals("kubeconfig")
                 || name.equals("secret.yml") || name.equals("secret.yaml")
-                || name.equals("secrets.yml") || name.equals("secrets.yaml");
+                || name.equals("secrets.yml") || name.equals("secrets.yaml")
+                || name.equals("secrets.json");
     }
 
     /** 对一段外部文本做脱敏（值级 + 形态级）。 */
@@ -153,10 +166,22 @@ public class SecretRedactor {
         return values;
     }
 
-    /** 单行脱敏（grep 结果逐行处理时复用，避免整段拼接后再替换的开销）。 */
+    /**
+     * 单行脱敏（grep 结果逐行处理时复用，避免整段拼接后再替换的开销）。
+     *
+     * <p>额外识别 PEM 单行标记：{@code -----BEGIN/END ... PRIVATE KEY-----} 行及紧随 BEGIN
+     * 的 base64 主体行整行替换为 {@code ***PEM***}，弥补"多行块按整段处理才命中"的逐行缺口。
+     */
     public String redactLine(String line, ProjectContext ctx) {
         if (line == null || line.isEmpty()) {
             return line;
+        }
+        if (PEM_BOUNDARY.matcher(line).find()) {
+            return "***PEM***";
+        }
+        String trimmed = line.stripLeading();
+        if (!trimmed.startsWith("--") && PEM_BODY_LINE.matcher(trimmed).matches()) {
+            return "***PEM***";
         }
         return applyPatterns(replaceKnownValues(line, ctx));
     }

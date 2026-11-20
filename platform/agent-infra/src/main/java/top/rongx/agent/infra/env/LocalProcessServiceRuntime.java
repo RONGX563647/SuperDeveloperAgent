@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
@@ -18,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.ProcessIdentity;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
@@ -94,7 +96,11 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
             return Result.failed("无法创建日志目录：" + e.getMessage());
         }
 
-        ProcessBuilder pb = new ProcessBuilder(argv)
+        // BUG-42/40：注入唯一身份标记，写入部署目录的 JSON 身份记录（双账本互认）
+        String token = UUID.randomUUID().toString();
+        List<String> tokenArgv = new ArrayList<>(argv);
+        tokenArgv.add("-D" + ProcessIdentity.TOKEN_PROPERTY + "=" + token);
+        ProcessBuilder pb = new ProcessBuilder(tokenArgv)
                 .directory(dir.toFile())
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
@@ -111,6 +117,21 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
 
         try {
             Process process = pb.start();
+            // BUG-43：设置页链路也写 JSON 身份记录到部署目录，流水线停止端可凭它识别
+            try {
+                Optional<Path> recordDir = deployDir(projectId, env);
+                if (recordDir.isPresent()) {
+                    ProcessIdentity.writePidRecord(recordDir.get(), service,
+                            new ProcessIdentity.PidRecord(process.pid(),
+                                    ProcessHandle.of(process.pid())
+                                            .flatMap(h -> h.info().startInstant())
+                                            .map(java.time.Instant::toEpochMilli)
+                                            .orElse(0L),
+                                    token, String.join(" ", tokenArgv)));
+                }
+            } catch (IOException e) {
+                log.warn("写 pid 身份记录失败（不影响启动）：{}", e.getMessage());
+            }
             store.saveServiceLease(new ServiceLease(projectId, env, service, port,
                     "RUNNING", process.pid(), System.currentTimeMillis()));
             boolean exited = process.waitFor(PROBE_MS, TimeUnit.MILLISECONDS);
@@ -132,31 +153,75 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
         }
     }
 
+    /** 流水线链路的部署账本目录：{@code <repo>/.agent/deploy/<project>-<env>}。 */
+    private Optional<Path> deployDir(String projectId, String env) {
+        return repos.repoDir(projectId).map(repo -> ProcessIdentity.deployDir(repo, projectId, env));
+    }
+
     @Override
     public Result stop(String projectId, String env, String service) {
         Optional<ServiceLease> lease = store.serviceLeases(projectId, env).stream()
                 .filter(l -> l.service().equals(service)).findFirst();
         if (lease.isEmpty() || lease.get().pid() <= 0) {
+            // BUG-43：租约没有 pid，但部署目录里可能有流水线链路的 pid 身份记录 → 顺手对账
+            stopDeployRecordIfPresent(projectId, env, service);
             return new Result(true, lease.map(ServiceLease::hostPort).orElse(0), 0,
                     "STOPPED", service + " 没有由平台启动的进程");
         }
         long pid = lease.get().pid();
         int port = lease.get().hostPort();
-        // pid 复用防护：命令行对不上说明是别的进程，绝不误杀
-        if (!owns(pid, service, port)) {
+        // pid 复用/跨项目防护：身份对不上说明不是本项目进程，绝不误杀（BUG-42）
+        if (!owns(pid, projectId, env, service, port)) {
+            log.warn("停止 {} 跳过：pid={} 身份校验不匹配（PID 已被复用或属于其它项目）",
+                    service, pid);
             store.saveServiceLease(new ServiceLease(projectId, env, service, port,
                     "STOPPED", 0, System.currentTimeMillis()));
             return new Result(true, port, 0, "STOPPED",
-                    "pid " + pid + " 已被其它进程复用，未执行结束操作（租约已清理）");
+                    "pid " + pid + " 身份校验不匹配（已被其它进程复用），未执行结束操作（租约已清理）");
         }
         boolean stopped = kill(pid);
         store.saveServiceLease(new ServiceLease(projectId, env, service, port,
                 "STOPPED", 0, System.currentTimeMillis()));
+        // BUG-43：停掉租约进程后清掉部署目录的 pid 身份记录，两本账保持一致
+        deployDir(projectId, env).ifPresent(dir -> ProcessIdentity.deletePidFiles(dir, service));
         if (!stopped) {
             return new Result(false, port, 0, "UNKNOWN", "进程 " + pid + " 结束失败（可能已不存在）");
         }
         log.info("本地服务已停止：project={} service={} pid={}", projectId, service, pid);
         return new Result(true, port, 0, "STOPPED", service + " 已停止");
+    }
+
+    /**
+     * BUG-43：租约没有 pid 时探测部署目录 pid 身份记录并按身份终止（双账本对账）。
+     * 身份不匹配（PID 已复用）则只清记录不杀，避免误杀。
+     */
+    private void stopDeployRecordIfPresent(String projectId, String env, String service) {
+        Optional<Path> dir = deployDir(projectId, env);
+        if (dir.isEmpty()) {
+            return;
+        }
+        Optional<ProcessIdentity.PidRecord> record =
+                ProcessIdentity.readPidRecord(dir.get(), service);
+        if (record.isEmpty()) {
+            return;
+        }
+        Optional<ProcessHandle> handle = ProcessHandle.of(record.get().pid());
+        if (handle.isEmpty() || !handle.get().isAlive()) {
+            ProcessIdentity.deletePidFiles(dir.get(), service);
+            return;
+        }
+        if (!ProcessIdentity.matches(handle.get().info().commandLine(),
+                handle.get().info().startInstant(), record.get(),
+                pathFragments(projectId, 0))) {
+            log.warn("部署记录 pid={} 身份校验不匹配，跳过终止：project={} service={}",
+                    record.get().pid(), projectId, service);
+            ProcessIdentity.deletePidFiles(dir.get(), service);
+            return;
+        }
+        kill(record.get().pid());
+        ProcessIdentity.deletePidFiles(dir.get(), service);
+        log.info("已停止流水线链路进程：project={} service={} pid={}",
+                projectId, service, record.get().pid());
     }
 
     @Override
@@ -168,8 +233,13 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
         }
         long pid = lease.get().pid();
         if (pid > 0 && ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)
-                && owns(pid, service, lease.get().hostPort())) {
+                && owns(pid, projectId, env, service, lease.get().hostPort())) {
             return "RUNNING";
+        }
+        // pid 死了或身份不符：不再报假绿（BUG-40 收益点 5）
+        if (pid > 0 && ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
+            log.warn("租约 pid={} 仍存活但身份不符（可能已被复用），状态降级 STOPPED：project={} service={}",
+                    pid, projectId, service);
         }
         return "STOPPED";
     }
@@ -281,22 +351,71 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
     }
 
     /**
-     * pid 是否仍是我们启动的那个进程（防 pid 复用误杀）。
-     * 拿不到命令行时保守返回 true：Windows 上部分进程不暴露 CommandLine。
+     * pid 是否仍是本项目（租约）对应的那个进程（BUG-42：身份校验，防跨项目误杀）。
+     *
+     * <p>判定规则（宁可漏杀不可误杀）：
+     * <ul>
+     *   <li>优先读 {@code <repo>/.agent/deploy/<project>-<env>/<service>.pid.json} 身份记录：
+     *       有 startInstant 时按 ±2s 容差比对；legacy 记录按命令行包含本项目
+     *       repo 路径 / 状态目录 / 注入 token 判定；</li>
+     *   <li>没有 pid 文件时退化为租约身份探针：命令行必须包含本项目 repo 绝对路径，
+     *       或以 {@code --server.port=}/{@code -Dserver.port=} 形式包含租约端口
+     *       （裸 {@code :port} 子串不再作为判据——curl/docker 参数里同样会出现）；</li>
+     *   <li>读不到命令行 → 一律 false（默认不杀），并告警。</li>
+     * </ul>
      */
-    private static boolean owns(long pid, String service, int port) {
-        return ProcessHandle.of(pid)
-                .flatMap(h -> h.info().commandLine())
-                .map(cmd -> {
-                    String lower = cmd.toLowerCase(Locale.ROOT);
-                    if (lower.contains(":" + port) || lower.contains("server.port=" + port)) {
-                        return true;
-                    }
-                    return ServiceLease.BACKEND.equals(service)
-                            ? lower.contains("-jar") || lower.contains("spring-boot")
-                            : lower.contains("npm") || lower.contains("node") || lower.contains("vite");
-                })
-                .orElse(true);
+    private boolean owns(long pid, String projectId, String env, String service, int port) {
+        Optional<ProcessHandle> handle = ProcessHandle.of(pid);
+        if (handle.isEmpty()) {
+            return false;
+        }
+        Optional<String> cmd = handle.get().info().commandLine();
+        // 1. 身份记录优先（有 startInstant 记录时是充分判据——Windows 上部分进程读不到
+        //    commandLine，但 startInstant 通常可读，不能因此放弃记录路径）
+        Optional<ProcessIdentity.PidRecord> record = readDeployPidRecord(projectId, env, service);
+        if (record.isPresent()) {
+            return ProcessIdentity.matches(cmd, handle.get().info().startInstant(), record.get(),
+                    pathFragments(projectId, port));
+        }
+        if (cmd.isEmpty() || cmd.get().isBlank()) {
+            log.warn("owns({}) 读取命令行失败且无 pid 身份记录，默认不杀：project={} service={}",
+                    pid, projectId, service);
+            return false;
+        }
+        // 2. 租约身份探针：本项目 repo 路径 / 部署状态目录 / 精确端口参数形式 / 注入 token
+        return ProcessIdentity.matchesCommandLine(cmd, pathFragments(projectId, port))
+                || exactPortArg(cmd.get(), port);
+    }
+
+    /** 端口子串只允许 {@code --server.port=N} / {@code -Dserver.port=N} 形式（BUG-42）。 */
+    private static boolean exactPortArg(String commandLine, int port) {
+        String lower = commandLine.toLowerCase(Locale.ROOT);
+        return lower.contains("--server.port=" + port)
+                || lower.contains("-dserver.port=" + port)
+                || lower.contains("server.port=" + port + " ");
+    }
+
+    /** 本项目关键路径片段：repo 绝对路径、部署状态目录名、租约端口的精确参数形式。 */
+    private List<String> pathFragments(String projectId, int port) {
+        List<String> fragments = new ArrayList<>();
+        Optional<Path> repo = repos.repoDir(projectId);
+        repo.map(p -> p.toAbsolutePath().normalize().toString()).filter(s -> !s.isBlank())
+                .ifPresent(fragments::add);
+        repo.map(p -> ProcessIdentity.deployDir(p, projectId, "dev"))
+                .map(p -> p.toAbsolutePath().normalize().toString())
+                .filter(s -> !s.isBlank()).ifPresent(fragments::add);
+        fragments.add("--server.port=" + port);
+        fragments.add("-Dserver.port=" + port);
+        return fragments;
+    }
+
+    /** 流水线链路的 pid 身份记录：{@code <repo>/.agent/deploy/<project>-<env>/<service>.pid(.json)}。 */
+    private Optional<ProcessIdentity.PidRecord> readDeployPidRecord(String projectId, String env,
+                                                                    String service) {
+        return repos.repoDir(projectId)
+                .map(repo -> ProcessIdentity.deployDir(repo, projectId, env))
+                .map(dir -> ProcessIdentity.readPidRecord(dir, service))
+                .orElse(Optional.empty());
     }
 
     private Path logFile(String projectId, String service) {

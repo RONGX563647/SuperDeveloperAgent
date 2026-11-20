@@ -38,7 +38,7 @@ class ChangeStatusToolTest {
     @DisplayName("四种状态各自给出对应 next，模型不必自己推断")
     void mapsEveryStatusToNext() {
         FakeStore store = new FakeStore();
-        ChangeTools tools = new ChangeTools(store);
+        ChangeStatusTool tools = new ChangeStatusTool(store);
 
         store.put(plan("chg-p", "P1", "dev", ChangePlan.Status.PENDING));
         store.put(plan("chg-c", "P1", "dev", ChangePlan.Status.CONFIRMED));
@@ -66,7 +66,7 @@ class ChangeStatusToolTest {
     @DisplayName("查询是只读的：不写状态、不推卡（store 无任何写调用）")
     void queryHasNoSideEffects() {
         FakeStore store = new FakeStore();
-        ChangeTools tools = new ChangeTools(store);
+        ChangeStatusTool tools = new ChangeStatusTool(store);
         store.put(plan("chg-1", "P1", "dev", ChangePlan.Status.PENDING));
 
         tools.changeStatus("chg-1", ctx("P1", "dev"));
@@ -80,7 +80,7 @@ class ChangeStatusToolTest {
     @DisplayName("越权与不存在都拒绝，且不泄露别的项目内容")
     void rejectsForeignAndMissing() {
         FakeStore store = new FakeStore();
-        ChangeTools tools = new ChangeTools(store);
+        ChangeStatusTool tools = new ChangeStatusTool(store);
         store.put(plan("chg-other", "P2", "dev", ChangePlan.Status.CONFIRMED));
         store.put(plan("chg-env", "P1", "test", ChangePlan.Status.CONFIRMED));
 
@@ -105,7 +105,7 @@ class ChangeStatusToolTest {
     @DisplayName("留痕单标 RECORDED：明确告知无需确认，避免模型空等")
     void manualKindIsRecorded() {
         FakeStore store = new FakeStore();
-        ChangeTools tools = new ChangeTools(store);
+        ChangeStatusTool tools = new ChangeStatusTool(store);
         store.put(new ChangePlan("chg-m", "P1", "dev", "env_ensure", "h", "留痕",
                 null, null, false, Instant.now(), ChangePlan.Status.PENDING));
 
@@ -116,6 +116,45 @@ class ChangeStatusToolTest {
         assertTrue(out.contains("executable: false"), out);
     }
 
+    @Test
+    @DisplayName("跨环境必须拒绝且不回显 status（BUG-28 唯一实现的验收口径）")
+    void crossEnvIsRejectedWithoutLeakingStatus() {
+        FakeStore store = new FakeStore();
+        ChangeStatusTool tools = new ChangeStatusTool(store);
+        // 单子登记在 test 环境，模型试图从 dev 会话里读它
+        store.put(plan("chg-cross", "P1", "test", ChangePlan.Status.CONFIRMED));
+
+        String out = tools.changeStatus("chg-cross", ctx("P1", "dev"));
+
+        assertTrue(out.startsWith("err:"), out);
+        assertTrue(out.contains("不一致"), out);
+        assertFalse(out.contains("status: "), "拒绝时不得回显任何状态行：" + out);
+        assertFalse(out.contains("CONFIRMED"), "拒绝时不得回显状态值：" + out);
+        // 唯一实现：全平台只有一处 @Tool(name = "change_status") 声明
+        assertEquals(1, declaredChangeStatusToolCount(),
+                "change_status 的 @Tool 声明必须全局唯一（BUG-28）");
+    }
+
+    /** 统计三个候选源文件里 change_status 的 @Tool 声明数量（必须恰好 1）。 */
+    private static int declaredChangeStatusToolCount() {
+        String[] sources = {
+                "src/main/java/top/rongx/agent/tools/ChangeTools.java",
+                "src/main/java/top/rongx/agent/tools/ChangeQueryTools.java",
+                "src/main/java/top/rongx/agent/tools/ChangeStatusTool.java",
+        };
+        int count = 0;
+        for (String path : sources) {
+            try {
+                String source = java.nio.file.Files.readString(java.nio.file.Path.of(path));
+                if (source.contains("@Tool(name = \"change_status\"")) {
+                    count++;
+                }
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException("读取源文件失败：" + path, e);
+            }
+        }
+        return count;
+    }
     /** 只实现查询所需的读方法；写方法计数以证明没被调用。 */
     private static final class FakeStore implements ChangeStore {
         private final Map<String, ChangePlan> rows = new HashMap<>();

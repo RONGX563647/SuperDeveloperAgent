@@ -23,6 +23,7 @@ import top.rongx.agent.domain.conversation.DispatchNode;
 import top.rongx.agent.domain.conversation.DispatchNodeResult;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
+import top.rongx.agent.domain.conversation.RunIds;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
 
@@ -55,13 +56,20 @@ public final class WorkspaceDispatchScheduler {
     private static final int MAX_ERROR_CHARS = 400;
 
     /**
-     * runId 的形状：以 {@code run-} 开头且后面还有内容。
+     * runId 的形状：以 {@code run-} 开头，后跟合法字符（字母/数字/下划线/连字符）。
      *
-     * <p>用它代替"以 err: 开头就当失败"的文本猜测。只校验前缀而不是更严的字符集，
-     * 是因为这是一道"别把错误文案当 runId"的护栏，不是 id 生成规则的复制品：
-     * 规则收紧时不应该连带把合法派发判成失败。
+     * <p>用它代替"以 err: 开头就当失败"的文本猜测（BUG-29）。口径收敛到
+     * {@link RunIds#isRunId}（agent-domain），与工具层 WorkspaceSupervisorTools 共用，
+     * 避免两处漂移。首次派发与失败重试共用同一口径：形状非法 = send 契约被破坏
+     * （返回了错误文案而不是 runId），直接判节点失败且不重试——重试一个契约错误
+     * 只会重放同样的坏返回值。
      */
-    private static final Pattern RUN_ID_SHAPE = Pattern.compile("run-.+");
+    private static final Pattern RUN_ID_SHAPE = RunIds.SHAPE;
+
+    /** runId 形状校验（首次派发与重试共用，与 WorkspaceSupervisorTools 同口径）。 */
+    static boolean isRunId(String value) {
+        return RunIds.isRunId(value);
+    }
 
     /** 调度器需要的最小会话能力（由 ConversationManager 绑定 owner 后传入）。 */
     public interface Backend {
@@ -286,7 +294,7 @@ public final class WorkspaceDispatchScheduler {
         if (runId == null || runId.isBlank()) {
             return completedFailure(node, conversationId, "", "派发失败：没有返回 runId", start);
         }
-        if (!RUN_ID_SHAPE.matcher(runId).matches()) {
+        if (!isRunId(runId)) {
             return completedFailure(node, conversationId, "",
                     "派发失败：send 返回值不是合法 runId（" + truncate(runId, 120)
                             + "）；这是一个契约缺陷，请报告", start);
@@ -341,9 +349,15 @@ public final class WorkspaceDispatchScheduler {
                     truncate(result.error(), 120));
             try {
                 String nextRunId = backend.send(active.conversationId(), node.message());
-                if (nextRunId == null || nextRunId.isBlank() || nextRunId.startsWith("err:")) {
+                if (nextRunId == null || nextRunId.isBlank()
+                        || !RUN_ID_SHAPE.matcher(nextRunId).matches()) {
+                    // 与首次派发同一口径（BUG-29）：send 的契约是「返回 runId 或抛异常」，
+                    // 返回值不是合法 runId 形状 = 契约被破坏，直接判失败且不重试，
+                    // 不能再靠 "err:" 前缀猜（死分支会掩盖契约回归）。
                     String message = nextRunId == null || nextRunId.isBlank()
-                            ? "重试派发失败：没有返回 runId" : nextRunId;
+                            ? "重试派发失败：没有返回 runId"
+                            : "重试派发失败：send 返回值不是合法 runId（"
+                                    + truncate(nextRunId, 120) + "）；这是一个契约缺陷，请报告";
                     return new DispatchNodeResult(node.id(), active.conversationId(),
                             active.runId(), "FAILED", false, "",
                             truncate("已重试 " + attempt + " 次；" + message, MAX_ERROR_CHARS),

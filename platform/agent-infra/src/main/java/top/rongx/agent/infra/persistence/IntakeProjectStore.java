@@ -62,6 +62,9 @@ public class IntakeProjectStore implements AutoCloseable {
 
     /** 登记一个接入完成的项目（含环境）。已存在则覆盖（重接入语义）。 */
     public void upsert(IntakeProject p, List<ProjectEnv> envs) {
+        // BUG-45：composeDir 目前只登记、不参与部署落点，但同一项目内填成同一个目录
+        // 会让人误以为"环境已隔离"。这里直接拒绝，避免存量脏数据变成隐形事故。
+        requireDistinctComposeDir(envs);
         try {
             db.run(em -> {
                 PlatformDb.update(em, PROJECT_UPSERT_SQL,
@@ -105,6 +108,32 @@ public class IntakeProjectStore implements AutoCloseable {
             return db.inTx(em -> PlatformDb.update(em, sql, projectId, env) > 0);
         } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "环境登记失败：" + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 校验同一项目内的环境登记目录不重复。
+     *
+     * <p>BUG-45：{@code composeDir} 只登记、不参与部署落点（部署落点由流水线 deploy 段与
+     * 容器命名决定）。同一个值被多个环境共用时，用户会误以为环境已经隔离，因此这里拒绝保存。
+     * 空值表示"未登记"，不参与比较。
+     */
+    private static void requireDistinctComposeDir(List<ProjectEnv> envs) {
+        if (envs == null) {
+            return;
+        }
+        java.util.Map<String, String> seen = new java.util.LinkedHashMap<>();
+        for (ProjectEnv e : envs) {
+            String dir = e.composeDir() == null ? "" : e.composeDir().trim();
+            if (dir.isEmpty()) {
+                continue;
+            }
+            String prev = seen.putIfAbsent(dir, e.env());
+            if (prev != null) {
+                throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT,
+                        "composeDir 重复：环境 " + prev + " 与 " + e.env() + " 都登记为 " + dir
+                                + "。该字段只做登记、不改变部署落点，请改用不同目录或留空。");
+            }
         }
     }
 

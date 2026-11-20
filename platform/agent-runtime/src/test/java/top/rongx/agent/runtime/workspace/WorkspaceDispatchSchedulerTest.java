@@ -171,6 +171,48 @@ class WorkspaceDispatchSchedulerTest {
     }
 
     @Test
+    @DisplayName("send 返回非 run- 形状字符串：节点直接失败、错误带原文、不重试（BUG-29）")
+    void malformedRunIdFailsWithoutRetry() {
+        FakeBackend backend = new FakeBackend();
+        // 契约破坏场景：send 返回错误文案而不是 runId（历史上靠 startsWith("err:") 兜底）
+        backend.rejectMessage = "err: 会话正在运行";
+        DispatchPlan plan = new DispatchPlan(List.of(
+                new DispatchNode("bad", null, null, null, null, "目标-bad", List.of(),
+                        true, 60, 3)), true, 1);
+
+        DispatchResult result = scheduler.execute(plan, backend);
+
+        DispatchNodeResult bad = result.find("bad").orElseThrow();
+        assertEquals("FAILED", bad.status());
+        assertTrue(bad.error().contains("err: 会话正在运行"),
+                "错误信息必须包含 send 返回值原文：" + bad.error());
+        assertTrue(bad.error().contains("不是合法 runId"),
+                "必须明确指出是 runId 形状/契约问题：" + bad.error());
+        // 形状非法不重试：retries=3 也只 send 一次
+        assertEquals(0, backend.sent.size(), "非法 runId 不得进入重试");
+    }
+
+    @Test
+    @DisplayName("节点失败重试后 send 再返回非法形状：同样直接失败、不再重试")
+    void malformedRunIdOnRetryFailsImmediately() {
+        FakeBackend backend = new FakeBackend();
+        backend.transientFailures.put("flaky", new AtomicInteger(1));
+        backend.retryResponses.add("err: 契约破坏文本");
+        DispatchPlan plan = new DispatchPlan(List.of(
+                new DispatchNode("flaky", null, null, null, null, "目标-flaky", List.of(),
+                        true, 60, 2)), true, 1);
+
+        DispatchResult result = scheduler.execute(plan, backend);
+
+        DispatchNodeResult flaky = result.find("flaky").orElseThrow();
+        assertEquals("FAILED", flaky.status());
+        assertTrue(flaky.error().contains("err: 契约破坏文本"), flaky.error());
+        assertTrue(flaky.error().contains("不是合法 runId"), flaky.error());
+        // 首次派发成功进入等待，节点失败后重试 send 返回非法形状 → 直接失败，不再继续 send
+        assertEquals(1, backend.sent.size(), "非法重试返回不应再触发下一次 send");
+    }
+
+    @Test
     @DisplayName("DAG 总时长超限：取消在跑节点并返回部分结果")
     void globalTimeoutCancelsInFlightNodes() {
         FakeBackend backend = new FakeBackend();
@@ -263,6 +305,8 @@ class WorkspaceDispatchSchedulerTest {
         final List<String> openedTickets = Collections.synchronizedList(new ArrayList<>());
         final List<String> ticketConversations = Collections.synchronizedList(new ArrayList<>());
         final Map<String, DispatchNodeResult> closedTickets = new ConcurrentHashMap<>();
+        /** 重试 send 需要返回的坏返回值队列（BUG-29 回归用例）。 */
+        final List<String> retryResponses = new ArrayList<>();
         volatile long delayMillis = 20;
         volatile String rejectMessage;
 
@@ -291,6 +335,11 @@ class WorkspaceDispatchSchedulerTest {
         public String send(String conversationId, String text) {
             if (rejectMessage != null) {
                 return rejectMessage;
+            }
+            // 重试场景：首次 send 正常返回 runId；从第 2 次 send 起返回预置的坏返回值
+            //（BUG-29 回归用例），坏返回值不计入 sent
+            if (!sent.isEmpty() && !retryResponses.isEmpty()) {
+                return retryResponses.remove(0);
             }
             String nodeId = text.startsWith("目标-") ? text.substring(3) : text;
             String runId = "run-" + nodeId + "-" + sequence.incrementAndGet();

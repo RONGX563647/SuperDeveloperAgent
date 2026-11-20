@@ -4,6 +4,7 @@ import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.gateway.auth.Role;
 import top.rongx.agent.gateway.auth.UserStore;
 import org.springframework.stereotype.Component;
@@ -16,8 +17,10 @@ import top.rongx.agent.domain.error.RunException;
  * <p>规约 §1.1 A2 的落地：{@code projectId} 由<b>服务端</b>解析并校验后才进入会话；
  * 模型无法提供或修改它。会话建立后若要换项目，必须新建会话。
  *
- * <p>项目访问不做成员级 RBAC：已登录用户可以选择任一已接入项目，权限由角色（动作/设置）
- * 控制。只读角色（VIEWER）的上下文会带上 {@code readOnly=true}，由运行层据此装配只读工具面。
+ * <p>项目访问按 {@code users.projects} 做成员级校验：用户的项目范围含通配符
+ * {@link UserStore#ALL_PROJECTS "*"} 或显式包含目标项目才放行，否则拒绝
+ * （{@link ErrorCode#RUN_INVALID_INPUT}）。动作/设置类权限仍由角色控制；
+ * 只读角色（VIEWER）的上下文会带上 {@code readOnly=true}，由运行层据此装配只读工具面。
  */
 @Component
 public class ProjectContextResolver {
@@ -60,9 +63,13 @@ public class ProjectContextResolver {
         // 2. 项目必须存在（服务端校验，模型不可伪造）
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "项目不存在: " + projectId));
-        // 3. 不做项目级 RBAC：已登录用户可访问任一项目（动作/设置权限仍由角色控制）
-        // 4. 环境缺省为 test
-        String targetEnv = (env == null || env.isBlank()) ? "test" : env;
+        // 3. 项目级 RBAC：users.projects 含 "*" 或显式包含该项目才放行
+        if (!user.canAccess(project.id())) {
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT,
+                    "无权访问该项目: " + project.id());
+        }
+        // 4. 环境口径统一走 EnvNames：缺省 test、去空格转小写、未知值直接拒绝
+        String targetEnv = EnvNames.normalize(env);
         // 5. 环境必须属于该项目（防止越权访问他人环境）
         boolean known = projects.findEnvs(project.id()).stream()
                 .map(ProjectEnv::env)

@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.PipelineDefinitionInspector;
 import top.rongx.agent.domain.port.PipelineEngine;
@@ -62,6 +63,7 @@ public class ProjectReadinessController {
     private final PipelineDefinitionInspector definitions;
     private final RepoInspector repoInspector;
     private final DockerfileTools dockerfileTools;
+    private final ProjectContextResolver contextResolver;
     private final CurrentUser currentUser;
     private final boolean legacyServerConfigured;
 
@@ -75,6 +77,7 @@ public class ProjectReadinessController {
                                       PipelineDefinitionInspector definitions,
                                       RepoInspector repoInspector,
                                       DockerfileTools dockerfileTools,
+                                      ProjectContextResolver contextResolver,
                                       CurrentUser currentUser,
                                       @Value("${agent.deploy.server.host:}") String legacyServerHost) {
         this.repoLocator = repoLocator;
@@ -87,6 +90,7 @@ public class ProjectReadinessController {
         this.definitions = definitions;
         this.repoInspector = repoInspector;
         this.dockerfileTools = dockerfileTools;
+        this.contextResolver = contextResolver;
         this.currentUser = currentUser;
         this.legacyServerConfigured = legacyServerHost != null && !legacyServerHost.isBlank();
     }
@@ -100,7 +104,8 @@ public class ProjectReadinessController {
     @GetMapping("/{id}/readiness")
     public Map<String, Object> readiness(@PathVariable String id,
                                          @RequestParam(defaultValue = DEFAULT_ENV) String env) {
-        String target = env.trim().toLowerCase();
+        // 环境口径统一走 EnvNames：缺省 test、去空格转小写、未知值直接拒绝
+        String target = EnvNames.normalize(env);
         Optional<Path> repoDir = repoLocator.repoDir(id).filter(Files::isDirectory);
 
         List<Map<String, Object>> steps = new ArrayList<>();
@@ -151,7 +156,7 @@ public class ProjectReadinessController {
     public Map<String, Object> generateDockerfile(@PathVariable String id,
                                                   @RequestParam(defaultValue = DEFAULT_ENV) String env) {
         String userId = currentUser.requireUserId();
-        String target = env.trim().toLowerCase();
+        String target = EnvNames.normalize(env);
         if ("prod".equals(target)) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "生产环境不允许生成 Dockerfile：请先在 dev/test 验证");
         }
@@ -159,7 +164,8 @@ public class ProjectReadinessController {
         if (baseSha == null || baseSha.isBlank()) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "仓库没有可用提交：请先把代码提交一次再修复");
         }
-        ProjectContext ctx = new ProjectContext(id, target, userId, null, null);
+        // BUG-27 入口5收敛：环境校验统一走 resolver，不再自行 new ProjectContext
+        ProjectContext ctx = contextResolver.resolve(id, target, userId);
         String report = dockerfileTools.ensure(baseSha, null, ctx);
         if (report.startsWith("err:")) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, report.substring(4).trim());

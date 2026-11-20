@@ -7,13 +7,18 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.ProcessIdentity;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.error.ErrorCode;
 
@@ -32,6 +37,8 @@ import top.rongx.agent.domain.error.ErrorCode;
  * </pre>
  */
 public class LocalDevHostDeployer {
+
+    private static final Logger log = LoggerFactory.getLogger(LocalDevHostDeployer.class);
 
     /** 后端启动等待（RuoYi 首次启动含连接池/迁移，给足 3 分钟）。 */
     private static final long BACKEND_READY_TIMEOUT_MS = 180_000;
@@ -95,12 +102,13 @@ public class LocalDevHostDeployer {
         stopIn(dir, projectId, env, log);
 
         // 1. 后端
+        String backendToken = UUID.randomUUID().toString();
         Path backendLog = logFile(projectId, dir, ServiceLease.BACKEND);
-        Path backendPid = dir.resolve("backend.pid");
         startLog(backendLog, "[dev] java -jar " + jar.getFileName() + " --server.port=" + backendPort);
         Process backend;
         try {
             List<String> argv = List.of(javaBin(), "-jar", jar.toString(),
+                    "-D" + ProcessIdentity.TOKEN_PROPERTY + "=" + backendToken,
                     "--server.port=" + backendPort);
             ProcessBuilder pb = new ProcessBuilder(argv)
                     .directory(repo.toFile())
@@ -111,7 +119,10 @@ public class LocalDevHostDeployer {
                 envVars.forEach((k, v) -> pb.environment().put(k, v == null ? "" : v));
             }
             backend = pb.start();
-            Files.writeString(backendPid, String.valueOf(backend.pid()), StandardCharsets.UTF_8);
+            // BUG-40：写入 JSON 身份记录（pid + startInstant + token + 命令行摘要），
+            // 停止端凭 startInstant/token 校验身份，杜绝 PID 复用误杀。
+            writeIdentity(dir, ServiceLease.BACKEND, backend, backendToken,
+                    String.join(" ", argv));
         } catch (IOException e) {
             return new Result(false, null, ErrorCode.ENV_NOT_PROMOTED.code(),
                     "无法启动后端进程：" + e.getMessage(), "", backendPort, frontendPort);
@@ -121,45 +132,61 @@ public class LocalDevHostDeployer {
         String backendFail = awaitBackend(backend, backendPort);
         if (backendFail != null) {
             kill(backend.pid());
-            deleteQuietly(backendPid);
+            ProcessIdentity.deletePidFiles(dir, ServiceLease.BACKEND);
             return new Result(false, null, ErrorCode.ENV_NOT_PROMOTED.code(),
                     "后端未就绪：" + backendFail, redact(log.toString() + tail(backendLog)),
                     backendPort, frontendPort);
         }
         log.append("[dev] 后端就绪 http://127.0.0.1:").append(backendPort).append('\n');
-        saveLease(projectId, env, ServiceLease.BACKEND, backendPort, backend.pid());
+        String backendLeaseError = saveLease(projectId, env, ServiceLease.BACKEND,
+                backendPort, backend.pid());
+        if (backendLeaseError != null) {
+            kill(backend.pid());
+            ProcessIdentity.deletePidFiles(dir, ServiceLease.BACKEND);
+            return new Result(false, null, ErrorCode.ENV_NOT_PROMOTED.code(),
+                    backendLeaseError, redact(log.toString()), backendPort, frontendPort);
+        }
 
         // 2. 前端（可选）
         int actualFrontend = 0;
         if (distDir != null && Files.isRegularFile(distDir.resolve("index.html"))) {
             Path script = dir.resolve("static-server.cjs");
+            String frontendToken = UUID.randomUUID().toString();
             Path frontendLog = logFile(projectId, dir, ServiceLease.FRONTEND);
-            Path frontendPid = dir.resolve("frontend.pid");
             try {
                 Files.writeString(script, StaticServerScript.text(), StandardCharsets.UTF_8);
                 startLog(frontendLog, "[dev] node static-server.mjs " + distDir
                         + " " + frontendPort + " " + backendPort);
-                ProcessBuilder pb = new ProcessBuilder(List.of(nodeBin(), script.toString(),
+                List<String> frontendArgv = List.of(nodeBin(), script.toString(),
                         distDir.toAbsolutePath().toString(), String.valueOf(frontendPort),
-                        String.valueOf(backendPort)))
+                        String.valueOf(backendPort));
+                ProcessBuilder pb = new ProcessBuilder(frontendArgv)
                         .directory(repo.toFile())
                         .redirectErrorStream(true)
                         .redirectOutput(ProcessBuilder.Redirect.appendTo(frontendLog.toFile()));
                 Process frontend = pb.start();
-                Files.writeString(frontendPid, String.valueOf(frontend.pid()), StandardCharsets.UTF_8);
+                writeIdentity(dir, ServiceLease.FRONTEND, frontend, frontendToken,
+                        String.join(" ", frontendArgv));
                 log.append("[dev] 前端静态服务器启动中 pid=").append(frontend.pid())
                         .append("，端口 ").append(frontendPort).append('\n');
                 String frontendFail = awaitFrontend(frontend, frontendPort);
                 if (frontendFail != null) {
                     kill(frontend.pid());
-                    deleteQuietly(frontendPid);
+                    ProcessIdentity.deletePidFiles(dir, ServiceLease.FRONTEND);
                     return new Result(false, null, ErrorCode.FRONTEND_START_FAILED.code(),
                             "前端静态服务器未就绪：" + frontendFail,
                             redact(log.toString() + tail(frontendLog)), backendPort, frontendPort);
                 }
                 actualFrontend = frontendPort;
                 log.append("[dev] 前端就绪 http://127.0.0.1:").append(frontendPort).append('\n');
-                saveLease(projectId, env, ServiceLease.FRONTEND, frontendPort, frontend.pid());
+                String frontendLeaseError = saveLease(projectId, env, ServiceLease.FRONTEND,
+                        frontendPort, frontend.pid());
+                if (frontendLeaseError != null) {
+                    kill(frontend.pid());
+                    ProcessIdentity.deletePidFiles(dir, ServiceLease.FRONTEND);
+                    return new Result(false, null, ErrorCode.FRONTEND_START_FAILED.code(),
+                            frontendLeaseError, redact(log.toString()), backendPort, frontendPort);
+                }
             } catch (IOException e) {
                 return new Result(false, null, ErrorCode.FRONTEND_START_FAILED.code(),
                         "无法启动前端静态服务器：" + e.getMessage(), log.toString(),
@@ -184,39 +211,131 @@ public class LocalDevHostDeployer {
 
     private boolean stopIn(Path dir, String projectId, String env, StringBuilder log) {
         boolean stopped = false;
-        for (String name : List.of("frontend.pid", "backend.pid")) {
-            Path pidFile = dir.resolve(name);
-            if (Files.isRegularFile(pidFile)) {
-                try {
-                    long pid = Long.parseLong(Files.readString(pidFile, StandardCharsets.UTF_8).trim());
-                    Optional<ProcessHandle> handle = ProcessHandle.of(pid);
-                    if (handle.isPresent() && handle.get().isAlive()) {
-                        kill(pid);
-                        stopped = true;
-                        log.append("[dev] 已停止 ").append(name.replace(".pid", ""))
-                                .append(" pid=").append(pid).append('\n');
-                    }
-                } catch (Exception e) {
-                    log.append("[dev] 停止 ").append(name).append(" 失败（继续）：")
-                            .append(e.getMessage()).append('\n');
-                }
-                deleteQuietly(pidFile);
+        for (String service : List.of(ServiceLease.FRONTEND, ServiceLease.BACKEND)) {
+            Optional<ProcessIdentity.PidRecord> record =
+                    ProcessIdentity.readPidRecord(dir, service);
+            if (record.isPresent()) {
+                stopped |= stopByRecord(record.get(), dir, service, projectId, env, log);
             }
-            deleteLease(projectId, env, name.replace(".pid", ""));
+            // BUG-43：双账本对账。租约表里还挂着 pid（设置页链路或历史残留）时，
+            // 也按同一身份校验终止一次，两条链路不再各停各的。
+            stopped |= stopByLease(projectId, env, service, log);
+            ProcessIdentity.deletePidFiles(dir, service);
+            deleteLease(projectId, env, service);
         }
         return stopped;
     }
 
-    /** 登记本机服务租约：平台 env_runtime_status / port_check 由此看到 dev 应用。 */
-    private void saveLease(String projectId, String env, String service, int port, long pid) {
-        if (store == null || projectId == null || projectId.isBlank() || port <= 0) {
-            return;
+    /** 按 pid 身份记录停止：身份不匹配（PID 复用）则跳过终止并告警。 */
+    private boolean stopByRecord(ProcessIdentity.PidRecord record, Path dir, String service,
+                                 String projectId, String env, StringBuilder log) {
+        long pid = record.pid();
+        Optional<ProcessHandle> handle = ProcessHandle.of(pid);
+        if (handle.isEmpty() || !handle.get().isAlive()) {
+            return false;
+        }
+        if (!ProcessIdentity.matches(handle.get().info().commandLine(),
+                handle.get().info().startInstant(), record, repoPathFragments(projectId, env))) {
+            log.append("[dev] pid=").append(pid)
+                    .append(" 已被复用（身份校验不匹配），跳过终止 ").append(service).append('\n');
+            warn("停止 " + service + " 跳过：pid=" + pid + " 身份校验不匹配（PID 已被复用）");
+            return false;
+        }
+        kill(pid);
+        log.append("[dev] 已停止 ").append(service).append(" pid=").append(pid).append('\n');
+        return true;
+    }
+
+    /** 按租约表停止（BUG-43：与 pid 文件账本互认，租约与 pid 文件不一致时以租约为准清理双方）。 */
+    private boolean stopByLease(String projectId, String env, String service, StringBuilder log) {
+        if (store == null || projectId == null || projectId.isBlank()) {
+            return false;
         }
         try {
+            Optional<ServiceLease> lease = store.serviceLeases(projectId, env).stream()
+                    .filter(l -> l.service().equals(service)).findFirst();
+            if (lease.isEmpty() || lease.get().pid() <= 0) {
+                return false;
+            }
+            long pid = lease.get().pid();
+            ProcessHandle handle = ProcessHandle.of(pid).orElse(null);
+            if (handle == null || !handle.isAlive()) {
+                return false;
+            }
+            // 租约没有 startInstant（表结构未扩展），退化为命令行包含本项目关键路径/token 探针
+            if (!ProcessIdentity.matches(handle.info().commandLine(), Optional.empty(),
+                    new ProcessIdentity.PidRecord(pid, 0, null, null),
+                    repoPathFragments(projectId, env))) {
+                log.append("[dev] 租约 pid=").append(pid)
+                        .append(" 身份校验不匹配，跳过终止 ").append(service).append('\n');
+                warn("租约 " + service + " 跳过终止：pid=" + pid + " 不属于本项目");
+                return false;
+            }
+            kill(pid);
+            log.append("[dev] 已停止（租约）").append(service).append(" pid=").append(pid).append('\n');
+            return true;
+        } catch (RuntimeException e) {
+            log.append("[dev] 租约对账停止 ").append(service).append(" 失败（继续）：")
+                    .append(e.getMessage()).append('\n');
+            return false;
+        }
+    }
+
+    /** 本项目关键路径片段：repo 绝对路径 + 部署状态目录，供 legacy 记录/租约命令行探针使用。 */
+    private static List<String> repoPathFragments(String projectId, String env) {
+        List<String> fragments = new ArrayList<>();
+        // 复用当前实例在 deploy() 里可拿到的信息：状态目录名（project-env）总是唯一可判定的
+        fragments.add(ProcessIdentity.deployDirName(projectId, env));
+        return fragments;
+    }
+
+    /** 启动后写入 JSON 身份记录（pid + startInstant + token + 命令行摘要）。 */
+    private static void writeIdentity(Path dir, String service, Process process,
+                                      String token, String command) throws IOException {
+        long startMs = ProcessHandle.of(process.pid())
+                .flatMap(h -> h.info().startInstant())
+                .map(Instant::toEpochMilli)
+                .orElseGet(() -> System.currentTimeMillis());
+        ProcessIdentity.writePidRecord(dir, service,
+                new ProcessIdentity.PidRecord(process.pid(), startMs, token, command));
+    }
+
+    /**
+     * 登记本机服务租约（BUG-43：覆盖前探活旧 pid）。
+     *
+     * <p>旧租约 RUNNING 且旧 pid 仍活着、但身份不属于本项目（本项目身份校验不通过）时，
+     * 拒绝覆盖并把旧实例视为并发实例 → 返回错误文本（上层中止本次部署），避免旧进程
+     * 成为平台看不见的孤儿、两个后端并存。旧 pid 已死或身份匹配（本次 stopIn 已停过）时正常覆盖。
+     *
+     * @return null = 登记成功；非 null = 错误文本（拒绝覆盖）
+     */
+    private String saveLease(String projectId, String env, String service, int port, long pid) {
+        if (store == null || projectId == null || projectId.isBlank() || port <= 0) {
+            return null;
+        }
+        try {
+            Optional<ServiceLease> existing = store.serviceLeases(projectId, env).stream()
+                    .filter(l -> l.service().equals(service)).findFirst();
+            if (existing.isPresent() && existing.get().running() && existing.get().pid() > 0
+                    && existing.get().pid() != pid) {
+                long oldPid = existing.get().pid();
+                ProcessHandle handle = ProcessHandle.of(oldPid).orElse(null);
+                if (handle != null && handle.isAlive()
+                        && !ProcessIdentity.matches(handle.info().commandLine(), Optional.empty(),
+                                new ProcessIdentity.PidRecord(oldPid, 0, null, null),
+                                repoPathFragments(projectId, env))) {
+                    String error = "检测到并发实例：" + service + " 旧 pid=" + oldPid
+                            + " 仍在运行且不属于本项目，拒绝覆盖租约（请先停止该进程）";
+                    warn(error);
+                    return error;
+                }
+            }
             store.saveServiceLease(new ServiceLease(projectId, env, service, port,
                     "RUNNING", pid, System.currentTimeMillis()));
+            return null;
         } catch (RuntimeException ignored) {
             // 登记失败不影响部署（只影响可观测性）
+            return null;
         }
     }
 
@@ -249,18 +368,18 @@ public class LocalDevHostDeployer {
     /** 平台托管的本机服务是否在运行（前端或后端任一存活）。 */
     public boolean isRunning(Path repo, String projectId, String env) {
         Path dir = stateDir(repo, projectId, env);
-        for (String name : List.of("backend.pid", "frontend.pid")) {
-            Path pidFile = dir.resolve(name);
-            if (!Files.isRegularFile(pidFile)) {
+        for (String service : List.of(ServiceLease.BACKEND, ServiceLease.FRONTEND)) {
+            Optional<ProcessIdentity.PidRecord> record =
+                    ProcessIdentity.readPidRecord(dir, service);
+            if (record.isEmpty()) {
                 continue;
             }
-            try {
-                long pid = Long.parseLong(Files.readString(pidFile, StandardCharsets.UTF_8).trim());
-                if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
-                    return true;
-                }
-            } catch (Exception ignored) {
-                // 坏 pid 文件视为未运行
+            Optional<ProcessHandle> handle = ProcessHandle.of(record.get().pid());
+            if (handle.isPresent() && handle.get().isAlive()
+                    && ProcessIdentity.matches(handle.get().info().commandLine(),
+                            handle.get().info().startInstant(), record.get(),
+                            List.of(ProcessIdentity.deployDirName(projectId, env)))) {
+                return true;
             }
         }
         return false;
@@ -403,10 +522,22 @@ public class LocalDevHostDeployer {
                     h.destroy();
                 });
             }
-        } catch (Exception ignored) {
-            // 结束失败不阻塞流程
+        } catch (Exception e) {
+            // BUG-40 收益点 6：结束失败要说话，"停不掉"不能再静默吞掉
+            warn("结束进程树失败 pid=" + pid + "：" + e.getMessage());
         }
-        ProcessHandle.of(pid).filter(ProcessHandle::isAlive).ifPresent(ProcessHandle::destroyForcibly);
+        ProcessHandle.of(pid).filter(ProcessHandle::isAlive).ifPresent(h -> {
+            try {
+                h.destroyForcibly();
+            } catch (Exception e) {
+                warn("强制结束失败 pid=" + pid + "：" + e.getMessage());
+            }
+        });
+    }
+
+    /** 身份校验不匹配 / kill 失败时留痕（轻量告警，不再静默）。 */
+    private static void warn(String message) {
+        log.warn("[dev-warn] {}", message);
     }
 
     private static void startLog(Path logFile, String header) {
@@ -432,14 +563,6 @@ public class LocalDevHostDeployer {
     /** 构建日志尾部（供流水线展示）。 */
     public String logTail(Path logFile) {
         return ProcessExecutor.redact(tail(logFile));
-    }
-
-    private static void deleteQuietly(Path file) {
-        try {
-            Files.deleteIfExists(file);
-        } catch (IOException ignored) {
-            // 删不掉不影响后续
-        }
     }
 
     private static String javaBin() {

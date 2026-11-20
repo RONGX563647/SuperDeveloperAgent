@@ -21,6 +21,7 @@ import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.domain.settings.DeployServerRepository;
+import top.rongx.agent.domain.project.ProjectContext;
 
 /** 首次发布就绪清单：只验证聚合规则（缺什么 → 哪个修复入口）。 */
 class ProjectReadinessControllerTest {
@@ -46,9 +47,31 @@ class ProjectReadinessControllerTest {
         return new ProjectReadinessController(
                 locator, defStore, projects, recipes, servers, envStore, engine,
                 new top.rongx.agent.executor.PipelineDefinitionInspectorImpl(),
-                repoInspector, dockerfileTools, currentUser,
+                repoInspector, dockerfileTools, contextResolver, currentUser,
                 legacyServerHost);
     }
+
+    /** BUG-27：控制器环境校验收敛到 resolver；测试桩不做用户校验，只校验 env 属于项目。 */
+    private final ProjectContextResolver contextResolver =
+            new ProjectContextResolver(projects, null) {
+                @Override
+                public ProjectContext resolve(String projectId, String env, String userId) {
+                    return resolve(projectId, env, userId, null);
+                }
+
+                @Override
+                public ProjectContext resolve(String projectId, String env, String userId,
+                                              String worktree) {
+                    List<ProjectEnv> envs = projects.findEnvs(projectId);
+                    boolean known = envs.stream().anyMatch(e -> e.env().equals(env));
+                    if (!known) {
+                        throw new top.rongx.agent.domain.error.RunException(
+                                top.rongx.agent.domain.error.ErrorCode.RUN_INVALID_INPUT,
+                                "环境不属于该项目: " + env);
+                    }
+                    return new ProjectContext(projectId, env, userId, null, worktree);
+                }
+            };
 
     @Test
     void dockerProjectWithEverythingConfiguredIsReadyButNotYetRun() throws Exception {

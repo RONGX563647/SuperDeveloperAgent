@@ -83,7 +83,7 @@ class ConversationManagerTest {
     }
 
     @Test
-    @DisplayName("调度会话按用户唯一；新建会话默认沿用调度环境")
+    @DisplayName("调度会话按用户唯一；新建会话不传 env 时落默认 test（BUG-27：不再继承调度会话历史 env）")
     void supervisorAndCreate() {
         ConversationManager manager = manager(new SilentChat(), 2);
         Conversation first = manager.ensureSupervisor(PROJECT, USER);
@@ -92,13 +92,51 @@ class ConversationManagerTest {
         assertEquals(ConversationKind.SUPERVISOR, first.kind());
         assertFalse(manager.ensureSupervisor(PROJECT, "bob").id().equals(first.id()));
 
+        // 把调度会话的历史环境改成 prod（模拟上次派发到 prod）
+        manager.updateOwned(first.id(), USER, new ConversationPatch(null, "prod", null,
+                null, null, null, null));
+        // 不传 env 的新会话必须落默认 test，而不是继承调度会话的 prod
         Conversation created = manager.createConversation(PROJECT, USER, "修复构建", null, "wt-a");
-        assertEquals("test", created.env());
+        assertEquals("test", created.env(),
+                "BUG-27：新建会话不传 env 时不得继承调度会话历史 env");
         assertEquals("wt-a", created.worktree());
         assertEquals(1, manager.list(PROJECT, USER, false).stream()
                 .filter(c -> c.kind() == ConversationKind.NORMAL).count());
         assertTrue(manager.list(PROJECT, "bob", false).stream()
                 .noneMatch(c -> c.kind() == ConversationKind.NORMAL));
+    }
+
+    @Test
+    @DisplayName("BUG-27：显式传 env 的新会话仍按传入环境创建")
+    void createWithExplicitEnv() {
+        ConversationManager manager = manager(new SilentChat(), 2);
+        manager.ensureSupervisor(PROJECT, USER);
+        Conversation created = manager.createConversation(PROJECT, USER, "t", "dev", null);
+        assertEquals("dev", created.env());
+    }
+
+    @Test
+    @DisplayName("BUG-27：同一 patch 同时改 env+worktree 时，worktree 按新 env 校验且保存后 env 生效")
+    void updateOwnedEnvPlusWorktreeUsesNewEnv() {
+        ConversationManager manager = manager(new SilentChat(), 2);
+        manager.ensureSupervisor(PROJECT, USER);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        // 旧实现用旧 env（test）构造校验上下文；改为先 resolveEnv 新 env
+        assertTrue(manager.updateOwned(c.id(), USER,
+                new ConversationPatch(null, "prod", "wt-b", null, null, null, null)).isPresent());
+        Conversation updated = manager.findOwned(c.id(), USER).orElseThrow();
+        assertEquals("prod", updated.env());
+        assertEquals("wt-b", updated.worktree());
+    }
+
+    @Test
+    @DisplayName("BUG-27：patch 里的未知环境被拒绝（含改 env+worktree 的组合）")
+    void updateOwnedRejectsUnknownEnv() {
+        ConversationManager manager = manager(new SilentChat(), 2);
+        manager.ensureSupervisor(PROJECT, USER);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        assertThrows(PlatformException.class, () -> manager.updateOwned(c.id(), USER,
+                new ConversationPatch(null, "staging", "wt-x", null, null, null, null)));
     }
 
     @Test

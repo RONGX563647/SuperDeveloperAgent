@@ -2,10 +2,7 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -55,7 +52,6 @@ public class ProjectTools {
             return "当前项目没有配置环境。evidence: project:" + ctx.projectId();
         }
         StringBuilder out = new StringBuilder("envs:\n");
-        Map<String, List<String>> byDir = new LinkedHashMap<>();
         for (ProjectEnv e : envs) {
             EffectiveEndpointResolver.Endpoint endpoint = endpoints.resolve(ctx.projectId(), e.env());
             out.append("- ").append(e.env())
@@ -65,24 +61,17 @@ public class ProjectTools {
                     .append(endpoint.healthPath())
                     .append("（来源：").append(endpoint.source()).append("）")
                     .append("  composeDir=").append(e.composeDir() == null ? "未登记" : e.composeDir())
+                    .append("（仅登记，未参与部署：reserved）")
                     .append('\n');
             int registeredPort = portOf(e.appUrl());
             if (registeredPort > 0 && registeredPort != endpoint.port()) {
                 out.append("  warning: 登记地址端口 ").append(registeredPort)
                         .append(" 与生效端口 ").append(endpoint.port())
-                        .append(" 不一致，以 effective 为准\n");
-            }
-            if (e.composeDir() != null && !e.composeDir().isBlank()) {
-                byDir.computeIfAbsent(e.composeDir(), k -> new ArrayList<>()).add(e.env());
+                        .append(" 不一致，真实端口以租约为准（当前 ")
+                        .append(endpoint.port()).append("），不要通过改登记地址来对齐\n");
             }
         }
-        byDir.forEach((dir, names) -> {
-            if (names.size() > 1) {
-                out.append("warning: 环境 ").append(String.join("/", names))
-                        .append(" 共用 composeDir=").append(dir)
-                        .append("；若在同一宿主机部署会互相覆盖\n");
-            }
-        });
+        out.append("note: composeDir 只是登记信息，当前部署由流水线 deploy 段与容器命名决定，修改它不会改变部署落点\n");
         out.append("evidence: project:").append(ctx.projectId());
         return out.toString();
     }

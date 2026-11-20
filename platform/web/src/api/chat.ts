@@ -83,8 +83,10 @@ export function extractText(event: AgentEventDto): string {
   return ''
 }
 
-/** 从文本里识别变更单号（骨架阶段的临时手段，后续应由后端发专用事件）。 */
-export function findChangeId(text: string): string | null {
-  const match = text.match(/chg-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
-  return match ? match[0] : null
-}
+/**
+ * 从文本里识别变更单号——与后端 ChangeWire 同一口径（BUG-31）。
+ *
+ * <p>唯一实现在 {@link ./changeWire.ts}（零依赖，可被纯 Node 测试直接加载）；
+ * 这里保留同名导出，方便既有调用方不动代码。
+ */
+export { findChangeId } from './changeWire'
