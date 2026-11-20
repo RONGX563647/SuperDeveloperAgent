@@ -1795,7 +1795,8 @@ def web_tests() -> int:
     for script in scripts:
         proc = subprocess.run(
             [node, "--experimental-strip-types", "--import", "./tools/ts-resolve.mjs", script],
-            cwd=web, env=clean_env(), capture_output=True, text=True)
+            cwd=web, env=clean_env(), capture_output=True, text=True,
+            encoding="utf-8", errors="replace")
         if proc.returncode != 0:
             record_metric("web-test", time.time() - begun, result="FAILED")
             out(proc.stdout)
