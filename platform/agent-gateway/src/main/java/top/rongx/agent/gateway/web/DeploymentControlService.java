@@ -932,7 +932,7 @@ public class DeploymentControlService {
                 + RemoteDockerPs.FORMAT + "'";
         SshAccess.Result result = sshDocker(server, command);
         if (!result.ok()) {
-            throw new IllegalStateException(shortError(result.error()));
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, shortError(result.error()));
         }
         List<RemoteContainer> found = new ArrayList<>();
         for (RemoteDockerPs.Row row : RemoteDockerPs.parse(projectId, result.output())) {
