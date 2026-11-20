@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.PortLease;
+import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.process.JavaRuntime;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
@@ -74,15 +75,19 @@ public class DeploymentControlService {
     /** 远程部署服务器（SERVER 目标）：矩阵/日志/启停都要能看见远端容器。 */
     private final DeployServerRepository servers;
     private final SshAccess ssh;
+    /** 流水线引擎端口：镜像版本账本（deployImages）从这读，环境页展示保留的镜像。 */
+    private final PipelineEngine engine;
 
     public DeploymentControlService(RuntimeInspector inspector, EnvironmentStore envStore,
                                     DeployServerRepository servers, SshAccess ssh,
+                                    PipelineEngine engine,
                                     @Value("${agent.workspace.root:./data/workspaces}")
                                     String workspaceRoot) {
         this.inspector = inspector;
         this.envStore = envStore;
         this.servers = servers;
         this.ssh = ssh;
+        this.engine = engine;
         this.deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("deploy");
     }
@@ -174,7 +179,25 @@ public class DeploymentControlService {
             note = (note.isEmpty() ? "" : note + "；") + "远程服务器未刷新："
                     + String.join("；", remoteNotes);
         }
-        return new Matrix(columns, versions, list, dockerAvailable, note);
+        return new Matrix(columns, versions, list, dockerAvailable, note, retainedImages(projectId));
+    }
+
+    /**
+     * 最近保留的镜像（来自镜像版本账本 deployImages，按部署时间倒序）：
+     * 环境页据此展示「哪些版本还在本机、可直接重新部署」。
+     * 账本即保留策略的权威记录——被 prune 移除的版本不会出现在这里。
+     */
+    private List<ImageInfo> retainedImages(String projectId) {
+        try {
+            return ENVS.stream()
+                    .flatMap(env -> engine.deployImages(projectId, env).stream()
+                            .map(v -> new ImageInfo(v.tag(), v.version(), v.gitSha(), v.runId(),
+                                    v.sizeBytes(), v.status(), v.createdAt(), v.deployedAt())))
+                    .toList();
+        } catch (RuntimeException e) {
+            // 账本读不到（引擎未装配 / 文件损坏）不影响矩阵主体
+            return List.of();
+        }
     }
 
     // ------------------------------------------------------------------ 启停
@@ -1014,7 +1037,13 @@ public class DeploymentControlService {
     }
 
     public record Matrix(List<EnvColumn> environments, List<String> versions,
-                         List<Cell> cells, boolean dockerAvailable, String note) {
+                         List<Cell> cells, boolean dockerAvailable, String note,
+                         List<ImageInfo> images) {
+    }
+
+    /** 环境页「最近保留的镜像」条目：来自镜像版本账本，可直接按版本重新部署。 */
+    public record ImageInfo(String tag, String version, String gitSha, String runId,
+                            long sizeBytes, String status, long createdAt, long deployedAt) {
     }
 
     public record ActionResult(boolean ok, String message, String state) {

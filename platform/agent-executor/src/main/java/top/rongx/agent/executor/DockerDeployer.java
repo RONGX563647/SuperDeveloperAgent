@@ -289,7 +289,10 @@ public class DockerDeployer implements Deployer {
                     ProcessExecutor.redact(log.toString()));
         }
         return DeployResult.ok(DeployTarget.DOCKER,
-                "http://" + endpointHost + ":" + hostPort + safePath(healthPath),
+                // 部署地址 = 用户点「打开部署地址」要跳转的页面入口（根路径 → 前端首页），
+                // 不是 healthPath：healthPath（/actuator/health）只用于探活判定，
+                // 返回的是一段 JSON，拿它当部署地址会让用户以为部署错了地方。
+                "http://" + endpointHost + ":" + hostPort + "/",
                 name, ProcessExecutor.redact(log.toString()));
     }
 

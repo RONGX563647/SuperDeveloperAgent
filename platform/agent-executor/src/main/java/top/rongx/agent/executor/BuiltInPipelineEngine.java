@@ -4078,11 +4078,18 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
-     * 镜像保留策略：每个 (项目, 环境) 只保留最近 {@link #KEEP_IMAGES} 个已部署版本。
+     * 镜像保留策略（分级保护 + 规则外保留 {@link #KEEP_IMAGES} 个）：
      *
-     * <p>账本与本地镜像一起收敛：先按账本挑出过期版本，再 {@code docker rmi -f}；
-     * 删镜像失败（Docker 不可用 / 仍被容器引用）只记日志，不阻断本次发布。
-     * 当前版本（账本第一条）永远保留。
+     * <p><b>保护名单（永不清理）</b>：
+     * <ul>
+     *   <li>当前版本（账本第一条 = 回滚锚点）；</li>
+     *   <li>上一版本（账本第二条 = 回滚的回滚锚点，故障时用户最常退到的一版）；</li>
+     *   <li>正在运行的容器引用的镜像（删了会让活着的部署下次重启失败）。</li>
+     * </ul>
+     *
+     * <p><b>规则外</b>：按部署时间保留最近 {@link #KEEP_IMAGES} 个，其余 {@code docker rmi -f}。
+     * 删除失败（Docker 不可用 / 仍被容器引用）只记日志，不阻断本次发布；
+     * 账本同步移除过期条目，防止列表无限增长。
      */
     private void pruneOldImages(RunState state) {
         try {
@@ -4090,7 +4097,23 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             if (rows.size() <= KEEP_IMAGES) {
                 return;
             }
-            List<ImageVersion> stale = rows.subList(KEEP_IMAGES, rows.size());
+            java.util.Set<String> protectedTags = new java.util.HashSet<>();
+            if (!rows.isEmpty()) {
+                protectedTags.add(rows.get(0).tag());          // 当前版本（回滚锚点）
+            }
+            if (rows.size() > 1) {
+                protectedTags.add(rows.get(1).tag());          // 上一版本
+            }
+            runningImageTags(state, protectedTags);
+            List<ImageVersion> stale = new ArrayList<>();
+            int kept = 0;
+            for (ImageVersion v : rows) {
+                if (protectedTags.contains(v.tag()) || kept < KEEP_IMAGES) {
+                    kept++;
+                    continue;
+                }
+                stale.add(v);
+            }
             int removed = 0;
             for (ImageVersion v : stale) {
                 BoundedCommand.Outcome outcome = BoundedCommand.run(
@@ -4104,13 +4127,32 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 } else {
                     removed++;
                 }
-                // 账本只保留最近 KEEP_IMAGES 个：镜像没删掉也要移出，否则列表无限增长
+                // 账本只保留保护名单 + 最近 KEEP_IMAGES 个：镜像没删掉也要移出，否则列表无限增长
                 imageVersions.remove(state.projectId, state.env, v.tag());
             }
-            state.log.append("[image] 已清理 ").append(removed).append(" 个历史镜像，账本保留最近 ")
-                    .append(KEEP_IMAGES).append(" 个版本\n");
+            if (!stale.isEmpty()) {
+                state.log.append("[image] 已清理 ").append(removed)
+                        .append(" 个历史镜像（保护：当前/上一版本与运行中镜像；规则外保留最近 ")
+                        .append(KEEP_IMAGES).append(" 个）\n");
+            }
         } catch (Exception e) {
             state.log.append("[image] 镜像清理跳过：").append(e.getMessage()).append('\n');
+        }
+    }
+
+    /** 收集本机正在运行的、属于本项目的容器所引用的镜像 tag（清理保护名单）。 */
+    private void runningImageTags(RunState state, java.util.Set<String> into) {
+        BoundedCommand.Outcome outcome = BoundedCommand.run(dockerCli.cmd(
+                "ps", "--filter", "label=agent.project=" + state.projectId,
+                "--format", "{{.Image}}"), 10_000L);
+        if (!outcome.ok()) {
+            return;
+        }
+        for (String line : outcome.output().split("\\R")) {
+            String image = line.trim();
+            if (!image.isEmpty()) {
+                into.add(image);
+            }
         }
     }
 
@@ -4570,8 +4612,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 deployEnv,
                 network,
                 state.env,
-                // 版本号只认用户在流水线里填的 / 打 tag 的版本：没填就是 latest
-                rollback ? null : state.deployVersion,
+                // 版本标签：用户填写的版本号优先；默认部署槽也回落到构建序号版本（test-v44），
+                // 否则容器 label agent.version=latest，部署矩阵把所有默认部署挤进同一个
+                // "latest" 版本格，用户看到的是"上次部署的旧提交"而不是按版本区分的环境。
+                rollback ? null : versionLabel(state.deployVersion, state.env, state.seq, state.gitSha),
                 tagged,
                 spec.volume());
 

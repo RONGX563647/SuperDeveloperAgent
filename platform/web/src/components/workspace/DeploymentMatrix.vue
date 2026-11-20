@@ -10,7 +10,9 @@ import {
   stopDeployment,
   type DeploymentCell,
   type DeploymentMatrix,
+  type RetainedImage,
 } from '../../api/workspace'
+import { triggerPipeline } from '../../api/pipeline'
 import { envShort } from '../../utils/pipelineLabels'
 
 /**
@@ -25,7 +27,35 @@ const matrix = ref<DeploymentMatrix | null>(null)
 const loading = ref(false)
 const error = ref('')
 const acting = ref('')
+/** 正在按镜像 tag 触发重新构建的行（构建按钮转圈）。 */
+const building = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
+
+/** 最近保留的镜像（镜像账本，按部署时间倒序）。 */
+const retainedImages = computed<RetainedImage[]>(() => matrix.value?.images ?? [])
+
+function sizeLabel(bytes: number): string {
+  if (!bytes) return '—'
+  const gb = bytes / (1024 * 1024 * 1024)
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / (1024 * 1024))} MB`
+}
+
+/** 按保留镜像的提交直接触发一次 test 环境重新构建（不打 tag，覆盖默认部署槽）。 */
+async function rebuild(image: RetainedImage): Promise<void> {
+  if (!image.gitSha || image.gitSha.length < 7) {
+    ElMessage.warning('该镜像没有记录提交 sha，无法按提交重新构建；请在流水线页手动触发')
+    return
+  }
+  building.value = image.tag
+  try {
+    const run = await triggerPipeline('release', props.projectId, image.gitSha, 'docker', 'test')
+    ElMessage.success(`已触发重新构建：${image.version || image.tag}（runId ${run.runId}）`)
+  } catch (e) {
+    ElMessage.error(`触发失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    building.value = ''
+  }
+}
 
 const drawerOpen = ref(false)
 const selectedKey = ref('')
@@ -264,6 +294,37 @@ onUnmounted(() => {
       <h3>还没有可管理的部署</h3>
       <p>在流水线里完成一次 dev / test / prod 部署后，版本会出现在这里，并可按环境一键启停。</p>
     </div>
+
+    <!-- 最近保留的镜像：来自镜像版本账本（保留策略内），可直接按提交重新构建 -->
+    <section v-if="retainedImages.length" class="dv-images">
+      <header class="dv-images-head">
+        <h3>最近保留的镜像</h3>
+        <p>保留策略内的版本（当前/上一版本 + 最近 5 个）；点「重新构建」按该提交再跑一次流水线。</p>
+      </header>
+      <div class="dv-image-list">
+        <article v-for="img in retainedImages" :key="img.tag" class="dv-image-card">
+          <div class="dv-image-main">
+            <code class="dv-image-tag" :title="img.tag">{{ img.tag }}</code>
+            <span v-if="img.version" class="dv-chip">{{ img.version }}</span>
+            <span v-if="img.gitSha" class="dv-chip mono">{{ img.gitSha.slice(0, 7) }}</span>
+            <span class="dv-chip">{{ sizeLabel(img.sizeBytes) }}</span>
+          </div>
+          <div class="dv-image-foot">
+            <span class="dv-time" :title="absoluteTime(img.deployedAt)">
+              {{ img.deployedAt ? `${relativeTime(img.deployedAt)}部署` : '未部署' }}
+            </span>
+            <button
+              type="button"
+              class="dv-btn primary"
+              :disabled="building === img.tag"
+              @click.stop="rebuild(img)"
+            >
+              {{ building === img.tag ? '构建中…' : '重新构建' }}
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <div v-else class="dv-grid">
       <section v-for="env in envs" :key="env.key" class="dv-env">
@@ -1077,5 +1138,60 @@ onUnmounted(() => {
   .dw-info {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* ---- 最近保留的镜像 ---- */
+.dv-images {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.dv-images-head {
+  margin-bottom: 10px;
+}
+.dv-images-head h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+.dv-images-head p {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+.dv-image-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+.dv-image-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.dv-image-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.dv-image-tag {
+  max-width: 200px;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dv-image-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 </style>

@@ -195,7 +195,9 @@ public class HostDeployer implements Deployer {
                     .append(" release=").append(releaseSha)
                     .append(" port=").append(request.hostPort()).append('\n');
             return DeployResult.ok(DeployTarget.HOST,
-                    "http://127.0.0.1:" + request.hostPort() + safePath(request.healthPath()),
+                    // 部署地址 = 根路径（前端页面入口）；healthPath 只用于探活判定，
+                    // 返回的是 JSON，拿它当「打开部署地址」的跳转目标会误导用户
+                    "http://127.0.0.1:" + request.hostPort() + "/",
                     releaseSha, ProcessExecutor.redact(log.toString()));
         } catch (IOException e) {
             return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_START_FAILED.code(),
