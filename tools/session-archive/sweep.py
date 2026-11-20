@@ -209,12 +209,14 @@ def main() -> int:
         if args.dry_run:
             print(f"[待补录] {manifest_id} | {manifest['title']}")
             continue
-        gate.write_json(gate.PROCESS / "docs" / folder / "manifest.json", manifest)
-        gate.write_summary(manifest, {"folder": folder, "slug": folder.split("_", 2)[2],
-                                      "category": "docs"}, folder[:7])
+        period = folder[:7]
+        ledger_path = gate.LEDGER / f"{period}.jsonl"
+        gate.write_ledger(ledger_path, gate.manifest_lines(ledger_path) + [manifest])
         print(f"[已补录] {manifest_id} | {manifest['title']}")
 
     if not args.dry_run:
+        gate.reseal_chain("docs")
+        gate.rebuild_views()
         gate.write_json(STATE, {"schema": "ide-sessions/v1",
                                 "updatedAt": datetime.now(TZ).isoformat(),
                                 "sessions": known})

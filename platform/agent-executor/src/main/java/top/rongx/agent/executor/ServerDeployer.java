@@ -242,8 +242,8 @@ public class ServerDeployer implements Deployer {
                 // 只比镜像不够：改过环境变量/网络也需要重启，所以这里还要求 runId 相同。
                 log.append("[deploy] 本次运行已部署且镜像一致，跳过重复重启\n");
                 return DeployResult.ok(DeployTarget.SERVER,
-                        "http://" + server.host() + ":" + previousPort
-                                + safePath(request.healthPath()),
+                        // 部署地址 = 根路径（页面入口）；healthPath 只用于探活
+                        "http://" + server.host() + ":" + previousPort + "/",
                         server.host() + ":" + container, redact(log));
             }
             // 环境变量很多时会超出 ssh 单条命令长度上限：改成上传 600 权限的 env-file。
@@ -351,8 +351,8 @@ public class ServerDeployer implements Deployer {
             }
 
             return DeployResult.ok(DeployTarget.SERVER,
-                    "http://" + server.host() + ":" + hostPort
-                            + safePath(request.healthPath()),
+                    // 部署地址 = 根路径（页面入口）；healthPath 只用于探活
+                    "http://" + server.host() + ":" + hostPort + "/",
                     server.host() + ":" + container, redact(log));
         } finally {
             try {

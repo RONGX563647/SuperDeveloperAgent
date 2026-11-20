@@ -19,9 +19,12 @@ Every session must be archived; otherwise you may not edit code, commit, or push
 2. Write the implementation and its unit tests together (feat/bug need >= 1 new case).
 3. `git commit`: the pre-commit hook runs the test suite and stores evidence. Never
    bypass with `--no-verify`.
-4. When done: `python tools/session-archive/gate.py finish` writes `docs/process`
-   and `docs/summary`; commit those docs. The pre-push hook rejects unarchived work.
-5. Archives are append-only. Full rules: `docs/session-archive-spec-v1.md`.
+4. When done: `python tools/session-archive/gate.py finish` appends one record to
+   `docs/ledger/<YYYY-MM>.jsonl` and refreshes `docs/views/`; commit those docs.
+   The pre-push hook rejects unarchived work.
+5. Archives are append-only (hash chain per category). Full rules:
+   `docs/session-archive-spec-v1.md`. Broken chain after rebase/merge? Diagnose with
+   `python tools/session-archive/diag-chain.py <category>` and reseal.
 6. If hooks are missing in a fresh clone: `powershell -ExecutionPolicy Bypass -File
    tools/session-archive/install-hooks.ps1`.
 7. Review/optimisation plans are not sessions: put them in `docs/summary/plan/`
@@ -68,10 +71,14 @@ that stop matching.
 6. Otherwise: the minimum code that works.
 
 ## Docs
-`docs/` is a doc-marshal tree: ASCII kebab-case names, no `README.md`, every note
-has `type`/`summary` front-matter. New docs: `doc-marshal new <type> <path>`.
-After changing code, run `doc-marshal drifted` and update the affected `code_refs`;
-before commit run `doc-marshal check --all`.
+Start at `docs/README.md` (the map). Task-domain knowledge lives in
+`docs/skills/*/SKILL.md` — read the 1–2 cards whose `when_to_read` matches, they
+carry a `budget`. History is in `docs/ledger/*.jsonl` (audit data, never read
+wholesale): query it with `python tools/docs/find.py "<keywords>"` (also
+`--module`, `--impact <file>`, `--recent`). `docs/views/` is generated — do not
+hand-edit. Naming rules stay: ASCII kebab-case, `type`/`summary` front-matter,
+`doc-marshal new <type> <path>` for new docs, `doc-marshal check --all` before
+commit.
 
 ## Rules
 - No unrequested abstractions. Java: no single-impl interface without a port, no

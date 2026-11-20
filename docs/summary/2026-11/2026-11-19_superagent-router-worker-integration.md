@@ -4,7 +4,7 @@ kind: plan
 slug: superagent-router-worker-integration
 period: 2026-11
 createdAt: 2026-11-19T10:00:00+08:00
-updatedAt: 2026-11-19T18:00:00+08:00
+updatedAt: 2026-11-20T22:10:00+08:00
 status: done
 owner: TBD
 verdict: PASS
@@ -50,7 +50,7 @@ Super-agent 的「Router + Worker」思想对本项目真正有价值的只有�
 | 阶段 | 改动 | 落点 |
 |---|---|---|
 | 1 | 新增 `WorkerRole` 枚举（PRODUCT/DEV/TEST/OPS）与解析 | `agent-domain/.../conversation/WorkerRole.java` |
-| 2 | 任务与账本加可空维度：`source_ref`/`trigger_type`、`worker_role`/`trigger_ref` | `WorkspaceTask`、`RunRecord`、`V5__worker_role_and_trigger.sql`、两个 Entity 与 Store |
+| 2 | 任务与账本加可空维度：`source_ref`/`trigger_type`、`worker_role`/`trigger_ref` | `WorkspaceTask`、`RunRecord`、`V7__worker_role_and_trigger.sql`（原 V5，2026-11-20 合并时重排）、两个 Entity 与 Store |
 | 3 | `AgentFactory.createWorker(ctx, role)`：角色 →（工具面、提示、权限）映射；`createDeploy` 成为 OPS 特例 | `agent-runtime/.../AgentFactory.java` |
 | 4 | 会话按角色路由到 Worker | `ChatService` |
 | 5 | Gitee 事件 Fast Path（来源+类型+动作白名单、去重、零 LLM）→ 建任务 | `GiteeWebhookController#event` |
@@ -73,7 +73,7 @@ Super-agent 的「Router + Worker」思想对本项目真正有价值的只有�
 3. **账本维度**：工作区运行记录可读出 `worker_role` 与 `trigger_ref`；SQLite 重启后仍可读。
    反证：字段为空或反序列化报错。
    验收命令：`mvn -pl agent-infra test -Dtest=DbConversationStoreTest`。
-4. **迁移安全**：V5 只做 `ALTER TABLE ADD COLUMN`，已发布迁移未被改动。
+4. **迁移安全**：迁移只做 `ALTER TABLE ADD COLUMN`，已发布迁移未被改动。
    验收命令：`mvn -pl spec-checks test -Dtest=MigrationGuardTest`。
 5. **权限不倒退**：调度 Agent 工具面无任何写工具类。
    验收命令：`mvn -pl spec-checks test -Dtest=SupervisorToolkitWiringTest`。
@@ -94,6 +94,9 @@ Super-agent 的「Router + Worker」思想对本项目真正有价值的只有�
 
 - 2026-11-19 17:00 收敛为 v4 最小增量方案（删除三张新表与宏观概念）。
 - 2026-11-19 18:00 按 v4 实施完成并补验收证据；状态改为 done，verdict=PASS。
+- 2026-11-20 22:10 合并 0.1 时与 `V5__audit_event` 版本撞车，本方案的迁移重排为
+  `V7__worker_role_and_trigger.sql`（tag 之后的未发布迁移，允许改名）；曾按 V5 应用过
+  迁移的 0.2 线本地库需重建或 repair，0.1 线存量库不受影响。
 
 ## 链接
 

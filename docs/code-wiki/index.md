@@ -21,7 +21,7 @@ summary: 研发运维智能体平台 Code Wiki 总目录：定位、模块地图
 | 执行 | 仓库配方 `ci/actions.yml → Taskfile.yml → Makefile → 内置默认`，Docker 沙箱可选 |
 | 质量门禁 | ArchUnit 架构规则、禁令扫描、Flyway 迁移锁、Handbook 漂移、会话归档 |
 
-当前 HEAD：`93af965`（2026-11-19）。
+当前 HEAD：`e9a39d3`（2026-11-20，分支 `0.1.0-snapshot`）。
 
 ## 文档目录
 
@@ -32,7 +32,7 @@ summary: 研发运维智能体平台 Code Wiki 总目录：定位、模块地图
 | 3 | [核心流程](03-core-flows.md) | 对话 SSE、流水线、治理确认、项目接入、BugFix、工作区调度 |
 | 4 | [领域模型](04-domain-model.md) | 实体/枚举/端口/错误码字典 |
 | 5 | [工具与治理](05-tools-and-governance.md) | 工具面、插件渐进披露、权限矩阵、确认令牌 |
-| 6 | [执行与部署](06-execution-deploy.md) | 动作执行器、沙箱、流水线引擎、部署器、环境供给、自动修复 |
+| 6 | [执行与部署](06-execution-deploy.md) | 动作执行器、沙箱、镜像就绪自动收敛、流水线引擎、部署器、环境供给、自动修复 |
 | 7 | [持久化与数据布局](07-persistence.md) | 双数据库、Flyway、实体清单、工作区目录、加密状态 |
 | 8 | [HTTP API](08-http-api.md) | 接口分组清单、错误契约、SSE 协议 |
 | 9 | [前端架构](09-frontend.md) | 路由、视图、API 层、状态归约、组件 |

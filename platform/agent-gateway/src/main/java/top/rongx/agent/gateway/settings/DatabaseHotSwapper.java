@@ -269,7 +269,7 @@ public class DatabaseHotSwapper {
         }
     }
 
-    /** {@code V5__worker_role_and_trigger.sql} → 5；不匹配返回 0。 */
+    /** {@code V7__worker_role_and_trigger.sql} → 7；不匹配返回 0。 */
     private static int migrationVersionOf(String fileName) {
         var matcher = java.util.regex.Pattern.compile("^V(\\d+)__").matcher(fileName);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;

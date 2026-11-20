@@ -19,15 +19,21 @@ ROOT = Path(__file__).resolve().parents[2]
 def main(argv: list[str]) -> int:
     category = argv[1] if len(argv) > 1 else "bug"
     tail = int(argv[2]) if len(argv) > 2 else 4
-    root = ROOT / "docs" / "process" / category
+    root = ROOT / "docs" / "ledger"
     if not root.is_dir():
-        print(f"分类目录不存在：{root}", file=sys.stderr)
+        print(f"ledger 目录不存在：{root}", file=sys.stderr)
         return 1
 
     rows = []
-    for path in sorted(root.glob("*/manifest.json")):
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        rows.append((manifest.get("createdAt", ""), path.parent.name, manifest))
+    for path in sorted(root.glob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            manifest = json.loads(line)
+            if manifest.get("category") != category:
+                continue
+            rows.append((manifest.get("createdAt", ""), manifest.get("id", ""), manifest))
     rows.sort()
     print(f"{category} 共 {len(rows)} 份")
     if not rows:
@@ -53,7 +59,7 @@ def main(argv: list[str]) -> int:
         for line in broken:
             print("  - " + line)
         print("\n修复：python -c \"import sys;sys.path.insert(0,'tools/session-archive');"
-              f"import gate;print(gate.reseal_chain('{category}', gate.PROCESS))\"")
+              f"import gate;print(gate.reseal_chain('{category}', gate.LEDGER))\"")
         return 1
     print("\n链连续")
     return 0

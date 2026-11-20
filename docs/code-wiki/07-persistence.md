@@ -37,10 +37,17 @@ agent.db:
 ```text
 common/       V1__platform_schema.sql       建表
               V3__platform_indexes.sql      索引
+              V5__audit_event.sql           审计事件
+              V6__image_readiness.sql       镜像就绪状态（host + image）
+              V7__worker_role_and_trigger.sql  角色 Worker 与触发源维度（只加列，不建新表）
 sqlite/       V2__identity_tables.sql       自增表（SQLite 方言）
 postgresql/   V2__identity_tables.sql       自增表（PG 方言）
               V4__identity_sequence_resync.sql
 ```
+
+> 版本号撞车的教训（2026-11-20 合并 0.2）：两条线各自发过 `V5`，合并后 Flyway 直接拒启
+> （`Found more than one migration with version 5`）。并行分支发迁移前先看目标线的
+> 最大版本号，或合并后立即重排未发布迁移（tag 之后的迁移允许改名，改完重算基线）。
 
 规则：
 
@@ -58,7 +65,7 @@ postgresql/   V2__identity_tables.sql       自增表（PG 方言）
 | 身份 | `users`、`gitee_accounts`、`git_hosting_accounts`、`git_oauth_apps`、`git_integrations` |
 | 项目 | `projects`、`project_envs`、`project_env_vars`、`project_env_overrides`、`env_bindings`、`env_vars`、`env_templates`、`env_resources` |
 | 变更 | `change_plans`、`confirm_tokens`、`code_patches`、`code_patch_edits` |
-| 流水线/运行 | `run_ledger`、`token_usage`、`deploy_servers`、`deploy_port_leases`、`project_service_leases`、`platform_meta` |
+| 流水线/运行 | `run_ledger`、`token_usage`、`deploy_servers`、`deploy_port_leases`、`project_service_leases`、`platform_meta`、`audit_event`、`image_readiness` |
 | 会话/调度 | `conversations`、`conversation_messages`、`conversation_runs`、`conversation_timeline`、`workspace_tasks`、`stream_lease` |
 | Issue | `git_issues`、`git_issue_comments`、`git_issue_events` |
 | BugFix | `bugfix_runs`、`bugfix_stage_runs`、`bugfix_events`、`bugfix_policies`（`bugfix_policy` / `bugfix_project_policy`）、`bugfix_notifications`、`bugfix_leases`、`bugfix_env_leases` |
@@ -69,6 +76,7 @@ postgresql/   V2__identity_tables.sql       自增表（PG 方言）
 - 大量"文件型"实现同时提供 DB 版（如 `ChangeRegistry` 两个构造器：`GovernanceDb` 或 `workspaceRoot`），便于无库单测。
 - `stream_lease` / `project_service_leases` 用于多实例场景下的并发租约。
 - `run_ledger` 是跨引擎统一账本，`RunKind` 为分类维度。
+- `image_readiness` 主键是 `(host, image)`：镜像层缓存属于某台机器的 Docker 守护，换一台机器就该重新判定，不能按 image 全局共享。
 
 ## 4. 工作区目录布局
 

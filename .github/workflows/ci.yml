@@ -201,9 +201,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # 文档契约以仓库自有门禁为准（tools/session-archive + tools/handbook）：
+      # 文档契约以仓库自有门禁为准（tools/session-archive + tools/handbook + tools/docs）：
       # doc-marshal 要求 kebab-case 文件名、frontmatter 'type' 枚举、不得有 index.md，
-      # 与本仓库的 session-summary/v1 归档规范、handbook 生成器直接冲突；
+      # 与本仓库的 ledger 归档规范、handbook 生成器直接冲突；
       # 同时跑两套契约只会让人不知道该听谁的，故只保留一套。
 
       # 乱码源头治理：中文提交信息被 GBK/ASCII 编码链打进 git 后只剩 "?"，
@@ -229,6 +229,9 @@ jobs:
 
       - name: 会话归档校验（不依赖本地钩子）
         run: python tools/session-archive/gate.py validate
+
+      - name: views 与 ledger 一致
+        run: python tools/docs/build.py check
 
       - name: Handbook 漂移
         run: python tools/handbook/build.py check
