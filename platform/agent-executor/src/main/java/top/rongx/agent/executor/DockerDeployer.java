@@ -66,6 +66,7 @@ public class DockerDeployer implements Deployer {
         String name = containerName(request.projectId(), request.envName(), slotOf(request));
         List<String> labels = new ArrayList<>(List.of(
                 "--label", "agent.project=" + request.projectId(),
+                "--label", "agent.env=" + (request.envName() == null ? "" : request.envName()),
                 "--label", "agent.run=" + request.runId(),
                 "--label", "agent.version=" + displayVersion(request),
                 "--label", "agent.sha=" + request.gitSha()));

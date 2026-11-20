@@ -1118,6 +1118,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             var current = recipeStore.current(state.projectId, state.env);
             if (current.isPresent() && current.get().pipelineYaml().equals(yaml)
                     && java.util.Objects.equals(current.get().actionsYaml(), actions)) {
+                // 脚本没变，但可能是在新提交上又跑通了：证据必须跟着提交刷新，
+                // 否则生产晋升一直拿第一次跑通的旧提交比对，会拒绝新提交。
+                if (!java.util.Objects.equals(current.get().evidenceRunId(), state.runId)
+                        || !java.util.Objects.equals(current.get().gitSha(), state.gitSha)) {
+                    recipeStore.refreshEvidence(state.projectId, state.env, state.runId, state.gitSha);
+                    state.log.append("[recipe] 脚本未变，已刷新证据为 ").append(state.runId).append('\n');
+                }
                 return; // 脚本没变：沿用现有版本
             }
             var saved = recipeStore.save(new top.rongx.agent.domain.deploy.DeployRecipe(
@@ -2825,6 +2832,23 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * 且同版本号不能重复打标签。
      */
     private void requireVersionBranch(RunState state, ReleaseVersion version, String sha) {
+        // 同一提交重复发布同一版本 = 幂等重发（例如复用已打 tag 的镜像再部署一次）：
+        // 标签本来就指向这个提交，沿用同一版本槽，不覆盖其它版本，也不再要求重新选分支。
+        java.util.Optional<String> existing = repoLocator == null
+                ? java.util.Optional.empty()
+                : repoLocator.tagCommit(state.projectId, version.tagName());
+        if (existing.isPresent()) {
+            String tagged = existing.get();
+            if (tagged.startsWith(sha) || sha.startsWith(tagged)) {
+                state.log.append("[tag] 版本 ").append(version)
+                        .append(" 已指向提交 ").append(shortSha(sha))
+                        .append("：本次为幂等重发（沿用该版本槽，不覆盖其它版本）\n");
+                return;
+            }
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "标签 " + version.tagName()
+                    + " 已存在且指向 " + shortSha(tagged) + "，与本次提交 " + shortSha(sha)
+                    + " 不一致，请递增补丁号");
+        }
         String branch = state.branch;
         if (branch == null) {
             throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "正式发布必须选择版本分支（例如 "

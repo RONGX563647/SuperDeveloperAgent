@@ -759,6 +759,24 @@ public class GitWorktreeManager {
         run(repoDir, List.of("git", "tag", name, sha), "git tag " + name, 30);
     }
 
+    /**
+     * 标签指向的提交（完整 sha）；标签不存在或读取失败返回空。
+     *
+     * <p>发布触发时用它区分「同一提交重复发布同一版本」（幂等）与「版本号被其它提交占用」。
+     */
+    public java.util.Optional<String> tagCommit(Path repoDir, String tag) {
+        String name = validTag(tag);
+        Raw out = exec(repoDir, List.of("git", "rev-list", "-n", "1", "refs/tags/" + name),
+                "git rev-list tag " + name, 30, null);
+        if (out.exit() != 0 || out.output() == null) {
+            return java.util.Optional.empty();
+        }
+        String sha = out.output().trim();
+        return sha.matches("[0-9a-fA-F]{7,40}")
+                ? java.util.Optional.of(sha.toLowerCase(java.util.Locale.ROOT))
+                : java.util.Optional.empty();
+    }
+
     /** 把本地标签推送到指定远端地址（HTTPS 可带凭据；为空时走本机凭据）。 */
     public void pushTagTo(Path repoDir, String tag, String remoteUrl, GitAuth auth) {
         String name = validTag(tag);

@@ -265,7 +265,8 @@ export function deployImageVersion(
   tag: string,
   gitSha: string,
   version?: string,
-  tagged?: boolean
+  tagged?: boolean,
+  branch?: string
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
@@ -275,7 +276,8 @@ export function deployImageVersion(
       env,
       deployImage: tag,
       version: version ?? null,
-      tag: tagged === true
+      tag: tagged === true,
+      branch: branch ?? null
     })
   })
 }

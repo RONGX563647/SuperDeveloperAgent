@@ -35,13 +35,21 @@ public class SshExec implements SshAccess {
         // docker CLI 报 "can't evaluate field ServerVersion in type system.versionInfo"，
         // 导致 SSH 明明连通却一直判为失败。模板必须用引号包住，避免被远端 shell 展开。
         // 老版本 CLI 再兜底到 docker info 的 .ServerVersion。
+        String versionCmd = "docker version --format '{{.Server.Version}}' "
+                + "|| docker info --format '{{.ServerVersion}}'";
         JschSsh.Result docker = ssh.run(server.host(), server.port(), server.sshUser(),
-                server.authType(), server.keyPath(), secret,
-                "docker version --format '{{.Server.Version}}' "
-                        + "|| docker info --format '{{.ServerVersion}}'");
+                server.authType(), server.keyPath(), secret, versionCmd);
+        if (!docker.ok() && String.valueOf(docker.stderr())
+                .toLowerCase(java.util.Locale.ROOT).contains("permission denied")) {
+            // 部署器会用 sudo -n 兜底；这里同样探测，避免"测试连接失败但实际能部署"。
+            docker = ssh.run(server.host(), server.port(), server.sshUser(),
+                    server.authType(), server.keyPath(), secret,
+                    "sudo -n " + versionCmd.replace("|| docker", "|| sudo -n docker"));
+        }
         if (!docker.ok()) {
             String reason = docker.stderr();
-            return Result.failed(1, "SSH 已连通，但远端 docker 不可用："
+            return Result.failed(1, "SSH 已连通，但远端 docker 不可用（请确认已安装 docker，"
+                    + "且 SSH 用户有权限或可免密 sudo）："
                     + (reason == null || reason.isBlank()
                     ? "docker version / docker info 执行失败" : reason));
         }

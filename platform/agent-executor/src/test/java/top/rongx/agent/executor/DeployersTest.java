@@ -3,6 +3,7 @@ package top.rongx.agent.executor;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import top.rongx.agent.domain.deploy.DeployRequest;
@@ -143,6 +144,80 @@ class DeployersTest {
         assertEquals("agent-deploy-ry-test", DockerDeployer.containerName("RY", "test"));
         assertEquals("agent-deploy-ry", DockerDeployer.containerName("RY", null));
         assertEquals("agent-deploy-ry", DockerDeployer.containerName("RY", " "));
+    }
+
+    @Test
+    @DisplayName("远端端口探测：/proc/net/tcp 十六进制端口与 LISTEN 状态解析")
+    void parsesProcNetPorts() {
+        String proc = """
+                  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt
+                   0: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000
+                   1: 0100007F:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000
+                   2: 00000000000000000000000001000000:0050 00000000000000000000000000000000:0000 0A
+                   3: 00000000:1F91 00000000:0000 01 00000000:00000000 00:00000000 00000000
+                """;
+        assertEquals(Set.of(8080, 22, 80), ServerDeployer.parseProcNetPorts(proc));
+    }
+
+    @Test
+    @DisplayName("远端端口探测：ss/netstat 输出按地址列解析（兼容 IPv6 / *）")
+    void parsesSsNetstatPorts() {
+        String text = """
+                State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+                LISTEN 0      128    0.0.0.0:8080        0.0.0.0:*
+                LISTEN 0      128       [::]:22             [::]:*
+                LISTEN 0      128          *:443              *:*
+                """;
+        assertEquals(Set.of(8080, 22, 443), ServerDeployer.parseListeningPorts(text));
+    }
+
+    @Test
+    @DisplayName("端口选择：跳过已占用，探测不可用时信任期望端口")
+    void picksFreePort() {
+        assertEquals(8082, ServerDeployer.firstFreePort(8080, Set.of(8080, 8081)));
+        assertEquals(8080, ServerDeployer.firstFreePort(8080, null));
+        assertEquals(8081, ServerDeployer.nextFreePort(8080, Set.of(8080)));
+        assertEquals(-1, ServerDeployer.nextFreePort(65535, Set.of(65535)));
+    }
+
+    @Test
+    @DisplayName("docker 端口冲突识别：覆盖常见措辞，普通启动失败不误判")
+    void recognizesPortConflicts() {
+        assertTrue(ServerDeployer.portConflict(
+                "Bind for 0.0.0.0:8080 failed: port is already allocated"));
+        assertTrue(ServerDeployer.portConflict(
+                "docker: Error response from daemon: address already in use."));
+        assertFalse(ServerDeployer.portConflict("No such image: ci-abcdef1"));
+    }
+
+    @Test
+    @DisplayName("远端 shell 转义：空格/引号不会把命令拆开")
+    void quotesRemoteShellArguments() {
+        assertEquals("'/opt/agent/my app'", JschSsh.shellQuote("/opt/agent/my app"));
+        assertEquals("'a'\\''b'", JschSsh.shellQuote("a'b"));
+        assertEquals("''", JschSsh.shellQuote(""));
+    }
+
+    @Test
+    @DisplayName("版本槽容器名：打 tag 的不同版本互不覆盖，默认槽仍按环境隔离")
+    void versionSlotContainerNamesDoNotCollide() {
+        String prod = DockerDeployer.containerName("RY", "prod");
+        String v1 = DockerDeployer.containerName("RY", "prod", "0.1.0");
+        String v2 = DockerDeployer.containerName("RY", "prod", "0.1.1");
+        assertEquals(prod + "-0.1.0", v1);
+        assertEquals(prod + "-0.1.1", v2);
+        assertFalse(v1.equals(v2), "两个补丁版本必须落在不同容器名（不互相删除）");
+        assertEquals(prod, DockerDeployer.containerName("RY", "prod", null));
+    }
+
+    @Test
+    @DisplayName("远端 docker port 解析：IPv4/IPv6 映射都能取到宿主端口")
+    void parseMappedPortHandlesIpv4AndIpv6() {
+        assertEquals(18080, ServerDeployer.parseMappedPort("0.0.0.0:18080"));
+        assertEquals(18080, ServerDeployer.parseMappedPort("[::]:18080"));
+        assertEquals(18081, ServerDeployer.parseMappedPort("0.0.0.0:18081\n[::]:18081"));
+        assertEquals(0, ServerDeployer.parseMappedPort(""));
+        assertEquals(0, ServerDeployer.parseMappedPort(null));
     }
 
     @Test

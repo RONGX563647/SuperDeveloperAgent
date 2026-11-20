@@ -137,6 +137,37 @@ public class FileRecipeStore implements RecipeStore {
         return versionDir(safe(projectId), safe(env), version);
     }
 
+    /**
+     * 脚本内容没变、但这次在新提交上重新跑通：只刷新证据，不新增版本。
+     *
+     * <p>不刷新的话配方会永远停在第一次跑通的提交上，生产晋升会以
+     * "测试环境验证的是提交 X"为由拒绝新提交。
+     */
+    @Override
+    public void refreshEvidence(String projectId, String env, String runId, String sha) {
+        String safeProject = safe(projectId);
+        String safeEnv = safe(env);
+        Optional<Integer> active = currentVersion(safeProject, safeEnv);
+        if (active.isEmpty()) {
+            return;
+        }
+        Path metaFile = versionDir(safeProject, safeEnv, active.get()).resolve("meta.yml");
+        if (!Files.isRegularFile(metaFile)) {
+            return;
+        }
+        Map<String, Object> meta = new LinkedHashMap<>(readMeta(metaFile));
+        meta.put("evidenceRunId", runId == null ? "" : runId);
+        meta.put("gitSha", sha == null ? "" : sha);
+        try {
+            Files.writeString(metaFile, new Yaml().dump(meta), StandardCharsets.UTF_8);
+            log.info("刷新环境脚本证据：{} / {} v{} → 证据 {}", safeProject, safeEnv,
+                    active.get(), runId);
+        } catch (IOException e) {
+            throw new RecipeException(ErrorCode.RECIPE_INVALID_STATE,
+                    "刷新环境脚本证据失败：" + e.getMessage(), e);
+        }
+    }
+
     /** 只删 current 指针：历史版本保留，必要时可用 activate 回到旧脚本。 */
     @Override
     public void invalidate(String projectId, String env) {

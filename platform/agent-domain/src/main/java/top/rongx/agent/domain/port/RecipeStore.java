@@ -39,4 +39,13 @@ public interface RecipeStore {
      */
     default void invalidate(String projectId, String env) {
     }
+
+    /**
+     * 刷新当前生效脚本的证据（脚本内容与版本都不变）。
+     *
+     * <p>同一份脚本在新提交上又跑通时用：证据必须跟着提交走，否则生产晋升会一直
+     * 拿第一次跑通的旧提交做比对，拒绝新提交。默认 no-op，方便测试替身。
+     */
+    default void refreshEvidence(String projectId, String env, String runId, String sha) {
+    }
 }
