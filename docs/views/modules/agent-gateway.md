@@ -1,7 +1,27 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-77 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+81 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-20 · 合并 token 量化基线与部署矩阵修复到当前分支（chore `a533133`）
+- 问题：需把 feat/token-quantified-baseline 与 fix/deploy-matrix-metadata-staple 合并…
+- 方案：隔离 worktree 基于 d630a8c8 用 --no-ff 合并两分支（ ort 自动合并无冲突）；
+- 验证：合并后全量 verify 1000 例（token 13+deploy 2 文件叠加 capability-market）修复后全绿；
+
+## 2026-11-20 · 修复部署矩阵历史元数据与实际容器缝合（bug `3f97378`）
+- 问题：部署详情把历史构建元数据与实际容器缝合成一张卡：旧 HOST 残留槽 version=latest/sha=ec462cb/端口8183/11-…
+- 方案：P0 运行容器为元数据权威：容器 sha/RFC3339 startedAt/端口映射覆盖 HOST 残留，HOST 仅兜底，容器接管 key …
+- 验证：隔离 worktree gateway 253 例全绿(0失败/5跳过)+依赖链合计589例0失败；
+
+## 2026-11-20 · 补齐 token 治理三条量化验收与插件分项归因（feat `e94171d`）
+- 问题：token 爆炸专项验收 9 项里 6 项功能面通过，但 3 项量化指标（inputTokens 降 40%/命中率 60%/真实请求 toke…
+- 方案：新增 TokenBaselineTest 用真实工具面+评测指令锁定按需 schema 下降≥40%（最坏59.1%）防回涨；
+- 验证：隔离 worktree 全量 verify 1020 例 0失败0错误7跳过；
+
+## 2026-11-20 · 会话能力页增加内置工具展示并改造界面与市场多源接入（feat `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8` `b9add58` `415b525` `43eb19c` `8139279` `35611ee`）
+- 问题：会话能力页缺少内置工具展示、界面信息层级差、MCP/Skill 市场仅单一仓库来源
+- 方案：能力页新增内置工具区（复用 AgentToolCatalog 投影）并重做三卡概览界面；
+- 验证：独立跑通 spec-checks 35 例、市场相关 10 例、前端 13 个测试文件 23 例、vue-tsc 类型检查全绿；
 
 ## 2026-11-20 · 部署地址指向/镜像保留策略/版本区分/环境页镜像面板（bug `813904b` `342bfd9`）
 - 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；

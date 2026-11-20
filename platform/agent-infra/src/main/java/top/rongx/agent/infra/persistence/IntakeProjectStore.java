@@ -82,9 +82,9 @@ public class IntakeProjectStore implements AutoCloseable {
                 PlatformDb.update(em, "DELETE FROM project_envs WHERE project_id = ?", p.id());
                 for (ProjectEnv e : envs) {
                     PlatformDb.update(em, """
-                            INSERT INTO project_envs (project_id, env, app_url, compose_dir)
-                            VALUES (?,?,?,?)
-                            """, p.id(), e.env(), e.appUrl(), e.composeDir());
+                            INSERT INTO project_envs (project_id, env, compose_dir)
+                            VALUES (?,?,?)
+                            """, p.id(), e.env(), e.composeDir());
                 }
             });
         } catch (RuntimeException e) {
@@ -100,8 +100,8 @@ public class IntakeProjectStore implements AutoCloseable {
      */
     public boolean ensureEnv(String projectId, String env) {
         String sql = """
-                INSERT INTO project_envs (project_id, env, app_url, compose_dir)
-                VALUES (?, ?, '', '')
+                INSERT INTO project_envs (project_id, env, compose_dir)
+                VALUES (?, ?, '')
                 ON CONFLICT(project_id, env) DO NOTHING
                 """;
         try {
@@ -175,10 +175,10 @@ public class IntakeProjectStore implements AutoCloseable {
     public List<ProjectEnv> findEnvs(String projectId) {
         try {
             return db.read(em -> PlatformDb.rows(em,
-                    "SELECT project_id, env, app_url, compose_dir FROM project_envs"
+                    "SELECT project_id, env, compose_dir FROM project_envs"
                             + " WHERE project_id = ? ORDER BY env", projectId).stream()
                     .map(row -> new ProjectEnv((String) row[0], (String) row[1],
-                            (String) row[2], (String) row[3]))
+                            (String) row[2]))
                     .toList());
         } catch (RuntimeException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "环境查询失败：" + e.getMessage(), e);

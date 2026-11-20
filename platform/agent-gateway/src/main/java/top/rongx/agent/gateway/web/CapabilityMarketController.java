@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.web;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,16 +48,43 @@ public class CapabilityMarketController {
     @GetMapping("/market")
     public Map<String, Object> market(@RequestParam(required = false) String kind,
                                       @RequestParam(required = false) String q,
+                                      @RequestParam(required = false) String source,
                                       @RequestParam(defaultValue = "0") int offset,
                                       @RequestParam(defaultValue = "24") int limit,
                                       @RequestParam(defaultValue = "false") boolean refresh) {
         requireRead();
         CapabilityMarket.Kind type = CapabilityMarket.Kind.parse(kind).orElse(null);
-        CapabilityMarket.Page page = market.page(type, q, offset, limit, refresh);
+        CapabilityMarket.Page page = market.page(type, q, source, offset, limit, refresh);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("items", page.items().stream().map(this::view).toList());
         out.put("total", page.total());
         out.put("hasMore", page.hasMore());
+        return out;
+    }
+
+    /**
+     * 已接入的市场来源清单（设置页渲染来源筛选 chips 与「如何接入开源市场」说明）。
+     *
+     * <p>来源来自配置的 Registry 列表与 Skill 仓库列表，前端不再写死「单一仓库」。
+     */
+    @GetMapping("/sources")
+    public Map<String, Object> sources(@RequestParam(required = false) String kind) {
+        requireRead();
+        CapabilityMarket.Kind type = CapabilityMarket.Kind.parse(kind).orElse(null);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (CapabilityMarket.Source source : market.sources(type)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", source.id());
+            row.put("kind", source.kind().name());
+            row.put("name", source.name());
+            row.put("url", source.url());
+            row.put("description", source.description());
+            row.put("builtin", source.builtin());
+            items.add(row);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("items", items);
+        out.put("total", items.size());
         return out;
     }
 

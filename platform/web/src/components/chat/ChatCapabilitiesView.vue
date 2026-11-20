@@ -1,21 +1,28 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowDown, ArrowRight, Connection, MagicStick, Refresh, Search, Setting, Star, Warning } from '@element-plus/icons-vue'
+import {
+  ArrowDown, ArrowRight, Box, Connection, MagicStick, Refresh, Search,
+  Setting, Star, Warning,
+} from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { saveMcpServer, setSkillEnabled } from '../../api/settings'
-import type { CapabilityOption } from '../../composables/useChatCapabilities'
+import type { BuiltinToolOption, CapabilityOption } from '../../composables/useChatCapabilities'
 import { orderCapabilities } from './capabilityOrder'
 
 /**
  * 会话能力页（顶部 Tab「能力」）。
  *
- * <p>只回答一个问题：**这一轮对话，Agent 能用哪些 Skill / MCP？**
- * 所以这里是一张「开关清单」而不是市场：每行一个能力（名称 + 什么时候会用 + 开关），
- * 按 Skill / MCP 分两张卡；不可用的连接态标出来，避免"开了但用不了"。
+ * 一页回答三个问题：
+ * 1. 本 Agent 自带哪些工具（内置工具，只读，随版本发布）——最上面、永远有内容；
+ * 2. 这轮对话开了哪些 Skill（按需读取的知识包，可开关）；
+ * 3. 这轮对话开了哪些 MCP（外部工具服务，可开关）。
+ *
+ * 内置工具来自真实 Toolkit 投影（AgentToolCatalog），不是另写的清单；
  * 会话选择与设置页默认互不影响，开关立即用于下一轮请求。
  */
 const props = defineProps<{
+  toolOptions: BuiltinToolOption[]
   skillOptions: CapabilityOption[]
   mcpOptions: CapabilityOption[]
   skills: string[]
@@ -34,12 +41,13 @@ const router = useRouter()
 
 const skillOn = computed(() => props.skills.length)
 const mcpOn = computed(() => props.mcp.length)
-const total = computed(() => props.skillOptions.length + props.mcpOptions.length)
+const toolCount = computed(() => props.toolOptions.length)
+const readOnlyCount = computed(() => props.toolOptions.filter((t) => t.readOnly).length)
 
 /** 已启用项会整段进系统提示词；超过这个数量给一句成本提醒。 */
 const noisy = computed(() => skillOn.value + mcpOn.value > 10)
 
-// ---------------------------------------------------------------- 搜索 / 筛选 / 排序
+// ---------------------------------------------------------------- 全局搜索
 
 const keyword = ref('')
 const filter = ref<'all' | 'on' | 'off'>('all')
@@ -79,12 +87,42 @@ function visible(list: CapabilityOption[], kind: 'skill' | 'mcp'): CapabilityOpt
 const filteredSkills = computed(() => visible(props.skillOptions, 'skill'))
 const filteredMcp = computed(() => visible(props.mcpOptions, 'mcp'))
 
-/** 两张能力卡可折叠：能力多时先收起不关心的分组，避免一直滚动。 */
-const collapsed = ref({ skill: false, mcp: false })
+/** 两张能力卡可折叠：能力多时先收起不关心的分组。 */
+const collapsed = ref({ tool: false, skill: false, mcp: false })
 
-function toggleGroup(kind: 'skill' | 'mcp'): void {
+function toggleGroup(kind: 'tool' | 'skill' | 'mcp'): void {
   collapsed.value = { ...collapsed.value, [kind]: !collapsed.value[kind] }
 }
+
+// ---------------------------------------------------------------- 内置工具筛选
+
+/** 从真实数据里提取工具面及数量，避免硬编码不存在的分组。 */
+const toolFaces = computed(() => {
+  const counts = new Map<string, number>()
+  for (const tool of props.toolOptions) {
+    for (const face of tool.toolkits) {
+      counts.set(face, (counts.get(face) ?? 0) + 1)
+    }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])
+})
+
+const toolFace = ref('all')
+const toolExpanded = ref(false)
+
+const filteredTools = computed(() => {
+  const q = keyword.value.trim().toLowerCase()
+  return props.toolOptions.filter((tool) => {
+    if (toolFace.value !== 'all' && !tool.toolkits.includes(toolFace.value)) return false
+    if (!q) return true
+    return `${tool.name} ${tool.description}`.toLowerCase().includes(q)
+  })
+})
+
+/** 默认只显示前 24 个，避免 90 个工具一屏铺满；搜索/筛选时也先收起。 */
+const TOOL_PREVIEW = 24
+const visibleTools = computed(() =>
+  (toolExpanded.value || keyword.value.trim()) ? filteredTools.value : filteredTools.value.slice(0, TOOL_PREVIEW))
 
 // ---------------------------------------------------------------- 成本估算
 
@@ -232,37 +270,48 @@ function goSettings(): void {
       <header class="cap-head">
         <div class="cap-head-text">
           <h1>本会话能力</h1>
-          <p>
-            开关只影响当前会话，下一轮对话立即生效；设置页的默认值不会被改动。
-          </p>
+          <p>内置工具随 Agent 发布；Skill / MCP 的开关只影响当前会话，下一轮对话立即生效。</p>
         </div>
-        <button type="button" class="icon-btn" title="重新读取 Skill / MCP 列表" @click="emit('refresh')">
+        <button type="button" class="icon-btn" title="重新读取能力列表" @click="emit('refresh')">
           <el-icon :class="{ spin: loading }"><Refresh /></el-icon>
         </button>
       </header>
 
-      <div class="cap-summary">
-        <span class="sum-item">
-          <el-icon><MagicStick /></el-icon>
-          Skill <b class="mono">{{ ready ? `${skillOn}/${skillOptions.length}` : '…' }}</b>
-        </span>
-        <span class="sum-item">
-          <el-icon><Connection /></el-icon>
-          MCP <b class="mono">{{ ready ? `${mcpOn}/${mcpOptions.length}` : '…' }}</b>
-        </span>
-        <span class="sum-note">
-          已启用 {{ ready ? skillOn + mcpOn : '…' }} 项
-          <template v-if="ready">· Skill 描述约 <b class="mono">{{ skillTokens }}</b> tokens</template>
-          <template v-if="noisy">· 偏多，首字延迟会变长</template>
-        </span>
+      <!-- 概览：三类能力一眼看清，点击卡片滚动到对应分区 -->
+      <div class="cap-overview">
+        <button type="button" class="ov-card tools" @click="collapsed.tool && toggleGroup('tool')">
+          <span class="ov-icon"><el-icon><Box /></el-icon></span>
+          <span class="ov-body">
+            <span class="ov-num mono">{{ ready ? toolCount : '…' }}</span>
+            <span class="ov-label">内置工具</span>
+          </span>
+          <span class="ov-sub">{{ ready ? `${readOnlyCount} 个只读` : '读取中' }}</span>
+        </button>
+        <button type="button" class="ov-card skills" @click="collapsed.skill && toggleGroup('skill')">
+          <span class="ov-icon"><el-icon><MagicStick /></el-icon></span>
+          <span class="ov-body">
+            <span class="ov-num mono">{{ ready ? `${skillOn}/${skillOptions.length}` : '…' }}</span>
+            <span class="ov-label">Skill 已启用</span>
+          </span>
+          <span class="ov-sub">按需加载的知识包</span>
+        </button>
+        <button type="button" class="ov-card mcp" @click="collapsed.mcp && toggleGroup('mcp')">
+          <span class="ov-icon"><el-icon><Connection /></el-icon></span>
+          <span class="ov-body">
+            <span class="ov-num mono">{{ ready ? `${mcpOn}/${mcpOptions.length}` : '…' }}</span>
+            <span class="ov-label">MCP 已启用</span>
+          </span>
+          <span class="ov-sub">外部工具服务</span>
+        </button>
       </div>
 
+      <!-- 工具栏：搜索同时作用于三类；筛选只作用于 Skill/MCP -->
       <div class="cap-toolbar">
         <label class="cap-search">
           <el-icon><Search /></el-icon>
-          <input v-model="keyword" type="search" placeholder="搜索 Skill / MCP" aria-label="搜索能力">
+          <input v-model="keyword" type="search" placeholder="搜索工具 / Skill / MCP" aria-label="搜索能力">
         </label>
-        <div class="cap-seg" role="group" aria-label="启用状态筛选">
+        <div class="cap-seg" role="group" aria-label="启用状态筛选（Skill/MCP）">
           <button type="button" :class="{ active: filter === 'all' }" @click="filter = 'all'">全部</button>
           <button type="button" :class="{ active: filter === 'on' }" @click="filter = 'on'">已启用</button>
           <button type="button" :class="{ active: filter === 'off' }" @click="filter = 'off'">未启用</button>
@@ -276,7 +325,7 @@ function goSettings(): void {
         </button>
       </div>
 
-      <div v-if="ready" class="cap-presets">
+      <div v-if="ready && (recommendedPresets.length || savedPresets.length)" class="cap-presets">
         <span class="preset-label">场景</span>
         <button
           v-for="preset in recommendedPresets" :key="`rec-${preset.name}`"
@@ -297,116 +346,167 @@ function goSettings(): void {
         启用越多，系统提示词越长、首字延迟越高。只保留这轮真正需要的就好。
       </p>
 
-      <div v-if="ready && !total" class="cap-empty">
-        <p>还没有可用的能力。</p>
+      <!-- 内置工具：随 Agent 发布，只读展示 -->
+      <section class="cap-card tool-card" :class="{ 'is-folded': collapsed.tool }">
+        <header class="card-head">
+          <button
+            type="button" class="card-fold" :aria-expanded="!collapsed.tool"
+            :title="collapsed.tool ? '展开工具列表' : '收起工具列表'"
+            @click="toggleGroup('tool')"
+          >
+            <el-icon><ArrowRight v-if="collapsed.tool" /><ArrowDown v-else /></el-icon>
+          </button>
+          <span class="card-icon tool"><el-icon><Box /></el-icon></span>
+          <span class="card-title">
+            <b>内置工具 <span class="card-on mono">{{ toolCount }}</span></b>
+            <em>随 Agent 发布，每轮对话自动可调用；与 Skill/MCP 不同，无需开关</em>
+          </span>
+          <span class="card-actions">
+            <span class="mono">{{ readOnlyCount }} 只读</span>
+          </span>
+        </header>
+        <div v-show="!collapsed.tool" class="tool-body">
+          <div class="tool-faces" role="group" aria-label="按工具面筛选">
+            <button
+              type="button" class="face" :class="{ active: toolFace === 'all' }"
+              @click="toolFace = 'all'; toolExpanded = false"
+            >全部 <span class="mono">{{ toolCount }}</span></button>
+            <button
+              v-for="[face, count] in toolFaces" :key="face"
+              type="button" class="face" :class="{ active: toolFace === face }"
+              @click="toolFace = face; toolExpanded = false"
+            >{{ face }} <span class="mono">{{ count }}</span></button>
+          </div>
+          <div v-if="filteredTools.length" class="tool-grid">
+            <div
+              v-for="tool in visibleTools" :key="tool.name"
+              class="tool-chip" :title="tool.description"
+            >
+              <span class="tc-name mono">{{ tool.name }}</span>
+              <span v-if="tool.readOnly" class="tc-ro" title="只读工具，不改动环境">R</span>
+              <span class="tc-desc">{{ tool.description }}</span>
+            </div>
+          </div>
+          <div v-else class="row-empty">没有匹配的工具</div>
+          <button
+            v-if="filteredTools.length > TOOL_PREVIEW && !keyword.trim()" type="button"
+            class="tool-more" @click="toolExpanded = !toolExpanded"
+          >
+            {{ toolExpanded ? '收起' : `展开全部 ${filteredTools.length} 个工具` }}
+            <el-icon><ArrowDown v-if="!toolExpanded" /><ArrowRight v-else /></el-icon>
+          </button>
+        </div>
+      </section>
+
+      <!-- Skill：每个目录一份说明，按需加载 -->
+      <section v-if="skillOptions.length" class="cap-card" :class="{ 'is-folded': collapsed.skill }">
+        <header class="card-head">
+          <button
+            type="button" class="card-fold" :aria-expanded="!collapsed.skill"
+            :title="collapsed.skill ? '展开技能列表' : '收起技能列表'"
+            @click="toggleGroup('skill')"
+          >
+            <el-icon><ArrowRight v-if="collapsed.skill" /><ArrowDown v-else /></el-icon>
+          </button>
+          <span class="card-icon skill"><el-icon><MagicStick /></el-icon></span>
+          <span class="card-title">
+            <b>Skill <span class="card-on mono">{{ skillOn }}</span></b>
+            <em>按需读取的知识包，命中相关任务时才会展开</em>
+          </span>
+          <span class="card-actions">
+            <span class="mono">{{ skillOn }}/{{ skillOptions.length }}</span>
+            <button
+              type="button" class="link"
+              :disabled="skillOn === skillOptions.length"
+              @click="toggleAll('skill', true)"
+            >启用全部</button>
+            <button
+              type="button" class="link"
+              :disabled="!skillOn" @click="toggleAll('skill', false)"
+            >全部停用</button>
+          </span>
+        </header>
+        <ul v-show="!collapsed.skill" class="cap-rows">
+          <li
+            v-for="option in filteredSkills" :key="`skill-${option.key}`"
+            class="cap-row" :class="{ on: isOn('skill', option.key) }"
+          >
+            <span class="row-main">
+              <span class="row-name">
+                {{ option.label }}
+                <span v-if="option.fileCount" class="row-tag mono">{{ option.fileCount }} 文件</span>
+                <span class="row-tag mono" title="描述注入的粗略成本">~{{ tokenOf(option) }}t</span>
+              </span>
+              <span class="row-desc" :title="option.description">{{ option.description || '（Skill 未写描述，模型只能靠名称判断用途）' }}</span>
+            </span>
+            <el-switch
+              :model-value="isOn('skill', option.key)"
+              size="small"
+              :aria-label="`本次对话启用 ${option.label}`"
+              @change="(v: string | number | boolean) => toggle('skill', option.key, Boolean(v))"
+            />
+          </li>
+          <li v-if="!filteredSkills.length" class="row-empty">没有匹配的技能</li>
+        </ul>
+      </section>
+
+      <!-- MCP：外部工具服务，启用后会多出一批工具 -->
+      <section v-if="mcpOptions.length" class="cap-card" :class="{ 'is-folded': collapsed.mcp }">
+        <header class="card-head">
+          <button
+            type="button" class="card-fold" :aria-expanded="!collapsed.mcp"
+            :title="collapsed.mcp ? '展开 MCP 列表' : '收起 MCP 列表'"
+            @click="toggleGroup('mcp')"
+          >
+            <el-icon><ArrowRight v-if="collapsed.mcp" /><ArrowDown v-else /></el-icon>
+          </button>
+          <span class="card-icon mcp"><el-icon><Connection /></el-icon></span>
+          <span class="card-title">
+            <b>MCP <span class="card-on mono">{{ mcpOn }}</span></b>
+            <em>外部工具服务，启用后工具会出现在本轮可调用列表里</em>
+          </span>
+          <span class="card-actions">
+            <span class="mono">{{ mcpOn }}/{{ mcpOptions.length }}</span>
+            <button
+              type="button" class="link"
+              :disabled="mcpOn === mcpOptions.length"
+              @click="toggleAll('mcp', true)"
+            >启用全部</button>
+            <button
+              type="button" class="link" :disabled="!mcpOn" @click="toggleAll('mcp', false)"
+            >全部停用</button>
+          </span>
+        </header>
+        <ul v-show="!collapsed.mcp" class="cap-rows">
+          <li
+            v-for="option in filteredMcp" :key="`mcp-${option.key}`"
+            class="cap-row" :class="{ on: isOn('mcp', option.key) }"
+          >
+            <span class="row-main">
+              <span class="row-name">
+                {{ option.label }}
+                <span class="row-tag mono">{{ option.transport === 'http' ? 'HTTP' : 'stdio' }}</span>
+              </span>
+              <span class="row-desc" :title="option.description">{{ mcpTarget(option) || option.description }}</span>
+            </span>
+            <el-switch
+              :model-value="isOn('mcp', option.key)"
+              size="small"
+              :aria-label="`本次对话启用 ${option.label}`"
+              @change="(v: string | number | boolean) => toggle('mcp', option.key, Boolean(v))"
+            />
+          </li>
+          <li v-if="!filteredMcp.length" class="row-empty">没有匹配的 MCP 服务</li>
+        </ul>
+      </section>
+
+      <!-- Skill / MCP 都为空时给出去设置的引导（内置工具始终在上面展示） -->
+      <div v-if="ready && !skillOptions.length && !mcpOptions.length" class="cap-empty">
+        <p>还没有添加 Skill 或 MCP。内置工具已可直接使用；扩展能力请到设置页添加。</p>
         <button type="button" class="link" @click="goSettings">
           <el-icon><Setting /></el-icon>去设置页添加 Skill / MCP
         </button>
       </div>
-
-      <template v-else>
-        <!-- Skill：每个目录一份说明，按需加载 -->
-        <section v-if="skillOptions.length" class="cap-card">
-          <header class="card-head">
-            <button
-              type="button" class="card-fold" :aria-expanded="!collapsed.skill"
-              :title="collapsed.skill ? '展开技能列表' : '收起技能列表'"
-              @click="toggleGroup('skill')"
-            >
-              <el-icon><ArrowRight v-if="collapsed.skill" /><ArrowDown v-else /></el-icon>
-            </button>
-            <span class="card-icon skill"><el-icon><MagicStick /></el-icon></span>
-            <span class="card-title">
-              <b>Skill <span class="card-on mono">{{ skillOn }}</span></b>
-              <em>按需读取的知识包，命中相关任务时才会展开</em>
-            </span>
-            <span class="card-actions">
-              <span class="mono">{{ skillOn }}/{{ skillOptions.length }}</span>
-              <button
-                type="button" class="link"
-                :disabled="skillOn === skillOptions.length"
-                @click="toggleAll('skill', true)"
-              >启用全部</button>
-              <button
-                type="button" class="link"
-                :disabled="!skillOn" @click="toggleAll('skill', false)"
-              >全部停用</button>
-            </span>
-          </header>
-          <ul v-show="!collapsed.skill" class="cap-rows">
-            <li
-              v-for="option in filteredSkills" :key="`skill-${option.key}`"
-              class="cap-row" :class="{ on: isOn('skill', option.key) }"
-            >
-              <span class="row-main">
-                <span class="row-name">
-                  {{ option.label }}
-                  <span v-if="option.fileCount" class="row-tag mono">{{ option.fileCount }} 文件</span>
-                  <span class="row-tag mono" title="描述注入的粗略成本">~{{ tokenOf(option) }}t</span>
-                </span>
-                <span class="row-desc" :title="option.description">{{ option.description || '（Skill 未写描述，模型只能靠名称判断用途）' }}</span>
-              </span>
-              <el-switch
-                :model-value="isOn('skill', option.key)"
-                size="small"
-                :aria-label="`本次对话启用 ${option.label}`"
-                @change="(v: string | number | boolean) => toggle('skill', option.key, Boolean(v))"
-              />
-            </li>
-            <li v-if="!filteredSkills.length" class="row-empty">没有匹配的技能</li>
-          </ul>
-        </section>
-
-        <!-- MCP：外部工具服务，启用后会多出一批工具 -->
-        <section v-if="mcpOptions.length" class="cap-card">
-          <header class="card-head">
-            <button
-              type="button" class="card-fold" :aria-expanded="!collapsed.mcp"
-              :title="collapsed.mcp ? '展开 MCP 列表' : '收起 MCP 列表'"
-              @click="toggleGroup('mcp')"
-            >
-              <el-icon><ArrowRight v-if="collapsed.mcp" /><ArrowDown v-else /></el-icon>
-            </button>
-            <span class="card-icon mcp"><el-icon><Connection /></el-icon></span>
-            <span class="card-title">
-              <b>MCP <span class="card-on mono">{{ mcpOn }}</span></b>
-              <em>外部工具服务，启用后工具会出现在本轮可调用列表里</em>
-            </span>
-            <span class="card-actions">
-              <span class="mono">{{ mcpOn }}/{{ mcpOptions.length }}</span>
-              <button
-                type="button" class="link"
-                :disabled="mcpOn === mcpOptions.length"
-                @click="toggleAll('mcp', true)"
-              >启用全部</button>
-              <button
-                type="button" class="link" :disabled="!mcpOn" @click="toggleAll('mcp', false)"
-              >全部停用</button>
-            </span>
-          </header>
-          <ul v-show="!collapsed.mcp" class="cap-rows">
-            <li
-              v-for="option in filteredMcp" :key="`mcp-${option.key}`"
-              class="cap-row" :class="{ on: isOn('mcp', option.key) }"
-            >
-              <span class="row-main">
-                <span class="row-name">
-                  {{ option.label }}
-                  <span class="row-tag mono">{{ option.transport === 'http' ? 'HTTP' : 'stdio' }}</span>
-                </span>
-                <span class="row-desc" :title="option.description">{{ mcpTarget(option) || option.description }}</span>
-              </span>
-              <el-switch
-                :model-value="isOn('mcp', option.key)"
-                size="small"
-                :aria-label="`本次对话启用 ${option.label}`"
-                @change="(v: string | number | boolean) => toggle('mcp', option.key, Boolean(v))"
-              />
-            </li>
-            <li v-if="!filteredMcp.length" class="row-empty">没有匹配的 MCP 服务</li>
-          </ul>
-        </section>
-      </template>
 
       <p class="cap-foot">
         想改默认值或新增能力，去
@@ -426,7 +526,7 @@ function goSettings(): void {
 }
 
 .cap-page {
-  width: min(100%, 48rem);
+  width: min(100%, 54rem);
   padding: var(--sp-6) var(--page-gutter) var(--sp-10);
   margin: 0 auto;
 }
@@ -436,18 +536,18 @@ function goSettings(): void {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-4);
-  margin-bottom: var(--sp-4);
+  margin-bottom: var(--sp-5);
 }
 
 .cap-head-text h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 600;
   color: var(--ink);
 }
 
 .cap-head-text p {
-  margin: 4px 0 0;
+  margin: 5px 0 0;
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--ink-muted);
@@ -462,44 +562,78 @@ function goSettings(): void {
 }
 
 @keyframes cap-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
-/* ---- 计数条 ---- */
-.cap-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2) var(--sp-4);
-  padding: 8px 12px;
+/* ---- 概览卡 ---- */
+.cap-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
   margin-bottom: var(--sp-4);
-  font-size: 12px;
-  color: var(--ink-muted);
+}
+
+.ov-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
   background: var(--surface-raised);
   border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.ov-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.ov-icon {
+  display: flex;
+  grid-row: 1 / 3;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  font-size: 17px;
   border-radius: var(--radius-md);
 }
 
-.sum-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink-soft);
+.ov-card.tools .ov-icon { color: #2563eb; background: rgb(37 99 235 / 10%); }
+.ov-card.skills .ov-icon { color: var(--accent-ink); background: var(--accent-soft); }
+.ov-card.mcp .ov-icon { color: #0891b2; background: rgb(8 145 178 / 10%); }
+
+.ov-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
-.sum-item b {
+.ov-num {
+  font-size: 20px;
   font-weight: 600;
+  line-height: 1.15;
   color: var(--ink);
 }
 
-.sum-note {
-  margin-left: auto;
+.ov-label {
   font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.ov-sub {
+  grid-column: 2;
+  font-size: 10.5px;
   color: var(--ink-faint);
 }
 
+/* ---- 提示条 ---- */
 .cap-warn {
   display: flex;
   align-items: flex-start;
@@ -525,10 +659,10 @@ function goSettings(): void {
 
 .cap-search {
   display: flex;
-  flex: 1 1 180px;
+  flex: 1 1 200px;
   align-items: center;
   gap: 6px;
-  min-width: 150px;
+  min-width: 160px;
   padding: 0 10px;
   color: var(--ink-faint);
   background: var(--surface-raised);
@@ -654,16 +788,7 @@ function goSettings(): void {
   color: var(--ink-faint);
 }
 
-.preset-x:hover {
-  color: var(--danger);
-}
-
-.row-empty {
-  padding: 14px;
-  font-size: 11.5px;
-  color: var(--ink-faint);
-  text-align: center;
-}
+.preset-x:hover { color: var(--danger); }
 
 /* ---- 能力卡 ---- */
 .cap-card {
@@ -674,11 +799,15 @@ function goSettings(): void {
   border-radius: var(--radius-lg);
 }
 
+.cap-card.is-folded .card-head {
+  border-bottom: 0;
+}
+
 .card-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -686,13 +815,12 @@ function goSettings(): void {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
   border-radius: var(--radius-sm);
 }
 
-/* 分组折叠：只影响视觉，开关与筛选状态不变 */
 .card-fold {
   display: inline-flex;
   align-items: center;
@@ -722,20 +850,14 @@ function goSettings(): void {
   border-radius: 999px;
 }
 
-.card-icon.skill {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-
-.card-icon.mcp {
-  color: var(--ink-soft);
-  background: var(--surface-hover);
-}
+.card-icon.tool { color: #2563eb; background: rgb(37 99 235 / 10%); }
+.card-icon.skill { color: var(--accent-ink); background: var(--accent-soft); }
+.card-icon.mcp { color: #0891b2; background: rgb(8 145 178 / 10%); }
 
 .card-title {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -758,6 +880,7 @@ function goSettings(): void {
   margin-left: auto;
   font-size: 11.5px;
   color: var(--ink-faint);
+  white-space: nowrap;
 }
 
 .link {
@@ -773,9 +896,7 @@ function goSettings(): void {
   border: 0;
 }
 
-.link:hover {
-  text-decoration: underline;
-}
+.link:hover { text-decoration: underline; }
 
 .link:disabled {
   color: var(--ink-faint);
@@ -783,6 +904,131 @@ function goSettings(): void {
   text-decoration: none;
 }
 
+/* ---- 内置工具网格 ---- */
+.tool-body {
+  padding: 12px 14px 14px;
+}
+
+.tool-faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.face {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+
+.face .mono {
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  background: var(--surface-hover);
+  border-radius: 999px;
+}
+
+.face:hover { border-color: var(--line-strong); }
+
+.face.active {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.face.active .mono {
+  color: var(--accent-ink);
+  background: rgb(255 255 255 / 55%);
+}
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 8px;
+}
+
+.tool-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 6px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.tool-chip:hover { border-color: var(--line-strong); }
+
+.tc-name {
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-ro {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #0891b2;
+  background: rgb(8 145 178 / 12%);
+  border-radius: 4px;
+}
+
+.tc-desc {
+  grid-column: 1 / 3;
+  overflow: hidden;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.tool-more {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px dashed var(--line-soft);
+  border-radius: var(--radius-md);
+}
+
+.tool-more:hover { border-color: var(--accent-soft); }
+
+.row-empty {
+  padding: 14px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+/* ---- Skill / MCP 列表 ---- */
 .cap-rows {
   display: flex;
   flex-direction: column;
@@ -799,13 +1045,8 @@ function goSettings(): void {
   border-top: 1px solid var(--line-soft);
 }
 
-.cap-row:first-child {
-  border-top: 0;
-}
-
-.cap-row:hover {
-  background: var(--surface-hover);
-}
+.cap-row:first-child { border-top: 0; }
+.cap-row:hover { background: var(--surface-hover); }
 
 .row-main {
   display: flex;
@@ -824,9 +1065,7 @@ function goSettings(): void {
   color: var(--ink-soft);
 }
 
-.cap-row.on .row-name {
-  color: var(--ink);
-}
+.cap-row.on .row-name { color: var(--ink); }
 
 .row-tag {
   padding: 1px 5px;
@@ -855,30 +1094,28 @@ function goSettings(): void {
 
 /* ---- 空态 ---- */
 .cap-empty {
-  padding: 32px 16px;
+  padding: 24px 16px;
   text-align: center;
   background: var(--surface-raised);
-  border: 1px solid var(--line-soft);
+  border: 1px dashed var(--line-soft);
   border-radius: var(--radius-lg);
 }
 
 .cap-empty p {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--ink-muted);
 }
 
+@media (max-width: 720px) {
+  .cap-overview { grid-template-columns: 1fr; }
+  .ov-card { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ov-sub { grid-column: 3; grid-row: 1 / 3; }
+}
+
 @media (max-width: 640px) {
-  .cap-page {
-    padding: var(--sp-4) var(--page-gutter-tight) var(--sp-8);
-  }
-
-  .sum-note {
-    margin-left: 0;
-  }
-
-  .row-desc {
-    white-space: normal;
-  }
+  .cap-page { padding: var(--sp-4) var(--page-gutter-tight) var(--sp-8); }
+  .row-desc { white-space: normal; }
+  .card-actions .link { display: none; }
 }
 </style>

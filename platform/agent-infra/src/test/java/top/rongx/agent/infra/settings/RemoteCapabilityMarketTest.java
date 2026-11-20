@@ -122,6 +122,44 @@ class RemoteCapabilityMarketTest {
     }
 
     @Test
+    @DisplayName("多源接入：多个 Registry + 多个 Skill 仓库都进入来源清单")
+    void sourcesReflectMultiRepoConfig() {
+        RemoteCapabilityMarket market = new RemoteCapabilityMarket(
+                JSON,
+                "https://registry.modelcontextprotocol.io/v0/servers, https://mcp.example.com/v0/servers/",
+                "anthropics/skills, anbeime/skill");
+
+        List<CapabilityMarket.Source> mcp = market.sources(CapabilityMarket.Kind.MCP);
+        // 1 个精选 + 2 个 Registry；host 作为稳定来源 id，尾斜杠被去掉
+        assertEquals(3, mcp.size());
+        assertTrue(mcp.stream().anyMatch(s -> s.id().equals("Awesome-MCP-ZH") && s.builtin()));
+        assertTrue(mcp.stream().anyMatch(s -> s.id().equals("registry.modelcontextprotocol.io")));
+        assertTrue(mcp.stream().anyMatch(s -> s.id().equals("mcp.example.com")));
+
+        List<CapabilityMarket.Source> skills = market.sources(CapabilityMarket.Kind.SKILL);
+        assertEquals(2, skills.size());
+        assertTrue(skills.stream().anyMatch(s -> s.id().equals("anthropics/skills")));
+        assertTrue(skills.stream().anyMatch(s -> s.id().equals("anbeime/skill")));
+    }
+
+    @Test
+    @DisplayName("多 Registry：解析出的条目携带来源 host，便于按来源筛选")
+    void parseServerCarriesSource() throws Exception {
+        JsonNode wrapper = node("""
+                {"server": {"name": "com.acme/files", "description": "files",
+                  "packages": [{"registryType": "npm", "identifier": "acme-mcp",
+                    "transport": {"type": "stdio"}}]}}
+                """);
+        CapabilityMarket.Entry entry = RemoteCapabilityMarket
+                .parseServer(wrapper.path("server"), wrapper, "mcp.example.com").orElseThrow();
+        assertEquals("mcp.example.com", entry.source());
+        // 兼容旧调用：不传来源时退回默认标记
+        CapabilityMarket.Entry legacy = RemoteCapabilityMarket
+                .parseServer(wrapper.path("server"), wrapper).orElseThrow();
+        assertEquals("MCP Registry", legacy.source());
+    }
+
+    @Test
     @DisplayName("SKILL.md → 目录名 / 标题 / 描述 / 原文")
     void mapsSkillMarkdown() {
         String content = """

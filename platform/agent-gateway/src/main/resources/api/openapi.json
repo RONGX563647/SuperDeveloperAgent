@@ -5387,6 +5387,34 @@
         }
       }
     },
+    "/api/v1/settings/capabilities/sources" : {
+      "get" : {
+        "tags" : [ "capability-market-controller" ],
+        "summary" : "sources",
+        "operationId" : "sources",
+        "parameters" : [ {
+          "name" : "kind",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/capabilities/market" : {
       "get" : {
         "tags" : [ "capability-market-controller" ],
@@ -5401,6 +5429,13 @@
           }
         }, {
           "name" : "q",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "source",
           "in" : "query",
           "required" : false,
           "schema" : {
@@ -5448,6 +5483,26 @@
         }
       }
     },
+    "/api/v1/settings/builtin-tools" : {
+      "get" : {
+        "tags" : [ "builtin-tools-controller" ],
+        "summary" : "list",
+        "operationId" : "list_9",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs/{runId}" : {
       "get" : {
         "tags" : [ "workspace-controller" ],
@@ -5479,7 +5534,7 @@
       "get" : {
         "tags" : [ "run-ledger-controller" ],
         "summary" : "list",
-        "operationId" : "list_9",
+        "operationId" : "list_10",
         "parameters" : [ {
           "name" : "projectId",
           "in" : "query",
@@ -6934,7 +6989,7 @@
       "get" : {
         "tags" : [ "action-controller" ],
         "summary" : "list",
-        "operationId" : "list_10",
+        "operationId" : "list_11",
         "parameters" : [ {
           "name" : "projectId",
           "in" : "query",

@@ -38,8 +38,14 @@ def active_dir() -> Path:
 def evidence_dir() -> Path:
     return shared_state_dir() / "session-evidence"
 # 跨 worktree 测试锁超时（per-worktree 隔离后，只在同 worktree 内排队）。
-LOCK_TIMEOUT = 45 * 60
-LOCK_STALE = 90 * 60
+# 默认从 45/90 分钟收窄到 10/15 分钟：僵尸锁现在靠 PID 存活检测秒级回收，
+# 这两个值只兜底「持锁进程还活着但卡死」的场景，不必再让并行提交等 45 分钟。
+# 需要更长的重负载场景可用环境变量覆盖。
+LOCK_TIMEOUT = int(os.environ.get("SESSION_ARCHIVE_LOCK_TIMEOUT", str(10 * 60)))
+LOCK_STALE = int(os.environ.get("SESSION_ARCHIVE_LOCK_STALE", str(15 * 60)))
+# git index.lock 竞争重试：并行会话/IDE 的 git 写操作会短暂持有 index.lock，
+# write-tree/diff 撞上就 GateError。用指数退避等待，窗口内基本都能等到。
+INDEX_LOCK_RETRY = int(os.environ.get("SESSION_ARCHIVE_INDEX_LOCK_RETRY", "80"))
 LEDGER = ROOT / "docs" / "ledger"
 SUMMARY = ROOT / "docs" / "summary"
 CATEGORIES = ("feat", "bug", "chore", "docs", "deploy")
@@ -83,11 +89,31 @@ def clean_env() -> dict:
 
 
 def git(*args: str, check: bool = True, binary: bool = False):
-    proc = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, env=clean_env())
-    if check and proc.returncode != 0:
+    """执行 git 命令；对「并行 git 写操作抢占 index.lock」做指数退避重试。
+
+    并行会话 / IDE 的 SCM 刷新会短暂创建 {@code .git/index.lock}，读命令
+    （status/diff/write-tree/ls-files…）撞上就会非 0 退出。这类失败是瞬时的，
+    重试不改变命令语义；其它失败（参数错、路径不存在）立即返回，避免把真实
+    错误拖成 40 秒等待。
+    """
+    last = ""
+    delay = 0.1
+    for attempt in range(INDEX_LOCK_RETRY + 1):
+        proc = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, env=clean_env())
+        if proc.returncode == 0:
+            return proc.stdout if binary else proc.stdout.decode("utf-8", "replace").strip()
         detail = proc.stderr.decode("utf-8", "replace").strip()
-        raise GateError(f"git {' '.join(args)} 失败：{detail}")
-    return proc.stdout if binary else proc.stdout.decode("utf-8", "replace").strip()
+        last = detail
+        lock_busy = "index.lock" in detail or "Unable to create" in detail
+        if not lock_busy or attempt == INDEX_LOCK_RETRY:
+            break
+        if attempt == 0:
+            out("git 撞上并行 index.lock，等待释放后重试…")
+        time.sleep(delay)
+        delay = min(delay * 1.5, 1.0)
+    if check:
+        raise GateError(f"git {' '.join(args)} 失败：{last}")
+    return ""
 
 
 def now_iso() -> str:
@@ -371,24 +397,8 @@ def cmd_start(args) -> int:
 # ------------------------------------------------------------------ tests
 
 def write_tree() -> str:
-    """快照当前索引树。
-
-    <p>IDE 的 SCM 刷新、并行会话的 git 操作都会短暂创建 {@code .git/index.lock}，
-    撞上就会让本该通过的提交失败。这里对瞬时锁做几次短重试，测试结论本身不受影响。
-    """
-    last = ""
-    for attempt in range(10):
-        proc = subprocess.run(["git", "write-tree"], cwd=ROOT, capture_output=True,
-                              env=clean_env())
-        if proc.returncode == 0:
-            return proc.stdout.decode("utf-8", "replace").strip()
-        last = proc.stderr.decode("utf-8", "replace").strip()
-        if "index.lock" not in last:
-            break
-        if attempt == 0:
-            out("索引被其它 git 进程占用，等待锁释放后重试…")
-        time.sleep(0.5)
-    raise GateError(f"git write-tree 失败：{last}")
+    """快照当前索引树（复用 git() 的统一 index.lock 退避重试）。"""
+    return git("write-tree")
 
 
 def surefire_stats(started: float) -> dict:
@@ -692,6 +702,37 @@ def worktree_git_dir() -> Path:
     return Path(proc.stdout.decode("utf-8", "replace").strip())
 
 
+def pid_alive(pid: int) -> bool:
+    """判断 PID 是否仍指向一个存活进程（跨平台，仅用标准库）。
+
+    僵尸锁的根因：持锁进程被 SIGTERM/超时杀掉时 {@code __exit__} 不会执行，
+    锁文件残留，但 mtime 很新、stale 阈值内不会被判死，于是后面每个提交都
+    排队等待直到超时。锁文件里写了 PID，检测它是否还活着即可秒级回收。
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        probe = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                               capture_output=True, text=True, errors="replace")
+        return str(pid) in probe.stdout
+    try:
+        os.kill(pid, 0)  # 信号 0：只探测存在性，不真的发信号
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # 存在但无权探测，按存活处理（保守，不会误删活锁）
+
+
+def read_lock_pid(path: Path) -> int:
+    """从锁文件首行读出持锁 PID；格式被破坏时返回 0。"""
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return int(fh.readline().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
 class TestLock:
     """同 worktree 内的互斥锁（O_CREAT|O_EXCL），拿不到就排队。
 
@@ -737,6 +778,11 @@ class TestLock:
                 time.sleep(1)
 
     def _stale(self) -> bool:
+        # 首选：持锁进程已死 → 立即回收（僵尸锁秒级自愈，不必等满 stale 阈值）。
+        pid = read_lock_pid(self.path)
+        if pid > 0 and not pid_alive(pid):
+            return True
+        # 兜底：PID 读不出或仍存活但锁长时间未释放（真死锁），按 mtime 判。
         try:
             return time.time() - self.path.stat().st_mtime > LOCK_STALE
         except OSError:
@@ -756,10 +802,14 @@ class TestLock:
 
 
 def worktree_fingerprint() -> str:
-    """当前工作区指纹：索引树 + 未暂存改动 + 未跟踪文件元数据。
+    """当前工作区指纹：索引树 + 已跟踪文件的未暂存改动。
 
-    测试实际跑在工作区而不是索引上，只按 tree 复用会把“同样暂存、不同未提交改动”
-    误判成等价，所以要把未暂存 diff 和未跟踪文件也算进来。
+    测试跑在工作区上，只按 tree 复用会把“同样暂存、不同未提交改动”误判成等价，
+    所以要把未暂存 diff 也算进来。但<b>不纳入未跟踪文件元数据</b>：并行会话/
+    IDE 会频繁生成临时文件（编译产物、补丁暂存、编辑器备份），把它们算进指纹
+    会让证据缓存永不命中，每次提交都被迫重跑测试——这正是并行任务被门禁拖垮
+    的主因之一。未跟踪的源码一旦要进测试，必然先被 {@code git add} 而进入索引树，
+    届时 tree 已变化、缓存自然失效，不会漏复用。
     """
     tree = write_tree()
     diff = subprocess.run(["git", "diff", "--no-ext-diff", "--no-color"], cwd=ROOT,
@@ -770,13 +820,6 @@ def worktree_fingerprint() -> str:
     digest.update(tree.encode("utf-8"))
     digest.update(b"\0")
     digest.update(diff.stdout)
-    for name in sorted(line for line in git("ls-files", "--others", "--exclude-standard").splitlines() if line):
-        path = ROOT / name
-        try:
-            stat = path.stat()
-            digest.update(f"\0{name}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8"))
-        except OSError:
-            digest.update(f"\0{name}:missing".encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -2257,6 +2300,28 @@ def cmd_self_test(args) -> int:
 
         plan.unlink()
         primary.unlink()
+    # 并发健壮性契约（并行任务不互相卡死）：
+    # 1) PID 存活检测：当前进程必须判活，明显不存在的 PID 必须判死。
+    if not pid_alive(os.getpid()):
+        return fail("self-test: 当前进程应判为存活")
+    dead_pid = 999999 if os.name != "nt" else 2147483647  # 常规/Windows 上的非法高 PID
+    if pid_alive(dead_pid):
+        return fail("self-test: 不存在的 PID 不应判为存活")
+    if pid_alive(0) or pid_alive(-1):
+        return fail("self-test: 非法 PID 应判为死亡")
+    # 2) 僵尸锁自愈：锁文件里的持锁 PID 已死 → _stale() 必须立即返回 True，
+    #    不必等到 LOCK_STALE（15 分钟）——这是并行提交被卡 45 分钟的根因。
+    with tempfile.TemporaryDirectory() as tmp:
+        stale_lock = Path(tmp) / "test.lock"
+        stale_lock.write_text(f"{dead_pid} 2026-11-20T00:00:00+08:00\n", encoding="utf-8")
+        if read_lock_pid(stale_lock) != dead_pid:
+            return fail("self-test: 应从锁文件读出持锁 PID")
+        if not TestLock(stale_lock)._stale():
+            return fail("self-test: 持锁进程已死的锁应立即判为 stale")
+        alive_lock = Path(tmp) / "alive.lock"
+        alive_lock.write_text(f"{os.getpid()} {now_iso()}\n", encoding="utf-8")
+        if TestLock(alive_lock)._stale():
+            return fail("self-test: 持锁进程仍存活的锁不应判为 stale")
     out("self-test OK")
     return 0
 

@@ -44,6 +44,25 @@ platform/
   网络慢的根治办法是本地缓存源：`tools/registry-cache`（pull-through cache）+
   `agent.sandbox.pull-mirrors=localhost:5000`，第二次起走 LAN。
 
+### 沙箱分层：AgentScope 管准入，DockerSandbox 管隔离（不重复）
+
+AgentScope Java（`agentscope-core`，本仓库锁定 2.0.x）**不带本地执行沙箱**：它的
+`ShellCommandTool` 是宿主进程直跑（`ProcessBuilder sh -c`）＋命令白名单＋审批回调，
+`PermissionMode`/规则引擎只管"模型能不能调某个工具"；官方 BOM 里的 sandbox 扩展
+（kubernetes / agentrun / daytona / e2b）全是**远程沙箱**，且 ReActAgent 的 javadoc
+明说 BYPASS 要"paired with a sandboxed environment"（环境自带）。本仓库的分工：
+
+| 层 | 谁 | 管什么 |
+|---|---|---|
+| 工具准入 | AgentScope `PermissionMode` + 只读/完整工具面 | 模型能不能调某个工具 |
+| 执行隔离 | `DockerSandbox`（cap-drop ALL / no-new-privileges / 只读根 / 资源与网络上限） | 不可信仓库代码真正在哪跑、跑崩了宿主活不活 |
+
+流水线执行的命令**不是模型编的**：来自 `ci/actions.yml` 配方（人工评审）＋argv 白名单
+（E-201）＋禁 shell（E-202），所以"宿主 shell 工具 + 命令白名单"这条路在平台里没有存在
+价值，反而会成为绕过容器的通道。守卫：`spec-checks/.../HostToolExclusionTest` 禁止把
+AgentScope 的宿主 shell/文件工具注册进任何工具面——未来真要给模型开放 shell，正确做法
+是写一个转发进 `DockerSandbox.wrap(...)` 的 AgentTool。
+
 ### 失败自动修复（默认开启，无需人工介入）
 
 缺镜像已经在**动作前预检**被自动拉取（见上），大多数构建不会走到这里。若运行仍然失败，平台按下面的闭环处理，**只有平台复核通过才自动从失败阶段续跑**，不需要人点「重跑」：

@@ -131,10 +131,10 @@ class ProjectContextResolverTest {
         @Override
         public List<ProjectEnv> findEnvs(String projectId) {
             return "RY".equals(projectId)
-                    ? List.of(new ProjectEnv("RY", "dev", null, null),
-                            new ProjectEnv("RY", "test", null, null),
-                            new ProjectEnv("RY", "prod", null, null))
-                    : List.of(new ProjectEnv("NEW", "dev", null, null));
+                    ? List.of(new ProjectEnv("RY", "dev", null),
+                            new ProjectEnv("RY", "test", null),
+                            new ProjectEnv("RY", "prod", null))
+                    : List.of(new ProjectEnv("NEW", "dev", null));
         }
 
         private static Project project(String id) {

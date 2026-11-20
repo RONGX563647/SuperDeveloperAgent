@@ -33,7 +33,17 @@ public interface TokenUsageRepository {
             int inputTokens,
             int cachedTokens,
             int outputTokens,
-            long createdAt) {
+            long createdAt,
+            String activatedPlugins,
+            String pluginSchemaChars) {
+
+        /** 旧调用（无归因）：兼容旧签名，归因字段留空。 */
+        public ModelUsage(String sessionId, String projectId, String userId, String connectionId,
+                          String modelName, int inputTokens, int cachedTokens, int outputTokens,
+                          long createdAt) {
+            this(sessionId, projectId, userId, connectionId, modelName, inputTokens, cachedTokens,
+                    outputTokens, createdAt, null, null);
+        }
 
         public long totalTokens() {
             return (long) inputTokens + outputTokens;

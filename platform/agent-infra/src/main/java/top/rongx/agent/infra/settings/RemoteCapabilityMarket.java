@@ -59,6 +59,7 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
     private static final int PAGE_LIMIT = 100;
     private static final String AWESOME_SOURCE = "Awesome-MCP-ZH";
     private static final String AWESOME_PREFIX = "awesome-mcp:";
+    private static final String REGISTRY_SOURCE = "MCP Registry";
     /** 单个技能最多下载的文件数与体积上限，避免一个仓库把市场拖垮。 */
     private static final int MAX_FILES = 80;
     private static final long MAX_FILE_BYTES = 256 * 1024;
@@ -77,7 +78,8 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
     private static final List<Entry> AWESOME_MCP = awesomeMcp();
 
     private final ObjectMapper json;
-    private final String mcpRegistry;
+    /** 可配置的多个 MCP Registry 来源（逗号分隔），每个独立接入、独立来源标注。 */
+    private final List<String> mcpRegistries;
     private final List<String> skillRepos;
     private final HttpClient http;
     private final Map<String, Cached> cache = new ConcurrentHashMap<>();
@@ -93,9 +95,55 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
             @Value("${agent.market.skill-repos:anthropics/skills,anbeime/skill}")
             String skillRepos) {
         this.json = json;
-        this.mcpRegistry = trimSlash(mcpRegistry);
+        this.mcpRegistries = splitRegistries(mcpRegistry);
         this.skillRepos = splitRepos(skillRepos);
         this.http = client();
+    }
+
+    /**
+     * 当前接入的市场来源清单：MCP = 精选清单 + 每个 Registry；Skill = 每个 GitHub 仓库。
+     *
+     * <p>来源是「可接入哪些开源市场」的事实源，设置页据此渲染来源筛选 chips 与接入说明，
+     * 运维在 {@code agent.market.*} 加一个地址即可在这里多出一项，不需要改前端。
+     */
+    @Override
+    public List<Source> sources(Kind kind) {
+        List<Source> out = new ArrayList<>();
+        if (kind == null || kind == Kind.MCP) {
+            out.add(new Source(AWESOME_SOURCE, Kind.MCP, "MCP 精选",
+                    "https://github.com/yzfly/Awesome-MCP-ZH",
+                    "社区精选的可直接运行服务，离线也能安装", true));
+            for (String registry : mcpRegistries) {
+                String host = hostOf(registry);
+                out.add(new Source(host, Kind.MCP, "MCP Registry · " + host, registry,
+                        "MCP 官方兼容 Registry 协议的服务目录", false));
+            }
+        }
+        if (kind == null || kind == Kind.SKILL) {
+            for (String repo : skillRepos) {
+                out.add(new Source(repo, Kind.SKILL, repo,
+                        "https://github.com/" + repo,
+                        "GitHub 开源技能仓库（SKILL.md 目录）", false));
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** 带来源筛选的分页：条目的 source 与筛选值一致才保留。 */
+    @Override
+    public Page page(Kind kind, String keyword, String source,
+                     int offset, int limit, boolean refresh) {
+        boolean anySource = source == null || source.isBlank();
+        if (anySource) {
+            return page(kind, keyword, offset, limit, refresh);
+        }
+        CapabilityMarket.Page full = page(kind, keyword, 0, Integer.MAX_VALUE, refresh);
+        List<Entry> matched = full.items().stream()
+                .filter(e -> source.equals(e.source()))
+                .toList();
+        int from = Math.min(Math.max(0, offset), matched.size());
+        int end = (int) Math.min((long) from + Math.max(1, limit), matched.size());
+        return new Page(List.copyOf(matched.subList(from, end)), matched.size(), end < matched.size());
     }
 
     @Override
@@ -149,8 +197,18 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
         }
         if (id.startsWith("mcp:")) {
             String name = id.substring("mcp:".length());
-            JsonNode root = read(get(mcpRegistry + "/" + enc(name) + "/versions/latest"));
-            return parseServer(root.path("server"), root);
+            for (String registry : mcpRegistries) {
+                try {
+                    JsonNode root = read(get(registry + "/" + enc(name) + "/versions/latest"));
+                    Optional<Entry> found = parseServer(root.path("server"), root, hostOf(registry));
+                    if (found.isPresent()) {
+                        return found;
+                    }
+                } catch (RuntimeException e) {
+                    log.debug("Registry 未找到服务 name={} source={}：{}", name, hostOf(registry), e.getMessage());
+                }
+            }
+            return Optional.empty();
         }
         if (id.startsWith("skill:")) {
             String rest = id.substring("skill:".length());
@@ -198,25 +256,27 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
             }
         }
         RuntimeException failure = null;
-        try {
-            String url = mcpRegistry + "?version=latest&limit=" + PAGE_LIMIT
-                    + (q.isBlank() ? "" : "&search=" + enc(q));
-            JsonNode root = read(get(url));
-            for (JsonNode item : root.path("servers")) {
-                parseServer(item.path("server"), item).ifPresent(entry -> {
-                    if (matches(entry, q) && seen.add(entry.name())) {
-                        out.add(entry);
-                    }
-                });
+        // 逐个 Registry 接入：某一源不可达不影响其它源与精选清单。
+        for (String registry : mcpRegistries) {
+            try {
+                String url = registry + "?version=latest&limit=" + PAGE_LIMIT
+                        + (q.isBlank() ? "" : "&search=" + enc(q));
+                JsonNode root = read(get(url));
+                String source = hostOf(registry);
+                for (JsonNode item : root.path("servers")) {
+                    parseServer(item.path("server"), item, source).ifPresent(entry -> {
+                        if (matches(entry, q) && seen.add(entry.name())) {
+                            out.add(entry);
+                        }
+                    });
+                }
+            } catch (RuntimeException e) {
+                failure = e;
+                log.warn("MCP Registry 不可用 source={}：{}", hostOf(registry), e.getMessage());
             }
-        } catch (RuntimeException e) {
-            failure = e;
         }
         if (out.isEmpty() && failure != null) {
             throw failure;
-        }
-        if (failure != null) {
-            log.warn("MCP Registry 不可用，仅显示精选清单：{}", failure.getMessage());
         }
         cache.put(key, new Cached(List.copyOf(out), System.currentTimeMillis()));
         return out;
@@ -239,6 +299,11 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
      * 两类都没有（或远端 URL 需要用户填参数）则不进入市场，避免装出不可用的服务。
      */
     static Optional<Entry> parseServer(JsonNode server, JsonNode wrapper) {
+        return parseServer(server, wrapper, REGISTRY_SOURCE);
+    }
+
+    /** 带来源标注的解析：多 Registry 接入时每条目记录它来自哪个源。 */
+    static Optional<Entry> parseServer(JsonNode server, JsonNode wrapper, String source) {
         String registryName = server.path("name").asText("").trim();
         if (registryName.isEmpty()) {
             return Optional.empty();
@@ -328,7 +393,8 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
                 title.isBlank() ? registryName : title,
                 description.isBlank() ? title : description,
                 tags.stream().filter(t -> !t.isBlank()).toList(),
-                "MCP Registry", transport, command, List.copyOf(args), url, null,
+                source == null || source.isBlank() ? REGISTRY_SOURCE : source,
+                transport, command, List.copyOf(args), url, null,
                 requiredEnv.stream().filter(e -> !e.isBlank()).toList()));
     }
 
@@ -712,6 +778,28 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
         }
         return out.isEmpty()
                 ? List.of("anthropics/skills", "anbeime/skill") : List.copyOf(out);
+    }
+
+    /** Registry 地址同样可逗号分隔接入多个；每项都 trim + 去尾斜杠，去掉空项。 */
+    private static List<String> splitRegistries(String raw) {
+        List<String> out = new ArrayList<>();
+        for (String part : (raw == null ? "" : raw).split(",")) {
+            String url = trimSlash(part.trim());
+            if (url != null && url.startsWith("http")) {
+                out.add(url);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** 取 URL 的 host 作为稳定来源标识；解析失败时退回原地址。 */
+    private static String hostOf(String url) {
+        try {
+            String host = URI.create(url).getHost();
+            return host == null || host.isBlank() ? url : host;
+        } catch (IllegalArgumentException e) {
+            return url;
+        }
     }
 
     /** 与 git 一致读 HTTPS_PROXY / HTTP_PROXY：Java 的 HttpClient 不会自动读代理环境变量。 */

@@ -1,7 +1,17 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-runtime
 
-27 个会话；检索用 `python tools/docs/find.py --module agent-runtime`。
+29 个会话；检索用 `python tools/docs/find.py --module agent-runtime`。
+
+## 2026-11-20 · 补齐 token 治理三条量化验收与插件分项归因（feat `e94171d`）
+- 问题：token 爆炸专项验收 9 项里 6 项功能面通过，但 3 项量化指标（inputTokens 降 40%/命中率 60%/真实请求 toke…
+- 方案：新增 TokenBaselineTest 用真实工具面+评测指令锁定按需 schema 下降≥40%（最坏59.1%）防回涨；
+- 验证：隔离 worktree 全量 verify 1020 例 0失败0错误7跳过；
+
+## 2026-11-20 · 会话能力页增加内置工具展示并改造界面与市场多源接入（feat `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8` `b9add58` `415b525` `43eb19c` `8139279` `35611ee`）
+- 问题：会话能力页缺少内置工具展示、界面信息层级差、MCP/Skill 市场仅单一仓库来源
+- 方案：能力页新增内置工具区（复用 AgentToolCatalog 投影）并重做三卡概览界面；
+- 验证：独立跑通 spec-checks 35 例、市场相关 10 例、前端 13 个测试文件 23 例、vue-tsc 类型检查全绿；
 
 ## 2026-11-20 · 派发票据回写撞主键（closeTicket 误用 INSERT）（bug `03f5aee`）
 - 问题：调度派发票据关单时 closeTicket 对已存在票据用 saveTask（INSERT），每次回写终态都撞 workspace_tasks_…

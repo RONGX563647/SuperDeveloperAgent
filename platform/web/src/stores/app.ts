@@ -73,6 +73,15 @@ function newId(): string {
   return 's-' + Math.random().toString(36).slice(2, 10)
 }
 
+/**
+ * 会话默认工作树：按会话 id 派生，与后端 ChatController.defaultWorktree 同规则。
+ * 让每个会话开箱就有独立的写落点，Agent 的 workspace_* 工具不会卡在「请先选择工作树」。
+ * 用户仍可在状态条里手动切换/清空。
+ */
+function deriveWorktree(sessionId: string): string {
+  return 'wt-' + sessionId
+}
+
 /** 记住当前会话 id：刷新页面后仍能回到同一会话与历史消息。 */
 function loadCurrentSession(): string {
   try {
@@ -97,6 +106,7 @@ function persistCurrentSession(id: string) {
  */
 const initialSessionId = loadCurrentSession() || newId()
 persistCurrentSession(initialSessionId)
+const initialWorktree = deriveWorktree(initialSessionId)
 
 /**
  * 极轻量全局状态：只放「布局与页面共享」的少量字段。
@@ -106,8 +116,8 @@ persistCurrentSession(initialSessionId)
 export const appStore = reactive({
   projectId: DEFAULT_PROJECT,
   env: loadEnv(),
-  /** 当前会话使用的工作树（空 = 主仓库）；切换工作区时重置。 */
-  worktree: '',
+  /** 当前会话使用的工作树；新建会话时按会话 id 派生，开箱即可写。用户可手动切换/清空。 */
+  worktree: initialWorktree,
   sessionId: initialSessionId,
   sessions: loadSessions() as SessionItem[],
   /** 当前对话的执行策略（本地持久化，切换页面不丢）。 */
@@ -160,6 +170,7 @@ export const appStore = reactive({
    */
   newSession() {
     appStore.sessionId = newId()
+    appStore.worktree = deriveWorktree(appStore.sessionId)
     persistCurrentSession(appStore.sessionId)
   },
 
@@ -185,6 +196,9 @@ export const appStore = reactive({
     const target = appStore.sessions.find((s) => s.id === id)
     if (target) appStore.projectId = target.projectId
     appStore.sessionId = id
+    // 空工作树（如切换工作区后）按会话 id 派生，保证历史会话也有写落点；
+    // 用户在状态条手动选过的工作树则保留。
+    if (!appStore.worktree) appStore.worktree = deriveWorktree(id)
     persistCurrentSession(id)
   },
 

@@ -121,7 +121,6 @@ public class ProjectIntakeController {
                 .map(e -> {
                     Map<String, Object> row = new java.util.LinkedHashMap<>();
                     row.put("env", e.env());
-                    row.put("appUrl", e.appUrl() == null ? "" : e.appUrl());
                     row.put("composeDir", e.composeDir() == null ? "" : e.composeDir());
                     return row;
                 })

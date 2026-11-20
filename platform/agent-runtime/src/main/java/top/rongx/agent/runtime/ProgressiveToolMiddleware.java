@@ -10,8 +10,10 @@ import io.agentscope.core.middleware.ReasoningInput;
 import io.agentscope.core.model.ToolSchema;
 import io.agentscope.core.state.AgentState;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import org.slf4j.Logger;
@@ -91,10 +93,36 @@ public class ProgressiveToolMiddleware implements MiddlewareBase {
                 visible.add(tool);
             }
         }
+        // 分项归因：把本轮实际下发的 schema 按贡献者归类，交给 recorder 落库/记日志。
+        // 即使本轮没有裁剪（全量可见）也要记一份，避免归因缺席被误读成"没加载任何插件"。
+        if (ctx != null) {
+            ctx.put(ToolAttribution.class, attribution(visible, active));
+        }
         if (visible.size() == tools.size()) {
             return next.apply(input);
         }
         return next.apply(new ReasoningInput(input.messages(), visible, input.options()));
+    }
+
+    /**
+     * 按真实下发的 schema 计算归因：每个工具的 name+description 字符数计到它的插件，
+     * 核心/未归类工具计入 {@code core} 桶。只统计实际下发的，未激活插件不占 token。
+     */
+    private ToolAttribution attribution(List<ToolSchema> visible, Set<String> active) {
+        List<String> plugins = new ArrayList<>();
+        for (String name : active) {
+            if (!ROUTED_MARKER.equals(name)) {
+                plugins.add(name);
+            }
+        }
+        Map<String, Integer> chars = new LinkedHashMap<>();
+        for (ToolSchema tool : visible) {
+            String owner = index.pluginOf(tool.getName()).orElse("core");
+            String description = tool.getDescription();
+            int size = tool.getName().length() + (description == null ? 0 : description.length());
+            chars.merge(owner, size, Integer::sum);
+        }
+        return new ToolAttribution(plugins, chars);
     }
 
     /** 按插件目录顺序保留命中的前 {@link #MAX_AUTO_PLUGINS} 个，保证结果可预测。 */
