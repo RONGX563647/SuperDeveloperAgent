@@ -1,12 +1,13 @@
 <!-- 由 tools/docs/build.py 生成，勿手改；文档地图见 ../README.md -->
 # 近期变更索引
 
-留痕数据：`docs/ledger/*.jsonl`（165 个会话，截至 2026-11-20）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
+留痕数据：`docs/ledger/*.jsonl`（166 个会话，截至 2026-11-20）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
 
 ## 最近 10 个会话
 
 | 日期 | 类别 | 标题 | 模块 | 提交 |
 |---|---|---|---|---|
+| 2026-11-20 | chore | docs 体系改造：ledger 单一写入 + skills/views/find 三层消费 | other | `a381003` |
 | 2026-11-20 | docs | Code Wiki 刷新：镜像就绪、沙箱配置、归档链诊断 | other | `ceef158` |
 | 2026-11-20 | chore | 分支清理与归档诊断工具收录 | other | `b1a8628` |
 | 2026-11-20 | chore | 面板真实渲染校验脚本 + 清掉误生成的 npm 锁文件 | web | `e1583e5` |
@@ -16,13 +17,12 @@
 | 2026-11-20 | bug | forceTerminate 用例竞态：cancel 落在任务启动前，等 25s 必失败 | agent-executor | `d7b3cf7` `6142e67` |
 | 2026-11-20 | bug | 生产按版本部署：选项改为测试环境成功运行的版本 | agent-executor, agent-gateway, web | `fd26ec8` |
 | 2026-11-20 | chore | 补齐接口契约：新端点加 @Operation(summary)，spec-checks 恢复绿 | agent-gateway | `e72ff5d` |
-| 2026-11-20 | feat | 镜像就绪状态可观测：只读接口暴露按主机维度的镜像就绪/退避 | agent-domain, agent-executor, agent-gateway, agent-infra | `6b132e9` |
 
 ## 模块索引
 
 | 模块 | 会话数 | 最近变更 | 详见 |
 |---|---|---|---|
-| other | 36 | 2026-11-20 Code Wiki 刷新：镜像就绪、沙箱配置、归档链诊断 | [modules/other.md](modules/other.md) |
+| other | 37 | 2026-11-20 docs 体系改造：ledger 单一写入 + skills/views/find 三层消费 | [modules/other.md](modules/other.md) |
 | web | 58 | 2026-11-20 面板真实渲染校验脚本 + 清掉误生成的 npm 锁文件 | [modules/web.md](modules/web.md) |
 | agent-executor | 50 | 2026-11-20 固化脚本缺 deploy 阶段导致健康检查必败 | [modules/agent-executor.md](modules/agent-executor.md) |
 | agent-gateway | 76 | 2026-11-20 生产按版本部署：选项改为测试环境成功运行的版本 | [modules/agent-gateway.md](modules/agent-gateway.md) |

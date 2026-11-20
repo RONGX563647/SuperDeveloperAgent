@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：other
 
-36 个会话；检索用 `python tools/docs/find.py --module other`。
+37 个会话；检索用 `python tools/docs/find.py --module other`。
+
+## 2026-11-20 · docs 体系改造：ledger 单一写入 + skills/views/find 三层消费（chore `a381003`）
+- 问题：docs/ 539 个文件里 89% 是会话归档与每会话两份重复总结，分类混杂、agent 无路由入口、全读约 40 万 token，散文总结大…
+- 方案：换成一份事实多种投影：ledger JSONL 唯一写入点（165 份 manifest 原样迁入，哈希链不变）、build.py 生成 vie…
+- 验证：gate self-test OK；validate 165 份链全绿；views check 14 文件一致；sweep --dry-run …
 
 ## 2026-11-20 · Code Wiki 刷新：镜像就绪、沙箱配置、归档链诊断（docs `ceef158`）
 - 问题：Code Wiki 落后于今天的改动：执行面只有一句 ensureImageReady()，镜像缺失如何被发现/失败如何退避/状态存在哪都没写；…
