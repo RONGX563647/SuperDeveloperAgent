@@ -23,6 +23,7 @@ logs/
 *.swp
 
 # 本地环境与临时文件
+.tmp-*
 .env
 .env.local
 .env.*.local
