@@ -39,6 +39,7 @@ import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
+import top.rongx.agent.domain.deploy.DeploySlot;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.BuildException;
 import top.rongx.agent.domain.error.EnvironmentException;
@@ -2802,7 +2803,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     /** 版本槽：打 tag 时用版本号，否则 null（覆盖默认槽）。 */
     private static String deploySlot(RunState state) {
-        return state.deployTagged && state.deployVersion != null ? state.deployVersion : null;
+        return DeploySlot.of(state.deployTagged, state.deployVersion);
     }
 
     /** 版本号入参校验：允许字母数字开头，后面可带 . _ -，最长 32，防路径穿越。 */

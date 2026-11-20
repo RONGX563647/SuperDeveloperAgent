@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
+import top.rongx.agent.domain.deploy.DeploySlot;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RecipeException;
@@ -105,8 +106,7 @@ public class ServerDeployer implements Deployer {
 
         // 版本槽：打 tag 的发布按版本号独立命名（不同补丁版本/不同版本线互不覆盖），
         // 不打 tag 才落到该环境的默认槽。远端以前固定用环境名，导致每次发布都删掉上一版。
-        String slot = request.tagged() && request.version() != null && !request.version().isBlank()
-                ? normalizeSlot(request.version()) : null;
+        String slot = DeploySlot.of(request);
         String container = DockerDeployer.containerName(request.projectId(), request.envName(), slot);
         StringBuilder log = new StringBuilder();
 
@@ -151,6 +151,21 @@ public class ServerDeployer implements Deployer {
                                 + "；请重新执行 image_package 生成该版本", redact(log));
             }
 
+            // 传大镜像前先看远端空间：否则会在传一半时失败，留下半截文件和难懂的报错。
+            long tarBytes;
+            try {
+                tarBytes = Files.size(localTar);
+            } catch (IOException e) {
+                tarBytes = 0;
+            }
+            if (!ensureRemoteSpace(server, secret, remoteDir, tarBytes, log)) {
+                return DeployResult.failed(DeployTarget.SERVER,
+                        ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                        "远端部署目录空间不足：镜像约 " + (tarBytes / 1024 / 1024 + 1)
+                                + "MB，请清理旧镜像/日志后重试（docker image prune -f）",
+                        redact(log));
+            }
+
             SshAccess.Result transfer = ssh.upload(server, secret, localTar, remoteTar,
                     TRANSFER_TIMEOUT_MS);
             if (!transfer.ok()) {
@@ -172,12 +187,20 @@ public class ServerDeployer implements Deployer {
 
             // 只替换「同名同版本」的容器：打 tag 时容器名带版本号，
             // 其它版本（不同补丁/不同版本线）及默认槽的容器保持运行。
-            int previousPort = slot == null
-                    ? 0 : existingHostPort(server, secret, docker, container,
+            // 同时记录上一版镜像与端口：新版本启动失败时用它原地恢复，避免把可用环境弄丢。
+            PreviousContainer previous = previousContainer(server, secret, docker, container,
                     request.containerPort());
-            ssh.run(server, secret, docker + " rm -f " + container, SSH_TIMEOUT_MS);
-            log.append("[deploy] 已停止").append(slot == null ? "默认槽" : "版本 " + slot)
-                    .append(" 的旧容器 ").append(container).append('\n');
+            int previousPort = previous == null ? 0 : previous.hostPort();
+            SshAccess.Result removed = ssh.run(server, secret, docker + " rm -f " + container,
+                    SSH_TIMEOUT_MS);
+            if (removed.ok()) {
+                log.append("[deploy] 已停止").append(slot == null ? "默认槽" : "版本 " + slot)
+                        .append(" 的旧容器 ").append(container).append('\n');
+            } else {
+                // 删除失败不直接放弃：继续尝试 docker run，由最终报错给出真实原因（如守护进程异常）
+                log.append("[deploy] 旧容器停止返回非零：").append(brief(removed.error()))
+                        .append('\n');
+            }
 
             // 端口探测只建 1~2 条 SSH 连接：旧实现每个候选端口探测 2 次，
             // 端口被占时会连续建 400 条连接，最后报"端口耗尽"却和真实原因无关。
@@ -198,7 +221,8 @@ public class ServerDeployer implements Deployer {
             SshAccess.Result run = null;
             for (int attempt = 0; attempt < PORT_RETRY_LIMIT && hostPort > 0; attempt++) {
                 run = ssh.run(server, secret,
-                        runCommand(docker, image, request, container, hostPort), SSH_TIMEOUT_MS);
+                        runCommand(docker, image, request, container, hostPort,
+                                displayVersion(request)), SSH_TIMEOUT_MS);
                 if (run.ok()) {
                     break;
                 }
@@ -215,6 +239,26 @@ public class ServerDeployer implements Deployer {
             }
             if (run == null || !run.ok()) {
                 String reason = run == null ? "未执行 docker run" : run.error();
+                // 新版本没起来时把上一版拉起来：部署失败可以接受，丢掉正在服务的版本不行。
+                int restorePort = hostPort > 0 ? hostPort : Math.max(previousPort, request.hostPort());
+                if (previous != null && restorePort > 0) {
+                    SshAccess.Result restore = ssh.run(server, secret,
+                            runCommand(docker, previous.image(), request, container, restorePort,
+                                    previous.version()), SSH_TIMEOUT_MS);
+                    if (restore.ok()) {
+                        log.append("[rollback] 新版本启动失败，已用上一版恢复：")
+                                .append(previous.image()).append("（版本 ")
+                                .append(previous.version()).append("，端口 ")
+                                .append(restorePort).append("）\n");
+                        return DeployResult.failed(DeployTarget.SERVER,
+                                ErrorCode.DEPLOY_START_FAILED.code(),
+                                "远端容器启动失败：" + DockerDeployer.sanitize(reason, request.env())
+                                        + "；已自动恢复上一版 " + previous.version()
+                                        + "（" + previous.image() + "）", redact(log));
+                    }
+                    log.append("[rollback] 上一版恢复失败：").append(brief(restore.error()))
+                            .append('\n');
+                }
                 return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
                         "远端容器启动失败：" + DockerDeployer.sanitize(reason, request.env()),
                         redact(log));
@@ -418,14 +462,14 @@ public class ServerDeployer implements Deployer {
     }
 
     private static String runCommand(String docker, String image, DeployRequest request,
-                                     String container, int hostPort) {
+                                     String container, int hostPort, String labelVersion) {
         StringBuilder command = new StringBuilder(docker)
                 .append(" run -d --name ").append(container)
                 .append(" --restart unless-stopped")
                 .append(" --label agent.project=").append(JschSsh.shellQuote(request.projectId()))
                 .append(" --label agent.env=").append(JschSsh.shellQuote(
                         request.envName() == null ? "" : request.envName()))
-                .append(" --label agent.version=").append(JschSsh.shellQuote(displayVersion(request)))
+                .append(" --label agent.version=").append(JschSsh.shellQuote(labelVersion))
                 .append(" --label agent.sha=").append(JschSsh.shellQuote(request.gitSha()))
                 .append(" --label agent.run=").append(JschSsh.shellQuote(
                         request.runId() == null ? "" : request.runId()))
@@ -470,6 +514,74 @@ public class ServerDeployer implements Deployer {
         return result.ok() ? parseMappedPort(result.output()) : 0;
     }
 
+    /**
+     * 读取当前容器的镜像/版本/端口；容器不存在或读取失败返回 null。
+     *
+     * <p>新版本启动失败时用这些信息原地恢复上一版，保证「部署失败≠线上挂掉」。
+     */
+    private PreviousContainer previousContainer(DeployServer server, String secret, String docker,
+                                                String container, int containerPort) {
+        SshAccess.Result inspect = ssh.run(server, secret,
+                docker + " inspect -f '{{.Config.Image}}|"
+                        + "{{index .Config.Labels \"agent.version\"}}' " + container,
+                PROBE_TIMEOUT_MS);
+        if (!inspect.ok() || inspect.output() == null || inspect.output().isBlank()) {
+            return null;
+        }
+        String[] parts = inspect.output().trim().split("\\|", -1);
+        String image = parts[0].trim();
+        if (image.isEmpty() || "null".equals(image)) {
+            return null;
+        }
+        String version = parts.length > 1 ? parts[1].trim() : "";
+        return new PreviousContainer(image, version.isEmpty() ? "previous" : version,
+                existingHostPort(server, secret, docker, container, containerPort));
+    }
+
+    /**
+     * 上传前预检远端磁盘空间。
+     *
+     * <p>{@code df} 不可用/输出异常时放行（不做误伤），真正空间不足由上传报错兜底。
+     */
+    private boolean ensureRemoteSpace(DeployServer server, String secret, String remoteDir,
+                                      long bytes, StringBuilder log) {
+        if (bytes <= 0) {
+            return true;
+        }
+        SshAccess.Result result = ssh.run(server, secret,
+                "df -Pk " + JschSsh.shellQuote(remoteDir) + " 2>/dev/null | tail -n 1",
+                PROBE_TIMEOUT_MS);
+        if (!result.ok() || result.output() == null || result.output().isBlank()) {
+            return true;
+        }
+        String[] columns = result.output().trim().split("\\s+");
+        if (columns.length < 4) {
+            return true;
+        }
+        try {
+            long availableKb = Long.parseLong(columns[3]);
+            long requiredKb = bytes / 1024 + 2048;
+            if (availableKb < requiredKb) {
+                log.append("[space] 远端可用 ").append(availableKb / 1024)
+                        .append("MB，镜像需要 ").append(requiredKb / 1024).append("MB\n");
+                return false;
+            }
+            return true;
+        } catch (NumberFormatException e) {
+            return true;
+        }
+    }
+
+    /** 短错误：日志里保留可读原因，不把整段远端输出塞进结果。 */
+    private static String brief(String error) {
+        String text = error == null ? "" : error.trim();
+        return text.length() > 160 ? text.substring(0, 160) + "…" : text;
+    }
+
+    /** 上一版容器信息（用于启动失败后的原地恢复）。 */
+    private record PreviousContainer(String image, String version, int hostPort) {
+    }
+
     /** 解析 {@code docker port} 输出（{@code 0.0.0.0:8080} / {@code [::]:8080}）。 */
     static int parseMappedPort(String output) {
         int best = 0;
@@ -491,13 +603,6 @@ public class ServerDeployer implements Deployer {
             }
         }
         return best;
-    }
-
-    /** 版本槽后缀：与 DockerDeployer 的容器命名规则保持一致。 */
-    private static String normalizeSlot(String version) {
-        String value = version == null ? "" : version.trim().toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9_.-]", "-");
-        return value.isEmpty() ? null : value;
     }
 
     /** 展示版本：用户没填版本号时统一显示 latest。 */

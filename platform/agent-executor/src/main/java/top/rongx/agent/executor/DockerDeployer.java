@@ -9,6 +9,7 @@ import java.util.TreeMap;
 import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
+import top.rongx.agent.domain.deploy.DeploySlot;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RecipeException;
@@ -63,7 +64,7 @@ public class DockerDeployer implements Deployer {
         }
         Path dir = Path.of(request.workspace() == null || request.workspace().isBlank()
                 ? "." : request.workspace());
-        String name = containerName(request.projectId(), request.envName(), slotOf(request));
+        String name = containerName(request.projectId(), request.envName(), DeploySlot.of(request));
         List<String> labels = new ArrayList<>(List.of(
                 "--label", "agent.project=" + request.projectId(),
                 "--label", "agent.env=" + (request.envName() == null ? "" : request.envName()),
@@ -350,11 +351,6 @@ public class DockerDeployer implements Deployer {
         String volume = volumeName(composeProject(request.network(), request.envName()),
                 request.projectId(), "app");
         return List.of("-v", volume + ":" + request.volumePath().trim());
-    }
-
-    /** 版本槽后缀：打 tag 时用版本号，否则 null（默认槽）。 */
-    private static String slotOf(DeployRequest request) {
-        return request.tagged() ? normalize(request.version(), "v") : null;
     }
 
     /** 展示版本：用户没填版本号时统一显示 latest。 */
