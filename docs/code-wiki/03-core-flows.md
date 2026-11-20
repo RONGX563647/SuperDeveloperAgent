@@ -16,9 +16,11 @@ summary: 六条关键运行链路的分步说明：对话 SSE、流水线、治�
    - 未指定环境默认 test；环境必须属于该项目，否则拒绝解析
 3. AgentStreamLimiter.acquireOrThrow()  单用户并发闸门（内存 / jdbc 租约）
 4. ChatService.stream(ctx, sessionId, text, role, ...)
-5. AgentFactory.createChat(ctx, skills, attachments, model, connectionId)
-   - 选择 Toolkit：prod 或只读 → readOnlyToolkit；否则 agentToolkit
-   - 追踪中间件：tool 调用、token 用量、时间线
+5. AgentFactory 按三叉路由：
+   - `role == "deploy"` → `createDeploy`（发布 Agent，deployToolkit）
+   - `WorkerRole.parse(role)` 命中 → `createWorker`（PRODUCT/DEV/TEST/OPS 角色裁剪，见工具与治理 §1.3）
+   - 否则 → `createChat`：prod 或只读用户 → readOnlyToolkit；否则 agentToolkit（挂会话勾选的 Skill/MCP）
+   - 追踪中间件：tool 调用、token 用量（含插件分项归因）、时间线
 6. ReActAgent.streamEvents(text, RuntimeContext(ctx))
 7. AgentEventMapper.toDto() → SSE "agent" 事件（带递增 id，支持 Last-Event-ID 续传）
 8. run.completed / error 后释放闸门与 MCP 资源
@@ -129,6 +131,28 @@ POST /api/v1/workspaces/{projectId}/deployments/{env}/start 或 deploy_* 工具
 
 部署目标未注册时 fail-closed（E-505），不会"静默成功"。
 
+### 4.1 生产发布：从测试验证版本直接部署（0.2 链路）
+
+生产发布不再按分支/提交现拼发布对象，而是**复用 test 环境已验证的镜像**直接部署：
+
+```text
+test 构建/部署成功 → 登记 test 镜像账本（verify 运行不算晋升证据）
+  → 生产页展示候选：buildReleaseCandidates(images, history, gitTags)
+    （候选来自 test 账本 + 历史 git tag 证据；无 gitSha 的剔除）
+  → deployConfirm(projectId, 'prod', sha) 拿证据与一次性令牌
+  → deployImageVersion(deployImage=镜像tag, target=server, tagged=false)
+     （不重打 git 标签；镜像已构建，跳过构建阶段）
+  → 防错四层：
+     ① 前端候选剔除无效版本
+     ② 后端 deployPreflight 前移（版本归属/镜像存在/密钥/必填变量 → 400）
+     ③ DeployGate.requireIfNeeded：test 取证缺失 E-601 + 令牌缺失/过期 E-602
+        （令牌绑定 project+env+sha，一次性、5 分钟）
+     ④ 引擎内 EnvironmentPromotion 复核：证据提交与本次发布提交一致
+  → forDeployOnly 切片：只跑 deploy + health，不重新构建、不重新固化脚本
+```
+
+阶段预览同步标注"按版本直接部署：不重新构建"，界面与实际执行一致。
+
 ## 5. 项目接入链路
 
 ```text
@@ -162,11 +186,17 @@ DONE           关闭 Issue / 通知
 
 调度特征：
 
-- 全局并发 `Semaphore(MAX_CONCURRENT_RUNS)`，项目级锁 `projectLocks`。
-- 每个 run 用虚拟线程执行，`retryScheduler` 处理瞬时失败。
-- `apply()` 按 `BugFixPolicy` 决定该阶段是否需要人工审核；`block()` 进入等待，`resume()` 继续。
+- 全局并发 `Semaphore` + 项目级锁 + 测试环境 env-lease 互斥；运行租约 30 分钟 TTL 续租。
+- **部署类阶段（REPRO_DEPLOY / VERIFY_DEPLOY）禁生产环境**（productionLike 守卫）——BugFix 不碰生产。
+- 每个 run 用虚拟线程执行；`apply()` 按 `BugFixPolicy` 决定该阶段是否需要人工审核；`block()` 进入等待，`resume()` 继续。
+- 状态机以 `markMerged` 为 SUCCEEDED 唯一入口；PR 被关未合 → BLOCKED 可重试。
+- 修复分支带任务编码：`agent/bugfix-<code>-<id>`；异常统一 `RunException` + `RUN_*` 错误码。
 - 事件（`BugFixEvent`）与阶段记录（`BugFixStageRun`）持久化，供前端时间线展示。
-- `cancel()` 支持取消，`rerunRequested` 支持运行中重排。
+- `cancel()` 支持取消，`rerunRequested` 支持运行中重排；通知走发件箱 + 脱敏。
+
+触发门禁（webhook 与平台编辑共用 `BugFixTriggerService`）：kind=BUG 且 OPEN 且已关联项目且策略开启且标签无禁止项（`no-auto-fix` / `do-not-fix` / `manual-only` 等）且无进行中运行（幂等）。
+
+任务版本号建议（`GET /api/v1/git-issues/versions?projectId&kind`）：Bug 取当前版本线最大补丁 +1（无标签给 `x.y.0`）；Feat 取该 major 已发布最高次版本 +1（未发布线用 `x.y.0`）；非版本分支退最新标签（Feat 再 +1 个次版本）；仓库不可用返回空串不阻断建任务。历史任务读时只回显默认值不落库。
 
 ## 7. 工作区调度链路（Supervisor）
 
@@ -183,3 +213,34 @@ WorkspaceController / WorkspaceSuperController（/api/v1/workspaces/**）
 ```
 
 这是与单会话 `ChatController` 并行的第二套编排入口，共用 `AgentFactory` 与工具面。
+
+调度器细节：
+
+- DAG 派发前 `openTicket` 登记 `workspace_tasks` 票据（RUNNING），节点终态必须 UPDATE 回写（INSERT 会撞主键、票据永远 RUNNING）。
+- 模型给的 `maxParallel` / `maxDurationSeconds` 被服务端收紧到配置上限（默认 4 / 600s）；FAILED 自动重试（复用同会话同指令，最多 3 次；TIMEOUT/CANCELLED 不重试），连续失败熔断，必需节点失败提前终止。
+- `goalKey`（SHA-256 归一化）幂等：同会话活动运行存在时，同目标报错、异目标拒绝；调度深度固定 1，不能给调度会话本身派发。
+- 事件推送是 best-effort（`WorkspaceEventBus` 内存 sink，真相以库为准）；断线续传以 `conversation_timeline` 的 `seq` 为游标。
+
+## 8. 事件驱动任务链路（Gitee → 任务板 → 调度派发）
+
+0.2 线引入：Gitee 事件不直接驱动模型，而是"零 LLM 落任务、LLM 后置决策"。
+
+```text
+Gitee webhook → POST /api/v1/webhooks/gitee/event
+  （端点豁免登录，靠 X-Gitee-Token 常量比较或 X-Gitee-Signature HMAC-SHA256 验签；
+    密钥 agent.webhook.gitee-secret 未配置直接 401，不静默放行）
+  → 事件类型归一化（X-Gitee-Event 头，退回 body hook_name）
+  → 确定性白名单：仅 issue_hook / merge_request_hook 的 open / reopen 放行，
+    其余直接 {ignored:true} —— 全程不调用 LLM
+  → sourceRef = projectId:event:number:action（number 依次取 number/iid/id）
+    双层幂等：内存 Set 挡热重复 + 任务表 source_ref 兜底（重启/多副本仍只建一个任务）
+  → 命中 → 落一条 workspace_tasks（TODO、priority 3、无会话、
+    goal="[event] #编号 标题"、triggerType=事件类型），HTTP 立即返回 taskId
+  → 之后由调度 Agent 在工作区对话里决策：建工单 / 关联已有 / 忽略，
+    用 workspace_dispatch / dispatch_issue 派发子会话 → 走 §7 的执行与看门狗链路
+  → 账本记录 trigger_ref = 关联任务 id（RunRecord.triggerRef）
+```
+
+对照 push 链路：`POST /api/v1/webhooks/gitee/push` 同样零 LLM——按 `projectId:sha` 去重（重启从构建历史恢复）后直接触发 `verify` 流水线；未托管仓库 400 拒绝，触发被前置校验拒绝时回滚去重键允许重试。构建历史查询 `GET /api/v1/webhooks/gitee/history`。
+
+> 另有 `POST /api/v1/webhooks/git/{provider}/issues`（Gitee/GitHub/GitLab 的 **Issue 同步**回调：验签→去重→入队，解析/唤醒 Agent 异步做）——这是 Issue 双向同步链路，与上面"事件建任务"是两条独立链路。

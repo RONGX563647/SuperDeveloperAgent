@@ -15,6 +15,17 @@ summary: 环境要求、后端/前端构建与启动、Docker 部署、关键环
 | 包管理 | npm 或 pnpm 9.15.4（`packageManager` 已声明） |
 | Docker | 可选但**默认必需**（`agent.sandbox.mode=docker`，Docker 不可用则启动失败） |
 | 数据库 | 默认 SQLite（零运维）；生产建议 PostgreSQL |
+| Python 3 | 会话归档门禁与 git hooks 依赖（钩子自动探测 `python`/`python3`/`py`） |
+| git | `core.hooksPath=.githooks`；迁移守卫/CI 需要完整历史与 tag |
+
+首次准备（克隆后）：
+
+```bash
+python tools/session-archive/gate.py install-hooks   # 或 tools/session-archive/install-hooks.ps1
+python tools/session-archive/gate.py doctor          # 环境自检
+```
+
+门禁会自动探测 JDK21+（`JAVA_HOME` 优先，否则扫常见安装位并缓存到 `.git/session-archive/jdk.json`）。
 
 ## 2. 后端
 
@@ -213,4 +224,4 @@ docker run -d --name agent-platform \
 
 ## 9. CI
 
-[.workflow/build.yml](file:///workspace/.workflow/build.yml)（Gitee Go）：本质是 `mvn -B verify`，可平移到任何 CI。`verify` 会执行 spec-checks 的全部规约测试。
+两条流水线详见 [质量门禁 §6](11-quality-and-tooling.md)：GitHub Actions（路径过滤 + backend/frontend/docs/contract/security 五 job，backend 带真 PG16 容器）与 Gitee Go（doc-marshal + 契约审计 + `mvn verify`，四稳定事实可平移）。本地 `verify` 会执行 spec-checks 的全部规约测试。

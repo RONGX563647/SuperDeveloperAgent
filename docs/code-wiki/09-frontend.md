@@ -5,7 +5,7 @@ summary: Vue3 前端：目录结构、路由与登录守卫、API 层、SSE 客�
 
 # 前端架构
 
-技术栈：Vue 3.5、Vite 7、Element Plus、vue-router 4、`@unovis/vue` 图表、TypeScript + `vue-tsc`。包管理 `pnpm@9.15.4`。
+技术栈：Vue 3.5、Vite 7、Element Plus、vue-router 4、`@unovis/vue` 图表、TypeScript + `vue-tsc`。包管理 `pnpm@9.15.4`。状态管理仍是 `stores/app.ts` reactive 单例（**不引 Pinia**），会话级常驻状态在 `state/*`；API 类型由 openapi-typescript 从后端 OpenAPI 快照生成（`gen:api-types`，CI 契约校验）。
 
 ## 1. 目录结构
 
@@ -17,12 +17,12 @@ platform/web/src
 │   ├── AppLayout.vue         # 侧栏 + 页头 + 内容区
 │   └── components/           # AppAside、ContextSwitcher、PageHeader、navDrawer
 ├── views/                    # 7 个页面
-│   ├── ChatView.vue          # 对话
-│   ├── WorkspaceHomeView.vue # 工作区（调度 Agent + 会话列表）
-│   ├── PipelineView.vue      # 流水线
+│   ├── ChatView.vue          # 对话（对话/轨迹/能力三视图共用输入区；任务 Tab 已上移工作区）
+│   ├── WorkspaceHomeView.vue # 工作区（助手/任务/环境三主视图 + 会话/运行/账本右栏）
+│   ├── PipelineView.vue      # 流水线（触发/阶段/历史/镜像账本/生产发布）
 │   ├── ProjectListView.vue   # 项目列表
-│   ├── ProjectIntakeView.vue # 接入项目
-│   ├── SettingsView.vue      # 设置
+│   ├── ProjectIntakeView.vue # 接入项目（本地/Git 地址/Gitee 卡片三选一）
+│   ├── SettingsView.vue      # 设置（13 分区导航，支持 ?section= 深链）
 │   └── LoginView.vue
 ├── components/
 │   ├── chat/                 # 消息、工具卡片、确认卡片、选项卡片、时间线、思考块…
@@ -83,9 +83,9 @@ public 页 → 放行
 | `change.ts` | 变更详情、确认、应用 |
 | `project.ts` | 项目、接入、Git 操作 |
 | `workspace.ts` | 会话、时间线、事件、部署矩阵 |
-| `issues.ts` | Issue CRUD、评论、同步 |
+| `issues.ts` | Issue CRUD、评论、同步、版本建议（kind 口径）、配图上传、xlsx 导出 |
 | `bugfix.ts` | BugFix 运行 |
-| `settings.ts` | 模型、服务器、数据库、MCP、Skill、密钥 |
+| `settings.ts` | 模型、服务器、数据库、MCP/Skill 市场（多源）、内置工具、工具链镜像、密钥 |
 | `action.ts` / `agent.ts` | 标准动作、Agent 配置 |
 | `generated/schema.d.ts` | 由 OpenAPI 生成，`check:api-types` 保证不漂移 |
 
@@ -149,7 +149,29 @@ reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent): AgentProjectio
 - `ChatTraceRail.vue` / `ChatTraceView.vue`：右侧轨迹。
 - `ChatStatusStrip.vue` / `EnvironmentStatusBar.vue`：状态条与环境。
 - `ConversationTimeline.vue`：时间线。
+- `ChatCapabilitiesView.vue`：能力页（见 §7.1）。
+- `ChatIssuesView.vue`：任务看板（挂在工作区「任务」视图；版本号选择见 §7.2）。
 - `MarkdownView.vue`：Markdown 渲染。
+
+### 7.1 能力页（ChatCapabilitiesView）
+
+一页回答三个问题：**内置工具**（只读，来自真实 Toolkit 投影 `GET /api/v1/settings/builtin-tools`，按工具面分组，不是另写清单）、**本轮 Skill**、**本轮 MCP**。三卡概览 + 全局搜索 + 启用筛选 + 排序。数据由 `useChatCapabilities` 并行拉取；会话级选择持久化 localStorage；支持场景预设（前端/后端/文档/发布推荐组合）与「设为默认」回写设置页。
+
+### 7.2 任务看板与版本号选择（ChatIssuesView）
+
+- 版本建议来自 `GET /api/v1/git-issues/versions?projectId&kind`：**kind=FEAT 建议下一个次版本、BUG 建议下一个补丁**（后端推导，前端不自算，避免与打 tag 的版本对不上）。
+- 建议值固定排下拉第一项并打「推荐」徽标；el-select 可搜索、可手输（allow-create）；placeholder 提示"留空 = 自动取建议值"。
+- 类型切换联动重拉建议值，仅当当前值为空或等于旧建议值时回填——用户手选的不动。
+- 版本筛选纯逻辑抽在 `utils/taskVersionFilter.ts`（零依赖单测）；另有 Unovis 量化看板与按 ids 的 xlsx 导出。
+
+### 7.3 部署矩阵（DeploymentMatrix，工作区「环境」视图）
+
+- 环境列 × 版本卡片（运行状态、target/server/ports/health、相对时间、「访问↗」、启停按钮）+ 详情抽屉（启停/重启、容器或进程日志跟随、10s 轮询）。
+- 「最近保留的镜像」面板：镜像账本保留策略内版本（当前/上一版本 + 最近 5 个），每张卡可按 gitSha 一键重新构建。
+- 部署地址指向应用根路径（前端页面），不再跳 `/actuator/health` 的 JSON。
+- 结构回归测试锁死环境网格与镜像面板是两个独立 `v-if`（曾因 `v-else` 错配互斥导致空白）。
+
+> 部署矩阵细节见 [核心流程 §4](03-core-flows.md)；镜像保留策略见 [执行与部署](06-execution-deploy.md)。
 
 ### 流水线
 
@@ -163,7 +185,7 @@ reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent): AgentProjectio
 
 `ModelPanel`、`ServerPanel`、`DatabasePanel`（热切换）、`McpPanel`、`SkillPanel`、`SecretPanel`、`AccountPanel`、`EnvTemplatePanel`、`ProjectEnvPanel`、`RepoPanel`、`GitOauthAppsPanel`、`UsagePanel`、`SandboxImagePanel`（工具链镜像就绪/退避）。
 
-`SandboxImagePanel` 的展示逻辑单独放在 `components/settings/imageReadiness.ts`（状态标签、退避倒计时、来源文案、失败计数），因此能脱离 Vue 单测——**`retryInSeconds = 0` 只代表“现在可以重试”，不代表已就绪**，这条判断是纯函数测试锁住的。
+`SandboxImagePanel` 的展示逻辑单独放在 `components/settings/imageReadiness.ts`（状态标签、退避倒计时、来源文案、失败计数），因此能脱离 Vue 单测——**`retryInSeconds = 0` 只代表“现在可以重试”，不代表已就绪**，这条判断是纯函数测试锁住的。设置页 MCP/Skill 面板已改为「已接入/市场」双 Tab：多源（官方 Registry、GitHub 技能仓库等任意多来源）chips 筛选、24 条/页滚动懒加载、一键接入，条目带 source 与 requiredEnv 提示。
 
 界面回归脚本在 `platform/web/scripts/*-check.mjs`（`login-check`、`layout-check`、`interaction-check`、`pipeline-ux-check`、`sandbox-images-check` 等），句式统一 `node scripts/<name>.mjs [base] [截图路径]`，需要后端与 dev server 同时在跑。
 
@@ -189,3 +211,5 @@ pnpm dev:mock       # 生成 mock 后以 VITE_MOCK=1 启动
 - 状态文案集中 `utils/status.ts`，不散落中文字面量。
 - 事件类型只认 `AgentEventMapper` 的稳定 wire type；未知类型忽略。
 - 组件内不直接读 localStorage，统一走 `stores/app.ts`。
+- 纯逻辑抽到 `utils/` 或组件旁的 `*.ts`（`imageReadiness`、`taskVersionFilter`、`releaseCandidates`、`capabilityOrder`、`changeWire`），用零依赖 node 测试锁行为。
+- 生产发布候选只来自测试镜像账本（`utils/releaseCandidates.ts`），生产触发必须带一次性令牌。
