@@ -13,12 +13,6 @@
   "solution": "intake 归档收录 fd26ec8 提交",
   "commits": [
     {
-      "sha": "5397ecf8a2cad434b7f95cfb2cc551d944abff38",
-      "subject": "chore: 归档锚点提交（收录 fd26ec8 生产按版本部署修复）",
-      "category": "chore",
-      "files": []
-    },
-    {
       "sha": "fd26ec8cc763c5b1dbc5653bb469da24c5579f3c",
       "subject": "fix(deploy): 生产按版本部署的选项改为测试环境成功运行的版本",
       "category": "chore",
@@ -46,6 +40,6 @@
   },
   "chain": {
     "prev": "40414444b33913d4b943313f3d65cb54838977d89913a8eadd0b638854e5eda2",
-    "self": "1613b83920db9a69bc50d476f38b3f09eaf3b5237f71b5e2d878c094c1b2f5b2"
+    "self": "a0f6f6e1ed0793ecd7fafdc4bb65ebe1f3b45c30aefcfc20195786eee78d0463"
   }
 }
