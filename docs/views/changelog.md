@@ -1,10 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（169 个），完整数据在 `docs/ledger/`。
+每行一个会话（170 个），完整数据在 `docs/ledger/`。
 
 ## 2026-11-20
 
+- **chore** 补周报视图，校正 README 阅读成本账（`bd18e87`）— G 方案实用功能清单的周报视图未落地；README 的『全树 ≈ 40 万 token』是改造前的旧账，会误导后来者做预算。
 - **chore** docs 体系改造：ledger 单一写入 + skills/views/find 三层消费（`a381003`）— docs/ 539 个文件里 89% 是会话归档与每会话两份重复总结，分类混杂、agent 无路由入口、全读约 40 万 token，散文总结大…
 - **feat** 生产发布改为从测试验证版本直接部署（`a27fe76`）— 生产发布需按 git 版本号选择、且只显示"发布到生产"，无法从已验证版本直接部署并查看镜像/git tag
 - **bug** 修复环境卡片区因 v-else 错配而空白（`bb27e58`）— 813904ba 新增镜像 section 时把原属环境网格的 v-else 留给了它，v-else 与 retainedImages.leng…

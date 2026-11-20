@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：other
 
-37 个会话；检索用 `python tools/docs/find.py --module other`。
+38 个会话；检索用 `python tools/docs/find.py --module other`。
+
+## 2026-11-20 · 补周报视图，校正 README 阅读成本账（chore `bd18e87`）
+- 问题：G 方案实用功能清单的周报视图未落地；README 的『全树 ≈ 40 万 token』是改造前的旧账，会误导后来者做预算。
+- 方案：build.py 增加 views/weekly.md（ISO 周聚合，生成物不带时间戳）；README 改为实测 370k（ledger 约 …
+- 验证：build.py sync 后 check 一致（15 个文件）；weekly 分组输出正确（2026-W47）；commit 前置自检放行（纯…
 
 ## 2026-11-20 · docs 体系改造：ledger 单一写入 + skills/views/find 三层消费（chore `a381003`）
 - 问题：docs/ 539 个文件里 89% 是会话归档与每会话两份重复总结，分类混杂、agent 无路由入口、全读约 40 万 token，散文总结大…
