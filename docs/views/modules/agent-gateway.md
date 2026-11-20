@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-77 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+78 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-20 · 修复部署矩阵历史元数据与实际容器缝合（bug `3f97378`）
+- 问题：部署详情把历史构建元数据与实际容器缝合成一张卡：旧 HOST 残留槽 version=latest/sha=ec462cb/端口8183/11-…
+- 方案：P0 运行容器为元数据权威：容器 sha/RFC3339 startedAt/端口映射覆盖 HOST 残留，HOST 仅兜底，容器接管 key …
+- 验证：隔离 worktree gateway 253 例全绿(0失败/5跳过)+依赖链合计589例0失败；
 
 ## 2026-11-20 · 部署地址指向/镜像保留策略/版本区分/环境页镜像面板（bug `813904b` `342bfd9`）
 - 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；

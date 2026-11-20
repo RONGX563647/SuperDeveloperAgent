@@ -297,9 +297,101 @@ class DeploymentControlServiceTest {
         assertEquals("http://10.0.0.9:18080", cell.url());
     }
 
+    // ------------------------------------------------------------------ 回归：矩阵元数据缝合
+
+    @Test
+    @DisplayName("P1 回归：agent.version=latest 但 sha 有效时按 sha 分组，不与旧 HOST latest 撞 key")
+    void latestLabelFallsBackToSha() {
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+        when(inspector.containers("proj", "test")).thenReturn(List.of(
+                containerFull("agent-deploy-proj-test", "test", true,
+                        "e9a39d31", "latest", "ci-test-e9a39d3",
+                        "2026-11-20T11:40:34.322Z", "8090/tcp → 0.0.0.0:8184")));
+
+        Matrix matrix = service(inspector).matrix("proj");
+
+        assertTrue(matrix.versions().contains("e9a39d31"), matrix.versions().toString());
+        assertFalse(matrix.versions().contains("latest"), matrix.versions().toString());
+        assertEquals("e9a39d31", matrix.cells().get(0).release());
+    }
+
+    @Test
+    @DisplayName("P0 回归：同版本 key 下运行容器覆盖旧 HOST 槽的提交/时间/端口")
+    void runningContainerOverridesStaleHostMetadata() throws IOException {
+        // 旧 HOST 打 tag 槽 test-v44：旧提交 ec462cb、旧端口 8183
+        Path state = root.resolve("_platform").resolve("deploy").resolve("proj-test")
+                .resolve("versions").resolve("test-v44");
+        Path oldRelease = state.resolve("releases").resolve("ec462cb");
+        Files.createDirectories(oldRelease);
+        Files.writeString(state.resolve("current"), "ec462cb", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("version"), "test-v44", StandardCharsets.UTF_8);
+        Files.writeString(state.resolve("port"), "8183", StandardCharsets.UTF_8);
+
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+        when(inspector.containers("proj", "test")).thenReturn(List.of(
+                containerFull("agent-deploy-proj-test", "test", true,
+                        "e9a39d31", "test-v44", "ci-test-e9a39d3",
+                        "2026-11-20T11:40:34.322Z", "8090/tcp → 0.0.0.0:8184")));
+
+        Cell cell = service(inspector).matrix("proj").cells().stream()
+                .filter(c -> "test".equals(c.env()))
+                .findFirst().orElseThrow();
+
+        assertEquals("e9a39d31", cell.release(), "发布提交应取运行容器 sha，而非旧 HOST current");
+        assertEquals(java.time.Instant.parse("2026-11-20T11:40:34.322Z").toEpochMilli(),
+                cell.deployedAt(), "部署时间应取容器 startedAt");
+        assertTrue(cell.ports().contains("8184"), "端口应取容器映射，而非旧 HOST 的 8183：" + cell.ports());
+        assertEquals("http://127.0.0.1:8184", cell.url());
+        assertTrue(cell.detail().contains("1 个容器"), cell.detail());
+        assertFalse(cell.detail().contains("打 tag 版本"), "容器接管后不应混入 HOST 残留细节：" + cell.detail());
+    }
+
+    @Test
+    @DisplayName("P2 回归：同环境有运行容器时清理旧 HOST 默认槽 latest 残留，打 tag 槽保留")
+    void staleHostDefaultSlotPrunedWhenContainerRuns() throws IOException {
+        Path base = root.resolve("_platform").resolve("deploy").resolve("proj-test");
+        // 默认槽 latest：旧提交 ec462cb、无运行 pid
+        Path def = base;
+        Files.createDirectories(def.resolve("releases").resolve("ec462cb"));
+        Files.writeString(def.resolve("current"), "ec462cb", StandardCharsets.UTF_8);
+        Files.writeString(def.resolve("version"), "latest", StandardCharsets.UTF_8);
+        Files.writeString(def.resolve("port"), "8183", StandardCharsets.UTF_8);
+        // 打 tag 的历史版本槽：应保留
+        Path tagged = base.resolve("versions").resolve("test-v40");
+        Files.createDirectories(tagged.resolve("releases").resolve("aaa1111"));
+        Files.writeString(tagged.resolve("current"), "aaa1111", StandardCharsets.UTF_8);
+        Files.writeString(tagged.resolve("version"), "test-v40", StandardCharsets.UTF_8);
+
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        when(inspector.containers(anyString(), anyString())).thenReturn(List.of());
+        when(inspector.containers("proj", "test")).thenReturn(List.of(
+                containerFull("agent-deploy-proj-test", "test", true,
+                        "e9a39d31", "latest", "ci-test-e9a39d3",
+                        "2026-11-20T11:40:34.322Z", "8090/tcp → 0.0.0.0:8184")));
+
+        Matrix matrix = service(inspector).matrix("proj");
+        var testCells = matrix.cells().stream().filter(c -> "test".equals(c.env())).toList();
+
+        assertFalse(matrix.versions().contains("latest"), "旧默认槽 latest 残留应被清理：" + matrix.versions());
+        assertTrue(matrix.versions().contains("e9a39d31"));
+        assertTrue(matrix.versions().contains("test-v40"), "打 tag 的历史版本槽应保留：" + matrix.versions());
+        assertEquals(2, testCells.size(), testCells.toString());
+    }
+
     private static ContainerStatus container(String name, String env, String service,
                                              boolean running, String sha, String image) {
         return container(name, env, service, running, sha, sha, image);
+    }
+
+    private static ContainerStatus containerFull(String name, String env, boolean running,
+                                                 String sha, String version, String image,
+                                                 String startedAt, String ports) {
+        return new ContainerStatus(name, "proj", env, "app",
+                running ? "running" : "exited", running, 0, startedAt,
+                image, image + "-id", "healthy", running ? 0 : 1,
+                ports, "run-x", sha, version, "agent-" + env);
     }
 
     private static ContainerStatus container(String name, String env, String service,
