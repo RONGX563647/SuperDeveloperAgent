@@ -95,7 +95,7 @@ class GitIssueControllerFieldContractTest {
         locator.tags = List.of("0.1.2", "0.1.1");
         GitIssueController controller = controller(service, locator);
 
-        Map<String, Object> versions = controller.versions("p1");
+        Map<String, Object> versions = controller.versions("p1", null);
 
         assertEquals("0.1.0-snapshot", versions.get("branch"));
         assertEquals("0.1.3", versions.get("suggested"), "版本线分支取最大补丁 +1");
@@ -103,9 +103,22 @@ class GitIssueControllerFieldContractTest {
     }
 
     @Test
+    @DisplayName("kind=FEAT 时建议值是下一个次版本，与 Bug 的补丁口径分开")
+    void versionsRespectKind() {
+        FakeLocator locator = new FakeLocator();
+        locator.branch = "0.1.0-snapshot";
+        locator.tags = List.of("0.1.2", "0.1.1");
+        GitIssueController controller = controller(new FakeService(), locator);
+
+        assertEquals("0.2.0", controller.versions("p1", "FEAT").get("suggested"),
+                "Feat 应给次版本，不能复用 Bug 的补丁建议值");
+    }
+
+    @Test
     @DisplayName("未给项目时版本候选项为空结构，不抛异常")
     void versionsWithoutProjectAreEmpty() {
-        Map<String, Object> versions = controller(new FakeService(), new FakeLocator()).versions(null);
+        Map<String, Object> versions =
+                controller(new FakeService(), new FakeLocator()).versions(null, null);
 
         assertEquals("", versions.get("branch"));
         assertEquals("", versions.get("suggested"));

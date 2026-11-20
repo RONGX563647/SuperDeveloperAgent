@@ -275,14 +275,37 @@ public class GitIssueServiceImpl implements GitIssueService {
         }
     }
 
-    /** 版本建议：版本线分支取最大补丁 +1；非版本分支取最新标签。 */
+    /**
+     * 版本建议（默认按 Bug）：版本线分支取最大补丁 +1；非版本分支取最新标签。
+     *
+     * <p>与流水线版本号建议保持一致；要按任务类型给目标版本时用三参重载。
+     */
     public static String suggestVersion(String branch, List<String> tags) {
+        return suggestVersion(branch, tags, "BUG");
+    }
+
+    /**
+     * 版本建议：Bug 走补丁线（当前版本线最大补丁 +1），Feat 走次版本线（minor +1、补丁归零）。
+     *
+     * <p>两者给同一个值会出现"类型选了 Feat 却被建议 0.1.1"这种对不上的情况；
+     * 次版本还要越过该 major 已发布的最高次版本，否则会建议一个已经打过 tag 的版本。
+     */
+    public static String suggestVersion(String branch, List<String> tags, String kind) {
         List<String> safeTags = tags == null ? List.of() : tags;
         var matcher = VERSION_BRANCH.matcher(branch == null ? "" : branch.trim());
         if (!matcher.matches()) {
-            return safeTags.isEmpty() ? "" : safeTags.get(0);
+            if (safeTags.isEmpty()) {
+                return "";
+            }
+            // 非版本分支没有版本线可推：Bug 仍退回最新标签，Feat 从该标签往后取一个次版本
+            return isFeat(kind) ? nextMinorOf(safeTags.get(0)) : safeTags.get(0);
         }
-        String line = matcher.group(1) + "." + matcher.group(2);
+        String major = matcher.group(1);
+        String minor = matcher.group(2);
+        if (isFeat(kind)) {
+            return nextMinor(major, minor, safeTags);
+        }
+        String line = major + "." + minor;
         Pattern tagOfLine = Pattern.compile("^" + Pattern.quote(line) + "\\.(\\d+)$");
         int best = -1;
         for (String tag : safeTags) {
@@ -296,6 +319,47 @@ public class GitIssueServiceImpl implements GitIssueService {
             }
         }
         return best < 0 ? line + ".0" : line + "." + (best + 1);
+    }
+
+    private static boolean isFeat(String kind) {
+        return kind != null && kind.toUpperCase(Locale.ROOT).startsWith("FEAT");
+    }
+
+    /**
+     * Feat 目标版本：当前分支的次版本还没发布就用它（x.y.0），已发布则取该 major 下
+     * 已发布的最高次版本 +1——否则会把一个已经打过 tag 的版本当成"下一个目标版本"。
+     */
+    private static String nextMinor(String major, String minor, List<String> tags) {
+        Pattern sameMajor = Pattern.compile("^" + Pattern.quote(major) + "\\.(\\d+)\\.\\d+$");
+        int branchMinor = Integer.parseInt(minor);
+        int maxReleased = -1;
+        for (String tag : tags) {
+            var m = sameMajor.matcher(tag == null ? "" : tag.trim());
+            if (m.matches()) {
+                try {
+                    maxReleased = Math.max(maxReleased, Integer.parseInt(m.group(1)));
+                } catch (NumberFormatException ignored) {
+                    // 次版本号超长时不参与比较
+                }
+            }
+        }
+        if (maxReleased < branchMinor) {
+            return major + "." + branchMinor + ".0";
+        }
+        return major + "." + (maxReleased + 1) + ".0";
+    }
+
+    /** 非版本分支的 Feat 建议：从最新标签往后取一个次版本（0.3.1 → 0.4.0）。 */
+    private static String nextMinorOf(String tag) {
+        String[] parts = (tag == null ? "" : tag.trim()).split("\\.");
+        if (parts.length < 3) {
+            return tag;
+        }
+        try {
+            return parts[0] + "." + (Integer.parseInt(parts[1]) + 1) + ".0";
+        } catch (NumberFormatException e) {
+            return tag;
+        }
     }
 
     private static String providerOf(Project project) {

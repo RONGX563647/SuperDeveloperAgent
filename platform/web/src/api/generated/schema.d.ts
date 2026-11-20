@@ -2244,6 +2244,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/capabilities/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** sources */
+        get: operations["sources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/capabilities/market": {
         parameters: {
             query?: never;
@@ -2253,6 +2270,23 @@ export interface paths {
         };
         /** market */
         get: operations["market"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/builtin-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list */
+        get: operations["list_9"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2286,7 +2320,7 @@ export interface paths {
             cookie?: never;
         };
         /** list */
-        get: operations["list_9"];
+        get: operations["list_10"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3037,7 +3071,7 @@ export interface paths {
             cookie?: never;
         };
         /** list */
-        get: operations["list_10"];
+        get: operations["list_11"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3690,12 +3724,26 @@ export interface components {
             key?: string;
             label?: string;
         };
+        ImageInfo: {
+            tag?: string;
+            version?: string;
+            gitSha?: string;
+            runId?: string;
+            /** Format: int64 */
+            sizeBytes?: number;
+            status?: string;
+            /** Format: int64 */
+            createdAt?: number;
+            /** Format: int64 */
+            deployedAt?: number;
+        };
         Matrix: {
             environments?: components["schemas"]["EnvColumn"][];
             versions?: string[];
             cells?: components["schemas"]["Cell"][];
             dockerAvailable?: boolean;
             note?: string;
+            images?: components["schemas"]["ImageInfo"][];
         };
         DeploymentLogs: {
             source?: string;
@@ -7968,15 +8016,62 @@ export interface operations {
             };
         };
     };
+    sources: {
+        parameters: {
+            query?: {
+                kind?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     market: {
         parameters: {
             query?: {
                 kind?: string;
                 q?: string;
+                source?: string;
                 offset?: number;
                 limit?: number;
                 refresh?: boolean;
             };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_9: {
+        parameters: {
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -8018,7 +8113,7 @@ export interface operations {
             };
         };
     };
-    list_9: {
+    list_10: {
         parameters: {
             query: {
                 projectId: string;
@@ -8405,6 +8500,7 @@ export interface operations {
         parameters: {
             query?: {
                 projectId?: string;
+                kind?: string;
             };
             header?: never;
             path?: never;
@@ -9076,7 +9172,7 @@ export interface operations {
             };
         };
     };
-    list_10: {
+    list_11: {
         parameters: {
             query: {
                 projectId: string;
