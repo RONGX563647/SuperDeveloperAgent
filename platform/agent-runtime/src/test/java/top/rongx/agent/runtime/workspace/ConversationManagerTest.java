@@ -384,9 +384,9 @@ class ConversationManagerTest {
         @Override
         public List<ProjectEnv> findEnvs(String projectId) {
             return PROJECT.equals(projectId)
-                    ? List.of(new ProjectEnv(PROJECT, "dev", "", ""),
-                    new ProjectEnv(PROJECT, "test", "", ""),
-                    new ProjectEnv(PROJECT, "prod", "", ""))
+                    ? List.of(new ProjectEnv(PROJECT, "dev", ""),
+                    new ProjectEnv(PROJECT, "test", ""),
+                    new ProjectEnv(PROJECT, "prod", ""))
                     : List.of();
         }
     }

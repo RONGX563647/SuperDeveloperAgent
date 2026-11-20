@@ -138,6 +138,32 @@ class ProgressiveToolMiddlewareTest {
                 .stream().filter(name -> Set.of("a", "b", "c").contains(name)).toList());
     }
 
+    @Test
+    @DisplayName("分项归因：把本轮激活插件与各插件 schema 字符数写入 RuntimeContext")
+    void recordsToolAttribution() {
+        // 用带真实 description 长度的 schema，验证字符数按插件归类
+        List<ToolSchema> tools = new ArrayList<>();
+        tools.add(ToolSchema.builder().name("project_info").description("core-tool").parameters(null).build());
+        tools.add(ToolSchema.builder().name("git_status").description("abcd").parameters(null).build()); // repo: 10+4=14
+        tools.add(ToolSchema.builder().name("read_file").description("xy").parameters(null).build());   // repo: 9+2=11
+        tools.add(ToolSchema.builder().name("ci_status").description("zzz").parameters(null).build());  // 未激活，不下发
+        AgentState state = AgentState.builder().sessionId("s").userId("u").build();
+        RuntimeContext rc = RuntimeContext.builder().sessionId("s").userId("u").build();
+        rc.setAgentState(state);
+
+        new ProgressiveToolMiddleware(INDEX, true)
+                .onReasoning(null, rc, new ReasoningInput(List.of(user("看下 git 代码")), tools, null),
+                        input -> Flux.empty()).blockLast();
+
+        ToolAttribution attribution = rc.get(ToolAttribution.class);
+        assertEquals(List.of("repo"), attribution.activatedPlugins(), "路由命中 repo，路由标记应剔除");
+        assertEquals(2, attribution.schemaChars().size(), "只有 core 与 repo 两个桶");
+        assertEquals(25, attribution.schemaChars().get("repo"), "git_status(10+4)+read_file(9+2)");
+        assertTrue(attribution.schemaChars().containsKey("core"), "核心工具计入 core 桶");
+        assertTrue(attribution.pluginsCsv().contains("repo"));
+        assertTrue(attribution.schemaCharsCsv().contains("repo:25"));
+    }
+
     private static List<ToolSchema> schemas() {
         List<ToolSchema> tools = new ArrayList<>();
         for (String name : List.of("project_info", "git_status", "read_file", "ci_status")) {

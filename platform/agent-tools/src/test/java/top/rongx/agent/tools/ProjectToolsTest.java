@@ -39,8 +39,8 @@ class ProjectToolsTest {
     @DisplayName("composeDir 在输出中标注「仅登记未参与部署」")
     void composeDirMarkedReserved() {
         String out = tools(List.of(
-                new ProjectEnv(PROJECT, "test", "http://127.0.0.1:18173", "/opt/apps/shop"),
-                new ProjectEnv(PROJECT, "prod", "http://127.0.0.1:18180", "/opt/apps/shop")
+                new ProjectEnv(PROJECT, "test", "/opt/apps/shop"),
+                new ProjectEnv(PROJECT, "prod", "/opt/apps/shop")
         ), EFFECTIVE_PORT).listEnvs(ctx());
         assertTrue(out.contains("composeDir=/opt/apps/shop"), out);
         assertTrue(out.contains("仅登记，未参与部署"), "必须标注 reserved：" + out);
@@ -51,21 +51,50 @@ class ProjectToolsTest {
     @DisplayName("同项目共用 composeDir 不再触发「互相覆盖」告警（部署从不读它）")
     void sharedComposeDirNoLongerWarns() {
         String out = tools(List.of(
-                new ProjectEnv(PROJECT, "test", "", "/opt/apps/superdeveloperag"),
-                new ProjectEnv(PROJECT, "prod", "", "/opt/apps/superdeveloperag")
+                new ProjectEnv(PROJECT, "test", "/opt/apps/superdeveloperag"),
+                new ProjectEnv(PROJECT, "prod", "/opt/apps/superdeveloperag")
         ), EFFECTIVE_PORT).listEnvs(ctx());
         assertFalse(out.contains("共用 composeDir"), out);
         assertFalse(out.contains("互相覆盖"), out);
     }
 
     @Test
-    @DisplayName("登记端口 ≠ 生效端口：提示改为「真实端口以租约为准」，不再让人去改登记地址")
-    void mismatchWarningPointsAtLease() {
+    @DisplayName("list_envs 只报告生效地址与来源，不再输出已删除的登记地址/端口告警")
+    void noRegisteredAddressInOutput() {
         String out = tools(List.of(
-                new ProjectEnv(PROJECT, "test", "http://127.0.0.1:8180", null)
+                new ProjectEnv(PROJECT, "test", null)
         ), EFFECTIVE_PORT).listEnvs(ctx());
-        assertTrue(out.contains("真实端口以租约为准"), out);
-        assertFalse(out.contains("以 effective 为准"), out);
+        assertTrue(out.contains("effective=http://127.0.0.1:" + EFFECTIVE_PORT), out);
+        assertFalse(out.contains("appUrl"), out);
+        assertFalse(out.contains("登记地址端口"), out);
+        assertTrue(out.contains("生效地址以端口租约/流水线为准"), out);
+    }
+
+    @Test
+    @DisplayName("project_info：repo 未登记时不输出裸 null，明确标注本地仓库")
+    void projectInfoNeverPrintsNullRepo() {
+        ProjectRepository nullRepo = new ProjectRepository() {
+            @Override
+            public java.util.Optional<Project> findById(String projectId) {
+                return java.util.Optional.of(new Project(PROJECT, "Shop", null,
+                        "local", "generic-java", 8100, 8199));
+            }
+
+            @Override
+            public List<Project> findAll() {
+                return List.of();
+            }
+
+            @Override
+            public List<ProjectEnv> findEnvs(String projectId) {
+                return List.of();
+            }
+        };
+        ProjectTools t = new ProjectTools(nullRepo,
+                new EffectiveEndpointResolver(null, null, null));
+        String out = t.projectInfo(ctx());
+        assertFalse(out.contains("repo: null"), out);
+        assertTrue(out.contains("未登记"), out);
     }
 
     private record FakeProjects(List<ProjectEnv> envs) implements ProjectRepository {

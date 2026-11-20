@@ -1,12 +1,22 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-65 个会话；检索用 `python tools/docs/find.py --module web`。
+67 个会话；检索用 `python tools/docs/find.py --module web`。
+
+## 2026-11-20 · 合并 token/deploy 并行工作并移植门禁并发健壮性（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe`）
+- 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …
+- 方案：模型保持 ledger：172 份按 id 吸收（175 行）、复活散文删除、views 重生成、链重排；把并发修复移植到 ledger 版 g…
+- 验证：gate self-test OK（含 PID 判活/僵尸锁回收/活锁不误删）；validate 175 份链全绿；views check 一致…
 
 ## 2026-11-20 · 0.1→0.2 同步：新归档模型（ledger/views/skills）带入 0.2 线（chore `ceef158` `a163612` `813904b` `342bfd9` `352fc30` `bb27e58` `c1fc559` `c455510` `a27fe76` `2c4af50` `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8`）
 - 问题：0.2 线还停在旧归档格式，两条线门禁模型不一致；合并时暴露迁移版本撞车：两条线各自发过 V5，Flyway 拒启（Found more tha…
 - 方案：merge 0.1→0.2：39 个 manifest modify/delete 冲突以 0.2 版本覆盖同 id ledger 行后统一入 …
 - 验证：gate validate 177 份链全绿；views/handbook check 一致；迁移锁 8/8；agent-gateway 226…
+
+## 2026-11-20 · 会话能力页增加内置工具展示并改造界面与市场多源接入（feat `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8` `b9add58` `415b525` `43eb19c` `8139279` `35611ee`）
+- 问题：会话能力页缺少内置工具展示、界面信息层级差、MCP/Skill 市场仅单一仓库来源
+- 方案：能力页新增内置工具区（复用 AgentToolCatalog 投影）并重做三卡概览界面；
+- 验证：独立跑通 spec-checks 35 例、市场相关 10 例、前端 13 个测试文件 23 例、vue-tsc 类型检查全绿；
 
 ## 2026-11-20 · 生产发布改为从测试验证版本直接部署（feat `a27fe76`）
 - 问题：生产发布需按 git 版本号选择、且只显示"发布到生产"，无法从已验证版本直接部署并查看镜像/git tag

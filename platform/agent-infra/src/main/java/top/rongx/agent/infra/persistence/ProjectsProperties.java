@@ -21,7 +21,6 @@ import java.util.List;
  *       port-range-end: 8099
  *       envs:
  *         - env: dev
- *           app-url: http://127.0.0.1:8080
  *           compose-dir: /opt/apps/ry
  * </pre>
  */
@@ -51,6 +50,6 @@ public record ProjectsProperties(List<ProjectDef> items) {
         }
     }
 
-    public record EnvDef(String env, String appUrl, String composeDir) {
+    public record EnvDef(String env, String composeDir) {
     }
 }

@@ -52,6 +52,36 @@ class TokenUsageRecorderTest {
                 ChatUsage.builder().inputTokens(10).outputTokens(5).build()));
     }
 
+    @Test
+    @DisplayName("分项归因随用量一起落库，不触发记账异常")
+    void recordsAttribution() {
+        CapturingRepository repository = new CapturingRepository();
+        TokenUsageRecorder recorder = new TokenUsageRecorder(repository);
+        ToolAttribution attribution = new ToolAttribution(
+                List.of("repo", "ci"), java.util.Map.of("core", 100, "repo", 24, "ci", 50));
+
+        recorder.record("s1", null, null,
+                ChatUsage.builder().inputTokens(100).outputTokens(20).build(), attribution);
+
+        assertEquals(1, repository.saved.size());
+        TokenUsageRepository.ModelUsage usage = repository.saved.get(0);
+        assertEquals("repo,ci", usage.activatedPlugins());
+        assertTrue(usage.pluginSchemaChars().contains("repo:24"), "归因字符串稳定可落库: "
+                + usage.pluginSchemaChars());
+    }
+
+    @Test
+    @DisplayName("无归因时使用旧签名，归因字段留空不影响落库")
+    void legacyRecordLeavesAttributionEmpty() {
+        CapturingRepository repository = new CapturingRepository();
+        TokenUsageRecorder recorder = new TokenUsageRecorder(repository);
+
+        recorder.record("s1", null, null,
+                ChatUsage.builder().inputTokens(10).outputTokens(5).build());
+
+        assertEquals(null, repository.saved.get(0).activatedPlugins());
+    }
+
     private static class CapturingRepository implements TokenUsageRepository {
         private final List<ModelUsage> saved = new ArrayList<>();
 

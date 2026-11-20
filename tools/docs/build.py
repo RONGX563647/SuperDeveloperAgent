@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""docs/views 生成器：从 docs/ledger/*.jsonl 投影出人类与 agent 共用的视图。
+"""docs 视图生成器：从 docs/ledger/*.jsonl 与 skill 卡 front-matter 投影读视图。
 
 用法：
-    python tools/docs/build.py sync     # 重建 docs/views/（index/changelog/modules）
-    python tools/docs/build.py check    # 校验 views 与 ledger 一致（pre-push/CI 用）
+    python tools/docs/build.py sync     # 重建 docs/views/（index/changelog/weekly/modules）+ docs/skills/index.md
+    python tools/docs/build.py check    # 校验视图与数据源一致（pre-push/CI 用）
     python tools/docs/build.py list     # 打印 ledger 统计
 
-为什么是生成而不是手写：视图是留痕（ledger）的投影，手改必然漂移；
-单一写入点是 ledger（gate.py finish 追加一行），这里只做「读 ledger → 写 Markdown」。
-生成物不带时间戳，同样的 ledger 必然生成同样的视图，check 才可比对。
+为什么是生成而不是手写：视图是留痕（ledger）与 skill 卡 front-matter 的投影，
+手改必然漂移；单一写入点是 ledger（gate.py finish 追加一行），这里只做「读数据 → 写 Markdown」。
+生成物不带时间戳，同样的数据必然生成同样的视图，check 才可比对。
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "tools" / "session-archive"))
 import gate  # noqa: E402  （与 sweep.py 同款：直接复用 gate 的 ledger 读取）
 
 VIEWS = ROOT / "docs" / "views"
+SKILLS = ROOT / "docs" / "skills"
 PERIOD_ORDER = "倒序"
 
 
@@ -59,7 +60,7 @@ def sorted_rows(items: list[dict]) -> list[dict]:
 
 
 def render(all_rows: list[dict]) -> dict[str, str]:
-    """返回 {相对 docs/views/ 的路径: 文件文本}。"""
+    """返回 {相对 docs/ 的路径: 文件文本}（views/* 与 skills/index.md）。"""
     ordered = sorted_rows(all_rows)
     newest = ordered[0].get("createdAt", "")[:10] if ordered else ""
     out: dict[str, str] = {}
@@ -94,7 +95,7 @@ def render(all_rows: list[dict]) -> dict[str, str]:
         last = items[0]
         lines.append(f"| {mod} | {len(items)} | {last.get('createdAt', '')[:10]} "
                      f"{last.get('title', '')} | [{module_file(mod)}]({module_file(mod)}) |")
-    out["index.md"] = "\n".join(lines) + "\n"
+    out["views/index.md"] = "\n".join(lines) + "\n"
 
     # ---- changelog.md：按日期倒序的完整变更日志
     cl = ["<!-- 由 tools/docs/build.py 生成，勿手改 -->", "# 变更日志", "",
@@ -107,7 +108,7 @@ def render(all_rows: list[dict]) -> dict[str, str]:
             current_day = day
         cl.append(f"- **{m.get('category', '')}** {m.get('title', '')}"
                   f"（{commit_shas(m)}）— {first_sentence(m.get('problem', ''))}")
-    out["changelog.md"] = "\n".join(cl) + "\n"
+    out["views/changelog.md"] = "\n".join(cl) + "\n"
 
     # ---- weekly.md：按 ISO 周的周报（周会/汇报直接取用）
     wk = ["<!-- 由 tools/docs/build.py 生成，勿手改 -->", "# 周报", "",
@@ -121,7 +122,7 @@ def render(all_rows: list[dict]) -> dict[str, str]:
             current_week = (year, week)
         wk.append(f"- {day} **{m.get('category', '')}** {m.get('title', '')}"
                   f"（{commit_shas(m)}）")
-    out["weekly.md"] = "\n".join(wk) + "\n"
+    out["views/weekly.md"] = "\n".join(wk) + "\n"
 
     # ---- modules/<m>.md：按模块的会话档案（问题/方案/验证）
     for mod, items in by_module.items():
@@ -136,45 +137,64 @@ def render(all_rows: list[dict]) -> dict[str, str]:
                    f"- 方案：{first_sentence(m.get('solution', ''))}",
                    f"- 验证：{first_sentence((m.get('impact') or {}).get('verification', ''))}",
                    ""]
-        out[module_file(mod)] = "\n".join(ml) + "\n"
+        out["views/" + module_file(mod)] = "\n".join(ml) + "\n"
+
+    # ---- skills/index.md：从各卡 front-matter 投影的路由表（agent 入口）
+    si = ["<!-- 由 tools/docs/build.py 生成，勿手改；来源是各卡 front-matter -->",
+          "# Skills 路由表", "",
+          "按 `when_to_read` 匹配任务，读 1–2 张卡（每卡有 `budget` 行数预算）；"
+          "历史检索用 `python tools/docs/find.py`。", "",
+          "| 技能 | 何时读 | 预算 | 卡片 |", "|---|---|---|---|"]
+    cards = []
+    if SKILLS.is_dir():
+        for path in sorted(SKILLS.glob("*/SKILL.md")):
+            meta = gate.frontmatter_scalars(gate.frontmatter(
+                path.read_text(encoding="utf-8", errors="replace")) or "")
+            cards.append((meta.get("name", path.parent.name), meta, path.parent.name))
+    for name, meta, folder in sorted(cards):
+        si.append(f"| {name} | {meta.get('when_to_read', '')} "
+                  f"| {meta.get('budget', '')} | [{folder}/SKILL.md]({folder}/SKILL.md) |")
+    out["skills/index.md"] = "\n".join(si) + "\n"
 
     return out
 
 
 def sync() -> int:
     files = render(rows())
-    VIEWS.mkdir(parents=True, exist_ok=True)
+    docs = ROOT / "docs"
     for rel, text in files.items():
-        path = VIEWS / rel
+        path = docs / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-    # 清掉不再生成的模块视图（模块只会增不会减，防御性删除）
+    # 清掉不再生成的模块视图（模块只会增不会减，防御性删除；skills 的手写卡不动）
     for stale in VIEWS.rglob("*.md"):
-        rel = stale.relative_to(VIEWS).as_posix()
+        rel = "views/" + stale.relative_to(VIEWS).as_posix()
         if rel not in files:
             stale.unlink()
-    print(f"views 已生成：{len(files)} 个文件 → docs/views/")
+    print(f"视图已生成：{len(files)} 个文件（docs/views/ + docs/skills/index.md）")
     return 0
 
 
 def check() -> int:
     expected = render(rows())
-    stale = [p.relative_to(VIEWS).as_posix() for p in VIEWS.rglob("*.md")
-             if p.relative_to(VIEWS).as_posix() not in expected] if VIEWS.is_dir() else []
+    docs = ROOT / "docs"
+    stale = ["views/" + p.relative_to(VIEWS).as_posix() for p in VIEWS.rglob("*.md")
+             if "views/" + p.relative_to(VIEWS).as_posix() not in expected] \
+        if VIEWS.is_dir() else []
     drift = []
     for rel, text in expected.items():
-        path = VIEWS / rel
+        path = docs / rel
         if not path.is_file() or path.read_text(encoding="utf-8") != text:
             drift.append(rel)
     if drift or stale:
         for name in drift:
-            print(f"- 缺失或过期：docs/views/{name}", file=sys.stderr)
+            print(f"- 缺失或过期：docs/{name}", file=sys.stderr)
         for name in stale:
-            print(f"- 多余文件：docs/views/{name}", file=sys.stderr)
-        print("views 与 ledger 不一致；运行 python tools/docs/build.py sync 并提交",
+            print(f"- 多余文件：docs/{name}", file=sys.stderr)
+        print("视图与数据源不一致；运行 python tools/docs/build.py sync 并提交",
               file=sys.stderr)
         return 1
-    print(f"views 与 ledger 一致（{len(expected)} 个文件）")
+    print(f"视图与数据源一致（{len(expected)} 个文件）")
     return 0
 
 
@@ -192,8 +212,8 @@ def stats() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="docs-build")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("sync", help="重建 docs/views/")
-    sub.add_parser("check", help="校验 views 与 ledger 一致")
+    sub.add_parser("sync", help="重建 views/ 与 skills/index.md")
+    sub.add_parser("check", help="校验视图与数据源一致")
     sub.add_parser("list", help="打印 ledger 统计")
     args = parser.parse_args()
     return {"sync": sync, "check": check, "list": stats}[args.cmd]()

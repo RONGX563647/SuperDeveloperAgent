@@ -22,9 +22,6 @@ public class ProjectEnvEntity {
     @Column(name = "env", nullable = false, columnDefinition = "text")
     private String env;
 
-    @Column(name = "app_url", columnDefinition = "text")
-    private String appUrl;
-
     @Column(name = "compose_dir", columnDefinition = "text")
     private String composeDir;
 

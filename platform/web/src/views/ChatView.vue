@@ -49,7 +49,7 @@ const router = useRouter()
 
 /** 本会话可调用的 Skill / MCP：默认取设置页启用项，可在轨迹旁工具栏按会话调整。 */
 const {
-  skillOptions, mcpOptions, selectedSkills, selectedMcp,
+  skillOptions, mcpOptions, toolOptions, selectedSkills, selectedMcp,
   ready: capsReady, loading: capsLoading, refresh: refreshCapabilities,
 } = useChatCapabilities(sessionId)
 
@@ -897,6 +897,7 @@ onBeforeUnmount(() => {
       v-if="viewMode === 'capabilities'"
       :skill-options="skillOptions"
       :mcp-options="mcpOptions"
+      :tool-options="toolOptions"
       :skills="selectedSkills"
       :mcp="selectedMcp"
       :ready="capsReady"

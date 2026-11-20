@@ -132,9 +132,13 @@ public class ChatController {
     public SseEmitter chat(@RequestBody ChatRequest request) {
         // 1. 认证：身份由 Sa-Token 会话保证（客户端不可伪造）
         String userId = currentUser.requireUserId();
-        // 2. 服务端解析并校验项目上下文（模型不可篡改）
+        // 2. 服务端解析并校验项目上下文（模型不可篡改）。
+        //    工作树缺省时按会话 id 派生：普通对话会话一进入就有专属工作树，
+        //    ctx.worktree() 非空，workspace_* 写工具不会卡在「请先选择工作树」。
+        //    派生值仅在本地状态里使用，不改写客户端语义；用户可在状态条显式切换/清空。
+        String worktree = defaultWorktree(request.worktree(), request.sessionId(), userId);
         ProjectContext ctx = contextResolver.resolve(
-                request.projectId(), request.env(), userId, request.worktree());
+                request.projectId(), request.env(), userId, worktree);
         // 2.0 会话选择的模型必须真实可用：非法/停用的连接或目录外模型直接 400，不回退默认
         requireKnownModel(request.modelConnectionId(), request.modelName());
         ActiveModel active = models.resolve(request.modelConnectionId(), request.modelName())
@@ -143,7 +147,7 @@ public class ChatController {
                         : request.modelConnectionId())));
         // 2.1 会话元数据服务端持久化：首条消息落标题，之后刷新活跃时间/环境/工作树/模型
         conversations.ensureFromChat(ctx, request.sessionId(), request.message(),
-                request.worktree(), request.modelConnectionId(), request.modelName());
+                worktree, request.modelConnectionId(), request.modelName());
         // 2.2 服务端时间线：每轮的真实事件落盘（前端 transcript 只是渲染镜像，不能当账本）
         ConversationTimelineRecorder.Recorder timeline =
                 timelineRecorder.begin(request.sessionId());
@@ -236,6 +240,32 @@ public class ChatController {
             emitter.complete();
         }
         return emitter;
+    }
+
+    /**
+     * 工作树兜底：请求没带工作树时，按会话 id 派生一个专属名字，让会话开箱即有写落点。
+     *
+     * <p>为什么放服务端：ctx.worktree() 是服务端绑定、模型不可篡改的值；若这里留空，
+     * EditorTools.guard 会让所有 workspace_* 写工具报「请先选择工作树」，而 workspace_open
+     * 自己也被同一道 guard 拦住，形成鸡生蛋死锁。派生值满足 ProjectContext 的工作树名校验
+     * （字母开头、仅字母数字/._-），且按会话隔离，多个会话互不共用分支。
+     *
+     * @param requested   客户端显式选择（空 = 让服务端派生）
+     * @param sessionId   前端会话 id（如 s-xxxxxxxx）
+     * @param userId      操作人（sessionId 缺失时的兜底种子）
+     * @return 非空工作树名
+     */
+    static String defaultWorktree(String requested, String sessionId, String userId) {
+        if (requested != null && !requested.isBlank()) {
+            return requested.trim();
+        }
+        String seed = (sessionId != null && !sessionId.isBlank()) ? sessionId.trim() : userId;
+        String slug = seed.replaceAll("[^A-Za-z0-9._-]", "-");
+        if (!slug.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")) {
+            slug = "auto-" + Integer.toHexString(seed.hashCode());
+        }
+        String name = "wt-" + slug;
+        return name.length() <= 64 ? name : name.substring(0, 64);
     }
 
     /**

@@ -191,22 +191,45 @@ public class ProjectIntakeService {
         // DIRECT/REMOTE 的 localPath = clone 目标目录
         String localPath = local ? req.localPath()
                 : ("DIRECT".equals(storageMode) ? req.cloneTargetDir() : null);
+        // 本地目录接入：从仓库自身的 origin 回填 repoUrl，避免 project_info 工具读到
+        // null 而误报「未绑定仓库」。UI 之所以能显示，是因为它走 git remote 实时探测；
+        // 这里把同一份事实落到登记字段，消除两个数据源的分裂。纯本地仓库无 origin 时
+        // 退回本地路径（标注在 project_info 的展示层），不写死 null。
+        String repoUrl = local ? localOriginUrl(localPath) : req.repoUrl();
         IntakeProjectStore.IntakeProject p = new IntakeProjectStore.IntakeProject(
                 id,
                 id,
-                local ? null : req.repoUrl(),
+                repoUrl,
                 local ? "local" : "gitee",
                 req.type() == null || req.type().isBlank() ? "generic-java" : req.type(),
                 8100, 8199,
                 local ? "LOCAL" : "REMOTE",
                 localPath,
                 storageMode);
-        // 三个环境都登记：dev 走本地服务（端口由 LocalServiceManager 按项目 hash 动态分配，
-        // 因此没有固定 appUrl / composeDir）；只登记 test/prod 会导致对话页缺「开发环境」选项。
+        // 三个环境都登记：dev 走本地服务（端口由 LocalServiceManager 按项目 hash 动态分配）。
+        // 不再登记「应用访问地址」：生效端口一律由 EffectiveEndpointResolver 从租约/流水线解析，
+        // 静态地址既对不齐又无人消费（见 V7__drop_project_env_app_url）。只登记 composeDir 备注。
         store.upsert(p, List.of(
-                new top.rongx.agent.domain.project.ProjectEnv(id, "dev", "", ""),
-                new top.rongx.agent.domain.project.ProjectEnv(id, "test", "http://127.0.0.1:8180", "/opt/apps/" + id.toLowerCase() + "/test"),
-                new top.rongx.agent.domain.project.ProjectEnv(id, "prod", "http://127.0.0.1:8181", "/opt/apps/" + id.toLowerCase() + "/prod")));
+                new top.rongx.agent.domain.project.ProjectEnv(id, "dev", ""),
+                new top.rongx.agent.domain.project.ProjectEnv(id, "test", "/opt/apps/" + id.toLowerCase() + "/test"),
+                new top.rongx.agent.domain.project.ProjectEnv(id, "prod", "/opt/apps/" + id.toLowerCase() + "/prod")));
+    }
+
+    /** 读取本地仓库的 origin URL；无 origin（纯本地仓库）时返回 null。 */
+    private String localOriginUrl(String localPath) {
+        if (localPath == null || localPath.isBlank()) {
+            return null;
+        }
+        try {
+            return git.remotes(java.nio.file.Path.of(localPath)).stream()
+                    .filter(r -> "origin".equalsIgnoreCase(r.name()))
+                    .map(GitWorktreeManager.RemoteInfo::url)
+                    .filter(url -> url != null && !url.isBlank())
+                    .findFirst().orElse(null);
+        } catch (RuntimeException e) {
+            log.debug("读取本地仓库 {} 的 origin 失败，repoUrl 留空：{}", localPath, e.getMessage());
+            return null;
+        }
     }
 
     private void update(String projectId, String phase, String message, Map<String, Object> report) {

@@ -20,6 +20,8 @@ public class TokenUsageRecorder {
     private static final Logger log = LoggerFactory.getLogger(TokenUsageRecorder.class);
     /** 独立日志通道：logback-spring.xml 单独滚动到 logs/token-usage.log。 */
     private static final Logger usageLog = LoggerFactory.getLogger("token.usage");
+    /** 分项归因通道：本轮加载了哪些插件、各占多少 schema 字符。 */
+    private static final Logger attributionLog = LoggerFactory.getLogger("token.attribution");
 
     private final TokenUsageRepository repository;
 
@@ -27,7 +29,19 @@ public class TokenUsageRecorder {
         this.repository = repository;
     }
 
+    /** 旧签名（无归因）：从 RuntimeContext 取归因后委托到完整版；无上下文时留空。 */
+    public void record(String sessionId, ProjectContext ctx, ActiveModel model, ChatUsage usage,
+                       io.agentscope.core.agent.RuntimeContext runtime) {
+        ToolAttribution attribution = runtime == null ? null : runtime.get(ToolAttribution.class);
+        record(sessionId, ctx, model, usage, attribution);
+    }
+
     public void record(String sessionId, ProjectContext ctx, ActiveModel model, ChatUsage usage) {
+        record(sessionId, ctx, model, usage, (ToolAttribution) null);
+    }
+
+    public void record(String sessionId, ProjectContext ctx, ActiveModel model, ChatUsage usage,
+                       ToolAttribution attribution) {
         if (usage == null || sessionId == null || sessionId.isBlank()) {
             return;
         }
@@ -39,9 +53,12 @@ public class TokenUsageRecorder {
         String connectionId = model == null ? null : model.id();
         String projectId = ctx == null ? null : ctx.projectId();
         String userId = ctx == null ? null : ctx.userId();
+        String activatedPlugins = attribution == null ? null : attribution.pluginsCsv();
+        String pluginSchemaChars = attribution == null ? null : attribution.schemaCharsCsv();
         try {
             repository.record(new TokenUsageRepository.ModelUsage(sessionId, projectId, userId,
-                    connectionId, modelName, input, cached, output, System.currentTimeMillis()));
+                    connectionId, modelName, input, cached, output, System.currentTimeMillis(),
+                    activatedPlugins, pluginSchemaChars));
         } catch (RuntimeException e) {
             log.warn("用量落库失败 session={}：{}", sessionId, e.getMessage());
         }
@@ -52,5 +69,11 @@ public class TokenUsageRecorder {
                         + "out={} total={} hit={}%",
                 sessionId, projectId, userId, connectionId, modelName, input, cached, output,
                 total, hitRate);
+        // 分项归因独立成行，便于按 session 追踪"这一轮到底加载了哪些插件、各占多少 token 代理"。
+        if (attribution != null && (!attribution.activatedPlugins().isEmpty()
+                || !attribution.schemaChars().isEmpty())) {
+            attributionLog.info("session={} model={} plugins={} schemaChars={}",
+                    sessionId, modelName, activatedPlugins, pluginSchemaChars);
+        }
     }
 }

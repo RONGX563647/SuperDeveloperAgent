@@ -117,11 +117,15 @@ agent:
     timeline:
       poll-ms: ${AGENT_WORKSPACE_TIMELINE_POLL_MS:500}
       stream-timeout-ms: ${AGENT_WORKSPACE_TIMELINE_STREAM_TIMEOUT_MS:600000}
-  # 能力市场：设置页「MCP 市场 / Skill 市场」直接读外部目录，不再内置虚构条目。
+  # 能力市场：设置页「MCP 市场 / Skill 市场」直接读开源目录，不再内置虚构条目。
+  # 均为「多源」配置：逗号分隔即可接入任意多个开源市场，来源会显示在设置页并支持筛选。
+  #  - MCP：任意实现 Registry HTTP 协议的目录（官方、厂商镜像、自建均可）；
+  #  - Skill：任意 GitHub 仓库（owner/repo），平台扫描其中所有 <dir>/SKILL.md。
   # 内网无外网时改为镜像地址，或用 HTTPS_PROXY/HTTP_PROXY 让平台走代理。
   market:
+    # 多个 MCP Registry 用英文逗号分隔；每个独立接入，某一源不可达不影响其它源。
     mcp-registry: ${AGENT_MARKET_MCP_REGISTRY:https://registry.modelcontextprotocol.io/v0/servers}
-    # 逗号分隔的 GitHub 仓库（owner/repo）；anbeime/skill 提供 100+ 中文技能
+    # 多个 GitHub 技能仓库用英文逗号分隔；anbeime/skill 提供 100+ 中文技能。
     skill-repos: ${AGENT_MARKET_SKILL_REPOS:anthropics/skills,anbeime/skill}
   # 流水线：项目与环境来自配置/接入，不在代码里写死
   pipeline:

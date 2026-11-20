@@ -320,7 +320,6 @@ export function listProjects(): Promise<ProjectRow[]> {
 /** 项目已配置的环境（对话页环境下拉用，只含真实存在的环境）。 */
 export interface ProjectEnvRow {
   env: string
-  appUrl: string
   composeDir: string
 }
 
