@@ -242,6 +242,8 @@ const envRows = ref<EnvStatus[]>([])
 const envsLoading = ref(false)
 /** 当前环境的镜像版本（current / previous / 历史），来自持久化版本账本。 */
 const imageVersions = ref<ImageVersionView[]>([])
+/** 版本选项实际来自哪个环境的账本：生产 = test（只列测试跑通过的版本）。 */
+const imageSourceEnv = ref('')
 /** 本机 Docker 是否可用：不可用时禁止「按版本部署」，避免触发后才失败。 */
 const dockerAvailable = ref(true)
 
@@ -768,9 +770,11 @@ async function loadImages(): Promise<void> {
   try {
     const res = await deployImages(projectId.value, env.value)
     imageVersions.value = res.images
+    imageSourceEnv.value = res.sourceEnv || env.value
     dockerAvailable.value = res.dockerAvailable !== false
   } catch {
     imageVersions.value = []
+    imageSourceEnv.value = ''
   }
 }
 
@@ -790,19 +794,43 @@ async function deployVersion(img: ImageVersionView): Promise<void> {
   const versionNote = tagged
     ? `\n版本 ${version}：打 tag 独立部署，旧版本继续运行。`
     : `\n将覆盖 ${env.value} 环境当前部署。`
-  try {
-    await ElMessageBox.confirm(
-      `将 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）重新部署到 ${env.value} 环境？`
-      + '\n不会重新构建：直接复用已登记镜像，只跑部署与健康检查。' + versionNote,
-      '按版本部署',
-      { type: 'warning', confirmButtonText: '部署', cancelButtonText: '取消' })
-  } catch {
-    return
+  let confirmToken: string | undefined
+  if (env.value === 'prod') {
+    // 生产：先过「测试证据 + 一次性令牌」（DeployGate 与主发布入口同一套规则），
+    // 不带令牌触发会被后端判 400 CONFIRM_REQUIRED —— 这就是"生产点不动"的另一半。
+    const plan = await deployConfirm(projectId.value, 'prod', img.gitSha)
+    if (!plan.allowed) {
+      ElMessage.warning(plan.reason ?? '测试环境还没有成功案例，无法发布到生产')
+      return
+    }
+    const evidence = plan.evidence
+    const ok = await ElMessageBox.confirm(
+      `即将把 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）发布到生产环境。\n`
+      + `依据：测试环境 v${evidence?.version ?? '?'} · 证据运行 ${evidence?.runId ?? '?'}`
+      + `（${evidence?.status ?? '?'}）\n这是高危操作，确认后立即执行。`,
+      '确认发布到生产',
+      { confirmButtonText: '确认发布', cancelButtonText: '取消', type: 'warning' },
+    ).then(() => true).catch(() => false)
+    if (!ok) {
+      ElMessage.info('已取消')
+      return
+    }
+    confirmToken = plan.confirmToken
+  } else {
+    try {
+      await ElMessageBox.confirm(
+        `将 ${img.tag}（提交 ${(img.gitSha || '').slice(0, 7)}）重新部署到 ${env.value} 环境？`
+        + '\n不会重新构建：直接复用已登记镜像，只跑部署与健康检查。' + versionNote,
+        '按版本部署',
+        { type: 'warning', confirmButtonText: '部署', cancelButtonText: '取消' })
+    } catch {
+      return
+    }
   }
   try {
     const result = await deployImageVersion(pipelineId.value, projectId.value, env.value,
       img.tag, img.gitSha, deployVersionInput.value.trim() || undefined,
-      showVersionControls.value && deployTagged.value, branch.value || undefined)
+      showVersionControls.value && deployTagged.value, branch.value || undefined, confirmToken)
     attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: img.gitSha })
     ElMessage.success('已触发按版本部署')
     void loadImages()
@@ -1810,7 +1838,9 @@ async function copyDigest(digest: string): Promise<void> {
             <section v-if="imageVersions.length" class="artifact-panel">
               <h3 class="ap-title">
                 镜像版本 <span class="ap-count">{{ imageVersions.length }}</span>
-                <span class="ap-hint">独立版本账本：按 (项目, 环境) 记账，删构建历史不影响版本与回滚锚点</span>
+                <span class="ap-hint">{{ imageSourceEnv && imageSourceEnv !== env
+                  ? '选项来自测试环境成功运行的版本：生产只发测试跑通过的构建，当前/上一版按生产实际在跑的标注'
+                  : '独立版本账本：按 (项目, 环境) 记账，删构建历史不影响版本与回滚锚点' }}</span>
               </h3>
               <div v-for="img in imageVersions.slice(0, 6)" :key="img.tag" class="image-row">
                 <span class="iv-badge" :class="imageBadgeClass(img)">{{ imageBadge(img) }}</span>
@@ -1841,8 +1871,10 @@ async function copyDigest(digest: string): Promise<void> {
             <section v-else-if="env !== 'dev'" class="artifact-panel">
               <h3 class="ap-title">镜像版本 <span class="ap-count">0</span></h3>
               <p class="ap-empty">
-                这个环境还没有镜像版本。发布（或显式打包镜像）后按环境记录当前 / 上一版，
-                回滚以「上一版」为目标；旧版本按保留策略自动清理。
+                {{ imageSourceEnv && imageSourceEnv !== env
+                  ? '测试环境还没有成功运行过的版本：请先在测试环境跑通并发布一次，生产只列测试通过的构建。'
+                  : '这个环境还没有镜像版本。发布（或显式打包镜像）后按环境记录当前 / 上一版，'
+                    + '回滚以「上一版」为目标；旧版本按保留策略自动清理。' }}
               </p>
               <p v-if="!dockerAvailable" class="ap-empty ap-warn">
                 本机 Docker 不可用，无法按版本部署；安装并启动 Docker 后刷新即可。

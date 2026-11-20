@@ -266,7 +266,9 @@ export function deployImageVersion(
   gitSha: string,
   version?: string,
   tagged?: boolean,
-  branch?: string
+  branch?: string,
+  /** 生产必填：DeployGate 校验测试证据后签发的一次性令牌，不带则 400 CONFIRM_REQUIRED。 */
+  confirmToken?: string
 ): Promise<TriggerRunView> {
   return apiFetch<TriggerRunView>(`/api/v1/ci/pipelines/${encodeURIComponent(pipelineId)}/run`, {
     method: 'POST',
@@ -277,7 +279,8 @@ export function deployImageVersion(
       deployImage: tag,
       version: version ?? null,
       tag: tagged === true,
-      branch: branch ?? null
+      branch: branch ?? null,
+      confirmToken: confirmToken ?? null
     })
   })
 }
@@ -414,7 +417,7 @@ export interface ImageVersionView {
 export function deployImages(
   projectId: string,
   env: string
-): Promise<{ projectId: string, env: string, dockerAvailable: boolean, images: ImageVersionView[] }> {
+): Promise<{ projectId: string, env: string, sourceEnv: string, dockerAvailable: boolean, images: ImageVersionView[] }> {
   const q = new URLSearchParams({ projectId, env })
   return apiFetch(`/api/v1/ci/deploy/images?${q}`)
 }

@@ -42,6 +42,7 @@ import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeploySlot;
 import top.rongx.agent.domain.deploy.DeployTarget;
+import top.rongx.agent.domain.deploy.EnvironmentPromotion;
 import top.rongx.agent.domain.error.BuildException;
 import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
@@ -1774,8 +1775,20 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     @Override
     public java.util.Optional<String> gitShaForImage(String projectId, String env, String tag) {
-        return imageVersions.find(projectId, env, tag).map(ImageVersion::gitSha)
+        return imageVersions.find(projectId, ledgerEnv(env), tag).map(ImageVersion::gitSha)
                 .filter(sha -> sha != null && !sha.isBlank());
+    }
+
+    /**
+     * 版本账本归属环境：需要测试证据的环境（生产）从**测试环境**账本取版本。
+     *
+     * <p>不这样做的后果：界面上给出的"测试跑通过的版本"在触发时会被
+     * {@link #deployPreflight} / {@code gitShaForImage} 判成"镜像版本不存在或不属于 prod"，
+     * 选项与解析不同源 = 看得见点不动。安全性不受影响——是否放行仍由
+     * {@link EnvironmentPromotion} 校验测试环境证据（同一个 sha）。
+     */
+    private static String ledgerEnv(String env) {
+        return EnvironmentPromotion.requiresTestEvidence(env) ? "test" : env;
     }
 
     /**
@@ -1790,8 +1803,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         if (tag == null || tag.isBlank()) {
             return List.of("镜像 tag 为空");
         }
-        if (imageVersions.find(projectId, env, tag).isEmpty()) {
-            blockers.add("镜像版本不存在或不属于 " + projectId + " / " + env + "：" + tag);
+        String optionEnv = ledgerEnv(env);
+        if (imageVersions.find(projectId, optionEnv, tag).isEmpty()) {
+            blockers.add("镜像版本不存在或不属于 " + projectId + " / " + optionEnv + "：" + tag);
         }
         if (!dockerAvailable()) {
             blockers.add(ErrorCode.LOCAL_IMAGE_UNAVAILABLE.code() + " 本机 Docker 不可用，无法按版本部署镜像 " + tag);
