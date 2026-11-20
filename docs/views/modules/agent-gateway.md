@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-83 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+84 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-20 · 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效（bug `a2aa87e`）
+- 问题：修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效
+- 方案：fix(deploy): 修复固化脚本重放丢失 version/tag 与部署地址指向 health JSON
+- 验证：Tests run: 489, Failures: 0, Errors: 0, Skipped: 6
 
 ## 2026-11-20 · 合并 token/deploy 并行工作并移植门禁并发健壮性（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe`）
 - 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …

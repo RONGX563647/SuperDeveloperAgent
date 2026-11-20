@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-51 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+52 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-20 · 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效（bug `a2aa87e`）
+- 问题：修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效
+- 方案：fix(deploy): 修复固化脚本重放丢失 version/tag 与部署地址指向 health JSON
+- 验证：Tests run: 489, Failures: 0, Errors: 0, Skipped: 6
 
 ## 2026-11-20 · 部署地址指向/镜像保留策略/版本区分/环境页镜像面板（bug `813904b` `342bfd9`）
 - 问题：四组问题：1)「打开部署地址」跳到 /actuator/health(JSON) 而不是前端页面；
