@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-81 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+82 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-20 · 合并 token/deploy 并行工作并移植门禁并发健壮性（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe`）
+- 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …
+- 方案：模型保持 ledger：172 份按 id 吸收（175 行）、复活散文删除、views 重生成、链重排；把并发修复移植到 ledger 版 g…
+- 验证：gate self-test OK（含 PID 判活/僵尸锁回收/活锁不误删）；validate 175 份链全绿；views check 一致…
 
 ## 2026-11-20 · 合并 token 量化基线与部署矩阵修复到当前分支（chore `a533133`）
 - 问题：需把 feat/token-quantified-baseline 与 fix/deploy-matrix-metadata-staple 合并…
