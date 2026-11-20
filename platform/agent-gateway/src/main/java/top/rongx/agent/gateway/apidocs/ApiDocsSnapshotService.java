@@ -109,10 +109,29 @@ public class ApiDocsSnapshotService {
                 log.info("OpenAPI 快照已生成：{}（{} ms）", snapshotPath, lastBuildMillis);
             }
             catch (RuntimeException e) {
-                // 文档不可用不应影响主流程；Agent 工具会退回到 classpath 快照
-                log.warn("OpenAPI 快照生成失败（不影响启动）：{}", e.toString());
+                // BUG-36：静默退回 classpath 旧快照 = Agent 拿过期文档回答"平台接口怎么调"，
+                // 且用户毫无感知。生成失败时把快照标记为过期（产物文件改名 + 明确告警），
+                // 让 api_docs 工具返回"文档快照不可用"而不是过期内容——宁可拒绝回答，不可给错答案。
+                log.error("OpenAPI 快照生成失败：{}（springdoc 升级可能改变了内部 API，"
+                        + "api_docs 工具将返回不可用而不是过期契约）", e.toString());
+                quarantineStaleSnapshot();
             }
         });
+    }
+
+    /** 快照生成失败时把现存（可能过期）快照移入隔离名，防止 Agent 静默读到旧契约。 */
+    private void quarantineStaleSnapshot() {
+        try {
+            if (Files.exists(snapshotPath)) {
+                Path quarantine = snapshotPath.resolveSibling(
+                        snapshotPath.getFileName() + ".stale-" + System.currentTimeMillis());
+                Files.move(snapshotPath, quarantine);
+                log.warn("已隔离可能过期的 OpenAPI 快照：{} -> {}", snapshotPath, quarantine);
+            }
+        }
+        catch (IOException moveError) {
+            log.warn("隔离过期快照失败：{}", moveError.toString());
+        }
     }
 
     private void write(String json) {
