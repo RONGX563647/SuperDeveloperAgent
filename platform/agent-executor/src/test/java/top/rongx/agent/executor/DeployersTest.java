@@ -2,6 +2,7 @@ package top.rongx.agent.executor;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -231,6 +232,19 @@ class DeployersTest {
         assertEquals(18081, ServerDeployer.parseMappedPort("0.0.0.0:18081\n[::]:18081"));
         assertEquals(0, ServerDeployer.parseMappedPort(""));
         assertEquals(0, ServerDeployer.parseMappedPort(null));
+    }
+
+    @Test
+    @DisplayName("环境变量：小集合内联；大集合或含换行时按需切换 env-file")
+    void envFilePolicy() {
+        assertFalse(ServerDeployer.needsEnvFile(null));
+        assertFalse(ServerDeployer.needsEnvFile(Map.of("A", "1")));
+        String big = "x".repeat(2_500);
+        assertTrue(ServerDeployer.needsEnvFile(Map.of("BIG", big)));
+        // 含换行的值无法写进 docker env-file，继续走 -e
+        assertFalse(ServerDeployer.needsEnvFile(Map.of("MULTI", "a\nb", "BIG", big)));
+        assertEquals("A=1\nB=2\n", ServerDeployer.envFileContent(
+                Map.of("B", "2", "A", "1")));
     }
 
     @Test
