@@ -13,7 +13,7 @@
 | 层 | 入口 | 触发 | 跑什么 | 预算 | 能绕过吗 |
 |---|---|---|---|---|---|
 | L1 | `.git/hooks/pre-commit` → `gate.py gate-pre-commit` | `git commit` | 必须有活跃会话；变更模块及下游的**增量测试**（`-pl <模块> -amd`，排除 spec-checks）；证据按工作区指纹 + TTL 复用 | ≤ 60s（首跑 ~2min） | `--no-verify` |
-| L2 | `.git/hooks/pre-push` → `gate.py gate-pre-push` | `git push` | 会话必须 finish；`docs/process`、`docs/summary` 干净；每个代码提交被归档覆盖；`validate`；handbook 漂移；前端自检；spec-checks 全量 | ≤ 3min | `--no-verify` |
+| L2 | `.git/hooks/pre-push` → `gate.py gate-pre-push` | `git push` | 会话必须 finish；`docs/ledger`、`docs/views` 干净；每个代码提交被归档覆盖；`validate`；views 一致；handbook 漂移；前端自检；spec-checks 全量 | ≤ 3min | `--no-verify` |
 | L3 | `.github/workflows/ci.yml` | PR / push 到 `main`、`0.1.0-snapshot` | 5 个 required checks：`backend (mvn verify)`、`frontend`、`docs`、`contract`、`security` | ≤ 10min | **不能**（ruleset 强制） |
 | L4 | `platform/spec-checks`（并入 `mvn verify`） | 每次构建 | ArchUnit 棘轮、禁令正则 R01–R15、错误码契约 EC、决策面凭证扫描 C、**迁移基线 M1**、工具 schema 预算、API 文档契约、Handbook 漂移、归档校验 | — | 不能 |
 

@@ -65,5 +65,5 @@ L3 的"行为 → 源码位置"表由代码锚点生成，行号不需要手工�
 3. `python tools/handbook/build.py check`：锚点删除、符号改名、行号移动、生成区未刷新都会失败。
 4. pre-push 与 `spec-checks` 的 `HandbookDriftTest` 都跑同一个 `check`；禁止手改 `generated:begin/end` 之间的内容。
 
-文档只增不改，行为和源码位置的变更通过重新 `sync` 反映；会话归档（`docs/process`）记录"哪次会话改了什么"，
+文档只增不改，行为和源码位置的变更通过重新 `sync` 反映；会话留痕（`docs/ledger`）记录"哪次会话改了什么"，
 本手册记录"现在的行为落在哪"。

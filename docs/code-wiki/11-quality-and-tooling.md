@@ -89,14 +89,17 @@ python tools/handbook/build.py check    # 校验锚点/行号/生成区/文档�
 
 ## 3. 会话归档门禁
 
-`docs/process/<category>/` 保存每次会话的 manifest，`docs/summary/` 按月份归档总结；[tools/session-archive/gate.py](file:///workspace/tools/session-archive/gate.py) 负责校验。
+`docs/ledger/<YYYY-MM>.jsonl` 保存会话留痕（每行一份 manifest，追加式 + 哈希链）；
+`docs/views/` 是由 `tools/docs/build.py sync` 生成的读视图（近期索引/变更日志/模块档案）；
+[tools/session-archive/gate.py](file:///workspace/tools/session-archive/gate.py) 负责校验。
 
 ```bash
 python tools/session-archive/gate.py start     # 开新会话记录
-python tools/session-archive/gate.py finish    # 收尾
+python tools/session-archive/gate.py finish    # 追加 ledger 行 + 刷新 views
 python tools/session-archive/gate.py validate  # 校验完整性
 python tools/session-archive/gate.py self-test # 自检
 python tools/session-archive/diag-chain.py bug # 归档断链诊断（分类，默认 bug）
+python tools/docs/find.py "<关键词>"            # 检索留痕与 skills（勿整读 ledger）
 ```
 
 `.githooks/pre-commit` / `pre-push` 挂接该门禁（`install-hooks.ps1` 安装）。规范见 `docs/session-archive-spec-v1.md`。

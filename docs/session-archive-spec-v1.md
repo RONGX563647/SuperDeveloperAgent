@@ -23,29 +23,30 @@
 
 ```
 docs/
+  README.md                             # 地图与消费规则（agent 入口）
   session-archive-spec-v1.md            # 本规格
-  process/                              # 原始档案：一次 agent 会话 = 一个文件夹
-    feat/    2026-11-16_2245_deploy-versioned-env/
-             └── manifest.json（+ 可选 attachments/：截图、失败日志）
-    bug/     …
-    chore/   …
-    docs/    …
-    deploy/  …
-  summary/                              # 人读总结（markdown + frontmatter），双索引
-    2026-11/                            # 时间维（按月，权威内容）
-      2026-11-16_deploy-track.md
-    deploy-track/                       # 功能维（会话总结轨：feat/bug/chore/docs/deploy）
-      2026-11_versioning.md
-    plan/                               # 方案维：评审 / 优化方案（不生成 process 归档，见 §4.6）
-      quality-gate-review-2026-11.md    # 双索引副本，canonical 指回时间维主文件
+  skills/                               # 任务域知识卡（agent 按需读）
+  ledger/                               # 会话留痕：唯一写入点（JSONL，追加式）
+    2026-11.jsonl                       #   每行一份 manifest（schema v2，见 §3.2）
+  views/                                # 生成视图（tools/docs/build.py sync）：近期索引/
+                                        #   变更日志/模块档案；勿手改，pre-push 校验一致
+  summary/                              # 只剩方案轨（见 §4.6）
+    2026-11/                            # 时间维副本
+    plan/                               # 方案轨副本（canonical 指回时间维主文件）
 ```
 
-## 3. process 归档规范
+> 历史：2026-11-20 前是「一次会话一个 `process/<cat>/<folder>/manifest.json` +
+> 两份 `summary/` 散文」；迁移脚本 `tools/session-archive/migrate-to-ledger.py`
+> 把 165 份 manifest 原样并入 ledger（内容与链不变），散文副本由 views 取代后删除。
+> 会话总结不再手写：需要"最近改了什么"读 `docs/views/`，需要检索用
+> `python tools/docs/find.py`。
+
+## 3. 归档规范（ledger 行）
 
 ### 3.1 命名与分类
 
-- 文件夹名：`YYYY-MM-DD_HHMM_<英文slug>`（kebab-case），分钟级，固定 +08:00；同分钟冲突加 `-2`；中文标题写在 manifest。
-- 一次会话一个归档、归主导类；`commits[].category` 逐条记录每个提交的真实类别，跨类信息不丢。
+- 归档名（`id` 的后半段）：`YYYY-MM-DD_HHMM_<英文slug>`（kebab-case），分钟级，固定 +08:00；同分钟冲突加 `-2`；中文标题写在 manifest。
+- 一次会话一行归档、归主导类；`commits[].category` 逐条记录每个提交的真实类别，跨类信息不丢。
 
 | 类别 | 判据 | 测试要求 |
 |---|---|---|
@@ -55,7 +56,7 @@ docs/
 | docs | 纯文档 | 豁免单测 |
 | deploy | 部署链路/环境/发布/运维 | 豁免单测，但 `impact.verification` 非空（dry-run / 健康检查 / 测试任一） |
 
-### 3.2 manifest.json（schema v2）
+### 3.2 manifest（schema v2；存储为 ledger 行）
 
 ```json
 {
@@ -264,100 +265,21 @@ Maven 启动与 reactor 校验占大头），因此保持串行；`forkCount=8` 
   - 已存在 `ideSessionId` 的会话不重复建档（幂等）。
 - 对账任务每 2 小时跑一次；它只是兜底，正常流程仍是 `start` → `finish` → `validate`。
 
-## 4. summary 规范（本版核心增强）
+## 4. 总结与视图（v2：views 取代散文总结）
 
-### 4.1 定位与文件
+> 2026-11-20 起会话不再手写/生成 summary 散文：原 §4.1–4.5 的 `session-summary/v1`
+> 双份 Markdown 已废止（内容 100% 可由 ledger 重建），历史文件由
+> `tools/session-archive/migrate-to-ledger.py` 删除。`gate.py validate` 会拒绝新的
+> `schema: session-summary/v1` 文件。
 
-- 一份 summary = 一个 markdown 文件，双索引两处存放（时间维 + 功能维），内容互链。
-- 路径：`docs/summary/<YYYY-MM>/<YYYY-MM-DD>_<slug>.md` + `docs/summary/<track>/<YYYY-MM>_<slug>.md`。
-- `track` 取值：会话总结轨 `feat|bug|chore|docs|deploy`（与 process 分类同名，语义为「这次会话的总结」）；
-  方案轨 `plan`（评审 / 优化方案，契约见 §4.6，**不是** process 分类，也不生成 manifest）。
-- 同等只增不改：同主题新进展 = 新文件 + frontmatter `extends` 回指旧文件（ADR supersede 风格）。
-  plan 类的版本化规则例外，见 §4.6.6。
-
-### 4.2 frontmatter（数据聚合层）
-
-```yaml
-schema: session-summary/v1
-period: 2026-11
-createdAt: 2026-11-30T20:00:00+08:00
-extends: null                      # 同主题旧总结 id（新进展回指）
-refs:                              # 引用的 process 归档 id（必须全部真实存在）
-  - feat/2026-11-16_2245_deploy-versioned-env
-  - bug/2026-11-16_2257_worktree-broken-git
-metrics:                           # 由 skill 从 manifest.tests + JaCoCo 聚合生成，禁止手编
-  sessions: 4                      # 本期归档数
-  casesAdded: 12                   # 新增用例总数
-  casesTotal: 147                  # 本期最后一次全量运行的总用例
-  passRate: "99.3%"                # 通过率（含跳过说明）
-  lineCoverage: "61.2%"           # 全仓行覆盖率（JaCoCo；无报告记 N/A）
-  coverageDelta: "+1.8%"           # 对比 extends/上一份同 track 的变化量（Codecov delta）
-  patchCoverage: "84%"             # 本期新增行覆盖率（Codecov patch coverage）
-  gate: PASS                       # 质量门禁结论：PASS / WARN / FAIL（规则见 4.4）
-```
-
-### 4.3 正文结构（Keep a Changelog 风格）
-
-```markdown
-# 2026-11 部署链路月度总结
-
-## 概述
-2-4 句：本期主线、关键决策、一句话结论。
-
-## 交付清单
-| 归档 | 内容 | 测试 |
-|---|---|---|
-| feat/2026-11-16_2245_deploy-versioned-env | 版本号 + 打 tag 多版本部署 | PASSED，+4 用例 |
-| bug/2026-11-16_2257_worktree-broken-git | 半残 worktree prune+清理 | PASSED，先红后绿 |
-
-（每行引用 process id；测试状态必须与所引用归档的 tests 段一致，校验器比对）
-
-## 测试与质量总结
-### 覆盖率（Codecov 风格：看变化量与新增覆盖，不只看绝对值）
-| 模块 | 用例变化 | 行覆盖率变化 | 新增行覆盖 |
-|---|---|---|---|
-| agent-executor | +6 | 58.1% → 62.4% | 86% |
-| agent-tools | +4 | 71.0% → 71.2% | 91% |
-| web（typecheck/build） | — | — | build 通过 |
-
-### 质量门禁（SonarQube Quality Gates 风格）
-| 条件 | 阈值 | 实际 | 结果 |
-|---|---|---|---|
-| feat/bug 归档测试全绿 | 100% | 4/4 | ✅ |
-| 新增行覆盖（patch） | ≥ 80% | 84% | ✅ |
-| 新增未覆盖文件 | 0 | 0 | ✅ |
-| 跳过用例需注明原因 | 全部 | 2（按环境跳过，已注明） | ✅ |
-> **Gate: PASS**（任一条件不满足则 WARN/FAIL，并列出补救项）
-
-### 风险敞口
-- 未覆盖的新增文件：无 / 逐个列出
-- 跳过用例及原因
-- 覆盖率下降的模块及归因
-
-## 遗留与建议
-followUps 汇总 + 下期建议。
-
-## 链接
-引用的 process id 列表、extends 指向的旧总结。
-```
-
-### 4.4 质量门禁规则（gate）
-
-| gate | 条件 |
-|---|---|
-| **PASS** | 所有条件满足：refs 内 feat/bug 全 PASSED；patchCoverage ≥ 80% 或 N/A 且无未覆盖新增文件；跳过用例均有归因 |
-| **WARN** | 数据缺失（如未接入 JaCoCo、patchCoverage=N/A）或 patchCoverage 在 60%~80% |
-| **FAIL** | 任一 feat/bug 归档测试非 PASSED；存在新增未覆盖测试文件；未归档的 feat/bug 提交 |
-
-FAIL 必须在下一期 summary 的「遗留与建议」中给出修复计划。
-
-### 4.5 覆盖率数据来源
-
-- 引入 JaCoCo（Maven 插件，绑定 test 阶段：`prepare-agent` + `report`，输出 `target/site/jacoco*.xml`），
-  不改变现有测试行为。
-- `session-archive` skill 解析 JaCoCo XML 计算 `lineCoverage` / `patchCoverage` / 模块分解
-  （patch = 本期 refs 涉及的新增行覆盖）。
-- 未接入前各字段记 `N/A`，gate 降级为 WARN，不阻塞流程——但接入后 N/A 即 WARN。
+- 视图（`docs/views/`，由 `tools/docs/build.py sync` 从 ledger 投影生成）：
+  - `index.md`：最近 10 个会话 + 模块索引（agent 的变更入口）
+  - `changelog.md`：按日期倒序的完整变更日志（每行一个会话）
+  - `modules/<m>.md`：按模块的问题/方案/验证档案
+- 生成物勿手改：`build.py check` 在 pre-push 强制与 ledger 一致；同样的 ledger
+  必然生成同样的视图（生成物内不带时间戳）。
+- 指标以 manifest 的 `tests` 段为准；行覆盖率看 JaCoCo 报告（`target/site/jacoco`），
+  不再随会话写死进文档。
 
 ### 4.6 plan 类契约（评审与优化方案）
 
@@ -419,9 +341,9 @@ canonical: docs/summary/2026-11/2026-11-18_quality-gate-review.md   # 仅方案�
 **「验收契约」是 plan 能不能算方案的唯一标准**：一条缺口如果没有「可复制执行的验收命令 + 通过判定 + 反证」，
 它就只是意见，不是契约；`status` 也不得升到 `approved`。
 
-#### 4.6.5 与 session-summary 的差异
+#### 4.6.5 与 session-summary 的差异（历史对照；session-summary 已退役，见 §4）
 
-| 维度 | session-summary（§4.2–4.4） | session-plan（本节） |
+| 维度 | session-summary（已退役） | session-plan（本节） |
 |---|---|---|
 | schema | `session-summary/v1` | `session-plan/v1` |
 | 来源 | `gate.py finish` 从 manifest 自动生成 | 人写（agent 可起草），不自动生成 |
@@ -449,7 +371,7 @@ canonical: docs/summary/2026-11/2026-11-18_quality-gate-review.md   # 仅方案�
 4. `status` 在枚举内；`status=superseded` 时 `supersededBy` 非空；`verdict` 在 `PASS|WARN|FAIL|N/A` 内；`owner` 非空；
 5. 方案轨副本（`docs/summary/plan/` 下）必须有 `canonical`，指向存在的文件，且其 `slug`/`period` 与本文件一致；
 6. §4.6.4 的 8 个必需章节齐全；
-7. `refs` 内每个 process 归档 id 必须存在（与 §4.2 同规则）。
+7. `refs` 内每个 process 归档 id 必须存在（ledger 行的 id）。
 
 校验失败 = `gate.py validate` 非零 = `ProcessArchiveTest` 红 = 禁止推送；与归档门禁同一条出口。
 
@@ -457,10 +379,10 @@ canonical: docs/summary/2026-11/2026-11-18_quality-gate-review.md   # 仅方案�
 
 | 件 | 位置 | 作用 |
 |---|---|---|
-| JSON Schema | `docs/schemas/process-manifest-v2.json`、`session-summary-v1.md` 的 frontmatter 说明 | 校验依据 |
-| 归档 skill | 仓库 skill `session-archive` | 会话末：跑测试 → 从 git 提取 commits/files → 生成 manifest（含 hash 链）→ 聚合 metrics 生成/追加 summary |
-| 校验器 | `spec-checks` 新增 `ProcessArchiveTest`（附单测，作为 feat 归档自身的合规样本） | §3.3/§3.4/§4.2/§4.6 全部规则执行者 |
-| 覆盖率 | 根 pom 加 JaCoCo 插件 | §4.5 数据来源 |
+| JSON Schema | `docs/schemas/process-manifest-v2.json`（plan 的 frontmatter 契约见 §4.6） | 校验依据 |
+| 归档 skill | 仓库 skill `session-archive`（现为 `gate.py`） | 会话末：跑测试 → 从 git 提取 commits/files → 追加 ledger 行（含 hash 链）→ 刷新 `docs/views/` |
+| 校验器 | `spec-checks` 的 `ProcessArchiveTest`（附单测，作为 feat 归档自身的合规样本） | §3 / §4.6 全部规则执行者 |
+| 覆盖率 | 根 pom 的 JaCoCo 插件 | 看 `target/site/jacoco` 报告，不写进会话文档 |
 | 方案轨 | `docs/summary/plan/` + `docs/summary/<YYYY-MM>/` 双份 | 评审/优化方案（§4.6）；由人写，校验器只做契约检查 |
 
 执行顺序（首次落地）：
