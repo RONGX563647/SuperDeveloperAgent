@@ -2003,6 +2003,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/sandbox/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 工具链镜像就绪状态
+         * @description 按 host + image 列出就绪/失败与退避剩余时间；只读，不触发拉取
+         */
+        get: operations["images"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/projects/{projectId}/services": {
         parameters: {
             query?: never;
@@ -3681,6 +3701,7 @@ export interface components {
             release?: string;
             /** Format: int64 */
             pid?: number;
+            server?: string;
         };
         EnvColumn: {
             key?: string;
@@ -3712,6 +3733,8 @@ export interface components {
             outputTokens?: number;
             /** Format: int64 */
             totalTokens?: number;
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         ModelUsageSummary: {
             modelName?: string;
@@ -3725,6 +3748,8 @@ export interface components {
             outputTokens?: number;
             /** Format: int64 */
             totalTokens?: number;
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         ProjectUsageSummary: {
             projectId?: string;
@@ -3738,6 +3763,8 @@ export interface components {
             outputTokens?: number;
             /** Format: int64 */
             totalTokens?: number;
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         UsageSummary: {
             /** Format: int32 */
@@ -3746,6 +3773,8 @@ export interface components {
             daily?: components["schemas"]["DailyUsage"][];
             byModel?: components["schemas"]["ModelUsageSummary"][];
             byProject?: components["schemas"]["ProjectUsageSummary"][];
+            /** Format: int32 */
+            cacheHitRate?: number;
         };
         UsageTotals: {
             /** Format: int64 */
@@ -6690,7 +6719,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": string;
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
                 };
             };
         };
@@ -7615,6 +7644,28 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    images: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
         };

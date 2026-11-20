@@ -1,0 +1,91 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-20_1050_envbar-default-collapsed",
+  "category": "bug",
+  "title": "BUG-26/53 环境条默认折叠与抖动修复",
+  "createdAt": "2026-11-20T10:50:16+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "BUG-26/53 环境条默认折叠与抖动修复",
+    "toolCallCount": 0
+  },
+  "problem": "环境悬浮条全局 localStorage 单 key 导致展开过一次永远弹出；默认折叠无落点；切环境清空旧数据致三段跳变抖动（PG BUG-26/53）",
+  "solution": "fix(web): key 按 projectId+env 隔离；ChatView 传 :default-open=false；watch 就地刷新不清空；health 不闪烁；新增 envBarState.test.ts 5 例",
+  "commits": [
+    {
+      "sha": "e92e7a0af9e0d34ed2e959c97920d2b35f4e0dc6",
+      "subject": "fix(web): 环境条默认折叠、展开状态按项目/环境隔离、切环境不再抖动（BUG-26/53）（历史重写后等价提交）",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/process/bug/2026-11-20_1044_envbar-default-collapsed/manifest.json",
+          "status": "A",
+          "additions": 61,
+          "deletions": 0,
+          "blobHash": "d326e514ccaa269147630a6131e598875ecf0373"
+        },
+        {
+          "path": "docs/summary/2026-11/2026-11-20_1044_envbar-default-collapsed.md",
+          "status": "A",
+          "additions": 60,
+          "deletions": 0,
+          "blobHash": "bfe6e2dcb7aca62defbcd4d2eb75a2bebfcb11b2"
+        },
+        {
+          "path": "platform/web/src/components/chat/EnvironmentStatusBar.vue",
+          "status": "M",
+          "additions": 27,
+          "deletions": 12,
+          "blobHash": "b40a78421b7c034f38fea7e1ec3b009f5d76f52f"
+        },
+        {
+          "path": "platform/web/src/components/chat/envBarState.test.ts",
+          "status": "A",
+          "additions": 80,
+          "deletions": 0,
+          "blobHash": "793449f949665ed4ad8928d9b94a6ba8073b23de"
+        },
+        {
+          "path": "platform/web/src/views/ChatView.vue",
+          "status": "M",
+          "additions": 1,
+          "deletions": 0,
+          "blobHash": "1f288ac4627f8eef184167c35b6806b52412971f"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/web/src/components/chat/envBarState.test.ts",
+        "status": "A",
+        "additions": 80,
+        "deletions": 0,
+        "blobHash": "793449f949665ed4ad8928d9b94a6ba8073b23de"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "pnpm test 9 个测试文件全过（含新增 5 例）；vue-tsc 通过；PG 库 0.1.0 BUG 11/11 CLOSED"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1050_envbar-default-collapsed"
+    ]
+  },
+  "chain": {
+    "prev": "d506a750fa3afa2f3b43eb3d170f7ec5aecc8d00bda42af64d76c2e1408d57f8",
+    "self": "852ec12e625fe4253a740a46b0401c856186ad22bcca9cbffd7a2b3ee44249c7"
+  }
+}

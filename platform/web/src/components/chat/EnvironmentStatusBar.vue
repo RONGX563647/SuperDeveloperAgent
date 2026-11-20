@@ -33,11 +33,21 @@ const props = defineProps<{
 
 const emit = defineEmits<{ navigate: [] }>()
 
-const OPEN_KEY = 'agent.envBar.open'
+/**
+ * 展开状态 key：按「项目 · 环境」隔离（BUG-26）。
+ *
+ * <p>历史 bug：原实现是全局单 key {@code agent.envBar.open}，且不含「已提示过」语义——
+ * 用户在 A 项目展开过一次，切到 B 项目 / prod 依然自动展开，且除精确点中折叠按钮外
+ * 没有任何途径写回 '0'，观感就是「环境条永远弹出来」。现在 key 带 projectId + env，
+ * 每个组合各自记住自己的选择；兜底值来自 defaultOpen（ChatView 固定传 false = 默认折叠）。
+ */
+function openKey(projectId: string, env: string): string {
+  return `agent.envBar.open.${projectId}.${env}`
+}
 
 function loadOpen(): boolean {
   try {
-    const saved = localStorage.getItem(OPEN_KEY)
+    const saved = localStorage.getItem(openKey(props.projectId, props.env))
     if (saved !== null) {
       return saved === '1'
     }
@@ -68,15 +78,16 @@ const missingVars = computed(() => check.value?.missingVars ?? [])
 const sourceProvided = computed(() => check.value?.sourceProvidedVars ?? [])
 const requiredCount = computed(() => check.value?.requiredCount ?? 0)
 
-/** 摘要：运行健康 / 有待处理 / 读取失败。 */
+/** 摘要：运行健康 / 有待处理 / 读取失败。刷新中保留旧健康态，不闪「读取中」。 */
 const health = computed<'ok' | 'warn' | 'error' | 'loading'>(() => {
-  if (loading.value && !effective.value) return 'loading'
-  if (failed.value) return 'error'
+  if (loading.value && !effective.value && !check.value) return 'loading'
+  if (failed.value && !effective.value) return 'error'
   if (missingVars.value.length > 0) return 'error'
-  if (missing.value > 0) return 'error'
-  if (checkFailed.value) return 'warn'
-  if (total.value > 0 && running.value < total.value) return 'warn'
-  return 'ok'
+  if (effective.value && missing.value > 0) return 'error'
+  if (effective.value && checkFailed.value) return 'warn'
+  if (effective.value && total.value > 0 && running.value < total.value) return 'warn'
+  if (effective.value) return 'ok'
+  return 'loading'
 })
 
 const healthText = computed(() => {
@@ -92,7 +103,7 @@ const healthText = computed(() => {
 function toggle(): void {
   open.value = !open.value
   try {
-    localStorage.setItem(OPEN_KEY, open.value ? '1' : '0')
+    localStorage.setItem(openKey(props.projectId, props.env), open.value ? '1' : '0')
   } catch {
     // 隐私模式下不可写，忽略
   }
@@ -137,10 +148,14 @@ async function load(): Promise<void> {
 }
 
 watch([() => props.projectId, () => props.env], () => {
-  effective.value = null
-  check.value = null
+  // BUG-26 抖动修复：切换项目/环境时不清空旧数据（保留上一组合的摘要占位），
+  // 就地刷新到新值——避免「就绪 → 读取中(空) → 就绪」的三段高度跳变。
+  // open 状态也按新组合重读（key 已隔离，各组合记忆各自的展开选择）。
+  open.value = loadOpen()
   void load()
 })
+
+// 项目/环境变化时 open 的兜底重算需要跟随 props；模板里 open 只由 toggle 与上面 watch 驱动。
 
 onMounted(() => void load())
 </script>

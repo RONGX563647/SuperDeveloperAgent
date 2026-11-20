@@ -88,11 +88,26 @@ interface FailureRepair {
      *
      * <p>pullCommand / inspectCommand 由沙箱按**管理员配置**生成，修复器不拼 docker 参数，
      * 也不会把日志里出现的镜像名当作命令参数（防提示注入）。
+     *
+     * <p>{@code provisioner} 与动作前预检共用同一套就绪策略（超时判据、重试、镜像源、
+     * 退避状态）——修复路径不再自己定一套超时数字，否则预检与修复会各说各话。
      */
     record Context(BooleanSupplier cancelled, Consumer<String> log, CommandRunner command,
                    long pullTimeoutMs, List<String> pullCommand, List<String> inspectCommand,
                    String configuredImage, RunRecoveryAdvisor advisor,
                    String projectId, String env, String pipelineId, String gitSha,
-                   String actor, String logTail, BooleanSupplier preconditionsOk) {
+                   String actor, String logTail, BooleanSupplier preconditionsOk,
+                   ImageProvisioner provisioner) {
+
+        /** 兼容构造：没有就绪能力（非容器沙箱 / 老测试）时 provisioner 为空。 */
+        Context(BooleanSupplier cancelled, Consumer<String> log, CommandRunner command,
+                long pullTimeoutMs, List<String> pullCommand, List<String> inspectCommand,
+                String configuredImage, RunRecoveryAdvisor advisor,
+                String projectId, String env, String pipelineId, String gitSha,
+                String actor, String logTail, BooleanSupplier preconditionsOk) {
+            this(cancelled, log, command, pullTimeoutMs, pullCommand, inspectCommand,
+                    configuredImage, advisor, projectId, env, pipelineId, gitSha, actor, logTail,
+                    preconditionsOk, null);
+        }
     }
 }

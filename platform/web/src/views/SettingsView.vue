@@ -12,6 +12,7 @@ import DatabasePanel from '../components/settings/DatabasePanel.vue'
 import RepoPanel from '../components/settings/RepoPanel.vue'
 import McpPanel from '../components/settings/McpPanel.vue'
 import SkillPanel from '../components/settings/SkillPanel.vue'
+import SandboxImagePanel from '../components/settings/SandboxImagePanel.vue'
 import ProjectEnvPanel from '../components/settings/ProjectEnvPanel.vue'
 import EnvTemplatePanel from '../components/settings/EnvTemplatePanel.vue'
 import SecretPanel from '../components/settings/SecretPanel.vue'
@@ -33,7 +34,7 @@ import UsagePanel from '../components/settings/UsagePanel.vue'
  * 纵向分组可扩展、也能承载每个分区的说明文字。
  */
 type Section = 'servers' | 'models' | 'database' | 'usage' | 'repos' | 'mcp' | 'skills'
-  | 'envTemplates' | 'envs' | 'secrets' | 'gitOauth' | 'account'
+  | 'sandboxImages' | 'envTemplates' | 'envs' | 'secrets' | 'gitOauth' | 'account'
 
 interface SectionMeta {
   key: Section
@@ -50,6 +51,7 @@ const SECTIONS: SectionMeta[] = [
   { key: 'repos', label: '代码仓库', desc: 'Gitee / GitHub / GitLab', icon: Connection },
   { key: 'mcp', label: 'MCP 接入', desc: 'stdio / http 服务', icon: SetUp },
   { key: 'skills', label: 'Skill', desc: 'SKILL.md 技能目录', icon: MagicStick },
+  { key: 'sandboxImages', label: '工具链镜像', desc: '构建镜像就绪与退避', icon: Cpu },
   { key: 'envTemplates', label: '环境模板', desc: 'dev/test/prod 默认值', icon: Files },
   { key: 'envs', label: '项目环境', desc: '覆盖 · 注入变量 · 重新检测', icon: Key },
   { key: 'secrets', label: '密钥库', desc: 'secret:// 引用与轮换', icon: Lock },
@@ -58,7 +60,7 @@ const SECTIONS: SectionMeta[] = [
 ]
 
 /** 高级分区：默认收起，避免首次进入就被六个入口劝退。 */
-const ADVANCED: Section[] = ['envTemplates', 'envs', 'secrets', 'gitOauth']
+const ADVANCED: Section[] = ['envTemplates', 'envs', 'secrets', 'gitOauth', 'sandboxImages']
 const BASIC = SECTIONS.filter((s) => !ADVANCED.includes(s.key))
 const ADVANCED_SECTIONS = SECTIONS.filter((s) => ADVANCED.includes(s.key))
 
@@ -83,6 +85,7 @@ const secretRef = ref<InstanceType<typeof SecretPanel> | null>(null)
 const repoRef = ref<InstanceType<typeof RepoPanel> | null>(null)
 const mcpRef = ref<InstanceType<typeof McpPanel> | null>(null)
 const skillRef = ref<InstanceType<typeof SkillPanel> | null>(null)
+const sandboxImageRef = ref<InstanceType<typeof SandboxImagePanel> | null>(null)
 const gitOauthRef = ref<InstanceType<typeof GitOauthAppsPanel> | null>(null)
 const refreshing = ref(false)
 const bodyRef = ref<HTMLElement | null>(null)
@@ -99,6 +102,7 @@ function reloadSection(value: Section): Promise<void> | undefined {
   if (value === 'repos') return repoRef.value?.load()
   if (value === 'mcp') return mcpRef.value?.load()
   if (value === 'skills') return skillRef.value?.load()
+  if (value === 'sandboxImages') return sandboxImageRef.value?.load()
   if (value === 'envTemplates') return envTemplateRef.value?.load()
   if (value === 'envs') return envRef.value?.load()
   if (value === 'gitOauth') return gitOauthRef.value?.load()
@@ -192,6 +196,7 @@ async function refresh(): Promise<void> {
           <RepoPanel v-else-if="active === 'repos'" ref="repoRef" />
           <McpPanel v-else-if="active === 'mcp'" ref="mcpRef" />
           <SkillPanel v-else-if="active === 'skills'" ref="skillRef" />
+          <SandboxImagePanel v-else-if="active === 'sandboxImages'" ref="sandboxImageRef" />
           <EnvTemplatePanel v-else-if="active === 'envTemplates'" ref="envTemplateRef" />
           <ProjectEnvPanel v-else-if="active === 'envs'" ref="envRef" />
           <SecretPanel v-else-if="active === 'secrets'" ref="secretRef" />

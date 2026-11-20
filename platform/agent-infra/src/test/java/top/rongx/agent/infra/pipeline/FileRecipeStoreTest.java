@@ -55,6 +55,21 @@ class FileRecipeStoreTest {
     }
 
     @Test
+    @DisplayName("刷新证据：版本与脚本不变，只更新 evidenceRunId 与 gitSha")
+    void refreshEvidence(@TempDir Path workspace) {
+        FileRecipeStore store = new FileRecipeStore(workspace.toString());
+        store.save(recipe("name: v1\n", "run-1", "aaaaaaa"));
+
+        store.refreshEvidence(P, "test", "run-2", "bbbbbbb");
+
+        DeployRecipe current = store.current(P, "test").orElseThrow();
+        assertEquals(1, current.version());
+        assertEquals("run-2", current.evidenceRunId());
+        assertEquals("bbbbbbb", current.gitSha());
+        assertEquals(1, store.versions(P, "test").size(), "刷新证据不应新增版本");
+    }
+
+    @Test
     @DisplayName("非法 projectId / env 被拒绝（防路径穿越）")
     void rejectsUnsafeIds(@TempDir Path workspace) {
         FileRecipeStore store = new FileRecipeStore(workspace.toString());

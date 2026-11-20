@@ -150,12 +150,15 @@ public final class PipelineDefinitionResolver {
         var recipe = current.get();
         Path root = recipes.rootOf(projectId, sourceEnv, recipe.version());
         PipelineDefinition def = PipelineDefinition.load(root);
-        if (!satisfiesDeployTarget(def)) {
-            // 历史脚本是在 image_package 阶段加入之前固化的：它没有镜像阶段，
-            // 回放时 deploy 只能靠"docker 静默降级 host"才跑得通，镜像链路永远不会落地。
-            // 这种脚本不能再当"被证明能跑通"的定义用，退回仓库/平台定义。
-            log.warn("项目 {} 环境 {} 的固化脚本 v{} 与部署目标不一致（无法产出镜像），改用仓库/平台定义",
-                    projectId, sourceEnv, recipe.version());
+        if (!satisfiesDeployTarget(def) || !satisfiesDeployStage(def)) {
+            // 两类不能再当"被证明能跑通"的定义用，退回仓库/平台定义：
+            // 1. 历史脚本在 image_package 加入前固化（没有镜像阶段，镜像链路永不落地）；
+            // 2. 有 health 阶段但没有 deploy 阶段（实测事故：构建+镜像都成功，health 探一个
+            //    没人监听的端口，body= 空、E-401 失败、回滚空转——"被证明跑通"的脚本
+            //    根本不包含部署，固化它等于固化必然失败）。
+            log.warn("项目 {} 环境 {} 的固化脚本 v{} 与部署语义不一致（{}），改用仓库/平台定义",
+                    projectId, sourceEnv, recipe.version(),
+                    satisfiesDeployTarget(def) ? "health 阶段没有前置 deploy 阶段" : "无法产出镜像");
             return Optional.empty();
         }
         String note = "prod".equals(env) && !"prod".equals(sourceEnv)
@@ -285,6 +288,30 @@ public final class PipelineDefinitionResolver {
         }
         return def.stages().stream().anyMatch(stage ->
                 "image_package".equals(stage.action()) || "image".equalsIgnoreCase(stage.type()));
+    }
+
+    /**
+     * 固化脚本的一致性补充门（health vs deploy）：
+     * 定义里有 {@code type: health} 探活阶段、却没有任何 {@code type: deploy} 阶段时，
+     * 这份"被证明能跑通"的脚本根本不包含部署——health 必然探一个没人监听的端口
+     * （实测表现：body= 空、E-401、回滚空转），不能作为可复现脚本回放。
+     *
+     * <p>按版本部署切片（forDeployOnly）与纯构建流水线不受影响：前者只取 deploy+health
+     * 自成一体，后者连 deploy 段都没有、走 E-221 显式报错。
+     *
+     * @return true = 一致（或无从判断，放行给引擎）；false = health 与 deploy 语义断裂
+     */
+    static boolean satisfiesDeployStage(PipelineDefinition def) {
+        boolean hasHealth = def.stages().stream().anyMatch(s -> "health".equals(s.type()));
+        if (!hasHealth) {
+            return true;
+        }
+        boolean hasDeploy = def.stages().stream().anyMatch(s -> "deploy".equals(s.type()));
+        if (hasDeploy) {
+            return true;
+        }
+        // deploy 段都不存在时引擎会报 E-221（纯构建流水线的显式路径），这里同样放行
+        return def.deploy() == null;
     }
 
     /**

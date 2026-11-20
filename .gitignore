@@ -11,6 +11,10 @@ platform/web/mock/
 # 依赖
 node_modules/
 .pnpm-store/
+# 前端包管理器是 pnpm（pnpm-lock.yaml 才是唯一事实来源，CI 用 --frozen-lockfile）。
+# 顺手跑 npm install 会生成一份 package-lock.json，与 pnpm 锁文件冲突，一律不入库；
+# tools/api-docs-mcp 是独立 npm 项目，它的锁文件仍然要提交，所以只忽略这一处。
+platform/web/package-lock.json
 
 # 日志
 *.log
@@ -23,6 +27,7 @@ logs/
 *.swp
 
 # 本地环境与临时文件
+.tmp-*
 .env
 .env.local
 .env.*.local

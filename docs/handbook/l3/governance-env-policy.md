@@ -11,7 +11,7 @@ summary: 按 dev/test/prod 的 L0-L3 矩阵裁决动作，DENY 时抛出带上�
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 环境策略拒绝违规动作 | `EnvPolicyService#requireNotDenied` | `platform/agent-governance/src/main/java/top/rongx/agent/governance/EnvPolicyService.java:52-60` | agent-governance |
+| 环境策略拒绝违规动作 | `EnvPolicyService#requireNotDenied` | `platform/agent-governance/src/main/java/top/rongx/agent/governance/EnvPolicyService.java:68-76` | agent-governance |
 <!-- generated:end -->
 
 ## 行为拆解

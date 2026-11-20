@@ -11,7 +11,9 @@ import top.rongx.agent.domain.change.PlanHasher;
 import top.rongx.agent.domain.error.PlatformException;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.SessionWorkspaceEditor;
+import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.tool.ToolLevel;
 
 /**
  * 会话工作树编辑工具：Agent 在「本会话独占的 worktree」里读写代码。
@@ -35,10 +37,12 @@ public class EditorTools {
 
     private final SessionWorkspaceEditor editor;
     private final ChangeStore changes;
+    private final PolicyPort policy;
 
-    public EditorTools(SessionWorkspaceEditor editor, ChangeStore changes) {
+    public EditorTools(SessionWorkspaceEditor editor, ChangeStore changes, PolicyPort policy) {
         this.editor = editor;
         this.changes = changes;
+        this.policy = policy;
     }
 
     @Tool(name = "workspace_open", description = "Open this session's isolated worktree.",
@@ -188,7 +192,13 @@ public class EditorTools {
             readOnly = false, concurrencySafe = false)
     public String commit(
             @ToolParam(name = "message", description = "提交信息（写清改了什么、为什么）") String message,
+            @ToolParam(name = "confirmed_change_id", required = false,
+                    description = "已确认的变更单号（chg-...）；目标环境策略为 CONFIRM 时必填")
+            String confirmedChangeId,
             ProjectContext ctx) {
+        // 统一环境策略门（BUG-52）：prod L2=DENY 直接拒绝；test L2=ALLOW 放行；
+        // 策略异常 fail-closed。分支级授权（editor_branch:* 确认单）仍由 authorization() 负责。
+        policy.requireAllowed(ctx, ToolLevel.L2_EXECUTE_ISOLATED, "workspace_commit", confirmedChangeId);
         String blocked = guard(ctx);
         if (blocked != null) {
             return blocked;

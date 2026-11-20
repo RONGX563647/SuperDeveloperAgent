@@ -13,6 +13,7 @@ import top.rongx.agent.domain.run.StageStatus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -100,7 +101,8 @@ class PipelineWatchdogTest {
         tick(engine, state, now + 1_000L);
         assertEquals(StageStatus.TIMEOUT, engine.status("run-watch"));
         assertTrue(logOf(state).contains("E-302 运行超时且无法中断"));
-        assertTrue(engine.progress("run-watch").forceTerminated());
+        // BUG-38：强制终态条目已从内存移出，progress 走 history 兜底仍可查询（终态视图）
+        assertNotNull(engine.progress("run-watch"), "history 兜底的终态视图");
         assertTrue(RunHistoryStore.file(temp).list().stream()
                         .anyMatch(s -> s.runId().equals("run-watch")
                                 && s.status() == StageStatus.TIMEOUT),

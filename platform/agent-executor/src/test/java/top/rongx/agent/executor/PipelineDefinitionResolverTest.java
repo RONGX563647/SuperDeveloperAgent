@@ -212,6 +212,45 @@ class PipelineDefinitionResolverTest {
     }
 
     @Test
+    @DisplayName("固化脚本有 health 却没有 deploy 阶段 → 视为部署语义断裂，退回平台定义")
+    void recipeWithHealthButNoDeployStageIsSkipped(@TempDir Path temp) throws Exception {
+        Path repo = dir(temp, "repo");
+        MemoryStore defs = new MemoryStore(temp.resolve("platform"));
+        defs.write(PROJECT, dockerYaml("from-platform", true), null);
+        MemoryRecipeStore recipes = new MemoryRecipeStore(temp.resolve("recipes"));
+        // 实测事故形态（run-2a5d03c9 / run-899118e6）：脚本固化时漏了 deploy 阶段，
+        // 构建+镜像全成功，health 探一个没人监听的端口（body= 空、E-401、回滚空转）。
+        String broken = "name: from-recipe\n"
+                + "deploy: {target: docker, port: 8182, containerPort: 8090}\n"
+                + "stages:\n"
+                + "  - {id: build, type: action, action: backend_build, runner: host}\n"
+                + "  - {id: image, type: action, action: image_package, runner: host}\n"
+                + "  - {id: health, type: health, url: 'http://127.0.0.1:8182/actuator/health', expected: 2xx}\n";
+        recipes.save(new DeployRecipe(PROJECT, "test", 0, broken, null,
+                "run-broken", "bbbbbbb", 0L, "agent"));
+
+        PipelineDefinitionResolver.Resolved r = new PipelineDefinitionResolver(
+                defs, scaffolder(plan("JAVA", "from-rule")), null, recipes)
+                .resolveForRun(PROJECT, repo, repo, "test");
+
+        assertEquals(PipelineDefinitionResolver.Source.PLATFORM, r.source(),
+                "health 无前置 deploy 的固化脚本不能当可复现脚本用");
+        assertEquals("from-platform", r.definition().name());
+
+        PipelineDefinition parsed = PipelineDefinition.parse(broken, "test");
+        assertFalse(PipelineDefinitionResolver.satisfiesDeployStage(parsed),
+                "health 有而 deploy 无 → 语义断裂");
+        assertTrue(PipelineDefinitionResolver.satisfiesDeployStage(
+                PipelineDefinition.parse(dockerYaml("ok", true), "test")),
+                "deploy 阶段在 → 一致");
+        // 纯构建流水线（无 deploy 段）放行给引擎报 E-221，不算断裂
+        assertTrue(PipelineDefinitionResolver.satisfiesDeployStage(
+                PipelineDefinition.parse("name: pure\nstages:\n"
+                        + "  - {id: build, type: action, action: backend_build, runner: host}\n", "test")),
+                "无 deploy 段的纯构建流水线放行");
+    }
+
+    @Test
     @DisplayName("平台定义被写坏 → 抛 IllegalArgumentException（引擎映射成 E-221）")
     void brokenPlatformDefinitionThrows(@TempDir Path temp) throws Exception {
         Path repo = dir(temp, "repo");

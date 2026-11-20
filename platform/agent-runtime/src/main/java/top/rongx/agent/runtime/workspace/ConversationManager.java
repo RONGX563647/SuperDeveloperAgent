@@ -38,6 +38,7 @@ import top.rongx.agent.domain.port.UserRolePort;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
+import top.rongx.agent.domain.env.EnvNames;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
 
@@ -52,7 +53,6 @@ import top.rongx.agent.domain.error.RunException;
 public class ConversationManager implements WorkspaceSupervisorPort {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationManager.class);
-    private static final String DEFAULT_ENV = "test";
     private static final int MAX_TITLE = 60;
     private static final int MAX_TEXT = 4_000;
     private static final int MAX_TASK_GOAL = 1_000;
@@ -194,12 +194,16 @@ public class ConversationManager implements WorkspaceSupervisorPort {
             return Optional.empty();
         }
         Conversation current = existing.get();
-        if (patch.env() != null && !patch.env().isBlank()) {
-            resolveEnv(current.projectId(), patch.env());
-        }
+        // BUG-27 入口3收敛：同一 patch 同时改 env+worktree 时，worktree 必须按**新** env 校验，
+        // 否则"切到 prod + 切工作树"会用旧 env 构造上下文，校验与实际执行环境错位。
+        String envForValidation = patch.env() != null && !patch.env().isBlank()
+                ? resolveEnv(current.projectId(), patch.env())
+                : current.env();
         if (patch.worktree() != null) {
-            new ProjectContext(current.projectId(), current.env(), ownerUserId, "",
+            new ProjectContext(current.projectId(), envForValidation, ownerUserId, "",
                     patch.worktree());
+        } else if (patch.env() != null && !patch.env().isBlank()) {
+            resolveEnv(current.projectId(), patch.env());
         }
         return conversations.update(conversationId, ownerUserId, patch);
     }
@@ -326,13 +330,9 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         requireProject(projectId);
         requireUser(ownerUserId);
         String cleanWorktree = worktree == null || worktree.isBlank() ? null : worktree.trim();
-        // 未指定环境时沿用调度会话当前环境（工作区首页切换环境后新建会话即跟随）
-        String requestedEnv = env;
-        if (requestedEnv == null || requestedEnv.isBlank()) {
-            requestedEnv = conversations.findSupervisor(projectId, ownerUserId)
-                    .map(Conversation::env).orElse(null);
-        }
-        String resolvedEnv = resolveEnv(projectId, requestedEnv);
+        // BUG-27 入口2收敛：未指定环境时不再继承调度会话的历史 env（那常常是上次派发的
+        // 旧环境，不是界面当前选择），显式交给 resolver 落默认 test。
+        String resolvedEnv = resolveEnv(projectId, env);
         // 借用 ProjectContext 的校验：工作树名不允许包含分隔符或 ..
         new ProjectContext(projectId, resolvedEnv, ownerUserId, "", cleanWorktree);
         Conversation conversation = Conversation.normal("c-" + shortId(), projectId, ownerUserId,
@@ -504,7 +504,10 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                         + (result.conversationId().isBlank() ? "" : "，会话 " + result.conversationId())
                         + (result.runId().isBlank() ? "" : "，运行 " + result.runId())
                         + (result.error().isBlank() ? "" : "，错误 " + oneLine(result.error(), 200));
-                tasks.saveTask(new WorkspaceTask(task.id(), task.projectId(), task.conversationId(),
+                // 票据已存在（openTicket 落库过），这里必须 UPDATE 而不是 INSERT：
+                // 走 saveTask 会撞 workspace_tasks_pkey（duplicate key），每次关票据都失败，
+                // 任务看板上票据永远停在 RUNNING（结果/终态回写全部丢失）。
+                tasks.updateTask(new WorkspaceTask(task.id(), task.projectId(), task.conversationId(),
                         task.goal(), oneLine(task.expectedOutput() + "；" + evidence, 600),
                         status, task.priority(), task.createdAt(), System.currentTimeMillis(),
                         task.sourceRef(), task.triggerType()));
@@ -639,13 +642,10 @@ public class ConversationManager implements WorkspaceSupervisorPort {
     // ------------------------------------------------------------------ 内部
 
     private String resolveEnv(String projectId, String requested) {
-        String env = requested == null || requested.isBlank()
-                ? DEFAULT_ENV : requested.trim().toLowerCase(Locale.ROOT);
+        // 环境口径统一走 EnvNames：缺省 test、去空格转小写、未知值直接拒绝
+        String env = EnvNames.normalize(requested);
         List<ProjectEnv> envs = projects.findEnvs(projectId);
         if (envs.isEmpty()) {
-            if (!List.of("dev", "test", "prod").contains(env)) {
-                throw new RunException(ErrorCode.RUN_INVALID_INPUT, "环境不合法：" + env);
-            }
             return env;
         }
         boolean known = envs.stream().map(ProjectEnv::env).anyMatch(env::equals);

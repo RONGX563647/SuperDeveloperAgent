@@ -1,6 +1,7 @@
 package top.rongx.agent.tools;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
@@ -19,6 +20,7 @@ import top.rongx.agent.domain.error.IntakeException;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.SessionWorkspaceEditor;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.governance.EnvPolicyService;
 
 /**
  * 会话编辑工具：生产/无工作树/授权门槛/写入上限/路径逃逸。
@@ -32,10 +34,37 @@ class EditorToolsTest {
     }
 
     @Test
+    @DisplayName("BUG-52：workspace_commit 走统一环境策略门（prod DENY / test ALLOW）")
+    void commitGoesThroughEnvPolicyGate() {
+        FakeEditor editor = new FakeEditor();
+        MemoryChangeStore store = new MemoryChangeStore();
+        EditorTools tools = new EditorTools(editor, store, new EnvPolicyService());
+        ProjectContext prod = ctx("prod", "wt-demo");
+
+        // prod：L2=DENY，策略门在 guard 之前就拒绝
+        assertThrows(top.rongx.agent.domain.policy.PolicyDeniedException.class,
+                () -> tools.commit("agent: update", null, prod));
+        assertTrue(editor.commits.isEmpty(), "prod 提交必须被策略门挡住");
+    }
+
+    @Test
+    @DisplayName("BUG-52：dev 环境 workspace_commit 自动放行（L2 ALLOW）")
+    void commitAllowedInDev() {
+        FakeEditor editor = new FakeEditor();
+        MemoryChangeStore store = new MemoryChangeStore();
+        EditorTools tools = new EditorTools(editor, store, new EnvPolicyService());
+        ProjectContext dev = ctx("dev", "wt-demo");
+
+        String pending = tools.write("a.txt", "v1", dev);
+        store.updateStatus(changeId(pending), ChangePlan.Status.CONFIRMED);
+        assertTrue(tools.commit("agent: update", null, dev).startsWith("ok: committed"));
+    }
+
+    @Test
     @DisplayName("生产环境直接拒绝，不进入编辑器")
     void productionRejected() {
         FakeEditor editor = new FakeEditor();
-        EditorTools tools = new EditorTools(editor, new MemoryChangeStore());
+        EditorTools tools = new EditorTools(editor, new MemoryChangeStore(), new EnvPolicyService());
 
         String out = tools.write("a.txt", "x", ctx("prod", "wt-demo"));
 
@@ -48,7 +77,7 @@ class EditorToolsTest {
     @DisplayName("未选择专属工作树直接拒绝")
     void missingWorktreeRejected() {
         FakeEditor editor = new FakeEditor();
-        EditorTools tools = new EditorTools(editor, new MemoryChangeStore());
+        EditorTools tools = new EditorTools(editor, new MemoryChangeStore(), new EnvPolicyService());
 
         String out = tools.write("a.txt", "x", ctx("test", null));
 
@@ -62,7 +91,7 @@ class EditorToolsTest {
     void unauthorizedWriteAsksConfirmation() {
         FakeEditor editor = new FakeEditor();
         MemoryChangeStore store = new MemoryChangeStore();
-        EditorTools tools = new EditorTools(editor, store);
+        EditorTools tools = new EditorTools(editor, store, new EnvPolicyService());
 
         String out = tools.write("src/App.java", "class App {}", ctx("test", "wt-demo"));
 
@@ -77,7 +106,7 @@ class EditorToolsTest {
     @Test
     @DisplayName("同一分支重复未授权复用同一单号，不重复弹卡")
     void repeatedUnauthorizedReusesChangeId() {
-        EditorTools tools = new EditorTools(new FakeEditor(), new MemoryChangeStore());
+        EditorTools tools = new EditorTools(new FakeEditor(), new MemoryChangeStore(), new EnvPolicyService());
 
         String first = tools.write("a.txt", "1", ctx("test", "wt-demo"));
         String second = tools.write("b.txt", "2", ctx("test", "wt-demo"));
@@ -90,7 +119,7 @@ class EditorToolsTest {
     void confirmedGrantAllowsWrite() {
         FakeEditor editor = new FakeEditor();
         MemoryChangeStore store = new MemoryChangeStore();
-        EditorTools tools = new EditorTools(editor, store);
+        EditorTools tools = new EditorTools(editor, store, new EnvPolicyService());
         ProjectContext ctx = ctx("test", "wt-demo");
 
         String pending = tools.write("a.txt", "v1", ctx);
@@ -99,14 +128,14 @@ class EditorToolsTest {
         assertTrue(written.startsWith("ok: wrote"), written);
         assertEquals("v2", editor.files.get("a.txt"));
 
-        assertTrue(tools.commit("agent: update", ctx).startsWith("ok: committed"));
+        assertTrue(tools.commit("agent: update", null, ctx).startsWith("ok: committed"));
     }
 
     @Test
     @DisplayName("超限内容在进入编辑器前被拒")
     void oversizedContentRejected() {
         FakeEditor editor = new FakeEditor();
-        EditorTools tools = new EditorTools(editor, new MemoryChangeStore());
+        EditorTools tools = new EditorTools(editor, new MemoryChangeStore(), new EnvPolicyService());
 
         String out = tools.write("big.txt", "a".repeat(200_001), ctx("test", "wt-demo"));
 
@@ -120,7 +149,7 @@ class EditorToolsTest {
         FakeEditor editor = new FakeEditor();
         editor.rejectPath = true;
         MemoryChangeStore store = new MemoryChangeStore();
-        EditorTools tools = new EditorTools(editor, store);
+        EditorTools tools = new EditorTools(editor, store, new EnvPolicyService());
         ProjectContext ctx = ctx("test", "wt-demo");
 
         // 先授权，确保进入写入分支
@@ -136,7 +165,7 @@ class EditorToolsTest {
     @Test
     @DisplayName("workspace_open 同样受生产环境与工作树前置检查约束")
     void openGuarded() {
-        EditorTools tools = new EditorTools(new FakeEditor(), new MemoryChangeStore());
+        EditorTools tools = new EditorTools(new FakeEditor(), new MemoryChangeStore(), new EnvPolicyService());
 
         assertTrue(tools.open(ctx("prod", "wt-demo")).startsWith("err:"));
         assertTrue(tools.open(ctx("test", null)).startsWith("err:"));
@@ -154,6 +183,7 @@ class EditorToolsTest {
 
         final Map<String, String> files = new LinkedHashMap<>();
         final List<String> writes = new ArrayList<>();
+        final List<String> commits = new ArrayList<>();
         boolean rejectPath;
 
         @Override
@@ -193,6 +223,7 @@ class EditorToolsTest {
 
         @Override
         public Commit commit(String projectId, String sessionKey, String message) {
+            commits.add(message);
             return new Commit("sha1", "agent/session-" + sessionKey, List.copyOf(files.keySet()));
         }
     }

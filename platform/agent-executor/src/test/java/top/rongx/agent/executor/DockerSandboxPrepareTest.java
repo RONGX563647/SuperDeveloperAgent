@@ -25,8 +25,11 @@ class DockerSandboxPrepareTest {
     private static final class Recorder implements DockerSandbox.CommandExecutor {
         final List<List<String>> commands = new ArrayList<>();
         final List<Long> timeouts = new ArrayList<>();
+        final List<Long> idles = new ArrayList<>();
         final List<Boolean> cancelledFlags = new ArrayList<>();
         Function<List<String>, ProcessExecutor.StepOutcome> handler;
+        /** 假命令的实时输出：默认回显命令行，测试可改成"下载完成/卡住"之类的真实文本。 */
+        Function<List<String>, String> emitter = cmd -> "[fake] " + String.join(" ", cmd) + "\n";
 
         Recorder(Function<List<String>, ProcessExecutor.StepOutcome> handler) {
             this.handler = handler;
@@ -35,11 +38,27 @@ class DockerSandboxPrepareTest {
         @Override
         public ProcessExecutor.StepOutcome run(List<String> cmd, long timeoutMs,
                                                BooleanSupplier cancelled, Consumer<String> live) {
+            return record(cmd, 0L, timeoutMs, cancelled, live);
+        }
+
+        @Override
+        public ProcessExecutor.StepOutcome runUntilIdle(List<String> cmd, long idleMs, long totalMs,
+                                                        BooleanSupplier cancelled,
+                                                        Consumer<String> live) {
+            return record(cmd, idleMs, totalMs, cancelled, live);
+        }
+
+        private ProcessExecutor.StepOutcome record(List<String> cmd, long idleMs, long totalMs,
+                                                   BooleanSupplier cancelled, Consumer<String> live) {
             commands.add(cmd);
-            timeouts.add(timeoutMs);
+            timeouts.add(totalMs);
+            idles.add(idleMs);
             cancelledFlags.add(cancelled != null && cancelled.getAsBoolean());
             if (live != null) {
-                live.accept("[fake] " + String.join(" ", cmd) + "\n");
+                String text = emitter.apply(cmd);
+                if (text != null && !text.isEmpty()) {
+                    live.accept(text);
+                }
             }
             return handler.apply(cmd);
         }
@@ -92,8 +111,12 @@ class DockerSandboxPrepareTest {
         sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, live::append);
         sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, live::append);
 
-        assertEquals(4, recorder.commands.size(), "探测 + mkdir + chown + 标记，第二次应跳过");
-        assertEquals(List.of(CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT),
+        // 探测 + mkdir + chmod + chown + 标记，第二次应跳过
+        // （chmod 是 Windows 卷的放权兜底：chown 在 WSL2/9p 卷上不生效，
+        //   没有 777 时构建用户 1000 写 /cache/m2 直接 AccessDenied）
+        assertEquals(5, recorder.commands.size(), "探测 + mkdir + chmod + chown + 标记，第二次应跳过");
+        assertEquals(List.of(CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT,
+                        CACHE_INIT_TIMEOUT, CACHE_INIT_TIMEOUT),
                 recorder.timeouts);
         assertTrue(recorder.commands.get(0).contains("test"));
         assertTrue(recorder.commands.get(1).contains("mkdir"));
@@ -101,8 +124,10 @@ class DockerSandboxPrepareTest {
                 "corepack 下载缓存必须是可写卷目录：" + recorder.commands.get(1));
         assertTrue(recorder.commands.get(1).contains("/cache/pnpm"),
                 "pnpm store 必须在缓存卷里，否则每次全量重下：" + recorder.commands.get(1));
-        assertTrue(recorder.commands.get(2).contains("chown"));
-        assertTrue(recorder.commands.get(3).contains("touch"));
+        assertTrue(recorder.commands.get(2).contains("chmod"),
+                "chmod 777 是 Windows 卷的可用放权手段：" + recorder.commands.get(2));
+        assertTrue(recorder.commands.get(3).contains("chown"));
+        assertTrue(recorder.commands.get(4).contains("touch"));
         assertTrue(live.toString().contains("[sandbox] $ "), "准备命令要写进实时日志");
     }
 
@@ -116,7 +141,10 @@ class DockerSandboxPrepareTest {
 
         assertEquals(1, recorder.commands.size());
         assertTrue(recorder.commands.get(0).contains("image"));
-        assertEquals("", live.toString(), "inspect 只做静默判断，70+ 行 JSON 不能挤进日志");
+        // 就绪结论要写进日志（可观测），但 inspect 的 70+ 行 JSON 不能挤进去
+        assertTrue(live.toString().contains("镜像已就绪"), live.toString());
+        assertTrue(!live.toString().contains("RepoTags") && !live.toString().contains("\"Id\""),
+                "inspect 的完整 JSON 不能进日志：" + live);
     }
 
     @Test
@@ -232,7 +260,9 @@ class DockerSandboxPrepareTest {
 
         recorder.handler = freshVolume();
         sandbox.prepareCacheVolume(Path.of("E:/work/P"), () -> false, null);
-        assertEquals(7, recorder.commands.size(),
+        // 3（失败轮：探测 + mkdir as1000 超时即抛）
+        // + 5（成功轮：探测 + mkdir + chmod + chown + 标记）= 8
+        assertEquals(8, recorder.commands.size(),
                 "失败后不能把卷标记为已初始化，否则后续构建会误用 root 属主的缓存");
     }
 
@@ -262,14 +292,14 @@ class DockerSandboxPrepareTest {
 
         sandbox.ensureImageReady(() -> false, null);
 
-        assertEquals(3, recorder.commands.size(), "inspect → pull → inspect");
+        assertEquals(3, recorder.commands.size(), "inspect 探测 → pull → inspect 复核（未接状态存储时不取 digest）");
         assertEquals(List.of("docker", "image", "inspect", "maven:3.9-eclipse-temurin-21"),
                 recorder.commands.get(0));
         assertEquals(5_000L, recorder.timeouts.get(0));
         assertEquals(List.of("docker", "pull", "maven:3.9-eclipse-temurin-21"),
                 recorder.commands.get(1));
         assertEquals(List.of("docker", "image", "inspect", "maven:3.9-eclipse-temurin-21"),
-                recorder.commands.get(2));
+                recorder.commands.get(2), "pull 的退出码不算数，必须 inspect 复核");
     }
 
     @Test
@@ -286,7 +316,8 @@ class DockerSandboxPrepareTest {
         assertTrue(error.getMessage().contains("agent.sandbox.image"), error.getMessage());
         assertEquals(List.of("docker", "pull", "maven:3.9-eclipse-temurin-21"),
                 recorder.commands.get(1));
-        assertEquals(CACHE_INIT_TIMEOUT * 2, recorder.timeouts.get(1), "默认拉取预算 180s");
+        assertEquals(900_000L, recorder.timeouts.get(1), "总上限 900s 只在一直有进度时兜底");
+        assertEquals(60_000L, recorder.idles.get(1), "判定卡死看静默阈值，不是固定总预算");
     }
 
     @Test
@@ -295,6 +326,74 @@ class DockerSandboxPrepareTest {
         Recorder recorder = new Recorder(cmd -> ok());
         sandbox(recorder).setImagePrecheck(false).ensureImageReady(() -> false, null);
         assertTrue(recorder.commands.isEmpty());
+    }
+
+    @Test
+    @DisplayName("层已下载完但没解压完：诊断指向解压/落盘，而不是让人去查 registry")
+    void pullTimeoutAfterDownloadBlamesExtraction() {
+        Recorder recorder = new Recorder(cmd -> cmd.contains("pull")
+                ? ProcessExecutor.StepOutcome.failed(124, "E-302", "执行超时（900s，总时长已达上限），已终止")
+                : ProcessExecutor.StepOutcome.failed(1, "E-101", "no such image"));
+        // 复刻 run-66c5c523 的日志形态：全部层 Download complete，没有一个 Pull complete
+        recorder.emitter = cmd -> cmd.contains("pull")
+                ? "450e9cb70a64: Pulling fs layer\n450e9cb70a64: Download complete\n"
+                + "69245854ad58: Download complete\n"
+                : "";
+        DockerSandbox sandbox = sandbox(recorder);
+
+        PlatformException error = assertThrows(PlatformException.class,
+                () -> sandbox.ensureImageReady(() -> false, null));
+        assertTrue(error.getMessage().contains("卡在解压/落盘"), error.getMessage());
+        assertTrue(error.getMessage().contains("会复用"), "要告诉操作者重试不会从头再下：" + error.getMessage());
+        assertTrue(!error.getMessage().contains("检查网络"),
+                "已下完还让人查网络就是把根因指错：" + error.getMessage());
+    }
+
+    @Test
+    @DisplayName("没有任何层开始下载：诊断指向网络/镜像源")
+    void pullFailureWithoutProgressBlamesNetwork() {
+        Recorder recorder = new Recorder(cmd -> ProcessExecutor.StepOutcome.failed(
+                124, "E-302", "执行停滞（60s 无输出），已终止"));
+        recorder.emitter = cmd -> cmd.contains("pull") ? "" : "";
+        DockerSandbox sandbox = sandbox(recorder);
+
+        PlatformException error = assertThrows(PlatformException.class,
+                () -> sandbox.ensureImageReady(() -> false, null));
+        assertTrue(error.getMessage().contains("没有任何镜像层开始下载"), error.getMessage());
+        assertTrue(error.getMessage().contains("agent.sandbox.pull-mirrors"), error.getMessage());
+    }
+
+    @Test
+    @DisplayName("直连拉取失败后走配置的镜像加速源，并 tag 回原名")
+    void mirrorIsUsedWhenDirectPullFails() {
+        java.util.concurrent.atomic.AtomicInteger inspects =
+                new java.util.concurrent.atomic.AtomicInteger();
+        Recorder recorder = new Recorder(cmd -> {
+            String line = String.join(" ", cmd);
+            if (line.contains("inspect")) {
+                // 第一次（预检）没有镜像；tag 之后再复核才通过
+                return inspects.getAndIncrement() == 0
+                        ? ProcessExecutor.StepOutcome.failed(1, "E-101", "no such image")
+                        : ok();
+            }
+            if (line.contains("pull") && line.contains("docker.m.daocloud.io")) {
+                return ok();
+            }
+            if (line.contains("pull")) {
+                return ProcessExecutor.StepOutcome.failed(124, "E-302", "执行停滞（60s 无输出），已终止");
+            }
+            return ok();
+        });
+        DockerSandbox sandbox = sandbox(recorder).setPullMirrors(List.of("docker.m.daocloud.io"));
+
+        sandbox.ensureImageReady(() -> false, null);
+        assertTrue(recorder.commands.contains(
+                        List.of("docker", "pull", "docker.m.daocloud.io/library/maven:3.9-eclipse-temurin-21")),
+                "加速源应按 library/ 补齐官方镜像路径：" + recorder.commands);
+        assertTrue(recorder.commands.contains(
+                        List.of("docker", "tag", "docker.m.daocloud.io/library/maven:3.9-eclipse-temurin-21",
+                                "maven:3.9-eclipse-temurin-21")),
+                "拉下来的镜像必须 tag 回原名，后续阶段才无感：" + recorder.commands);
     }
 
     @Test

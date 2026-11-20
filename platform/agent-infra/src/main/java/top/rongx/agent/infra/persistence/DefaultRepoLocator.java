@@ -117,6 +117,11 @@ public class DefaultRepoLocator implements ProjectRepoLocator {
     }
 
     @Override
+    public java.util.Optional<String> tagCommit(String projectId, String tag) {
+        return repoDir(projectId).flatMap(dir -> git.tagCommit(dir, tag));
+    }
+
+    @Override
     public String currentBranch(String projectId) {
         return repoDir(projectId).map(git::currentBranch).orElse("");
     }

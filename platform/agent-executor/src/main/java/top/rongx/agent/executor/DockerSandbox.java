@@ -12,6 +12,7 @@ import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.SandboxDeniedException;
+import top.rongx.agent.domain.image.ImageReadinessStore;
 
 /**
  * 容器沙箱：把一条业务命令包成 {@code docker run}。
@@ -58,8 +59,17 @@ public class DockerSandbox {
     /** 镜像预检预算：本机已有时秒级返回；缺镜像时不能把"没有"误判成"网络慢"。 */
     private static final long IMAGE_INSPECT_TIMEOUT_MS = 5_000L;
 
-    /** 自动拉取工具链镜像的默认预算（可由 agent.sandbox.pull-timeout-seconds 覆盖）。 */
-    private static final long DEFAULT_IMAGE_PULL_TIMEOUT_MS = 180_000L;
+    /** 自动拉取工具链镜像的总时长上限（可由 agent.sandbox.pull-timeout-seconds 覆盖）。 */
+    private static final long DEFAULT_IMAGE_PULL_TIMEOUT_MS = 900_000L;
+
+    /**
+     * 拉取静默多久判定为卡死（可由 agent.sandbox.pull-idle-timeout-seconds 覆盖）。
+     *
+     * <p>拉取是「慢但一直在推进」的长任务：固定总预算会把「层已下完、正在解压」误判成
+     * 网络故障——实测 node:22-bookworm 在构建并行、磁盘被 chown 抢占时 180s 只够下完所有层，
+     * 随后被砍掉并报 E-302。判据改成「有没有新输出」而不是「一共跑了多久」。
+     */
+    private static final long DEFAULT_IMAGE_PULL_IDLE_MS = 60_000L;
 
     /** 缓存卷初始化的可信最小镜像：只做 mkdir/chown/touch，绝不用构建镜像（可能是不可信代码）。 */
     private static final String DEFAULT_INIT_IMAGE = "busybox:1.36";
@@ -96,6 +106,18 @@ public class DockerSandbox {
     interface CommandExecutor {
         ProcessExecutor.StepOutcome run(List<String> cmd, long timeoutMs,
                                         BooleanSupplier cancelled, Consumer<String> live);
+
+        /**
+         * 进度感知执行（自动拉镜像用）：只要还有输出就继续，静默 {@code idleMs} 才终止。
+         *
+         * <p>默认按总预算退回固定语义，测试里的假执行器不必改；生产实现见
+         * {@link #DEFAULT_EXECUTOR}。
+         */
+        default ProcessExecutor.StepOutcome runUntilIdle(List<String> cmd, long idleMs, long totalMs,
+                                                         BooleanSupplier cancelled,
+                                                         Consumer<String> live) {
+            return run(cmd, totalMs > 0 ? totalMs : idleMs, cancelled, live);
+        }
     }
 
     private final String dockerBinary;
@@ -122,8 +144,21 @@ public class DockerSandbox {
     private final CommandExecutor commandExecutor;
     /** 动作前是否预检工具链镜像（离线/自建 registry 场景可关闭）。 */
     private boolean precheckImage = true;
-    /** 缺镜像时自动拉取的硬超时。 */
+    /** 缺镜像时自动拉取：总上限只在「一直有进度」时兜底，真正判定卡死的是静默超时。 */
     private long imagePullTimeoutMs = DEFAULT_IMAGE_PULL_TIMEOUT_MS;
+    /** 拉取静默多久判定卡死。 */
+    private long imagePullIdleMs = DEFAULT_IMAGE_PULL_IDLE_MS;
+    /** 镜像加速源/缓存源（registry 前缀，如 docker.m.daocloud.io、localhost:5000）：直连失败时按序回退。 */
+    private List<String> pullMirrors = List.of();
+    /** 直连拉取的自动重试次数（只对"值得再试"的失败重试：鉴权/不存在/磁盘满不重试）。 */
+    private int imagePullAttempts = 2;
+    /** 失败退避：下一次可重试时间按指数增长，避免每次构建都白等一轮超时。 */
+    private long pullBackoffBaseMs = 60_000L;
+    private long pullBackoffMaxMs = 900_000L;
+    /** 镜像就绪状态（跨运行复用）；null = 只判断本次，不落库。 */
+    private ImageReadinessStore readinessStore;
+    /** Docker 守护所在主机：就绪状态按主机隔离（镜像层缓存属于这台机器）。 */
+    private String host = defaultHost();
     /** npm registry 镜像：默认直连 npmjs 在国内沙箱只有几 KB/s，install 会吃光构建预算。 */
     private String npmRegistry = "";
     /** docker 运行时（如 gVisor 的 runsc）；空 = 默认 runc。 */
@@ -140,7 +175,7 @@ public class DockerSandbox {
                          String memory, String cpus, int pidsLimit, String user,
                          String cacheVolumePrefix) {
         this(dockerBinary, image, network, memory, cpus, pidsLimit, user, cacheVolumePrefix,
-                DockerSandbox::defaultExec);
+                DEFAULT_EXECUTOR);
     }
 
     /** 测试装配点：注入命令执行器，独立卷状态，不依赖 Docker 守护进程。 */
@@ -175,6 +210,23 @@ public class DockerSandbox {
         return new ProcessExecutor().exec(Path.of("."), cmd, timeoutMs, new StringBuilder(),
                 cancelled, live);
     }
+
+    /** 生产执行器：普通命令走固定预算，拉镜像走进度感知（有输出就继续）。 */
+    private static final CommandExecutor DEFAULT_EXECUTOR = new CommandExecutor() {
+        @Override
+        public ProcessExecutor.StepOutcome run(List<String> cmd, long timeoutMs,
+                                               BooleanSupplier cancelled, Consumer<String> live) {
+            return defaultExec(cmd, timeoutMs, cancelled, live);
+        }
+
+        @Override
+        public ProcessExecutor.StepOutcome runUntilIdle(List<String> cmd, long idleMs, long totalMs,
+                                                        BooleanSupplier cancelled,
+                                                        Consumer<String> live) {
+            return new ProcessExecutor().execUntilIdle(Path.of("."), cmd, idleMs, totalMs,
+                    new StringBuilder(), cancelled, live);
+        }
+    };
 
     /**
      * 构造 docker run 命令。
@@ -318,10 +370,66 @@ public class DockerSandbox {
         return this;
     }
 
-    /** 设置缺镜像时自动拉取的硬超时（由 SandboxConfig 的配置注入）。 */
+    /** 设置缺镜像时自动拉取的总时长上限（由 SandboxConfig 的配置注入）。 */
     public DockerSandbox setImagePullTimeout(long millis) {
         this.imagePullTimeoutMs = millis <= 0 ? DEFAULT_IMAGE_PULL_TIMEOUT_MS : millis;
         return this;
+    }
+
+    /** 设置拉取的静默判定阈值：连续这么久没有任何输出才视为卡死。 */
+    public DockerSandbox setImagePullIdle(long millis) {
+        this.imagePullIdleMs = millis <= 0 ? DEFAULT_IMAGE_PULL_IDLE_MS : millis;
+        return this;
+    }
+
+    /** 设置镜像加速源（registry 前缀）；空表示只用 Docker 守护进程自带的 mirrors。 */
+    public DockerSandbox setPullMirrors(List<String> mirrors) {
+        this.pullMirrors = mirrors == null ? List.of() : mirrors.stream()
+                .map(m -> m == null ? "" : m.trim())
+                .filter(m -> !m.isEmpty())
+                .map(m -> m.endsWith("/") ? m.substring(0, m.length() - 1) : m)
+                .toList();
+        return this;
+    }
+
+    /** 设置直连拉取的自动重试次数（只对"值得再试"的失败重试，1 = 不重试）。 */
+    public DockerSandbox setImagePullAttempts(int attempts) {
+        this.imagePullAttempts = Math.max(1, attempts);
+        return this;
+    }
+
+    /** 设置失败退避区间：第 n 次失败后等 base*2^(n-1)，最长不超过 max。 */
+    public DockerSandbox setPullBackoff(long baseMs, long maxMs) {
+        this.pullBackoffBaseMs = baseMs <= 0 ? 60_000L : baseMs;
+        this.pullBackoffMaxMs = maxMs <= 0 ? 900_000L : maxMs;
+        return this;
+    }
+
+    /** 注入镜像就绪状态存储（跨运行复用失败结论与 digest）；null = 只判断本次。 */
+    public DockerSandbox setReadinessStore(ImageReadinessStore store) {
+        this.readinessStore = store;
+        return this;
+    }
+
+    /** 设置 Docker 守护所在主机名（就绪状态按主机隔离）。 */
+    public DockerSandbox setHost(String host) {
+        this.host = host == null || host.isBlank() ? defaultHost() : host.trim();
+        return this;
+    }
+
+    /** 默认主机名：优先容器/系统环境变量，拿不到就退回本机主机名。 */
+    private static String defaultHost() {
+        for (String key : new String[] {"HOSTNAME", "COMPUTERNAME"}) {
+            String value = System.getenv(key);
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        try {
+            return java.net.InetAddress.getLocalHost().getHostName();
+        } catch (Exception ignored) {
+            return "unknown";
+        }
     }
 
     /** 设置 npm registry 镜像；空值表示用容器默认源。 */
@@ -343,10 +451,10 @@ public class DockerSandbox {
     }
 
     /**
-     * 动作前确认工具链镜像已在本机；缺失时先自动拉取，再复核。
+     * 动作前确认工具链镜像已在本机；缺失时自动把它弄到本机。
      *
-     * <p>原先缺镜像直接失败、要求人工 {@code docker pull}，等于把确定性故障留给人；
-     * 现在由平台自己完成「pull → inspect 复核」，pull 有硬超时且可取消，失败才报错。
+     * <p>策略全部在 {@link ImageProvisioner}（进度感知超时、退避重试、镜像源回退、
+     * 跨运行就绪状态），这里只负责把结论翻译成运行日志与可操作的异常。
      * 不复用日志/模型提供的镜像名：拉取命令只来自平台配置。
      */
     public void ensureImageReady(BooleanSupplier cancelled, Consumer<String> live) {
@@ -354,36 +462,31 @@ public class DockerSandbox {
             return;
         }
         BooleanSupplier abort = cancelled == null ? () -> false : cancelled;
-        List<String> inspect = List.of(dockerBinary, "image", "inspect", image);
-        // 不要把 inspect 的完整 JSON 流进运行日志：70+ 行会把真正的失败原因挤出截断窗口，
-        // 只在这里静默判断"镜像是否存在"
-        ProcessExecutor.StepOutcome outcome = commandExecutor.run(inspect,
-                IMAGE_INSPECT_TIMEOUT_MS, abort, null);
-        if (outcome.errorCode() == null) {
+        ImageProvisioner.Result result = provisioner().provision(abort, live);
+        if (result.ready()) {
+            notify(live, "[sandbox] ✅ 镜像已就绪：" + image + "（来源：" + result.source()
+                    + (result.digest() == null ? "" : "，" + result.digest()) + "）\n");
             return;
         }
         if (abort.getAsBoolean()) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "构建已取消：跳过自动拉取镜像 " + image);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
+                    "构建已取消：镜像 " + image + " 尚未就绪（" + result.summary() + "）");
         }
-        notify(live, "[sandbox] 镜像 " + image + " 不在本机，自动执行 "
-                + String.join(" ", imagePullCommand()) + "（最长 "
-                + imagePullTimeoutMs / 1000 + "s，可取消）\n");
-        ProcessExecutor.StepOutcome pull = commandExecutor.run(imagePullCommand(),
-                imagePullTimeoutMs, abort, live);
-        if (pull.errorCode() != null) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "构建镜像未就绪（" + image + "）：自动拉取失败（"
-                    + pull.errorCode() + "：" + pull.summary()
-                    + "）；请检查 Docker 网络/registry，或手动 docker pull " + image
-                    + "，或用 agent.sandbox.image 指定本机已有镜像");
-        }
-        // 只信平台自己执行的 inspect，不采信 pull 的退出码或输出文本
-        ProcessExecutor.StepOutcome verify = commandExecutor.run(inspect,
-                IMAGE_INSPECT_TIMEOUT_MS, abort, null);
-        if (verify.errorCode() != null) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "构建镜像未就绪（" + image + "）：拉取后仍无法通过 docker image inspect"
-                    + "（" + verify.errorCode() + "：" + verify.summary() + "）");
-        }
-        notify(live, "[sandbox] ✅ 镜像已就绪：" + image + "\n");
+        // 镜像未就绪是「本机缺资源」（E-705），不是「可执行文件不存在」（E-209）：
+        // 报错码要能指向正确的自愈方向，否则自动修复会去查二进制而不是拉镜像。
+        throw new EnvironmentException(ErrorCode.LOCAL_IMAGE_UNAVAILABLE,
+                "构建镜像未就绪（" + image + "）：自动拉取失败（" + result.errorCode() + "："
+                        + result.summary() + "）；诊断：" + result.diagnosis()
+                        + "；可手动 docker pull " + image
+                        + "（已下载的层会复用，不会从头再下），或用 agent.sandbox.pull-mirrors"
+                        + " 配镜像加速/本地缓存源，或用 agent.sandbox.image 指定本机已有镜像");
+    }
+
+    /** 按当前配置装配就绪策略（每次现取，保证 setter 改动即时生效）。自动修复路径共用它。 */
+    ImageProvisioner provisioner() {
+        return new ImageProvisioner(dockerBinary, image, host, commandExecutor, readinessStore,
+                new ImageProvisioner.Policy(imagePullIdleMs, imagePullTimeoutMs, imagePullAttempts,
+                        pullBackoffBaseMs, pullBackoffMaxMs, pullMirrors));
     }
 
     /**
@@ -430,6 +533,7 @@ public class DockerSandbox {
             try {
                 runInit(volume, cancelled, live, "mkdir", "-p",
                         "/cache/m2", "/cache/npm", "/cache/pnpm", "/cache/corepack");
+                chmodWorldWritable(volume, cancelled, live);
                 chownBestEffort(volume, cancelled, live);
                 runInit(volume, cancelled, live, "touch", READY_MARKER);
                 return;
@@ -441,6 +545,26 @@ public class DockerSandbox {
                 notify(live, "[sandbox] 缓存卷初始化失败，自动重试（"
                         + (attempt + 1) + "/" + CACHE_INIT_ATTEMPTS + "）\n");
             }
+        }
+    }
+
+    /**
+     * 目录放权（root 执行）：确保构建用户（1000）可写。
+     *
+     * <p>为什么不能只靠 chown：Windows 的 Docker Desktop 卷（WSL2/9p）不支持 chown，
+     * root 建出的目录属主停在 root:root 0755，uid 1000 写 {@code /cache/m2} 直接
+     * Permission denied（Docker 29 实测，构建阶段 E-101 秒败）。chmod 不走 9p 属主
+     * 语义，root 对自属目录放权 777 稳定生效；构建进程以 1000 运行，能写即可。
+     */
+    private void chmodWorldWritable(String volume, BooleanSupplier cancelled, Consumer<String> live) {
+        List<String> cmd = initCommand(volume, "0:0", "chmod", "777",
+                "/cache", "/cache/m2", "/cache/npm", "/cache/pnpm", "/cache/corepack");
+        notify(live, "[sandbox] $ " + String.join(" ", cmd) + "\n");
+        ProcessExecutor.StepOutcome outcome = commandExecutor.run(cmd, CACHE_INIT_TIMEOUT_MS,
+                cancelled == null ? () -> false : cancelled, live);
+        if (outcome.exitCode() != 0) {
+            notify(live, "[sandbox] 目录放权未生效（exit " + outcome.exitCode()
+                    + "），继续初始化（若构建仍报 Permission denied 需检查卷驱动）\n");
         }
     }
 
@@ -472,7 +596,9 @@ public class DockerSandbox {
 
     private EnvironmentException initFailure(ProcessExecutor.StepOutcome outcome, String volume,
                                              String... argv) {
-        return new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
+        // 子步骤的错误码只能写进消息：EnvironmentException 只接受 ENVIRONMENT 组的码，
+        // 运行层的 E-302/E-303 由 DockerActionRunner 按此消息与取消信号还原。
+        return new EnvironmentException(ErrorCode.ENV_PREPARE_FAILED,
                 "缓存卷初始化失败（" + outcome.errorCode() + "，卷 " + volume + "）："
                         + outcome.summary() + "；命令：" + String.join(" ", argv));
     }
@@ -715,6 +841,10 @@ public class DockerSandbox {
                 ImageRef.require(newImage, "stage.image"), network, memory, cpus,
                 pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
         return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs)
+                .setImagePullIdle(imagePullIdleMs).setPullMirrors(pullMirrors)
+                .setImagePullAttempts(imagePullAttempts)
+                .setPullBackoff(pullBackoffBaseMs, pullBackoffMaxMs)
+                .setReadinessStore(readinessStore).setHost(host)
                 .setNpmRegistry(npmRegistry).setRuntime(runtime).setInitImage(initImage);
     }
 
@@ -751,11 +881,43 @@ public class DockerSandbox {
     }
 
     /**
+     * prepare 阶段的网络就绪保证（BUG-35）：
+     * {@code agent.sandbox.network} 配置成自定义网络（如 build-net）时先确保存在，
+     * 否则构建会在 {@code docker run --network} 处以 {@code network not found} 失败
+     * 且被误归因为代码问题。bridge/host/none 是内置网络，跳过。
+     *
+     * @throws EnvironmentException 网络检查/创建失败（错误信息含 {@code docker network create} 可复制命令）
+     */
+    public void prepareNetwork(BooleanSupplier cancelled, Consumer<String> live) {
+        if ("bridge".equalsIgnoreCase(network) || "host".equalsIgnoreCase(network)
+                || "none".equalsIgnoreCase(network) || network == null || network.isBlank()) {
+            return;
+        }
+        StringBuilder log = new StringBuilder();
+        DockerCli cli = new DockerCli(dockerBinary);
+        // 走注入的 commandExecutor：单测可用 fake runner 断言 inspect → create 序列
+        DockerNetwork.Exec exec = (cmd, timeoutMs, abort, out) ->
+                commandExecutor.run(cmd, timeoutMs, abort == null ? () -> false : abort, out);
+        boolean ready = DockerNetwork.ensure(exec, cli, Path.of("."), network, log);
+        if (!ready) {
+            throw new EnvironmentException(ErrorCode.ENV_PREPARE_FAILED,
+                    "沙箱网络未就绪（agent.sandbox.network=" + network + "）："
+                            + "自动创建失败——" + ProcessExecutor.redact(log.toString())
+                            + "。请手动执行 docker network create " + network
+                            + " 后重试，或改用 bridge 档位");
+        }
+        notify(live, "[sandbox] ✅ 沙箱网络已就绪：" + network + "\n");
+    }
+
+    /**
      * 网络档位校验：声明要外联但策略把网络关掉时必须拒绝，而不是静默让它失败。
      *
      * <p>典型误用：流水线定义里写了「需要下载依赖」，平台却配了
      * {@code agent.sandbox.network=none}；不在这里拒绝的话，构建跑几十秒后死于
      * 一句 {@code Could not resolve host}，没人知道是策略而不是代码的问题。
+     *
+     * <p>修复建议动态生成（BUG-35）：不再硬编码推荐 {@code build-net}——
+     * 只有该网络确实存在时才推荐，否则引导先创建，避免"按文档配置即炸"。
      *
      * @param needsNetwork 该动作是否声明需要外联
      * @throws SandboxDeniedException 策略不允许外联但动作要求外联
@@ -767,8 +929,16 @@ public class DockerSandbox {
         throw new SandboxDeniedException(SandboxDeniedException.Rule.NETWORK,
                 "阶段 " + stageName + " 需要外联，但沙箱网络档位是 none",
                 isolationSnapshot(),
-                "改用 agent.sandbox.network=bridge（或专用 build-net），"
-                        + "或把该阶段改成只用已预热缓存的动作");
+                networkSuggestion());
+    }
+
+    /** 动态生成网络档位建议：内置网络直接推荐；自定义网络先确认存在再推荐。 */
+    private String networkSuggestion() {
+        // bridge 永远存在，直接推荐；自定义网络（build-net 等）由 prepareNetwork 在
+        // prepare 阶段保证过存在，这里只推荐"换档位"而不是凭空点名一个不存在的网络。
+        return "改用 agent.sandbox.network=bridge（平台会自动确保网络就绪），"
+                + "或把该阶段改成只用已预热缓存的动作；"
+                + "确需专用网络时先执行 docker network create build-net";
     }
 
     /**

@@ -14,7 +14,7 @@
   "commits": [
     {
       "sha": "636a7ce9c5f95428c2968e37a329f145552c0dc9",
-      "subject": "feat(pipeline): 构建历史提供「复用产物部署」入口",
+      "subject": "feat(pipeline): 构建历史提供「复用产物部署」入口（cherry-pick 到主干基线）",
       "category": "feat",
       "files": [
         {
@@ -85,7 +85,7 @@
     ]
   },
   "chain": {
-    "prev": "f54ded0f4fdb821b637df234de79787ebd327369c8c40c506098520c2e6c997f",
-    "self": "10bd652ac7515eaa7e1d52f1f7fd9cfa94a869374d54f24bc6c17b193382f819"
+    "prev": "05c03971694c69c3421049141d9b70cdfd3843a055cdf6516eb79c9c47dc0f08",
+    "self": "5bb134277eb04a853ccf80d69df9750f6d9021475d6fe42bf4b7231ca86c0d23"
   }
 }

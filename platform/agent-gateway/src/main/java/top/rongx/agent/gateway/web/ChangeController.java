@@ -7,6 +7,7 @@ import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionId;
 import top.rongx.agent.domain.change.ChangePlan;
 import top.rongx.agent.domain.patch.CodePatch;
+import top.rongx.agent.domain.port.AuditTrail;
 import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.PatchStore;
 import top.rongx.agent.domain.project.ProjectContext;
@@ -50,6 +51,7 @@ public class ChangeController {
     private final top.rongx.agent.gateway.auth.CurrentUser currentUser;
     private final CodePatcher codePatcher;
     private final PatchStore patches;
+    private final AuditTrail audit;
 
     public ChangeController(ChangeStore registry,
                             ConfirmTokenService tokens,
@@ -58,7 +60,8 @@ public class ChangeController {
                             ProjectContextResolver contextResolver,
                             top.rongx.agent.gateway.auth.CurrentUser currentUser,
                             CodePatcher codePatcher,
-                            PatchStore patches) {
+                            PatchStore patches,
+                            AuditTrail audit) {
         this.registry = registry;
         this.tokens = tokens;
         this.passwordVerifier = passwordVerifier;
@@ -67,6 +70,7 @@ public class ChangeController {
         this.currentUser = currentUser;
         this.codePatcher = codePatcher;
         this.patches = patches;
+        this.audit = audit;
     }
 
     /**
@@ -117,9 +121,15 @@ public class ChangeController {
                         : actions.apply(ctx, action, plan.planHash()));
             }
             registry.updateStatus(changeId, ChangePlan.Status.APPLIED);
+            // BUG-37 审计落库：谁应用了哪个变更（变更单 24h 清理后仍可追溯）
+            audit.record(userId, null, "change:apply", "change_plan", changeId,
+                    plan.projectId(), plan.env(), "OK", plan.kind());
             return view;
         } catch (RuntimeException error) {
             registry.updateStatus(changeId, ChangePlan.Status.FAILED);
+            // BUG-37 审计落库：执行失败同样留痕（result=FAILED）
+            audit.record(userId, null, "change:apply", "change_plan", changeId,
+                    plan.projectId(), plan.env(), "FAILED", error.getMessage());
             throw error;
         }
     }
@@ -198,15 +208,23 @@ public class ChangeController {
         if (plan.highRisk()) {
             String password = request == null ? null : request.password();
             if (password == null || password.isBlank()) {
+                // BUG-37 审计落库：被拒的确认也要留痕
+                audit.record(userId, null, "change:confirm", "change_plan", changeId,
+                        plan.projectId(), plan.env(), "DENIED", "高危变更缺少二次密码");
                 throw new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "高危变更需要二次密码确认");
             }
             if (!passwordVerifier.verify(userId, password)) {
+                audit.record(userId, null, "change:confirm", "change_plan", changeId,
+                        plan.projectId(), plan.env(), "DENIED", "二次密码校验未通过");
                 throw new PromotionException(ErrorCode.PROMOTION_INVALID_INPUT, "密码校验未通过，高危变更无法确认");
             }
         }
 
         ConfirmToken token = tokens.issue(userId, plan.changeId(), plan.planHash());
         registry.updateStatus(changeId, ChangePlan.Status.CONFIRMED);
+        // BUG-37 审计落库：谁确认了哪个变更（人工闸门的持久记录，规约 §4.10）
+        audit.record(userId, null, "change:confirm", "change_plan", changeId,
+                plan.projectId(), plan.env(), "OK", plan.kind());
         return new ConfirmResponse(token.token(), plan.changeId(), plan.planHash(),
                 token.expiresAt(), Map.of("note", "令牌一次性、5 分钟有效、绑定计划哈希"));
     }

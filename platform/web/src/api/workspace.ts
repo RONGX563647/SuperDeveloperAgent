@@ -183,6 +183,8 @@ export interface DeploymentCell {
   release: string | null
   /** HOST 进程 pid（仅运行中）。 */
   pid: number
+  /** 远程部署服务器名（SERVER 目标；本地部署为空）。 */
+  server?: string | null
 }
 
 export interface DeploymentMatrix {

@@ -3651,7 +3651,7 @@
           "200" : {
             "description" : "OK",
             "content" : {
-              "application/json" : {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : {
                 "schema" : {
                   "type" : "string",
                   "format" : "byte"
@@ -4923,6 +4923,30 @@
                 "schema" : {
                   "type" : "object",
                   "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/sandbox/images" : {
+      "get" : {
+        "tags" : [ "sandbox-image-controller" ],
+        "summary" : "工具链镜像就绪状态",
+        "description" : "按 host + image 列出就绪/失败与退避剩余时间；只读，不触发拉取",
+        "operationId" : "images",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "object",
+                    "additionalProperties" : { }
+                  }
                 }
               }
             }
@@ -8593,6 +8617,9 @@
           "pid" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "server" : {
+            "type" : "string"
           }
         }
       },
@@ -8687,6 +8714,10 @@
           "totalTokens" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
@@ -8715,6 +8746,10 @@
           "totalTokens" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
@@ -8743,6 +8778,10 @@
           "totalTokens" : {
             "type" : "integer",
             "format" : "int64"
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
@@ -8773,6 +8812,10 @@
             "items" : {
               "$ref" : "#/components/schemas/ProjectUsageSummary"
             }
+          },
+          "cacheHitRate" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },

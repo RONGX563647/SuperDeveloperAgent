@@ -1,0 +1,77 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-20_1239_apidocs-stale-quarantine",
+  "category": "bug",
+  "title": "BUG-36 快照生成失败时隔离过期契约",
+  "createdAt": "2026-11-20T12:39:56+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "BUG-36 快照生成失败时隔离过期契约",
+    "toolCallCount": 0
+  },
+  "problem": "BUG-36：api_docs 依赖反射 springdoc 私有方法，升级后静默退回过期快照，Agent 拿过期文档回答接口问题且无提示",
+  "solution": "快照生成失败时把现存快照改名隔离（.stale-时间戳）+ log.error 明确告警，api_docs 工具返回不可用而不是过期契约；新增 ApiDocsStaleQuarantineTest 2 例",
+  "commits": [
+    {
+      "sha": "d103bd6a37a76abd045403e879d55478ca77b852",
+      "subject": "fix(gateway): OpenAPI 快照生成失败时隔离过期快照，不再静默退回旧契约（BUG-36）（历史重写后等价提交）",
+      "category": "bug",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/apidocs/ApiDocsSnapshotService.java",
+          "status": "M",
+          "additions": 21,
+          "deletions": 2,
+          "blobHash": "10601c500ff8ef1cd0626c8973875ec40caf0470"
+        }
+      ]
+    },
+    {
+      "sha": "fd015451c3d2cfe3fc70eea0f7050f99f0b45bf7",
+      "subject": "test(gateway): BUG-36 隔离行为回归 2 例（失败路径调用隔离 + move 语义）（历史重写后等价提交）",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/apidocs/ApiDocsStaleQuarantineTest.java",
+          "status": "A",
+          "additions": 76,
+          "deletions": 0,
+          "blobHash": "b71ba833b7734e91235ab5a21dcdc1cafcfb9fd4"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/apidocs/ApiDocsStaleQuarantineTest.java",
+        "status": "A",
+        "additions": 76,
+        "deletions": 0,
+        "blobHash": "b71ba833b7734e91235ab5a21dcdc1cafcfb9fd4"
+      }
+    ],
+    "casesAdded": 2,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 208, Failures: 0, Errors: 0, Skipped: 5"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "mvn -pl agent-gateway -Dtest=ApiDocsStaleQuarantineTest 2/2 绿；agent-gateway 全量 208 用例 0 失败"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1239_apidocs-stale-quarantine"
+    ]
+  },
+  "chain": {
+    "prev": "8418d11c7173bd4cece64ef0d35d863133fc1eac69943e4ec17baef043a93453",
+    "self": "0823a22ec7d8e3ba8bcfb5f0f1277db701e10ba3c55ab13d08ce2ceb9ab9e2b8"
+  }
+}

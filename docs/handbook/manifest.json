@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-19T22:10:19+08:00",
-  "sourceCommit": "11bdc2a2c7f9b4d2445bded0ebc28e3eb9a03a76",
+  "generatedAt": "2026-11-20T19:34:24+08:00",
+  "sourceCommit": "943333171a7a4ed755df03d77e59996d432d1dbb",
   "docs": [
     {
       "level": "L1",
@@ -104,8 +104,8 @@
       "symbol": "BuiltInPipelineEngine#trigger",
       "source": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
       "module": "agent-executor",
-      "start": 1266,
-      "end": 1361
+      "start": 1333,
+      "end": 1431
     },
     {
       "id": "gateway-chat-controller/chat-stream",
@@ -134,8 +134,8 @@
       "symbol": "EnvPolicyService#requireNotDenied",
       "source": "platform/agent-governance/src/main/java/top/rongx/agent/governance/EnvPolicyService.java",
       "module": "agent-governance",
-      "start": 52,
-      "end": 60
+      "start": 68,
+      "end": 76
     },
     {
       "id": "infra-git-worktree/add-worktree",
@@ -204,8 +204,8 @@
       "symbol": "DeployTools#envStatus",
       "source": "platform/agent-tools/src/main/java/top/rongx/agent/tools/DeployTools.java",
       "module": "agent-tools",
-      "start": 75,
-      "end": 94
+      "start": 79,
+      "end": 98
     }
   ]
 }

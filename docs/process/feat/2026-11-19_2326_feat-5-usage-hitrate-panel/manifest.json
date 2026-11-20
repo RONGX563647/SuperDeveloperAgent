@@ -1,0 +1,100 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_2326_feat-5-usage-hitrate-panel",
+  "category": "feat",
+  "title": "FEAT-5 用量面板显示各维度缓存命中率",
+  "createdAt": "2026-11-19T23:26:14+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "三个维度的命中率做成 record 组件（派生方法不进 JSON），面板改用后端值与新增命中率列",
+    "toolCallCount": 0
+  },
+  "problem": "上一批只给 UsageSummary 加了总体命中率组件，三个维度仍是派生方法：Java 能调用、单测也过，但 springdoc 只序列化 record 组件，导致 JSON 与 OpenAPI 里没有该字段，前端表格那一列永远空白——而接口看起来一切正常。同时 UsagePanel 顶部命中率还在用 cachedTokens/inputTokens 手算，与后端形成两套口径（除零、四舍五入、百分比还是小数都可能不一致），后端一改算法界面对不上且很难发现。",
+  "solution": "把 DailyUsage / ModelUsageSummary / ProjectUsageSummary 的 cacheHitRate 改成 record 组件（构造器传 null 时按 token 数推导，旧构造器保留以兼容 Sqlite 层的既有调用点）；UsagePanel 顶部改用后端返回的 cacheHitRate，按模型与按天两张表各加「命中率」列，拿不到时显式显示 — 而不是回退到自己算。新增 UsageHitRateSerializationTest 5 例：用反射断言「是 record 组件」——domain 不允许依赖 Jackson（架构 A2），而「是不是组件」正是「会不会进 JSON」的本质判据；另有取值、无输入为 0、显式值优先、旧构造器仍可用四条。同步重新生成 OpenAPI（cacheHitRate 从 1 处增至 4 处）与前端类型。",
+  "commits": [
+    {
+      "sha": "239ee274270e04faee3a5ea326e369d39e6a3f6f",
+      "subject": "feat(usage): 用量面板显示各维度缓存命中率",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/TokenUsageRepository.java",
+          "status": "M",
+          "additions": 53,
+          "deletions": 15,
+          "blobHash": "490baf7fb3749de1f5d864a3cb0d6edd413e0d2f"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageHitRateSerializationTest.java",
+          "status": "A",
+          "additions": 81,
+          "deletions": 0,
+          "blobHash": "0e42be60ece6a2a7c9faa4f10df47ad8f6f67610"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 12,
+          "deletions": 0,
+          "blobHash": "388612adea94066c6f2ef8c6dc723f1f07dfa07d"
+        },
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "bfc7e5eb301969efb99e91453dc4bc3930f322d7"
+        },
+        {
+          "path": "platform/web/src/api/settings.ts",
+          "status": "M",
+          "additions": 8,
+          "deletions": 0,
+          "blobHash": "bb85ab97f80b2fbc051fff2d9450179c6ce7dcfa"
+        },
+        {
+          "path": "platform/web/src/components/settings/UsagePanel.vue",
+          "status": "M",
+          "additions": 27,
+          "deletions": 3,
+          "blobHash": "f335048d98b273f093eb9e765fec8995e933f148"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageHitRateSerializationTest.java",
+        "status": "A",
+        "additions": 81,
+        "deletions": 0,
+        "blobHash": "0e42be60ece6a2a7c9faa4f10df47ad8f6f67610"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "mvn -B -nsu -pl agent-domain,agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-domain,agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 264, Failures: 0, Errors: 0, Skipped: 6"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "web"
+    ],
+    "verification": "mvn -pl agent-domain test：12 用例通过（三个命中率测试类）；vue-tsc 通过；六套前端自检共 101 个断言通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2326_feat-5-usage-hitrate-panel"
+    ]
+  },
+  "chain": {
+    "prev": "d2024384d63a26a446aac4ef355f82a67aa94ca91976b171b85eff275eb1c232",
+    "self": "045667bb292e56b068ab6f7b364d0aaa7dceec5c536adaaa93aabc9c2d835ebb"
+  }
+}

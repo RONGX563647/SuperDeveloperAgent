@@ -1,0 +1,55 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "chore/2026-11-19_2323_schema-xlsx-media",
+  "category": "chore",
+  "title": "同步 schema.d.ts 的 xlsx 媒体类型",
+  "createdAt": "2026-11-19T23:23:17+08:00",
+  "session": {
+    "agentModel": "traecn/deepseek-v4.1-flash",
+    "promptSummary": "frontend 作业报 schema.d.ts 与 openapi 不一致",
+    "toolCallCount": 0
+  },
+  "problem": "CI frontend 作业报 schema.d.ts 与 openapi 不一致：导出接口改为显式 produces 后，response 的 content key 从 application/json 变成 xlsx 媒体类型，自动生成的类型没跟着更新。",
+  "solution": "在干净工作树里用同一份 openapi.json 重新生成 schema.d.ts（仅 1 行 content key 变化），并提交。",
+  "commits": [
+    {
+      "sha": "a3e360a3dc7429e7cab6f7772fe59abfe01d5be2",
+      "subject": "chore(web): 同步 schema.d.ts 的 xlsx 媒体类型",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "bb02e5541e973ba4ca5530148969e7df25dad821"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": false,
+    "files": [],
+    "casesAdded": 0,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "web"
+    ],
+    "verification": "重新生成后 git diff 只有那 1 行；提交门禁走「前端自检 + 跳过 Maven」。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2323_schema-xlsx-media"
+    ]
+  },
+  "chain": {
+    "prev": "962bc1355e1cdbac7c3533be5057b021c29c765a10a75c0d0acfceb068f37071",
+    "self": "cc091675927c0f2a18379042635214a827a76f66962ea724a6ba1286ec9e4dbb"
+  }
+}

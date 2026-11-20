@@ -38,10 +38,27 @@ async function changeDays(value: number): Promise<void> {
   await load()
 }
 
+/**
+ * 缓存命中率：直接取后端算好的 `cacheHitRate`。
+ *
+ * <p>不要在这里重新用 cachedTokens / inputTokens 手算——后端已经统一了口径
+ * （四舍五入到整数百分比、输入为 0 时给 0）。前端再算一遍就会出现两套口径，
+ * 一旦后端调整算法（例如改按「缓存命中 / 总输入」还是「命中 / 全部 token」），
+ * 界面数字会与接口返回值对不上，而且这类偏差很难被发现。
+ */
 function hitRate(): string {
-  const input = totals.value.inputTokens
-  if (!input) return '—'
-  return `${Math.round((totals.value.cachedTokens / input) * 100)}%`
+  const rate = data.value?.cacheHitRate
+  return typeof rate === 'number' ? `${rate}%` : '—'
+}
+
+/**
+ * 表格行的命中率。
+ *
+ * <p>优先用行上的 `cacheHitRate`（后端算好）；拿不到时退回 `—` 而不是自己算，
+ * 这样"后端没给"会显式暴露出来，不会静默产生第二套口径。
+ */
+function rowHitRate(row: { cacheHitRate?: number }): string {
+  return typeof row.cacheHitRate === 'number' ? `${row.cacheHitRate}%` : '—'
 }
 
 load()
@@ -89,6 +106,10 @@ defineExpose({ load })
         <el-table-column label="输出" width="100" align="right">
           <template #default="{ row }">{{ formatTokens(row.outputTokens) }}</template>
         </el-table-column>
+        <!-- 命中率列：绝对值看不出"省了多少"，比率才是判断压缩是否有效的依据 -->
+        <el-table-column label="命中率" width="82" align="right">
+          <template #default="{ row }">{{ rowHitRate(row) }}</template>
+        </el-table-column>
         <el-table-column label="合计" width="110" align="right">
           <template #default="{ row }">{{ formatTokens(row.totalTokens) }}</template>
         </el-table-column>
@@ -107,6 +128,9 @@ defineExpose({ load })
         </el-table-column>
         <el-table-column label="输出" width="100" align="right">
           <template #default="{ row }">{{ formatTokens(row.outputTokens) }}</template>
+        </el-table-column>
+        <el-table-column label="命中率" width="82" align="right">
+          <template #default="{ row }">{{ rowHitRate(row) }}</template>
         </el-table-column>
         <el-table-column label="合计" width="110" align="right">
           <template #default="{ row }">{{ formatTokens(row.totalTokens) }}</template>

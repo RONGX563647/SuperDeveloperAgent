@@ -1,5 +1,6 @@
 package top.rongx.agent.executor;
 
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,6 +9,7 @@ import org.springframework.context.annotation.Configuration;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.image.ImageReadinessStore;
 
 /**
  * 执行模式装配。
@@ -29,6 +31,7 @@ public class SandboxConfig {
 
     @Bean
     public DockerSandbox dockerSandbox(
+            org.springframework.beans.factory.ObjectProvider<ImageReadinessStore> readinessStore,
             @Value("${agent.sandbox.docker-binary:docker}") String binary,
             @Value("${agent.sandbox.image:maven:3.9-eclipse-temurin-21}") String image,
             @Value("${agent.sandbox.network:bridge}") String network,
@@ -38,18 +41,48 @@ public class SandboxConfig {
             @Value("${agent.sandbox.user:1000:1000}") String user,
             @Value("${agent.sandbox.cache-volume-prefix:}") String cacheVolumePrefix,
             @Value("${agent.sandbox.precheck-image:true}") boolean precheckImage,
-            @Value("${agent.sandbox.pull-timeout-seconds:180}") long pullTimeoutSeconds,
+            @Value("${agent.sandbox.pull-timeout-seconds:900}") long pullTimeoutSeconds,
+            @Value("${agent.sandbox.pull-idle-timeout-seconds:60}") long pullIdleTimeoutSeconds,
+            @Value("${agent.sandbox.pull-attempts:2}") int pullAttempts,
+            @Value("${agent.sandbox.pull-backoff-seconds:60}") long pullBackoffSeconds,
+            @Value("${agent.sandbox.pull-backoff-max-seconds:900}") long pullBackoffMaxSeconds,
+            @Value("${agent.sandbox.pull-mirrors:}") String pullMirrors,
+            @Value("${agent.sandbox.host:}") String host,
             @Value("${agent.sandbox.npm-registry:}") String npmRegistry,
             @Value("${agent.sandbox.runtime:}") String runtime,
             @Value("${agent.sandbox.init-image:busybox:1.36}") String initImage) {
         // 镜像标签由 agent.sandbox.image 决定；缺镜像时自动 pull 并复核，
         // 离线/自建 registry 仍可通过 agent.sandbox.precheck-image=false 关闭预检。
+        // pull-timeout-seconds 是总上限（只在一直有进度时兜底），判卡死用的是静默阈值：
+        // 固定总预算会把「层已下完、正在解压」误判成网络故障（实测 node:22 冷拉超过 180s）。
+        // 就绪状态落库（V6）后，同一台机器上的重复构建可直接复用失败结论与 digest。
+        ImageReadinessStore store = readinessStore.getIfAvailable();
+        if (store == null) {
+            log.warn("未接镜像就绪状态存储：每次动作前都会重新探测/拉取（不影响正确性，只是更慢）");
+        }
         return new DockerSandbox(binary, image, network, memory, cpus, pidsLimit, user,
                 cacheVolumePrefix).setImagePrecheck(precheckImage)
                 .setImagePullTimeout(pullTimeoutSeconds * 1000L)
+                .setImagePullIdle(pullIdleTimeoutSeconds * 1000L)
+                .setImagePullAttempts(pullAttempts)
+                .setPullBackoff(pullBackoffSeconds * 1000L, pullBackoffMaxSeconds * 1000L)
+                .setPullMirrors(splitList(pullMirrors))
+                .setHost(host)
+                .setReadinessStore(store)
                 .setNpmRegistry(npmRegistry)
                 .setRuntime(runtime)
                 .setInitImage(initImage);
+    }
+
+    /** 逗号/空白分隔的配置项拆成列表（镜像加速源等）。 */
+    static List<String> splitList(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(raw.split("[,\\s]+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
     }
 
     @Bean

@@ -52,6 +52,15 @@ public class UserStore implements UserRolePort {
     /** 一个平台账号。 */
     public record User(String userId, String displayName, String bcryptHash,
                        Role role, List<String> projects) {
+
+        /**
+         * 项目级访问判定：{@code projects} 含通配符 {@link #ALL_PROJECTS("*")} 或显式包含
+         * {@code projectId} 才放行。登录回显（/me）与服务端鉴权共用本方法，口径一致。
+         */
+        public boolean canAccess(String projectId) {
+            return projects.contains(ALL_PROJECTS)
+                    || (projectId != null && projects.contains(projectId));
+        }
     }
 
     /** 种子账号定义：userId / 显示名 / 角色 / 项目范围。 */

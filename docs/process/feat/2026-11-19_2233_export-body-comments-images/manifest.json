@@ -1,0 +1,126 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_2233_export-body-comments-images",
+  "category": "feat",
+  "title": "导出 Excel 带上正文、评论与配图",
+  "createdAt": "2026-11-19T22:33:45+08:00",
+  "session": {
+    "agentModel": "traecn/deepseek-v4.1-flash",
+    "promptSummary": "内容也要导出 内容评论图片也要导出",
+    "toolCallCount": 0
+  },
+  "problem": "导出 Excel 只有元数据（编码/标题/状态/优先级/时间），任务正文、评论、配图都看不到——导出来没法离线看这条缺陷到底发生了什么。另外线上反馈 POST /api/v1/git-issues/export 报 405，排查发现是进程比产物旧（进程 21:27 启动，含新映射的 class 21:44 才编译），代码本身没问题，但默认 405 报文是空的，只能靠状态码猜。",
+  "solution": "导出改成三张表：任务（元数据 + 描述正文自动换行 + 评论数 + 图片数）、评论（逐条作者/来源/内容/时间）、图片（编码/标题/文件名/说明 + 真实嵌入图片）。图片从正文 Markdown 引用解析、按文件头判类型、只允许配图目录裸文件名（挡 ../ 越权）、webp 与缺失文件只登记说明不阻断导出；单元格 32000 字符截断、控制字符剔除、CRLF 归一。修掉两个让 Excel 打不开的问题：Content_Types 缺 workbook Override（openpyxl 与 Excel 都报 no valid workbook part）、无可嵌入图片时仍写 drawing 引用。另修 405 可诊断性：BuildFreshnessCheck 增加运行期 staleRuntimeHint 与每分钟巡检，GlobalExceptionHandler 新增 405 处理把进程未重启结论拼进报文。",
+  "commits": [
+    {
+      "sha": "6a8d0b9ec6abdc18989ff05a21b424328eea5236",
+      "subject": "feat(task): 导出 Excel 带上正文、评论与配图",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/config/BuildFreshnessCheck.java",
+          "status": "M",
+          "additions": 72,
+          "deletions": 0,
+          "blobHash": "613764f6e68a990e7867c01e55c76ee49b11fd9b"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GitIssueController.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 1,
+          "blobHash": "7e3af8825e8edd4dfb0534e89a1d24a1075766d9"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/GlobalExceptionHandler.java",
+          "status": "M",
+          "additions": 19,
+          "deletions": 0,
+          "blobHash": "3e24acf9808804c4c492c8bfbc1c6ec1404a62fc"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/IssueExcelExporter.java",
+          "status": "M",
+          "additions": 483,
+          "deletions": 86,
+          "blobHash": "e3fc78848552486292ae0a4cd409cd47a533af14"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "eb2389376256523e34f34c796739f83057f5b265"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/config/BuildFreshnessCheckTest.java",
+          "status": "M",
+          "additions": 23,
+          "deletions": 0,
+          "blobHash": "60511b15771e6222de5614c146bd9b344121fa45"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GlobalExceptionHandlerTest.java",
+          "status": "M",
+          "additions": 20,
+          "deletions": 0,
+          "blobHash": "d2934dc69ce9fe34bb1f2de4e6e73b26dcb4d9d5"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/IssueExcelExporterTest.java",
+          "status": "M",
+          "additions": 194,
+          "deletions": 58,
+          "blobHash": "805ab323ddbc8bb3040cf2356c9b1c548992dd90"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/config/BuildFreshnessCheckTest.java",
+        "status": "M",
+        "additions": 23,
+        "deletions": 0,
+        "blobHash": "60511b15771e6222de5614c146bd9b344121fa45"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/GlobalExceptionHandlerTest.java",
+        "status": "M",
+        "additions": 20,
+        "deletions": 0,
+        "blobHash": "d2934dc69ce9fe34bb1f2de4e6e73b26dcb4d9d5"
+      },
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/IssueExcelExporterTest.java",
+        "status": "M",
+        "additions": 194,
+        "deletions": 58,
+        "blobHash": "805ab323ddbc8bb3040cf2356c9b1c548992dd90"
+      }
+    ],
+    "casesAdded": 9,
+    "command": "mvn -B -nsu -pl agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 180, Failures: 0, Errors: 0, Skipped: 6"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway"
+    ],
+    "verification": "IssueExcelExporterTest 14 例、GitIssueControllerExportTest 4 例、BuildFreshnessCheckTest 9 例、GlobalExceptionHandlerTest 4 例全绿；agent-gateway 全量 208 用例通过；提交门禁 180 用例 0 失败；openpyxl 交叉校验读到三张表、正文含换行、评论内容、嵌入图片 1 个（png）且无警告。"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2233_export-body-comments-images"
+    ]
+  },
+  "chain": {
+    "prev": "bcabce7201bf5efc720f435c34aef326ede78adeb8d03ebb08fc4d79512a4ccd",
+    "self": "d2024384d63a26a446aac4ef355f82a67aa94ca91976b171b85eff275eb1c232"
+  }
+}

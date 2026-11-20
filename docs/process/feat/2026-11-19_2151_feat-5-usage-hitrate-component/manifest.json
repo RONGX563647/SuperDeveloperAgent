@@ -1,0 +1,121 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-19_2151_feat-5-usage-hitrate-component",
+  "category": "feat",
+  "title": "FEAT-5 汇总缓存命中率做成 OpenAPI 组件",
+  "createdAt": "2026-11-19T21:51:51+08:00",
+  "session": {
+    "agentModel": "deepseek-v4.1",
+    "promptSummary": "派生方法不进 OpenAPI，前端拿不到；改为 record 组件并保留四参构造器兼容旧调用",
+    "toolCallCount": 0
+  },
+  "problem": "FEAT-5 第 3 项「提升 KV cache 命中率」缺度量侧：数据齐全（cachedTokens 已入库、UsageTotals.cacheHitRate 能算），但汇总结果里没有命中率，前端三处若各写一遍 cached/input 必然口径不一致。实现过程中还踩到两个真问题：1) 把 /usage/summary 改成返回自建 Map 会让 OpenAPI 的 UsageSummary schema 消失，前端生成的 schema.d.ts 立刻与契约不一致（CI 的 check:api-types 直接红）；2) 把命中率做成 record 的派生方法，springdoc 不序列化，字段根本到不了前端。",
+  "solution": "最终方案：命中率做成记录的一部分而不是派生方法或用 Map 重组。DailyUsage / ModelUsageSummary / ProjectUsageSummary 各加 cacheHitRate() 派生方法（它们只需在 Java 侧可用）；UsageSummary 新增 cacheHitRate 组件（Integer，构造器传 null 时按 totals 推导，并保留四参构造器兼容旧调用）——这样 springdoc 能序列化、schema 名不变、前端类型自动带上字段。新增 UsageSummaryHitRateTest 5 例：总体命中率与 totals 一致、null totals 安全、三维度各自可算且保留原字段、除零安全、四舍五入到整数。同步重新生成 OpenAPI 快照与前端 schema.d.ts。",
+  "commits": [
+    {
+      "sha": "218ff86bba494147269b4517d53a7d5020d8634b",
+      "subject": "fix(process): 重排 chore 归档链，修复 2059 归档断链",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/process/chore/2026-11-19_2059_bug-10-release-facts-ui-merge/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "352b8099e3edbe4754527b7cdf4cd217f32b2b69"
+        },
+        {
+          "path": "docs/process/chore/2026-11-19_2118_audit-apiblob-method/manifest.json",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "714490026986a0d35e0c995b438feab7e01bd753"
+        }
+      ]
+    },
+    {
+      "sha": "dbeb7280afa6e4c583a5bf20ea1859186d13188e",
+      "subject": "feat(usage): 用量记录提供缓存命中率，汇总带组件",
+      "category": "feat",
+      "files": [
+        {
+          "path": "platform/agent-domain/src/main/java/top/rongx/agent/domain/settings/TokenUsageRepository.java",
+          "status": "M",
+          "additions": 42,
+          "deletions": 1,
+          "blobHash": "12d932a72e5b49af4042f1fe9bd5e14169c82a54"
+        },
+        {
+          "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageSummaryHitRateTest.java",
+          "status": "A",
+          "additions": 79,
+          "deletions": 0,
+          "blobHash": "4961982af98754cd1b9b3697b96ea2e5e1e1cc7f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 0,
+          "blobHash": "eb2389376256523e34f34c796739f83057f5b265"
+        }
+      ]
+    },
+    {
+      "sha": "fe0b85fca754512730a57f04d279c4e9938adf86",
+      "subject": "chore: 重新生成前端类型并加 CI 失败日志抓取脚本",
+      "category": "chore",
+      "files": [
+        {
+          "path": "platform/web/src/api/generated/schema.d.ts",
+          "status": "M",
+          "additions": 2,
+          "deletions": 0,
+          "blobHash": "75b8e4c6674b2dd87745972bf5817c970717dac8"
+        },
+        {
+          "path": "tools/ci/fetch-ci-failure.py",
+          "status": "A",
+          "additions": 35,
+          "deletions": 0,
+          "blobHash": "c2dd56cd3970608f86acaaf90b61d95b4bee784d"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-domain/src/test/java/top/rongx/agent/domain/settings/UsageSummaryHitRateTest.java",
+        "status": "A",
+        "additions": 79,
+        "deletions": 0,
+        "blobHash": "4961982af98754cd1b9b3697b96ea2e5e1e1cc7f"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "(前端自检)",
+    "result": "PASSED",
+    "evidence": "Tests run: 0, Failures: 0, Errors: 0, Skipped: 0"
+  },
+  "impact": {
+    "modules": [
+      "agent-domain",
+      "agent-gateway",
+      "web"
+    ],
+    "verification": "mvn -pl agent-domain,agent-gateway test：171 用例通过；pnpm run check:api-types 退出码 0"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-19_2151_feat-5-usage-hitrate-component"
+    ]
+  },
+  "chain": {
+    "prev": "286e63529c5b93adb68d4ea138c91e0b4d8ea47d6e1fcad43003d17027891d3c",
+    "self": "bcabce7201bf5efc720f435c34aef326ede78adeb8d03ebb08fc4d79512a4ccd"
+  }
+}

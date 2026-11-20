@@ -1040,6 +1040,8 @@ public class RecipeScaffolder implements ProjectScaffolder {
     /**
      * 后端构建命令：优先仓库自带的 wrapper，构建阶段跳过测试（测试应由独立 stage 承担）。
      * 这样不依赖宿主机/镜像里预装的 mvn/gradle 版本。
+     * {@code -T 1C}：每核 1 线程并行构建，聚合工程（多模块）耗时显著下降；
+     * 单模块工程 reactor 只有一个项目，行为与串行一致。
      */
     private String backendBuildCommand(Path javaRoot, boolean gradle) {
         if (gradle) {
@@ -1047,7 +1049,7 @@ public class RecipeScaffolder implements ProjectScaffolder {
                     ? "./gradlew build -x test" : "gradle build -x test";
         }
         return isFile(javaRoot.resolve("mvnw"))
-                ? "./mvnw -B -q -DskipTests package" : "mvn -B -q -DskipTests package";
+                ? "./mvnw -B -q -T 1C -DskipTests package" : "mvn -B -q -T 1C -DskipTests package";
     }
 
     /**

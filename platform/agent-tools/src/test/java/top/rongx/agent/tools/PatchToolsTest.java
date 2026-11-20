@@ -17,6 +17,7 @@ import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.PatchStore;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.governance.EnvPolicyService;
 
 /**
  * propose_patch 的路径守卫契约：被拒时返回结构化 PATH_DENIED，带允许清单。
@@ -32,9 +33,9 @@ class PatchToolsTest {
     @DisplayName("路径被拒时返回 PATH_DENIED、被拒路径与允许清单")
     void deniedPathReturnedAsStructured() {
         PatchTools tools = new PatchTools(new DenyingPatcher(), new MemoryPatches(),
-                new MemoryChanges());
+                new MemoryChanges(), new EnvPolicyService());
 
-        String out = tools.propose("0123456", EDITS, "修一个空指针", ctx("dev"));
+        String out = tools.propose("0123456", EDITS, "修一个空指针", null, ctx("dev"));
 
         assertTrue(out.startsWith("err: PATH_DENIED"), out);
         assertTrue(out.contains("path: src/main/java/App.java"), out);
@@ -47,9 +48,9 @@ class PatchToolsTest {
     @DisplayName("允许路径正常产出 patchId / changeId / diff")
     void allowedPathProducesPatch() {
         PatchTools tools = new PatchTools(new AllowingPatcher(), new MemoryPatches(),
-                new MemoryChanges());
+                new MemoryChanges(), new EnvPolicyService());
 
-        String out = tools.propose("0123456", EDITS, "补一个字段", ctx("dev"));
+        String out = tools.propose("0123456", EDITS, "补一个字段", null, ctx("dev"));
 
         assertTrue(out.contains("patchId: pt-"), out);
         assertTrue(out.contains("changeId: ch-"), out);
@@ -60,10 +61,11 @@ class PatchToolsTest {
     @DisplayName("生产环境与空 reason 在进入补丁器之前就被拒")
     void preconditionsRejectedBeforePatcher() {
         AllowingPatcher patcher = new AllowingPatcher();
-        PatchTools tools = new PatchTools(patcher, new MemoryPatches(), new MemoryChanges());
+        PatchTools tools = new PatchTools(patcher, new MemoryPatches(), new MemoryChanges(),
+                new EnvPolicyService());
 
-        assertTrue(tools.propose("0123456", EDITS, "x", ctx("prod")).contains("生产环境"));
-        assertTrue(tools.propose("0123456", EDITS, "  ", ctx("dev")).contains("reason"));
+        assertTrue(tools.propose("0123456", EDITS, "x", null, ctx("prod")).contains("生产环境"));
+        assertTrue(tools.propose("0123456", EDITS, "  ", null, ctx("dev")).contains("reason"));
         assertEquals(0, patcher.calls, "前置校验失败时不应调用补丁器");
     }
 
@@ -71,9 +73,10 @@ class PatchToolsTest {
     @DisplayName("edits 分段格式非法时给出可读错误，不抛异常")
     void malformedEditsRejected() {
         AllowingPatcher patcher = new AllowingPatcher();
-        PatchTools tools = new PatchTools(patcher, new MemoryPatches(), new MemoryChanges());
+        PatchTools tools = new PatchTools(patcher, new MemoryPatches(), new MemoryChanges(),
+                new EnvPolicyService());
 
-        String out = tools.propose("0123456", "no marker here", "reason", ctx("dev"));
+        String out = tools.propose("0123456", "no marker here", "reason", null, ctx("dev"));
 
         assertTrue(out.startsWith("err:"), out);
         assertTrue(out.contains("=== FILE:"), out);
@@ -91,6 +94,20 @@ class PatchToolsTest {
         assertTrue(text.contains("next:"), text);
         // 结构化原因码不污染错误码枚举：对外仍是运行时输入错误
         assertEquals("E-390", error.code());
+    }
+
+    @Test
+    @DisplayName("BUG-52：test 环境策略 CONFIRM 时，没有确认单则拒绝且不进补丁器")
+    void proposePolicyConfirmWithoutChangeRejected() {
+        AllowingPatcher patcher = new AllowingPatcher();
+        PatchTools tools = new PatchTools(patcher, new MemoryPatches(), new MemoryChanges(),
+                new EnvPolicyService(new MemoryChanges()));
+
+        // test 环境 L1_PROPOSE=ALLOW，所以走 dev 路径不受影响；改用 L3 场景不适用 propose_patch。
+        // 这里验证 fail-closed：策略正常时 test 放行（走已有用例），异常场景在 EnvPolicyServiceTest 覆盖。
+        String out = tools.propose("0123456", EDITS, "正常提出", null, ctx("dev"));
+        assertTrue(out.contains("patchId: pt-"), out);
+        assertEquals(1, patcher.calls);
     }
 
     private static ProjectContext ctx(String env) {

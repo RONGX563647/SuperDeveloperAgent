@@ -6,11 +6,13 @@ import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import top.rongx.agent.domain.error.IntakeException;
 import top.rongx.agent.domain.project.Project;
 import top.rongx.agent.domain.project.ProjectEnv;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 接入项目 SQLite 存储：落库、重启恢复、两源合并、下线。 */
@@ -111,6 +113,19 @@ class IntakeProjectStoreTest {
             assertTrue(s.find("SHOP").isEmpty());
             assertTrue(s.findEnvs("SHOP").isEmpty());
             assertFalse(s.delete("SHOP"), "重复删除返回 false");
+        }
+    }
+
+    @Test
+    @DisplayName("S6 composeDir 重复：同一项目内多个环境登记同一目录时拒绝保存")
+    void rejectDuplicateComposeDir() {
+        try (IntakeProjectStore s = newStore()) {
+            IntakeException e = assertThrows(IntakeException.class, () -> s.upsert(shop(), List.of(
+                    new ProjectEnv("SHOP", "test", "http://127.0.0.1:8180", "/opt/apps/shop"),
+                    new ProjectEnv("SHOP", "prod", "http://127.0.0.1:8181", "/opt/apps/shop"))));
+            assertTrue(e.getMessage().contains("composeDir 重复"), e.getMessage());
+            // 拒绝后不应留下半截数据
+            assertTrue(s.find("SHOP").isEmpty());
         }
     }
 }

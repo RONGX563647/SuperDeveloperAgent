@@ -67,10 +67,12 @@ public abstract class AbstractActionRunner implements ActionRunner {
             }
             // 2. 翻译为真正执行的命令（宿主或容器）
             List<String> effective = effectiveArgv(workspace, argv);
-            // 3. 执行并扣减预算
+            // 3. 执行并扣减预算（带动作语义：测试/镜像/编译/脚本失败分别给出对应错误码）
+            ProcessExecutor.FailureKind kind = ProcessExecutor.FailureKind.ofAction(
+                    spec.action().wireName());
             long stepStart = System.nanoTime();
             ProcessExecutor.StepOutcome outcome = executor.exec(workspace, effective, budgetMillis, sink,
-                    cancelled, live);
+                    cancelled, live, kind);
             budgetMillis -= Math.max(0, (System.nanoTime() - stepStart) / 1_000_000L);
             // 4. 失败直接返回（E-101/E-209/E-302/E-303 来自内核）
             if (outcome.errorCode() != null) {

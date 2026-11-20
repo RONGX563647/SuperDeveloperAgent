@@ -136,6 +136,37 @@ class DeployRecipeFlowTest {
     }
 
     @Test
+    @DisplayName("脚本没变、换了新提交：测试跑通后证据要刷新，生产才放行")
+    void refreshesEvidenceAfterNewCommitWithSameScript(@TempDir Path temp) throws Exception {
+        Path repo = newRepo(temp);
+        String first = commit(repo, "init");
+        Path ws = temp.resolve("ws");
+        MemoryRecipeStore recipes = new MemoryRecipeStore(ws);
+        BuiltInPipelineEngine engine = newEngine(ws, repo, recipes, temp);
+        try {
+            String firstRun = engine.trigger(PROJECT, "release", Map.of("gitSha", first, "env", "test"));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, firstRun), engine.logTail(firstRun));
+            assertEquals(first, recipes.current(PROJECT, "test").orElseThrow().gitSha());
+
+            // 新提交不动 ci/：脚本内容不变，走的是 dedupe 分支
+            Files.writeString(repo.resolve("fix.txt"), "x", StandardCharsets.UTF_8);
+            String second = commit(repo, "fix");
+            String secondRun = engine.trigger(PROJECT, "release", Map.of("gitSha", second, "env", "test"));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, secondRun), engine.logTail(secondRun));
+
+            DeployRecipe frozen = recipes.current(PROJECT, "test").orElseThrow();
+            assertEquals(secondRun, frozen.evidenceRunId(), "新提交跑通后证据必须刷新");
+            assertEquals(second, frozen.gitSha());
+            assertEquals(1, recipes.versions(PROJECT, "test").size(), "脚本没变不该堆版本");
+
+            String prodRun = engine.trigger(PROJECT, "release", Map.of("gitSha", second, "env", "prod"));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, prodRun), engine.logTail(prodRun));
+        } finally {
+            engine.close();
+        }
+    }
+
+    @Test
     @DisplayName("晋升规则矩阵：无脚本 / 无证据 / 证据失败 / sha 不一致")
     void promotionMatrix(@TempDir Path temp) {
         RecipeStore recipes = new MemoryRecipeStore(temp.resolve("ws"));
@@ -250,6 +281,20 @@ class DeployRecipeFlowTest {
                 current.put(key(projectId, env), r);
                 return true;
             }).orElse(false);
+        }
+
+        @Override
+        public void refreshEvidence(String projectId, String env, String runId, String sha) {
+            DeployRecipe cur = current.get(key(projectId, env));
+            if (cur == null) {
+                return;
+            }
+            DeployRecipe refreshed = cur.withEvidence(runId, sha);
+            current.put(key(projectId, env), refreshed);
+            var versions = all.get(key(projectId, env));
+            if (versions != null) {
+                versions.put(refreshed.version(), refreshed);
+            }
         }
 
         @Override

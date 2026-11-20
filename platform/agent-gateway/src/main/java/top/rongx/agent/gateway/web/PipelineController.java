@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.domain.artifact.ArtifactRef;
+import top.rongx.agent.domain.deploy.EnvironmentPromotion;
 import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.port.PipelineEngine;
@@ -292,10 +293,30 @@ public class PipelineController {
     @GetMapping("/deploy/images")
     public Map<String, Object> deployImages(@RequestParam String projectId,
                                             @RequestParam(defaultValue = "test") String env) {
-        java.util.List<PipelineEngine.ImageVersion> rows = engine.deployImages(projectId, env);
-        java.util.List<Map<String, Object>> images = new java.util.ArrayList<>(rows.size());
-        for (int i = 0; i < rows.size(); i++) {
-            PipelineEngine.ImageVersion v = rows.get(i);
+        // 生产（需测试证据的环境）：可部署的选项来自"测试环境成功运行"的版本，而不是生产自己的账本。
+        // 生产从未部署时账本是空的，按老口径界面会一个选项都没有；且账本里的旧版本多半
+        // 没有测试证据，点了也会被 DeployGate 拒（E-601）——看得见、点不动。
+        boolean promotion = EnvironmentPromotion.requiresTestEvidence(env);
+        List<PipelineEngine.ImageVersion> own = engine.deployImages(projectId, env);
+        List<PipelineEngine.ImageVersion> rows = new java.util.ArrayList<>(
+                promotion ? engine.deployImages(projectId, "test") : own);
+        // 当前/上一版按"本环境真正在跑的"标注：生产时选项来自测试，不能按列表顺序推断
+        List<String> running = own.stream().limit(2)
+                .map(PipelineEngine.ImageVersion::tag).toList();
+        if (promotion) {
+            // 生产跑过、但测试账本里没有的版本（老数据）补在尾部，否则界面上看不到当前在跑哪一版
+            java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+            for (PipelineEngine.ImageVersion v : rows) {
+                seen.add(v.tag());
+            }
+            for (PipelineEngine.ImageVersion v : own) {
+                if (seen.add(v.tag())) {
+                    rows.add(v);
+                }
+            }
+        }
+        List<Map<String, Object>> images = new java.util.ArrayList<>(rows.size());
+        for (PipelineEngine.ImageVersion v : rows) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("tag", v.tag());
             row.put("digest", v.digest() == null ? "" : v.digest());
@@ -308,13 +329,15 @@ public class PipelineController {
             // 部署审计：最近一次发布到本环境的时间与操作者
             row.put("deployedAt", v.deployedAt());
             row.put("deployedBy", v.deployedBy() == null ? "" : v.deployedBy());
-            row.put("current", i == 0);
-            row.put("previous", i == 1);
+            row.put("current", !running.isEmpty() && running.get(0).equals(v.tag()));
+            row.put("previous", running.size() > 1 && running.get(1).equals(v.tag()));
             images.add(row);
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("projectId", projectId);
         out.put("env", env);
+        // 选项来自哪个环境的账本（生产 = test）：前端据此改写说明文案
+        out.put("sourceEnv", promotion ? "test" : env);
         out.put("dockerAvailable", engine.dockerAvailable());
         out.put("images", images);
         return out;

@@ -39,7 +39,7 @@ public class ToolCatalog {
                                    ConfigTools configTools,
                                    EnvQueryTools envQueryTools,
                                    GitIssueQueryTools gitIssueQueryTools,
-                                   ChangeQueryTools changeQueryTools,
+                                   ChangeStatusTool changeStatusTool,
                                    ApiDocTools apiDocTools,
                                    ToolCatalogTools toolCatalogTools,
                                    AskUserTools askUserTools,
@@ -47,7 +47,7 @@ public class ToolCatalog {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
-                changeQueryTools, apiDocTools, toolCatalogTools, askUserTools);
+                changeStatusTool, apiDocTools, toolCatalogTools, askUserTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
     }
@@ -62,7 +62,7 @@ public class ToolCatalog {
                                               ConfigTools configTools,
                                               EnvQueryTools envQueryTools,
                                               GitIssueQueryTools gitIssueQueryTools,
-                                              ChangeQueryTools changeQueryTools,
+                                              ChangeStatusTool changeStatusTool,
                                               ApiDocTools apiDocTools,
                                               ToolCatalogTools toolCatalogTools,
                                               AskUserTools askUserTools) {
@@ -77,7 +77,8 @@ public class ToolCatalog {
         // 任务页只读：生产会话也能看到 Issue 任务
         toolkit.registerTool(gitIssueQueryTools);
         // 变更单只读：确认卡异步广播，模型必须能事后查"确认了没/执行了没"
-        toolkit.registerTool(changeQueryTools);
+        // （BUG-28：与 agentToolkit 复用同一个 ChangeStatusTool bean，全局只有一份实现）
+        toolkit.registerTool(changeStatusTool);
         // API 文档与工具目录：只读规范，不调用任何业务接口
         toolkit.registerTool(apiDocTools);
         toolkit.registerTool(toolCatalogTools);
@@ -91,7 +92,7 @@ public class ToolCatalog {
                                 CiQueryTools ciQueryTools,
                                 CiCommandTools ciCommandTools,
                                 ChangeTools changeTools,
-                                ChangeQueryTools changeQueryTools,
+                                ChangeStatusTool changeStatusTool,
                                 ActionQueryTools actionQueryTools,
                                 ActionCommandTools actionCommandTools,
                                 DeployTools deployTools,
@@ -109,6 +110,7 @@ public class ToolCatalog {
                                 GitIssueCommandTools gitIssueCommandTools,
                                 ApiDocTools apiDocTools,
                                 ToolCatalogTools toolCatalogTools,
+                                AskUserTools askUserTools,
                                 ToolResultCache cache) {
         Toolkit toolkit = new Toolkit();
 
@@ -131,7 +133,7 @@ public class ToolCatalog {
         // 写操作工具：直接注册，保证非生产会话始终可见（确认交给变更单 / 确认卡）
         toolkit.registerTool(ciCommandTools);
         toolkit.registerTool(changeTools);
-        toolkit.registerTool(changeQueryTools);
+        toolkit.registerTool(changeStatusTool);
         toolkit.registerTool(actionCommandTools);
         // 受限写：只能改 ci/、构建配置与测试代码，仍需人工确认后应用
         toolkit.registerTool(patchTools);
@@ -145,6 +147,9 @@ public class ToolCatalog {
         // 任务页：读取 + 新建/编辑/评论/关闭/重开/同步（与「任务」Tab 同一份数据）
         toolkit.registerTool(gitIssueQueryTools);
         toolkit.registerTool(gitIssueCommandTools);
+        // 选项卡片：只读、无副作用（BUG-30）——AskUserMiddleware 以 ask_user 为拦截锚点，
+        // 主对话面没有这个工具它就守着一个不存在的工具，非生产会话出不了选项卡
+        toolkit.registerTool(askUserTools);
 
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
@@ -168,7 +173,7 @@ public class ToolCatalog {
                                      ConfigTools configTools,
                                      EnvQueryTools envQueryTools,
                                      GitIssueQueryTools gitIssueQueryTools,
-                                     ChangeQueryTools changeQueryTools,
+                                     ChangeStatusTool changeStatusTool,
                                      ApiDocTools apiDocTools,
                                      ToolCatalogTools toolCatalogTools,
                                      AskUserTools askUserTools,
@@ -176,7 +181,7 @@ public class ToolCatalog {
         Toolkit toolkit = new Toolkit();
         registerReadOnlyTools(toolkit, projectTools, ciQueryTools, actionQueryTools,
                 repoQueryTools, runtimeTools, configTools, envQueryTools, gitIssueQueryTools,
-                changeQueryTools, apiDocTools, toolCatalogTools, askUserTools);
+                changeStatusTool, apiDocTools, toolCatalogTools, askUserTools);
         toolkit.registerTool(supervisorTools);
         CachingAgentTool.install(toolkit, cache);
         return toolkit;
@@ -206,7 +211,7 @@ public class ToolCatalog {
                                  RuntimeTools runtimeTools,
                                  ConfigTools configTools,
                                  ChangeTools changeTools,
-                                 ChangeQueryTools changeQueryTools,
+                                 ChangeStatusTool changeStatusTool,
                                  ActionCommandTools actionCommandTools,
                                  PatchTools patchTools,
                                  EditorTools editorTools,
@@ -228,7 +233,7 @@ public class ToolCatalog {
         toolkit.registerTool(apiDocTools);
         toolkit.registerTool(toolCatalogTools);
         toolkit.registerTool(changeTools);
-        toolkit.registerTool(changeQueryTools);
+        toolkit.registerTool(changeStatusTool);
         toolkit.registerTool(actionCommandTools);
         toolkit.registerTool(patchTools);
         // 会话工作树编辑：写/删/提交需要分支级一次确认

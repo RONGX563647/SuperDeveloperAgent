@@ -59,38 +59,117 @@ public interface TokenUsageRepository {
         }
     }
 
+    /**
+     * 按天的用量。
+     *
+     * @param cacheHitRate 当日缓存命中率（0–100 整数）；无输入时为 0。
+     *                     做成组件而不是派生方法：springdoc 只序列化 record 组件，
+     *                     派生方法不会出现在 JSON 里，前端那一列就永远是空的。
+     */
     record DailyUsage(
             String day,
             long calls,
             long inputTokens,
             long cachedTokens,
             long outputTokens,
-            long totalTokens) {
+            long totalTokens,
+            Integer cacheHitRate) {
+
+        public DailyUsage {
+            cacheHitRate = cacheHitRate == null
+                    ? (inputTokens <= 0 ? 0 : (int) Math.round(cachedTokens * 100.0 / inputTokens))
+                    : cacheHitRate;
+        }
+
+        /** 兼容旧调用：命中率由 token 数推导。 */
+        public DailyUsage(String day, long calls, long inputTokens, long cachedTokens,
+                          long outputTokens, long totalTokens) {
+            this(day, calls, inputTokens, cachedTokens, outputTokens, totalTokens, null);
+        }
     }
 
+    /**
+     * 按模型的用量。
+     *
+     * @param cacheHitRate 该模型的缓存命中率（0–100 整数），同 {@link DailyUsage} 的理由做成组件。
+     */
     record ModelUsageSummary(
             String modelName,
             long calls,
             long inputTokens,
             long cachedTokens,
             long outputTokens,
-            long totalTokens) {
+            long totalTokens,
+            Integer cacheHitRate) {
+
+        public ModelUsageSummary {
+            cacheHitRate = cacheHitRate == null
+                    ? (inputTokens <= 0 ? 0 : (int) Math.round(cachedTokens * 100.0 / inputTokens))
+                    : cacheHitRate;
+        }
+
+        /** 兼容旧调用：命中率由 token 数推导。 */
+        public ModelUsageSummary(String modelName, long calls, long inputTokens, long cachedTokens,
+                                 long outputTokens, long totalTokens) {
+            this(modelName, calls, inputTokens, cachedTokens, outputTokens, totalTokens, null);
+        }
     }
 
+    /**
+     * 按项目的用量。
+     *
+     * @param cacheHitRate 该项目的缓存命中率（0–100 整数），同 {@link DailyUsage} 的理由做成组件。
+     */
     record ProjectUsageSummary(
             String projectId,
             long calls,
             long inputTokens,
             long cachedTokens,
             long outputTokens,
-            long totalTokens) {
+            long totalTokens,
+            Integer cacheHitRate) {
+
+        public ProjectUsageSummary {
+            cacheHitRate = cacheHitRate == null
+                    ? (inputTokens <= 0 ? 0 : (int) Math.round(cachedTokens * 100.0 / inputTokens))
+                    : cacheHitRate;
+        }
+
+        /** 兼容旧调用：命中率由 token 数推导。 */
+        public ProjectUsageSummary(String projectId, long calls, long inputTokens, long cachedTokens,
+                                   long outputTokens, long totalTokens) {
+            this(projectId, calls, inputTokens, cachedTokens, outputTokens, totalTokens, null);
+        }
     }
 
+    /**
+     * 全局用量汇总。
+     *
+     * @param cacheHitRate 总体缓存命中率（0–100 整数）。这是判断「压缩 prompt
+     *                     有没有省到钱」（FEAT-5 第 3 项）的唯一可信指标。
+     *                     做成组件而不是派生方法：springdoc 只序列化 record 组件，
+     *                     派生方法不会出现在 OpenAPI 里，前端类型也就拿不到。
+     *                     传 null 时按 totals 推导，旧调用点因此不用改。
+     */
     record UsageSummary(
             int days,
             UsageTotals totals,
             List<DailyUsage> daily,
             List<ModelUsageSummary> byModel,
-            List<ProjectUsageSummary> byProject) {
+            List<ProjectUsageSummary> byProject,
+            Integer cacheHitRate) {
+
+        public UsageSummary {
+            cacheHitRate = cacheHitRate == null
+                    ? (totals == null ? 0 : totals.cacheHitRate())
+                    : cacheHitRate;
+        }
+
+        /** 兼容旧调用：命中率由 totals 推导。 */
+        public UsageSummary(int days, UsageTotals totals, List<DailyUsage> daily,
+                            List<ModelUsageSummary> byModel,
+                            List<ProjectUsageSummary> byProject) {
+            this(days, totals, daily, byModel, byProject, null);
+        }
     }
 }

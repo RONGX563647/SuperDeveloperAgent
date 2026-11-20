@@ -8,6 +8,7 @@ import java.util.function.Consumer;
 import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.SandboxDeniedException;
 import top.rongx.agent.domain.run.StageResult;
 
@@ -56,6 +57,9 @@ public class DockerActionRunner extends AbstractActionRunner {
             long prepareStart = System.nanoTime();
             // 隔离参数先落日志：出问题时第一句话永远是「这次到底隔离了什么」
             sandbox.logIsolation(live);
+            // 网络先就绪（BUG-35）：配置了自定义网络（build-net）但不存在时，
+            // 在跑构建前就明确报"网络未就绪"，而不是等 docker run 报 network not found。
+            sandbox.prepareNetwork(cancelled, live);
             // 先确认工具链镜像在本机，再动缓存卷：缺镜像是配置问题，应在数秒内明确报出
             sandbox.ensureImageReady(cancelled, live);
             // tag 会被重新 pull 覆盖，同名 tag 在不同时间可能对应不同镜像；
@@ -99,6 +103,28 @@ public class DockerActionRunner extends AbstractActionRunner {
             }
             return new ActionResult(StageResult.failed(spec.action().wireName(), 126,
                     ErrorCode.ENV_POLICY_DENIED.code(), why, 0), why);
+        } catch (EnvironmentException env) {
+            // 环境异常只能携带 ENVIRONMENT 组错误码，具体的「超时/取消」写在消息里：
+            // 取消信号优先还原 E-303；准备/状态类通用码则按消息里的子命令码还原，
+            // 这样用户与自愈看到的是"超时"而不是笼统的"准备失败"。
+            String why = env.getMessage() == null ? env.toString() : env.getMessage();
+            String code = env.errorCode() == null
+                    ? ErrorCode.EXECUTABLE_NOT_FOUND.code() : env.errorCode().code();
+            if (cancelled != null && cancelled.getAsBoolean()) {
+                code = ErrorCode.CANCELLED.code();
+            } else if (GENERIC_ENV_CODES.contains(code)) {
+                String sub = subErrorCode(why);
+                if (sub != null) {
+                    code = sub;
+                }
+            }
+            int exit = ErrorCode.TIMEOUT.code().equals(code) ? 124
+                    : ErrorCode.CANCELLED.code().equals(code) ? 143 : 1;
+            if (live != null) {
+                live.accept("[sandbox] ❌ " + code + " " + why + "\n");
+            }
+            return new ActionResult(StageResult.failed(spec.action().wireName(), exit,
+                    code, why, 0), why);
         } catch (RuntimeException e) {
             String why = e.getMessage() == null ? e.toString() : e.getMessage();
             String code = why.contains(ErrorCode.TIMEOUT.code()) ? ErrorCode.TIMEOUT.code()
@@ -124,5 +150,16 @@ public class DockerActionRunner extends AbstractActionRunner {
     /** 耗时的人类可读形式：准备阶段可能只有几百毫秒，按整分钟显示会变成"0 分钟"。 */
     private static String human(long millis) {
         return ProcessExecutor.human(millis);
+    }
+
+    /** 通用环境码：具体原因在消息里，需要还原子命令的错误码（E-302 等）。 */
+    private static final java.util.Set<String> GENERIC_ENV_CODES = java.util.Set.of(
+            ErrorCode.ENV_PREPARE_FAILED.code(), ErrorCode.ENVIRONMENT_INVALID_STATE.code());
+
+    /** 取消息里第一个 {@code E-ddd} 形式的错误码（沙箱把子命令码原样写进消息）。 */
+    private static String subErrorCode(String message) {
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern.compile("E-\\d{3}").matcher(message == null ? "" : message);
+        return matcher.find() ? matcher.group() : null;
     }
 }

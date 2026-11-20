@@ -1,0 +1,21 @@
+# registry:2 pull-through cache 的可选覆盖配置。
+#
+# 当前 compose 用环境变量即可跑；需要调缓存清理/日志级别时再挂这份配置：
+#   volumes:
+#     - ./config.yml:/etc/docker/registry/config.yml:ro
+#
+# 说明：proxy.remoteurl 指向真正拉取的源站，第一次请求时同步拉取并落盘，
+# 之后同 digest 的层直接由本机返回。
+version: 0.1
+log:
+  level: info
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
+  # 允许 GC 删除失效层（registry garbage-collect），否则缓存只增不减
+  delete:
+    enabled: true
+http:
+  addr: :5000
+proxy:
+  remoteurl: https://registry-1.docker.io

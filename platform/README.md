@@ -36,15 +36,19 @@ platform/
   `JAVA_HOME=/path/to/any-jdk-21+ mvn -q verify`；用 `mvn -v` 里的 `Java version` 自检。
 - 目标字节码版本默认 21，可用 `-Djava.release=25` 覆盖（例如本机只有 25 时统一目标级别）。
 - 容器工具链镜像默认 `maven:3.9-eclipse-temurin-21`，可用 `agent.sandbox.image=<任意已安装镜像>` 覆盖；
-  平台在动作前做一次 `docker image inspect` 预检；缺镜像会先自动 `docker pull` 并复核
-  （`agent.sandbox.pull-timeout-seconds`，默认 180s、可取消），仍失败才进入下面的自动修复闭环，
-  而不是让用户先手动 pull。离线/自建 registry 场景可设 `agent.sandbox.precheck-image=false` 关闭预检。
+  平台在**运行前**把本次要用的镜像一次性点亮（并行），缺镜像先自动 `docker pull` 并复核，
+  仍失败才进入下面的自动修复闭环，而不是让用户先手动 pull。离线/自建 registry 场景可设
+  `agent.sandbox.precheck-image=false` 关闭预检。
+- 拉取的判据是**有没有新输出**而不是"一共跑了多久"：层下完在解压时不会被砍断；
+  失败按镜像维度记状态并指数退避，退避窗口内直接复用上次结论（不再每次白等一轮）。
+  网络慢的根治办法是本地缓存源：`tools/registry-cache`（pull-through cache）+
+  `agent.sandbox.pull-mirrors=localhost:5000`，第二次起走 LAN。
 
 ### 失败自动修复（默认开启，无需人工介入）
 
 缺镜像已经在**动作前预检**被自动拉取（见上），大多数构建不会走到这里。若运行仍然失败，平台按下面的闭环处理，**只有平台复核通过才自动从失败阶段续跑**，不需要人点「重跑」：
 
-1. **确定性修复**：预检关闭（`precheck-image=false`）时缺镜像 → 自动 `docker pull <配置的镜像>`（硬超时、可取消、输出实时进日志）。预检已尝试过拉取仍失败时**跳过重复拉取**，避免一次故障白等两轮超时。
+1. **确定性修复**：缺镜像 → 与动作前预检**共用同一套就绪策略**（进度感知超时、按镜像退避、镜像源回退、digest 记录）；退避窗口内直接复用上次结论，不会重复白等一轮超时。
 2. **平台复核**：重新执行 `docker image inspect`。不采信 pull 的输出文本，也不采信模型「已修复」的自述。
 3. **自动续跑**：复用保留的构建现场，只重跑失败阶段及其后阶段；最多 2 轮，仍失败则保持 `FAILED` 并写出结论。
 4. **兜底诊断**：确定性修复没成功才交发布 Agent（最长 5 分钟），诊断后同样要经平台复核，只有复核通过才续跑。
@@ -53,11 +57,25 @@ platform/
 
 | 配置（`application.yml`） | 默认 | 说明 |
 |---|---|---|
+| `agent.sandbox.pull-idle-timeout-seconds` | `60` | 连续这么久没有拉取输出才判卡死（真正的判据） |
+| `agent.sandbox.pull-timeout-seconds` | `900` | 单次拉取总上限，只在一直有进度时兜底 |
+| `agent.sandbox.pull-attempts` | `2` | 直连重试次数（只对超时/停滞/有进度的失败重试） |
+| `agent.sandbox.pull-backoff-seconds` / `-max-seconds` | `60` / `900` | 失败退避：第 n 次失败等 base*2^(n-1) |
+| `agent.sandbox.pull-mirrors` | 空 | 镜像加速源/本地缓存源（如 `localhost:5000`），按序回退 |
+| `agent.sandbox.host` | 环境变量取 | 就绪状态归属主机（镜像层缓存属于这台机器） |
 | `agent.pipeline.auto-repair.enabled` | `true` | 关闭后回到「只诊断 + 人工重跑」 |
 | `agent.pipeline.auto-repair.max-attempts` | `2` | 单次运行的「修复 → 续跑」轮次上限 |
-| `agent.pipeline.auto-repair.pull-timeout-seconds` | `180` | 自动拉取镜像的硬超时 |
+| `agent.pipeline.auto-repair.pull-timeout-seconds` | `180` | 仅用于运行总预算换算（拉取已统一走上面的就绪策略） |
 | `agent.pipeline.auto-repair.agent-fallback` | `true` | 确定性修复失败后是否调用发布 Agent |
 | `agent.pipeline.auto-repair.auto-resume` | `true` | 关闭后只验证、不自动续跑 |
+
+镜像就绪状态落库后可直接查（只读，不触发拉取），不用翻历史日志：
+
+```bash
+curl -s -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/settings/sandbox/images
+# [{ "host": "build-01", "image": "node:22-bookworm", "status": "FAILED",
+#    "attempts": 3, "lastError": "E-302 执行停滞（60s 无输出）", "retryInSeconds": 118 }]
+```
 
 ### 后端
 
@@ -91,6 +109,10 @@ npm run build      # vue-tsc strict + 产物
 ```
 
 > Vite 默认绑 `::1`，用 `127.0.0.1` 打不开属正常；需 IPv4 用 `npm run dev -- --host 127.0.0.1`。
+
+界面回归脚本在 `platform/web/scripts/`（如 `login-check.mjs`、`sandbox-images-check.mjs`），
+句式统一为 `node scripts/<name>.mjs [base] [截图路径]`，需要后端与 dev server 都在跑；
+默认按种子账号 `devops` / `admin-2026` 登录，本机改过密码时用 `CHECK_USER` / `CHECK_PASS` 覆盖。
 
 种子账号：`admin`（管理员）、`devops`（运维开发）、`viewer`（只读），三者共用固定初始密码
 `admin-2026`；登录后请到「设置 → 账号安全」修改。需要区分账号或用于共享环境时，用
@@ -158,7 +180,7 @@ npm run build      # vue-tsc strict + 产物
 1. **`confirm` 工具不签发令牌**——它只把变更单标成待确认，令牌只能由人在 HTTP 接口签发（规约 §4.10 第一道守卫）；
 2. **默认单机 SQLite**——重启不丢；多副本部署需配置 `agent.db.url=jdbc:postgresql://…` 切到 PostgreSQL（两库共用同一套 JPA 实体与 schema）。schema 与二级索引由 Flyway 统一迁移（`agent-infra/src/main/resources/db/migration`，V1 建表 / V2 自增表按 `{vendor}` 方言分文件 / V3 索引），Hibernate `ddl-auto=update` 仅作缺列安全网；存量库走 `baseline-on-migrate` 自动补齐索引；
 3. **用户体系默认落 SQLite**（3 个种子账号 + 项目成员列表），没有成员管理接口；多租户未做；
-4. **`GET /api/v1/fs/read` 未实现**——前端文件预览调用该端点，后端只有 ls/probe/roots；
+4. **`GET /api/v1/fs/read` 已实现但只读文本**——前端文件预览走该端点（`agent-gateway/.../web/FsBrowserController.java:75`，测试 `FsBrowserControllerTest.java:21`）；只支持 UTF-8 文本 + 截断与二进制降级，不做富预览；
 5. **事件映射用反射**——正式版应把 AgentScope 事件映射成稳定枚举；
 6. **`changeId` 仍走工具文本**——AgentScope 的工具事件没有结构化 payload；格式已收敛到 `ChangeWire` 并由登记表核对，但无法完全避免文本通道；
 7. **沙箱不注入私服凭据**——需要时挂只读 `settings.xml`；
@@ -168,7 +190,7 @@ npm run build      # vue-tsc strict + 产物
 
 | # | 任务 | 对应规约 |
 |---|---|---|
-| 1 | 变更单 / 补丁 / 用户体系落库 | 项目规约 §5 |
+| 1 | 用户管理界面与多租户（变更单 / 补丁 / 用户体系已统一落库：`_platform/platform.db`，Flyway V1-V3） | PRD §4.10 |
 | 2 | 用户管理界面与多租户 | PRD §4.10 |
 | 3 | 专用 `build-net` + 防火墙规则限制构建容器访问内网 | 执行器契约 §网络策略 |
 | 4 | 后端发专用 `change` SSE 事件，去掉前端正则提取 | PRD §4.10 |

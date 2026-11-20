@@ -6,9 +6,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
+import top.rongx.agent.domain.deploy.DeploySlot;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RecipeException;
@@ -37,6 +40,10 @@ public class DockerDeployer implements Deployer {
 
     private static final long DOCKER_TIMEOUT_MS = 120_000;
 
+    /** 同名容器串行部署：并发发布会互相删掉对方刚起的容器。 */
+    private static final ConcurrentHashMap<String, ReentrantLock> RUN_LOCKS =
+            new ConcurrentHashMap<>();
+
     private final ProcessExecutor executor = new ProcessExecutor();
     private final DockerCli docker;
 
@@ -63,9 +70,10 @@ public class DockerDeployer implements Deployer {
         }
         Path dir = Path.of(request.workspace() == null || request.workspace().isBlank()
                 ? "." : request.workspace());
-        String name = containerName(request.projectId(), request.envName(), slotOf(request));
+        String name = containerName(request.projectId(), request.envName(), DeploySlot.of(request));
         List<String> labels = new ArrayList<>(List.of(
                 "--label", "agent.project=" + request.projectId(),
+                "--label", "agent.env=" + (request.envName() == null ? "" : request.envName()),
                 "--label", "agent.run=" + request.runId(),
                 "--label", "agent.version=" + displayVersion(request),
                 "--label", "agent.sha=" + request.gitSha()));
@@ -93,7 +101,7 @@ public class DockerDeployer implements Deployer {
                     "服务 " + service + " 缺少镜像：请在 deploy.services 里声明 image", "");
         }
         // 打 tag 的版本独立命名空间后缀：容器名与网络别名都带版本，旧版本继续运行
-        String slot = tagged ? normalize(version, "v") : null;
+        String slot = DeploySlot.of(tagged, version);
         String name = serviceContainerName(namespace, projectId, service)
                 + (slot == null ? "" : "-" + slot);
         String alias = serviceAlias(projectId, service) + (slot == null ? "" : "-" + slot);
@@ -125,21 +133,7 @@ public class DockerDeployer implements Deployer {
      * @return true = 已存在或创建成功
      */
     public boolean ensureNetwork(Path dir, String network, StringBuilder log) {
-        BooleanSupplier never = () -> false;
-        ProcessExecutor.StepOutcome inspect =
-                executor.exec(dir, docker.cmd("network", "inspect", network), 15_000,
-                        log, never);
-        if (inspect.exitCode() == 0) {
-            return true;
-        }
-        ProcessExecutor.StepOutcome created =
-                executor.exec(dir, docker.cmd("network", "create", network), 30_000,
-                        log, never);
-        if (created.exitCode() == 0) {
-            log.append("[deploy] 已创建环境网络 ").append(network).append('\n');
-            return true;
-        }
-        return false;
+        return DockerNetwork.ensure(executor, docker, dir, network, log);
     }
 
     /**
@@ -186,6 +180,23 @@ public class DockerDeployer implements Deployer {
     private DeployResult run(Path dir, String name, String image, int hostPort, int containerPort,
                              Map<String, String> env, String network, String healthPath,
                              List<String> extraArgs, StringBuilder log, String endpointHost) {
+        ReentrantLock lock = RUN_LOCKS.computeIfAbsent(name, k -> new ReentrantLock());
+        if (!lock.tryLock()) {
+            return DeployResult.failed(DeployTarget.DOCKER, ErrorCode.DEPLOY_START_FAILED.code(),
+                    "容器 " + name + " 已有部署正在进行：请等待当前部署结束后重试", "");
+        }
+        try {
+            return runOnce(dir, name, image, hostPort, containerPort, env, network, healthPath,
+                    extraArgs, log, endpointHost);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private DeployResult runOnce(Path dir, String name, String image, int hostPort,
+                                 int containerPort, Map<String, String> env, String network,
+                                 String healthPath, List<String> extraArgs, StringBuilder log,
+                                 String endpointHost) {
         BooleanSupplier never = () -> false;
 
         // 0. 镜像名是 docker run 的位置参数，以 - 开头会被当成选项（参数注入）：
@@ -349,11 +360,6 @@ public class DockerDeployer implements Deployer {
         String volume = volumeName(composeProject(request.network(), request.envName()),
                 request.projectId(), "app");
         return List.of("-v", volume + ":" + request.volumePath().trim());
-    }
-
-    /** 版本槽后缀：打 tag 时用版本号，否则 null（默认槽）。 */
-    private static String slotOf(DeployRequest request) {
-        return request.tagged() ? normalize(request.version(), "v") : null;
     }
 
     /** 展示版本：用户没填版本号时统一显示 latest。 */

@@ -11,7 +11,9 @@ import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.env.EnvBindingWire;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.tool.ToolLevel;
 
 /**
  * 环境<b>写</b>工具：生成部署绑定草案、按需补齐中间件、维护项目环境变量。
@@ -30,14 +32,16 @@ public class EnvCommandTools {
     private final EnvBindingPort bindings;
     private final top.rongx.agent.domain.env.EnvProvisioner provisioner;
     private final EnvironmentStore envStore;
+    private final PolicyPort policy;
     private final ObjectMapper json = new ObjectMapper();
 
     public EnvCommandTools(EnvBindingPort bindings,
                            top.rongx.agent.domain.env.EnvProvisioner provisioner,
-                           EnvironmentStore envStore) {
+                           EnvironmentStore envStore, PolicyPort policy) {
         this.bindings = bindings;
         this.provisioner = provisioner;
         this.envStore = envStore;
+        this.policy = policy;
     }
 
     @Tool(name = "env_mapping_draft", description = "Draft an env binding for confirmation.",
@@ -147,8 +151,12 @@ public class EnvCommandTools {
                          @ToolParam(name = "secret", required = false,
                                  description = "是否敏感：true/false；缺省按变量名推断")
                          String secret,
+                         @ToolParam(name = "confirmed_change_id", required = false,
+                                 description = "已确认的变更单号（chg-...）；目标环境策略为 CONFIRM 时必填")
+                         String confirmedChangeId,
                          ProjectContext ctx) {
         String target = normalize(env);
+        policy.requireAllowed(ctx, ToolLevel.L2_EXECUTE_ISOLATED, "env_var_set", confirmedChangeId);
         if ("prod".equals(target)) {
             return "err: 生产环境变量不允许由 Agent 写入；请在「设置 → 项目环境」由运维维护";
         }
@@ -177,8 +185,12 @@ public class EnvCommandTools {
             readOnly = false, concurrencySafe = false)
     public String unsetVar(@ToolParam(name = "env", description = "环境：dev / test") String env,
                            @ToolParam(name = "key", description = "变量名") String key,
+                           @ToolParam(name = "confirmed_change_id", required = false,
+                                   description = "已确认的变更单号（chg-...）；目标环境策略为 CONFIRM 时必填")
+                           String confirmedChangeId,
                            ProjectContext ctx) {
         String target = normalize(env);
+        policy.requireAllowed(ctx, ToolLevel.L2_EXECUTE_ISOLATED, "env_var_unset", confirmedChangeId);
         if ("prod".equals(target)) {
             return "err: 生产环境变量不允许由 Agent 删除；请在「设置 → 项目环境」由运维维护";
         }

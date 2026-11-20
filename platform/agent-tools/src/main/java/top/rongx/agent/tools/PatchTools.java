@@ -11,7 +11,9 @@ import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.CodePatcher;
 import top.rongx.agent.domain.port.PatchStore;
+import top.rongx.agent.domain.policy.PolicyPort;
 import top.rongx.agent.domain.project.ProjectContext;
+import top.rongx.agent.domain.tool.ToolLevel;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.PatchPathDeniedException;
 import top.rongx.agent.domain.error.RunException;
@@ -37,11 +39,14 @@ public class PatchTools {
     private final CodePatcher patcher;
     private final PatchStore patches;
     private final ChangeStore changes;
+    private final PolicyPort policy;
 
-    public PatchTools(CodePatcher patcher, PatchStore patches, ChangeStore changes) {
+    public PatchTools(CodePatcher patcher, PatchStore patches, ChangeStore changes,
+                      PolicyPort policy) {
         this.patcher = patcher;
         this.patches = patches;
         this.changes = changes;
+        this.policy = policy;
     }
 
     @Tool(name = "propose_patch", description = "Propose a restricted code patch.",
@@ -53,7 +58,11 @@ public class PatchTools {
                     description = "文件改动，格式见工具说明：=== FILE: 相对路径 === 后跟完整新内容") String edits,
             @ToolParam(name = "reason",
                     description = "一句话说明为什么要改（会写进变更单，便于人工复核）") String reason,
+            @ToolParam(name = "confirmed_change_id", required = false,
+                    description = "已确认的变更单号（chg-...）；目标环境策略为 CONFIRM 时必填")
+            String confirmedChangeId,
             ProjectContext ctx) {
+        policy.requireAllowed(ctx, ToolLevel.L1_PROPOSE, "propose_patch", confirmedChangeId);
         if (ctx.isProduction()) {
             return "err: 生产环境不允许提交代码补丁；请先在 dev/test 验证";
         }

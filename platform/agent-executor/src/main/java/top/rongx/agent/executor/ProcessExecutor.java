@@ -38,9 +38,89 @@ final class ProcessExecutor {
         }
     }
 
+    /**
+     * 失败动作类型：退出码非 0 时决定错误码与摘要模板。
+     *
+     * <p>过去所有非 0 退出码一律标 E-101"编译失败"——测试失败、镜像构建失败、脚本失败
+     * 在 UI 与自动修复里都被当成编译错误处理，自愈动作与人的判断同时被误导。
+     * 现在调用方按动作语义传入类型；未传入时按命令首参数特征推断，兜底 SCRIPT_FAILED。
+     */
+    enum FailureKind {
+        /** 真正的编译动作（backend_build 等编译段）：保持 E-101。 */
+        COMPILE,
+        /** 测试动作（backend_test / frontend_test）：E-102。 */
+        TEST,
+        /** 镜像构建（docker build）：E-103。 */
+        IMAGE_BUILD,
+        /** 其它任意命令 / 脚本：E-104。 */
+        SCRIPT;
+
+        /** 按动作 wireName 映射；未知动作返回 null（由命令特征推断）。 */
+        static FailureKind ofAction(String actionWireName) {
+            if (actionWireName == null) {
+                return null;
+            }
+            return switch (actionWireName) {
+                case "backend_test", "frontend_test" -> TEST;
+                case "image_package" -> IMAGE_BUILD;
+                case "backend_build", "frontend_build" -> COMPILE;
+                default -> null;
+            };
+        }
+
+        /** 按命令首参数特征推断（mvn/pnpm 的 test 目标、docker build、其余脚本）。 */
+        static FailureKind fromArgv(List<String> argv) {
+            if (argv == null || argv.isEmpty()) {
+                return SCRIPT;
+            }
+            String head = argv.get(0);
+            String base = head == null ? "" : Path.of(head).getFileName().toString()
+                    .toLowerCase(java.util.Locale.ROOT);
+            if (base.contains(".")) {
+                base = base.substring(0, base.indexOf('.'));
+            }
+            boolean isMaven = base.equals("mvn") || base.equals("mvnw");
+            boolean isPnpmLike = base.equals("pnpm") || base.equals("npm") || base.equals("yarn")
+                    || base.equals("node") || base.equals("vitest") || base.equals("jest");
+            if (isMaven || isPnpmLike) {
+                boolean isTest = argv.stream().skip(1).limit(4).anyMatch(
+                        a -> "test".equalsIgnoreCase(a) || "verify".equalsIgnoreCase(a)
+                                || "-t".equalsIgnoreCase(a));
+                return isTest ? TEST : COMPILE;
+            }
+            if (base.equals("docker") && argv.stream().anyMatch(a -> "build".equals(a))) {
+                return IMAGE_BUILD;
+            }
+            return SCRIPT;
+        }
+
+        String errorCode() {
+            return switch (this) {
+                case COMPILE -> ErrorCode.COMPILE_FAILED.code();
+                case TEST -> ErrorCode.TEST_FAILED.code();
+                case IMAGE_BUILD -> ErrorCode.IMAGE_BUILD_FAILED.code();
+                case SCRIPT -> ErrorCode.SCRIPT_FAILED.code();
+            };
+        }
+
+        String summary(int exit, List<String> argv) {
+            String cmd = String.join(" ", argv);
+            String base = switch (this) {
+                case TEST -> "测试未通过（exit " + exit + "）：" + cmd + "；见 surefire/vitest 测试报告";
+                case IMAGE_BUILD -> "镜像/产物打包失败（exit " + exit + "）：" + cmd + "；检查 Dockerfile 与网络";
+                case COMPILE -> "编译失败（exit " + exit + "）：" + cmd + "；见编译诊断";
+                case SCRIPT -> "命令失败（exit " + exit + "）：" + cmd + "；见日志尾部";
+            };
+            // exit >= 128 = 被信号终止（137 = OOM/kill -9，143 = SIGTERM）：高频排障线索，单独点出
+            return exit >= 128
+                    ? base + "（被信号终止，exit-128=信号号；137 通常是内存不足被 OOM kill）"
+                    : base;
+        }
+    }
+
     StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
                      BooleanSupplier cancelled) {
-        return exec(dir, argv, budgetMillis, sink, cancelled, null);
+        return exec(dir, argv, budgetMillis, sink, cancelled, null, null);
     }
 
     /**
@@ -49,7 +129,41 @@ final class ProcessExecutor {
      */
     StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
                      BooleanSupplier cancelled, Consumer<String> live) {
-        long deadline = System.nanoTime() + Math.max(1, budgetMillis) * 1_000_000L;
+        return exec(dir, argv, budgetMillis, sink, cancelled, live, null);
+    }
+
+    /**
+     * 带动作语义的执行：失败时按 {@code failureKind}（缺省按 argv 推断）选错误码。
+     */
+    StepOutcome exec(Path dir, List<String> argv, long budgetMillis, StringBuilder sink,
+                     BooleanSupplier cancelled, Consumer<String> live, FailureKind failureKind) {
+        return run(dir, argv, 0L, Math.max(1, budgetMillis), sink, cancelled, live, failureKind);
+    }
+
+    /**
+     * 进度感知执行：只要还有新输出就继续跑，连续 {@code idleMillis} 无输出才判定卡死。
+     *
+     * <p>用于 {@code docker pull} 这类「慢但一直有进度」的长任务：固定总预算会把
+     * 「层已下载完成、正在解压」误判成网络故障（实测 node:22-bookworm 在忙时超过 180s，
+     * 报 E-302 而全部层其实已 Download complete）。{@code idleMillis <= 0} 时退回固定预算语义。
+     * {@code maxTotalMillis > 0} 时另有总时长兜底，防止「一直有零星输出」的任务无限跑。
+     */
+    StepOutcome execUntilIdle(Path dir, List<String> argv, long idleMillis, long maxTotalMillis,
+                              StringBuilder sink, BooleanSupplier cancelled, Consumer<String> live) {
+        if (idleMillis <= 0) {
+            return run(dir, argv, 0L, Math.max(1, maxTotalMillis), sink, cancelled, live, null);
+        }
+        return run(dir, argv, idleMillis, maxTotalMillis, sink, cancelled, live, null);
+    }
+
+    private StepOutcome run(Path dir, List<String> argv, long idleMillis, long maxTotalMillis,
+                            StringBuilder sink, BooleanSupplier cancelled, Consumer<String> live,
+                            FailureKind failureKind) {
+        long startedAt = System.nanoTime();
+        long deadline = maxTotalMillis > 0
+                ? startedAt + maxTotalMillis * 1_000_000L : Long.MAX_VALUE;
+        java.util.concurrent.atomic.AtomicLong lastOutputAt =
+                new java.util.concurrent.atomic.AtomicLong(startedAt);
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(dir.toFile())
                 .redirectErrorStream(true);
@@ -63,9 +177,19 @@ final class ProcessExecutor {
                     "无法启动命令 " + argv.get(0) + "：" + e.getMessage());
         }
 
-        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink, live));
+        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink, chunk -> {
+            lastOutputAt.set(System.nanoTime());
+            if (live != null) {
+                live.accept(chunk);
+            }
+        }));
 
         boolean finished;
+        // 终止原因要能区分「一直有进度但太久」和「彻底没动静」，否则读日志的人无法判断
+        // 是网络卡死还是单纯慢——这正是 E-302 那次被误读成 registry 故障的原因。
+        String stopReason = null;
+        long stopBudgetMillis = maxTotalMillis;
+        boolean stalled = false;
         try {
             while (true) {
                 if (cancelled != null && cancelled.getAsBoolean()) {
@@ -77,8 +201,18 @@ final class ProcessExecutor {
                     finished = true;
                     break;
                 }
-                if (System.nanoTime() - deadline > 0) {
+                long now = System.nanoTime();
+                if (now - deadline > 0) {
                     finished = false;
+                    stopReason = "总时长已达上限";
+                    break;
+                }
+                if (idleMillis > 0
+                        && now - lastOutputAt.get() > idleMillis * 1_000_000L) {
+                    finished = false;
+                    stopReason = "无任何输出";
+                    stopBudgetMillis = idleMillis;
+                    stalled = true;
                     break;
                 }
             }
@@ -102,15 +236,18 @@ final class ProcessExecutor {
             joinQuietly(reader);
             // 预算可能是秒级碎片（多步配方里前一步吃掉大半预算），按整秒显示会变成
             // "执行超时（0s）"，读日志的人无法判断到底是超时还是命令本身有问题。
+            String verdict = stalled
+                    ? "执行停滞（" + human(stopBudgetMillis) + " 无输出），已终止："
+                    : "执行超时（" + human(stopBudgetMillis) + "，" + stopReason + "），已终止：";
             return StepOutcome.failed(124, ErrorCode.TIMEOUT.code(),
-                    "执行超时（" + human(budgetMillis) + "），已终止：" + String.join(" ", argv));
+                    verdict + String.join(" ", argv));
         }
 
         joinQuietly(reader);
         int exit = process.exitValue();
         if (exit != 0) {
-            return StepOutcome.failed(exit, ErrorCode.COMPILE_FAILED.code(),
-                    "命令失败（exit " + exit + "）：" + String.join(" ", argv) + "；见日志尾部");
+            FailureKind kind = failureKind != null ? failureKind : FailureKind.fromArgv(argv);
+            return StepOutcome.failed(exit, kind.errorCode(), kind.summary(exit, argv));
         }
         return StepOutcome.ok();
     }
@@ -210,14 +347,25 @@ final class ProcessExecutor {
             return text;
         }
         // 1. Authorization / Bearer / token 赋值
-        text = text.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._-]{16,}", "$1***");
+        //    Bearer 阈值 8：与 agent-tools SecretRedactor 对齐（7 位以下不构成有效凭证，
+        //    统一阈值才能保证同一段密钥在所有出口的行为一致）。
+        text = text.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._-]{8,}", "$1***");
         text = text.replaceAll("(?i)((?:" + "token|secret|password|passwd|api[_-]?key|access[_-]?key"
                 + "|authorization" + ")\\s*[=:]\\s*)[^\\s\"']{8,}", "$1***");
+        // 1a. TOKEN_PREFIX：OpenAI/Anthropic、GitHub、GitLab、Slack、AWS 等前缀形凭证。
+        //     与 SecretRedactor 的 TOKEN_PREFIX 规则对齐；sk-proj- / sk-ant- 由 sk- 覆盖。
+        text = text.replaceAll("(?i)(sk-[A-Za-z0-9_-]{4,}"
+                + "|gh[pousr]_[A-Za-z0-9]{4,}"
+                + "|glpat-[A-Za-z0-9_-]{4,}"
+                + "|xox[baprs]-[A-Za-z0-9_-]{4,}"
+                + "|AKIA[0-9A-Z]{8,})", "***");
         // 2. 长十六进制串（jwt 第二段等）按行内孤立 token 处理；
         //    但 `sha256:<hex>` 是镜像/产物的公开指纹，属于构建证据，必须保留（否则页面上只剩 ***）。
         text = text.replaceAll("(?<!sha256:)(?<!sha512:)\\b[0-9a-fA-F]{64}\\b", "***");
         // 3. 形如 -----BEGIN ... PRIVATE KEY----- 的 PEM 块
         text = text.replaceAll("(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "***PEM***");
+        // 4. Cookie / Set-Cookie 整行（与 SecretRedactor 对齐：整行都是会话凭证）
+        text = text.replaceAll("(?im)^\\s*(?:set-)?cookie\\s*:.*$", "***COOKIE***");
         return text;
     }
 

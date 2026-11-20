@@ -44,6 +44,7 @@ import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.project.ProjectEnv;
 import top.rongx.agent.runtime.ChatService;
 import top.rongx.agent.runtime.ChatSessionRegistry;
+import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.PlatformException;
 import top.rongx.agent.domain.error.RunException;
 
@@ -83,7 +84,7 @@ class ConversationManagerTest {
     }
 
     @Test
-    @DisplayName("调度会话按用户唯一；新建会话默认沿用调度环境")
+    @DisplayName("调度会话按用户唯一；新建会话不传 env 时落默认 test（BUG-27：不再继承调度会话历史 env）")
     void supervisorAndCreate() {
         ConversationManager manager = manager(new SilentChat(), 2);
         Conversation first = manager.ensureSupervisor(PROJECT, USER);
@@ -92,13 +93,51 @@ class ConversationManagerTest {
         assertEquals(ConversationKind.SUPERVISOR, first.kind());
         assertFalse(manager.ensureSupervisor(PROJECT, "bob").id().equals(first.id()));
 
+        // 把调度会话的历史环境改成 prod（模拟上次派发到 prod）
+        manager.updateOwned(first.id(), USER, new ConversationPatch(null, "prod", null,
+                null, null, null, null));
+        // 不传 env 的新会话必须落默认 test，而不是继承调度会话的 prod
         Conversation created = manager.createConversation(PROJECT, USER, "修复构建", null, "wt-a");
-        assertEquals("test", created.env());
+        assertEquals("test", created.env(),
+                "BUG-27：新建会话不传 env 时不得继承调度会话历史 env");
         assertEquals("wt-a", created.worktree());
         assertEquals(1, manager.list(PROJECT, USER, false).stream()
                 .filter(c -> c.kind() == ConversationKind.NORMAL).count());
         assertTrue(manager.list(PROJECT, "bob", false).stream()
                 .noneMatch(c -> c.kind() == ConversationKind.NORMAL));
+    }
+
+    @Test
+    @DisplayName("BUG-27：显式传 env 的新会话仍按传入环境创建")
+    void createWithExplicitEnv() {
+        ConversationManager manager = manager(new SilentChat(), 2);
+        manager.ensureSupervisor(PROJECT, USER);
+        Conversation created = manager.createConversation(PROJECT, USER, "t", "dev", null);
+        assertEquals("dev", created.env());
+    }
+
+    @Test
+    @DisplayName("BUG-27：同一 patch 同时改 env+worktree 时，worktree 按新 env 校验且保存后 env 生效")
+    void updateOwnedEnvPlusWorktreeUsesNewEnv() {
+        ConversationManager manager = manager(new SilentChat(), 2);
+        manager.ensureSupervisor(PROJECT, USER);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        // 旧实现用旧 env（test）构造校验上下文；改为先 resolveEnv 新 env
+        assertTrue(manager.updateOwned(c.id(), USER,
+                new ConversationPatch(null, "prod", "wt-b", null, null, null, null)).isPresent());
+        Conversation updated = manager.findOwned(c.id(), USER).orElseThrow();
+        assertEquals("prod", updated.env());
+        assertEquals("wt-b", updated.worktree());
+    }
+
+    @Test
+    @DisplayName("BUG-27：patch 里的未知环境被拒绝（含改 env+worktree 的组合）")
+    void updateOwnedRejectsUnknownEnv() {
+        ConversationManager manager = manager(new SilentChat(), 2);
+        manager.ensureSupervisor(PROJECT, USER);
+        Conversation c = manager.createConversation(PROJECT, USER, "t", "test", null);
+        assertThrows(PlatformException.class, () -> manager.updateOwned(c.id(), USER,
+                new ConversationPatch(null, "staging", "wt-x", null, null, null, null)));
     }
 
     @Test
@@ -245,6 +284,30 @@ class ConversationManagerTest {
         assertEquals(TaskStatus.DONE, done.status());
         assertThrows(PlatformException.class,
                 () -> manager.updateTask("OTHER", USER, task.id(), null, null, TaskStatus.TODO));
+    }
+
+    @Test
+    @DisplayName("派发票据：open 建 RUNNING，close 回写终态走 UPDATE 不撞主键")
+    void dispatchTicketCloseUpdatesInsteadOfInsert() {
+        ConversationManager manager = manager(new SilentChat(), 1);
+        // 真实调度流：单节点 DAG。fake store 的 send 立即落一个 SUCCEEDED run；
+        // saveTask 现在撞重复主键会抛——若 closeTicket 仍走 INSERT，本测试直接红
+        //（线上 workspace_tasks_pkey duplicate key 的复现）。
+        var node = new top.rongx.agent.domain.conversation.DispatchNode(
+                "build", null, "构建检查", "test", null,
+                "跑一次构建", List.of(), true, 60);
+        var plan = new top.rongx.agent.domain.conversation.DispatchPlan(
+                List.of(node), false, 1, 300, 1);
+
+        top.rongx.agent.domain.conversation.DispatchResult result =
+                manager.dispatch(PROJECT, USER, plan);
+
+        assertEquals("SUCCEEDED",
+                result.find("build").orElseThrow().status(), "节点应成功");
+        WorkspaceTask ticket = manager.listTasks(PROJECT, USER).stream()
+                .filter(t -> t.goal().startsWith("[build] ")).findFirst().orElseThrow();
+        assertEquals(TaskStatus.DONE, ticket.status(), "close 后票据应为 DONE");
+        assertTrue(ticket.expectedOutput().contains("SUCCEEDED"), "终态证据应回写");
     }
 
     @Test
@@ -515,12 +578,21 @@ class ConversationManagerTest {
 
         @Override
         public WorkspaceTask saveTask(WorkspaceTask task) {
-            tasks.put(task.id(), task);
+            // 模仿真库的主键语义：INSERT 撞已有 id 必须抛（否则 closeTicket 的
+            // 「INSERT 当 UPDATE 用」缺陷在测试里永远发现不了）。
+            if (tasks.putIfAbsent(task.id(), task) != null) {
+                throw new RunException(ErrorCode.RUN_INVALID_STATE,
+                        "任务保存失败：duplicate key " + task.id());
+            }
             return task;
         }
 
         @Override
         public WorkspaceTask updateTask(WorkspaceTask task) {
+            if (!tasks.containsKey(task.id())) {
+                throw new RunException(ErrorCode.RUN_INVALID_STATE,
+                        "任务更新失败：不存在 " + task.id());
+            }
             tasks.put(task.id(), task);
             return task;
         }

@@ -238,6 +238,8 @@ export interface SessionUsageView {
 export interface UsageSummaryView {
   days: number
   totals: TokenUsageTotals
+  /** 总体缓存命中率（0–100 整数）：后端已算好，前端不要重复计算。 */
+  cacheHitRate?: number
   daily: Array<{
     day: string
     calls: number
@@ -245,6 +247,8 @@ export interface UsageSummaryView {
     cachedTokens: number
     outputTokens: number
     totalTokens: number
+    /** 该行的缓存命中率（0–100 整数）。 */
+    cacheHitRate?: number
   }>
   byModel: Array<{
     modelName: string
@@ -253,6 +257,8 @@ export interface UsageSummaryView {
     cachedTokens: number
     outputTokens: number
     totalTokens: number
+    /** 该行的缓存命中率（0–100 整数）。 */
+    cacheHitRate?: number
   }>
   byProject: Array<{
     projectId: string
@@ -261,6 +267,8 @@ export interface UsageSummaryView {
     cachedTokens: number
     outputTokens: number
     totalTokens: number
+    /** 该行的缓存命中率（0–100 整数）。 */
+    cacheHitRate?: number
   }>
 }
 
@@ -1348,5 +1356,30 @@ export function savePostgresBackend(input: PostgresInput): Promise<{
 /** 热切换回 SQLite（PG 数据保留，不清空）。 */
 export function switchToSqlite(): Promise<DatabaseSwitchResult> {
   return apiFetch('/api/v1/settings/database', { method: 'DELETE' })
+}
+
+// ---------------------------------------------------------------- 工具链镜像
+
+/**
+ * 某台主机上某个构建镜像的就绪状态。
+ *
+ * <p>镜像层缓存属于一台机器的 Docker 守护，所以按 host + image 记录；
+ * FAILED 表示上次失败且处于退避窗口，`retryInSeconds` 之内不会被再次尝试。
+ */
+export interface SandboxImage {
+  host: string
+  image: string
+  status: 'READY' | 'FAILED'
+  source: string | null
+  digest: string | null
+  attempts: number
+  lastError: string | null
+  updatedAt: number
+  retryInSeconds: number
+}
+
+/** 只读：不触发拉取，看的就是上次收敛后的结论。 */
+export function listSandboxImages(): Promise<SandboxImage[]> {
+  return apiFetch('/api/v1/settings/sandbox/images')
 }
 

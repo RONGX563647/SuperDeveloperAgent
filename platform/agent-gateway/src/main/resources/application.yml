@@ -63,6 +63,12 @@ sa-token:
   # 未配置时回退环境变量 AGENT_MODEL_API_KEY；两者都没有也能启动，仅调用模型时提示去配置。
   # 明文凭证不入配置库（规约 §8）。
 agent:
+  # 治理数据保留期（BUG-37）：与审计表 audit_event 的追溯窗口对齐。
+  # change-hours：变更单/补丁保留时长（默认 2160h = 90 天）；run-days：运行账本保留天数（默认 90）。
+  governance:
+    retention:
+      change-hours: ${AGENT_GOVERNANCE_CHANGE_HOURS:2160}
+      run-days: ${AGENT_GOVERNANCE_RUN_DAYS:90}
   # 数据库：留空走 SQLite（单文件、零运维）；配置 PG URL 后所有持久化切换过去。
   # 只认“未配置”时回落 SQLite；配置了 PG 但连不上会启动失败，避免数据分裂。
   # 运行中换后端不必改这里：设置页的「热切换」会替换连接池并写回 db-backend.yml。
@@ -194,8 +200,26 @@ agent:
     runtime: ${AGENT_SANDBOX_RUNTIME:}
     # 缓存卷初始化用的可信最小镜像（只 mkdir/chown/touch），绝不用构建镜像
     init-image: ${AGENT_SANDBOX_INIT_IMAGE:busybox:1.36}
-    # 自动拉取的硬超时（秒）；网络慢的 registry 可调大，离线环境可关闭预检
-    pull-timeout-seconds: ${AGENT_SANDBOX_PULL_TIMEOUT_SECONDS:180}
+    # 自动拉取的总时长上限（秒）：只在「一直有进度」时兜底，不是判定卡死的依据。
+    # 判定卡死看下面的静默阈值——固定总预算会把「层已下完、正在解压」误判成网络故障。
+    pull-timeout-seconds: ${AGENT_SANDBOX_PULL_TIMEOUT_SECONDS:900}
+    # 拉取静默判定（秒）：连续这么久没有任何新输出才视为卡死并终止。
+    # 慢但持续推进的拉取不会被砍断；真卡住（DNS/registry 无响应）则很快给出可读结论。
+    pull-idle-timeout-seconds: ${AGENT_SANDBOX_PULL_IDLE_TIMEOUT_SECONDS:60}
+    # 直连拉取的自动重试次数：只对「值得再试」的失败重试（超时/停滞/已有进度）；
+    # 鉴权、manifest 不存在、磁盘满不重试，避免把确定性失败拖成几分钟。
+    pull-attempts: ${AGENT_SANDBOX_PULL_ATTEMPTS:2}
+    # 失败退避：第 n 次失败后等 base*2^(n-1)，最长不超过 max（秒）。
+    # 退避窗口内直接复用上次结论，不再让每次构建都白等一轮超时。
+    pull-backoff-seconds: ${AGENT_SANDBOX_PULL_BACKOFF_SECONDS:60}
+    pull-backoff-max-seconds: ${AGENT_SANDBOX_PULL_BACKOFF_MAX_SECONDS:900}
+    # 镜像加速源 / 本地缓存源（registry 前缀，逗号分隔）：直连拉取失败后按序重试，
+    # 成功后自动 tag 回原名。只对 Docker Hub 镜像生效；留空则只用守护进程自带的 mirrors。
+    # 生产推荐指向本地 pull-through cache（deploy/registry-cache，形如 localhost:5000）。
+    pull-mirrors: ${AGENT_SANDBOX_PULL_MIRRORS:}
+    # 就绪状态归属的主机名（默认取 HOSTNAME/COMPUTERNAME）：镜像层缓存属于这台机器，
+    # 多实例共用同一 Docker 守护时共享，不同主机之间不共享。
+    host: ${AGENT_SANDBOX_HOST:}
     # 离线/自建 registry 场景可关闭预检（关闭后会回到 docker CLI 自行拉取的行为）
     precheck-image: ${AGENT_SANDBOX_PRECHECK_IMAGE:true}
     # 网络策略：bridge=能拉依赖（默认）；build-net=专用网络（生产建议，见文档）；

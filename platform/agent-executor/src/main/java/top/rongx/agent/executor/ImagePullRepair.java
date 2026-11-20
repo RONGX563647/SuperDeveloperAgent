@@ -26,42 +26,26 @@ final class ImagePullRepair implements FailureRepair {
 
     @Override
     public boolean matches(Diagnosis d) {
-        // 动作前预检已经尝试过自动拉取仍失败时，不再重复拉同一个镜像（否则白等两轮硬超时）。
-        // 这时只保留平台复核与发布 Agent 兜底；预检关闭（precheck-image=false）时才由本修复器补位。
-        return d.image() != null && !d.image().isBlank() && !d.precheckTried();
+        // 预检失败后仍允许本修复器出手：是否值得再试由就绪策略的退避状态决定
+        // （退避窗口内会立即返回上次结论，不会重复等一轮超时）。
+        return d.image() != null && !d.image().isBlank();
     }
 
     @Override
     public Outcome repair(Diagnosis d, Context ctx) {
         List<String> lines = new ArrayList<>();
-        if (d.precheckTried()) {
-            return Outcome.notFixed("动作前预检已尝试自动拉取，跳过重复拉取", lines);
-        }
         if (!d.image().equals(ctx.configuredImage())) {
             return Outcome.notFixed("日志中的镜像与平台配置不一致，跳过自动拉取（防提示注入）：日志="
                     + d.image() + " 配置=" + ctx.configuredImage(), lines);
         }
-        if (ctx.pullCommand() == null || ctx.inspectCommand() == null) {
+        if (ctx.provisioner() == null) {
             return Outcome.notFixed("当前执行模式不支持自动拉取镜像（非容器沙箱）", lines);
         }
         if (ctx.cancelled().getAsBoolean()) {
             return Outcome.notFixed("运行已取消，跳过自动修复", lines);
         }
 
-        // 先只读复核：镜像已在本机说明这次失败不是缺镜像（日志里可能只是上一轮残留），
-        // 必须交回协调器让后续修复器（发布 Agent）继续诊断，不能谎报"已修复"并占用续跑。
-        ProcessExecutor.StepOutcome present = ctx.command()
-                .run(ctx.inspectCommand(), INSPECT_TIMEOUT_MS, null);
-        if (present.errorCode() == null) {
-            lines.add("[autofix] 镜像已在本机（docker image inspect 通过），本次失败不是缺镜像");
-            return Outcome.notFixed("镜像已就绪，当前失败另有原因（交给后续诊断）", lines);
-        }
-
-        // 先写「开始」再跑命令：实时进度行由 live 直接落日志，顺序才不会倒过来
-        ctx.log().accept("[autofix] 检测到工具链镜像缺失：" + d.image()
-                + " · 自动执行 " + String.join(" ", ctx.pullCommand())
-                + "（最长 " + ctx.pullTimeoutMs() / 1000 + "s，可取消）\n");
-
+        lines.add("[autofix] 共用动作前预检的就绪策略（进度感知超时 / 重试 / 镜像源 / 退避）\n");
         AtomicInteger written = new AtomicInteger();
         // live 回调来自 ProcessExecutor 的虚拟线程：直接写运行日志（引擎侧已同步），
         // 不往结果 List 里并发 add，避免线程安全问题，也保证进度实时可见。
@@ -80,22 +64,21 @@ final class ImagePullRepair implements FailureRepair {
             }
         };
 
-        ProcessExecutor.StepOutcome pull = ctx.command()
-                .run(ctx.pullCommand(), ctx.pullTimeoutMs(), live);
-        if (pull.errorCode() != null) {
-            lines.add("[autofix] ❌ 自动拉取失败（" + pull.errorCode() + "）："
-                    + truncate(String.valueOf(pull.summary()), 240));
-            return Outcome.notFixed("docker pull 失败：" + pull.errorCode(), lines);
-        }
+        ImageProvisioner.Result result = ctx.provisioner().provision(ctx.cancelled(), live);
 
-        // 复核：只信平台自己执行的 inspect，不采信 pull 的输出文本
-        ProcessExecutor.StepOutcome inspect = ctx.command()
-                .run(ctx.inspectCommand(), INSPECT_TIMEOUT_MS, null);
-        if (inspect.errorCode() != null) {
-            return Outcome.notFixed("拉取后镜像仍不可用（" + inspect.errorCode() + "）", lines);
+        // 镜像本来就在本机 → 这次失败另有原因，必须交回后续修复器，不能谎报"已修复"占用续跑
+        if (result.ready() && "local".equals(result.source())) {
+            lines.add("[autofix] 镜像已在本机（docker image inspect 通过），本次失败不是缺镜像");
+            return Outcome.notFixed("镜像已就绪，当前失败另有原因（交给后续诊断）", lines);
         }
-        lines.add("[autofix] ✅ 镜像已就绪并通过 docker image inspect 复核");
-        return Outcome.fixed("镜像已拉取并验证", lines);
+        if (result.ready()) {
+            lines.add("[autofix] ✅ 镜像已就绪并通过 docker image inspect 复核（来源：" + result.source() + "）");
+            return Outcome.fixed("镜像已拉取并验证（" + result.source() + "）", lines);
+        }
+        lines.add("[autofix] ❌ 自动拉取失败（" + result.errorCode() + "）："
+                + truncate(result.summary(), 240) + "；诊断：" + truncate(result.diagnosis(), 240)
+                + (result.backedOff() ? "；仍在退避窗口内，稍后重跑会自动重试" : ""));
+        return Outcome.notFixed("docker pull 未收敛：" + result.errorCode(), lines);
     }
 
     private static String truncate(String value, int max) {
