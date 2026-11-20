@@ -7,6 +7,9 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -27,6 +30,9 @@ import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.process.JavaRuntime;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
+import top.rongx.agent.domain.settings.DeployServer;
+import top.rongx.agent.domain.settings.DeployServerRepository;
+import top.rongx.agent.domain.settings.SshAccess;
 import top.rongx.agent.gateway.bugfix.BugFixRedactor;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.DeployException;
@@ -68,12 +74,18 @@ public class DeploymentControlService {
     private final RuntimeInspector inspector;
     private final EnvironmentStore envStore;
     private final Path deployRoot;
+    /** 远程部署服务器（SERVER 目标）：矩阵/日志/启停都要能看见远端容器。 */
+    private final DeployServerRepository servers;
+    private final SshAccess ssh;
 
     public DeploymentControlService(RuntimeInspector inspector, EnvironmentStore envStore,
+                                    DeployServerRepository servers, SshAccess ssh,
                                     @Value("${agent.workspace.root:./data/workspaces}")
                                     String workspaceRoot) {
         this.inspector = inspector;
         this.envStore = envStore;
+        this.servers = servers;
+        this.ssh = ssh;
         this.deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("deploy");
     }
@@ -108,6 +120,24 @@ public class DeploymentControlService {
             }
         }
 
+        // 远程 SERVER 部署：容器在远端主机上，本地 docker inspect 看不到，
+        // 必须逐个已启用服务器查询（否则生产环境在矩阵里永远是空的）。
+        List<String> remoteNotes = new ArrayList<>();
+        for (DeployServer server : enabledServers()) {
+            try {
+                for (RemoteContainer rc : remoteContainers(server, projectId)) {
+                    if (!ENVS.contains(rc.env())) {
+                        continue;
+                    }
+                    CellAcc acc = cells.computeIfAbsent(rc.env() + "|" + rc.version(),
+                            k -> new CellAcc(rc.env(), rc.version()));
+                    acc.mergeRemote(rc);
+                }
+            } catch (RuntimeException e) {
+                remoteNotes.add(server.name() + "：" + e.getMessage());
+            }
+        }
+
         // 「当前」= 该环境最近部署的版本（HOST / Docker 都适用，不依赖单一 current 指针）
         Map<String, CellAcc> newest = new LinkedHashMap<>();
         for (CellAcc acc : cells.values()) {
@@ -128,8 +158,13 @@ public class DeploymentControlService {
         List<EnvColumn> columns = ENVS.stream()
                 .map(env -> new EnvColumn(env, ENV_LABELS.getOrDefault(env, env)))
                 .toList();
-        return new Matrix(columns, versions, list, dockerAvailable,
-                dockerAvailable ? "" : "Docker 不可用：当前只展示 HOST 部署");
+        String note = dockerAvailable ? ""
+                : "本机 Docker 不可用：本机容器未展示（远程服务器照常展示）";
+        if (!remoteNotes.isEmpty()) {
+            note = (note.isEmpty() ? "" : note + "；") + "远程服务器未刷新："
+                    + String.join("；", remoteNotes);
+        }
+        return new Matrix(columns, versions, list, dockerAvailable, note);
     }
 
     // ------------------------------------------------------------------ 启停
@@ -147,6 +182,25 @@ public class DeploymentControlService {
                 if (!status.running()) {
                     docker("start", status.name());
                     started.add(status.name());
+                }
+            }
+            return new ActionResult(true, started.isEmpty()
+                    ? "容器已在运行" : "已启动容器：" + String.join("、", started),
+                    stateOf(projectId, targetEnv, wanted));
+        }
+
+        // 1b) 远程 SERVER：容器在远端主机，本地 docker 看不到
+        List<RemoteContainer> remoteTargets = remoteTargets(projectId, targetEnv, wanted);
+        if (!remoteTargets.isEmpty()) {
+            List<String> started = new ArrayList<>();
+            for (RemoteContainer rc : remoteTargets) {
+                if (!rc.running()) {
+                    SshAccess.Result result = sshDocker(rc.server(), "start " + rc.name());
+                    if (!result.ok()) {
+                        throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT,
+                                "远端启动失败：" + shortError(result.error()));
+                    }
+                    started.add(rc.server().name() + ":" + rc.name());
                 }
             }
             return new ActionResult(true, started.isEmpty()
@@ -252,6 +306,16 @@ public class DeploymentControlService {
                 stopped.add(status.name());
             }
         }
+        List<String> remoteStopped = new ArrayList<>();
+        for (RemoteContainer rc : remoteTargets(projectId, targetEnv, wanted)) {
+            if (!rc.running()) {
+                continue;
+            }
+            SshAccess.Result result = sshDocker(rc.server(), "stop " + rc.name());
+            if (result.ok()) {
+                remoteStopped.add(rc.server().name() + ":" + rc.name());
+            }
+        }
         boolean hostStopped = false;
         for (HostSlot slot : hostSlots(projectId, targetEnv)) {
             boolean match = wanted == null
@@ -263,12 +327,15 @@ public class DeploymentControlService {
                 hostStopped = true;
             }
         }
-        if (stopped.isEmpty() && !hostStopped) {
+        if (stopped.isEmpty() && remoteStopped.isEmpty() && !hostStopped) {
             return new ActionResult(true, "该环境没有正在运行的应用", "STOPPED");
         }
         List<String> parts = new ArrayList<>();
         if (!stopped.isEmpty()) {
             parts.add("容器 " + String.join("、", stopped));
+        }
+        if (!remoteStopped.isEmpty()) {
+            parts.add("远程容器 " + String.join("、", remoteStopped));
         }
         if (hostStopped) {
             parts.add("HOST 进程");
@@ -323,6 +390,24 @@ public class DeploymentControlService {
                     matched.stream().map(ContainerStatus::name).toList(),
                     redactTail(lines, limit),
                     "docker logs " + target.name() + "（最近 " + since + " 分钟，最多 " + limit + " 行）");
+        }
+
+        // 远程 SERVER：本地没有该容器时，改为 ssh 到远端 docker logs
+        List<RemoteContainer> remoteMatched = remoteTargets(projectId, targetEnv, wanted);
+        if (!remoteMatched.isEmpty()) {
+            RemoteContainer target = pickRemote(remoteMatched, container);
+            SshAccess.Result result = sshDocker(target.server(),
+                    "logs --since " + since + "m --tail " + limit + " " + target.name());
+            if (!result.ok()) {
+                throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT,
+                        "读取远端容器日志失败：" + shortError(result.error()));
+            }
+            List<String> lines = Stream.of(String.valueOf(result.output()).split("\\R", -1)).toList();
+            return new DeploymentLogs("SERVER", target.name(),
+                    remoteMatched.stream().map(RemoteContainer::name).toList(),
+                    redactTail(lines, limit),
+                    "ssh " + target.server().name() + " docker logs " + target.name()
+                            + "（最近 " + since + " 分钟，最多 " + limit + " 行）");
         }
 
         HostSlot slot = findHostSlot(projectId, targetEnv, wanted);
@@ -813,13 +898,175 @@ public class DeploymentControlService {
 
     // ------------------------------------------------------------------ DTO
 
+    // ------------------------------------------------------------ 远程 SERVER 容器
+
+    /** 远端 ps 查询超时：矩阵/日志/启停都不该被一台不可达的服务器拖死。 */
+    private static final long REMOTE_SSH_TIMEOUT_MS = 8_000;
+    private static final String REMOTE_PS_FORMAT = "{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"
+            + "|{{.Label \"agent.env\"}}|{{.Label \"agent.version\"}}|{{.Label \"agent.sha\"}}"
+            + "|{{.CreatedAt}}";
+    private static final Pattern REMOTE_HOST_PORT = Pattern.compile(":(\\d+)->");
+
+    private List<DeployServer> enabledServers() {
+        if (servers == null) {
+            return List.of();
+        }
+        try {
+            return servers.findAll().stream().filter(DeployServer::enabled).toList();
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+    }
+
+    /** 远端容器清单：容器名以 agent-deploy-&lt;project&gt; 开头（含旧版本无标签的容器）。 */
+    private List<RemoteContainer> remoteContainers(DeployServer server, String projectId) {
+        String prefix = "agent-deploy-" + projectId;
+        String command = "ps -a --filter name=" + prefix + " --format '" + REMOTE_PS_FORMAT + "'";
+        SshAccess.Result result = sshDocker(server, command);
+        if (!result.ok()) {
+            throw new IllegalStateException(shortError(result.error()));
+        }
+        List<RemoteContainer> found = new ArrayList<>();
+        String output = result.output() == null ? "" : result.output();
+        for (String line : output.split("\\R")) {
+            if (line.isBlank()) {
+                continue;
+            }
+            String[] f = line.split("\\|", -1);
+            if (f.length < 8) {
+                continue;
+            }
+            String name = f[0].trim();
+            // 边界校验：agent-deploy-proj 不能误匹配 agent-deploy-proj2
+            if (!name.equals(prefix) && !name.startsWith(prefix + "-")) {
+                continue;
+            }
+            String rest = name.substring(prefix.length());
+            String env = f[4].trim();
+            if (env.isEmpty()) {
+                env = envFromName(rest);
+            }
+            if (env.isEmpty()) {
+                continue;
+            }
+            String sha = f[6].trim();
+            String version = f[5].trim();
+            if (version.isEmpty()) {
+                version = versionFromName(rest, env, sha);
+            }
+            if (version.isEmpty()) {
+                version = "latest";
+            }
+            String status = f[2].trim();
+            found.add(new RemoteContainer(server, name, f[1].trim(), env, version, sha,
+                    status, f[3].trim(), status.startsWith("Up"), parseCreatedAt(f[7].trim())));
+        }
+        return found;
+    }
+
+    private List<RemoteContainer> remoteTargets(String projectId, String env, String wanted) {
+        List<RemoteContainer> targets = new ArrayList<>();
+        for (DeployServer server : enabledServers()) {
+            try {
+                for (RemoteContainer rc : remoteContainers(server, projectId)) {
+                    if (!env.equals(rc.env())) {
+                        continue;
+                    }
+                    if (wanted != null && !wanted.equals(rc.version())) {
+                        continue;
+                    }
+                    targets.add(rc);
+                }
+            } catch (RuntimeException ignored) {
+                // 单台服务器不可达不影响其它服务器与本地结果
+            }
+        }
+        return targets;
+    }
+
+    private static RemoteContainer pickRemote(List<RemoteContainer> containers, String container) {
+        if (container != null && !container.isBlank()) {
+            for (RemoteContainer rc : containers) {
+                if (container.equals(rc.name())) {
+                    return rc;
+                }
+            }
+        }
+        return containers.stream().filter(RemoteContainer::running)
+                .findFirst().orElse(containers.get(0));
+    }
+
+    /**
+     * 执行远端 docker 命令；普通用户无权限时自动尝试免密 sudo。
+     *
+     * <p>生产机上把 SSH 用户加入 docker 组并非总是可行，这里与 ServerDeployer 保持一致。
+     */
+    private SshAccess.Result sshDocker(DeployServer server, String args) {
+        String secret = servers == null ? null : servers.secretOf(server.id()).orElse(null);
+        SshAccess.Result plain = ssh.run(server, secret, "docker " + args, REMOTE_SSH_TIMEOUT_MS);
+        if (plain.ok()) {
+            return plain;
+        }
+        String error = String.valueOf(plain.error()).toLowerCase(Locale.ROOT);
+        if (error.contains("permission denied") || error.contains("access denied")) {
+            return ssh.run(server, secret, "sudo -n docker " + args, REMOTE_SSH_TIMEOUT_MS);
+        }
+        return plain;
+    }
+
+    private static String envFromName(String rest) {
+        for (String env : ENVS) {
+            if (rest.equals("-" + env) || rest.startsWith("-" + env + "-")) {
+                return env;
+            }
+        }
+        return "";
+    }
+
+    private static String versionFromName(String rest, String env, String sha) {
+        String marker = "-" + env + "-";
+        int index = rest.indexOf(marker);
+        if (index >= 0 && index + marker.length() < rest.length()) {
+            return rest.substring(index + marker.length());
+        }
+        if (sha == null || sha.isBlank()) {
+            return "";
+        }
+        return sha.length() > 12 ? sha.substring(0, 12) : sha;
+    }
+
+    /** docker ps 的 CreatedAt：{@code 2026-11-20 10:00:00 +0800 CST}。 */
+    private static long parseCreatedAt(String value) {
+        if (value == null || value.length() < 19) {
+            return 0;
+        }
+        try {
+            return LocalDateTime.parse(value.substring(0, 19),
+                            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
+    private static String shortError(String error) {
+        String text = error == null ? "" : error.trim();
+        return text.length() > 180 ? text.substring(0, 180) + "…" : text;
+    }
+
+    private record RemoteContainer(DeployServer server, String name, String image, String env,
+                                   String version, String sha, String status, String ports,
+                                   boolean running, long createdAt) {
+    }
+
     public record EnvColumn(String key, String label) {
     }
 
     public record Cell(String env, String version, String state, String target,
                        boolean running, boolean current, List<String> containers,
                        String image, String health, String ports, String url,
-                       long deployedAt, String detail, String release, long pid) {
+                       long deployedAt, String detail, String release, long pid,
+                       String server) {
     }
 
     public record Matrix(List<EnvColumn> environments, List<String> versions,
@@ -855,6 +1102,7 @@ public class DeploymentControlService {
         private String ports;
         private String url;
         private String release;
+        private String server;
         private long pid;
         private long deployedAt;
 
@@ -909,11 +1157,38 @@ public class DeploymentControlService {
             details.add(statuses.size() + " 个容器");
         }
 
+        /** 合并远端 SERVER 容器：同一 (env, version) 与本地卡片合并展示。 */
+        private void mergeRemote(RemoteContainer rc) {
+            if (target == null || rc.running() || !running) {
+                target = "DOCKER";
+            }
+            running = running || rc.running();
+            containers.add(rc.name());
+            if ((image == null || image.isBlank()) && rc.image() != null && !rc.image().isBlank()) {
+                image = rc.image();
+            }
+            if (ports == null && rc.ports() != null && !rc.ports().isBlank()) {
+                ports = rc.ports();
+                Matcher matcher = REMOTE_HOST_PORT.matcher(rc.ports());
+                if (matcher.find() && rc.server().host() != null) {
+                    url = "http://" + rc.server().host() + ":" + matcher.group(1);
+                }
+            }
+            if (release == null && rc.sha() != null && !rc.sha().isBlank()) {
+                release = rc.sha();
+            }
+            deployedAt = Math.max(deployedAt, rc.createdAt());
+            String name = rc.server().name();
+            server = server == null ? name : (server.contains(name) ? server : server + "、" + name);
+            details.add("服务器 " + name);
+        }
+
         private Cell toCell() {
             String state = running ? "RUNNING" : "STOPPED";
             return new Cell(env, version, state, target == null ? "HOST" : target,
                     running, current, List.copyOf(containers), image, health, ports, url,
-                    deployedAt, String.join("；", new LinkedHashSet<>(details)), release, pid);
+                    deployedAt, String.join("；", new LinkedHashSet<>(details)), release, pid,
+                    server);
         }
     }
 }

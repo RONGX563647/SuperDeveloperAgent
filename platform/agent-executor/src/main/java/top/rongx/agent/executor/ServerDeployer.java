@@ -103,7 +103,11 @@ public class ServerDeployer implements Deployer {
             return DeployResult.failed(DeployTarget.SERVER, e.code(), e.getMessage(), "");
         }
 
-        String container = DockerDeployer.containerName(request.projectId(), request.envName());
+        // 版本槽：打 tag 的发布按版本号独立命名（不同补丁版本/不同版本线互不覆盖），
+        // 不打 tag 才落到该环境的默认槽。远端以前固定用环境名，导致每次发布都删掉上一版。
+        String slot = request.tagged() && request.version() != null && !request.version().isBlank()
+                ? normalizeSlot(request.version()) : null;
+        String container = DockerDeployer.containerName(request.projectId(), request.envName(), slot);
         StringBuilder log = new StringBuilder();
 
         // 远端 docker 预检：普通 docker 不可用时尝试免密 sudo，而不是等到 docker load 才失败。
@@ -166,12 +170,21 @@ public class ServerDeployer implements Deployer {
                                 + "（请确认远端磁盘空间与 docker 权限）", redact(log));
             }
 
+            // 只替换「同名同版本」的容器：打 tag 时容器名带版本号，
+            // 其它版本（不同补丁/不同版本线）及默认槽的容器保持运行。
+            int previousPort = slot == null
+                    ? 0 : existingHostPort(server, secret, docker, container,
+                    request.containerPort());
             ssh.run(server, secret, docker + " rm -f " + container, SSH_TIMEOUT_MS);
+            log.append("[deploy] 已停止").append(slot == null ? "默认槽" : "版本 " + slot)
+                    .append(" 的旧容器 ").append(container).append('\n');
 
             // 端口探测只建 1~2 条 SSH 连接：旧实现每个候选端口探测 2 次，
             // 端口被占时会连续建 400 条连接，最后报"端口耗尽"却和真实原因无关。
             Set<Integer> used = listeningPorts(server, secret, log);
-            int hostPort = firstFreePort(request.hostPort(), used);
+            int hostPort = previousPort > 0 && (used == null || !used.contains(previousPort))
+                    ? previousPort
+                    : firstFreePort(request.hostPort(), used);
             if (hostPort < 0) {
                 return DeployResult.failed(DeployTarget.SERVER, ErrorCode.SECRET_UNRESOLVED.code(),
                         "远端端口耗尽：从 " + request.hostPort() + " 起 " + PORT_SCAN_LIMIT
@@ -410,7 +423,12 @@ public class ServerDeployer implements Deployer {
                 .append(" run -d --name ").append(container)
                 .append(" --restart unless-stopped")
                 .append(" --label agent.project=").append(JschSsh.shellQuote(request.projectId()))
+                .append(" --label agent.env=").append(JschSsh.shellQuote(
+                        request.envName() == null ? "" : request.envName()))
+                .append(" --label agent.version=").append(JschSsh.shellQuote(displayVersion(request)))
                 .append(" --label agent.sha=").append(JschSsh.shellQuote(request.gitSha()))
+                .append(" --label agent.run=").append(JschSsh.shellQuote(
+                        request.runId() == null ? "" : request.runId()))
                 .append(" -p ").append(hostPort).append(':').append(request.containerPort());
         if (request.network() != null && !request.network().isBlank()) {
             command.append(" --network ").append(JschSsh.shellQuote(request.network().trim()));
@@ -434,6 +452,58 @@ public class ServerDeployer implements Deployer {
             sb.append(" -e ").append(JschSsh.shellQuote(pair));
         }
         return sb.toString();
+    }
+
+    /**
+     * 查询同名容器当前的宿主端口（仅打 tag 的版本使用）。
+     *
+     * <p>版本槽重复发布时沿用上次的端口：否则每次换端口，旧书签/监控失效。
+     * 容器不存在或没有映射时返回 0。
+     */
+    private int existingHostPort(DeployServer server, String secret, String docker,
+                                 String container, int containerPort) {
+        if (containerPort <= 0) {
+            return 0;
+        }
+        SshAccess.Result result = ssh.run(server, secret,
+                docker + " port " + container + " " + containerPort + "/tcp", PROBE_TIMEOUT_MS);
+        return result.ok() ? parseMappedPort(result.output()) : 0;
+    }
+
+    /** 解析 {@code docker port} 输出（{@code 0.0.0.0:8080} / {@code [::]:8080}）。 */
+    static int parseMappedPort(String output) {
+        int best = 0;
+        if (output == null) {
+            return best;
+        }
+        for (String line : output.split("\\R")) {
+            int colon = line.lastIndexOf(':');
+            if (colon < 0 || colon == line.length() - 1) {
+                continue;
+            }
+            try {
+                int port = Integer.parseInt(line.substring(colon + 1).trim());
+                if (port > 0 && port <= 65535) {
+                    best = port;
+                }
+            } catch (NumberFormatException ignored) {
+                // 表头/异常行
+            }
+        }
+        return best;
+    }
+
+    /** 版本槽后缀：与 DockerDeployer 的容器命名规则保持一致。 */
+    private static String normalizeSlot(String version) {
+        String value = version == null ? "" : version.trim().toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9_.-]", "-");
+        return value.isEmpty() ? null : value;
+    }
+
+    /** 展示版本：用户没填版本号时统一显示 latest。 */
+    private static String displayVersion(DeployRequest request) {
+        return request.version() == null || request.version().isBlank()
+                ? "latest" : request.version().trim();
     }
 
     private static String shortSha(String sha) {

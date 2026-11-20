@@ -199,6 +199,28 @@ class DeployersTest {
     }
 
     @Test
+    @DisplayName("版本槽容器名：打 tag 的不同版本互不覆盖，默认槽仍按环境隔离")
+    void versionSlotContainerNamesDoNotCollide() {
+        String prod = DockerDeployer.containerName("RY", "prod");
+        String v1 = DockerDeployer.containerName("RY", "prod", "0.1.0");
+        String v2 = DockerDeployer.containerName("RY", "prod", "0.1.1");
+        assertEquals(prod + "-0.1.0", v1);
+        assertEquals(prod + "-0.1.1", v2);
+        assertFalse(v1.equals(v2), "两个补丁版本必须落在不同容器名（不互相删除）");
+        assertEquals(prod, DockerDeployer.containerName("RY", "prod", null));
+    }
+
+    @Test
+    @DisplayName("远端 docker port 解析：IPv4/IPv6 映射都能取到宿主端口")
+    void parseMappedPortHandlesIpv4AndIpv6() {
+        assertEquals(18080, ServerDeployer.parseMappedPort("0.0.0.0:18080"));
+        assertEquals(18080, ServerDeployer.parseMappedPort("[::]:18080"));
+        assertEquals(18081, ServerDeployer.parseMappedPort("0.0.0.0:18081\n[::]:18081"));
+        assertEquals(0, ServerDeployer.parseMappedPort(""));
+        assertEquals(0, ServerDeployer.parseMappedPort(null));
+    }
+
+    @Test
     @DisplayName("注册表按目标分派；未知目标 fail-closed")
     void registryDispatchesByTarget() {
         Deployers deployers = Deployers.builtin();

@@ -71,6 +71,16 @@ public interface ProjectRepoLocator {
         return List.of();
     }
 
+    /**
+     * 标签当前指向的提交（完整 sha）。
+     *
+     * <p>用于判断「同一版本重复发布」：标签已存在但指向同一提交时是幂等重发，
+     * 不应按"版本号被占用"拒绝；指向其它提交才必须换版本号。
+     */
+    default Optional<String> tagCommit(String projectId, String tag) {
+        return Optional.empty();
+    }
+
     /** 当前分支名（任务默认版本号按分支版本线推导）；仓库不可用时返回空串。 */
     default String currentBranch(String projectId) {
         return "";

@@ -34,11 +34,15 @@ class DeploymentControlServiceTest {
     Path root;
 
     private DeploymentControlService service(RuntimeInspector inspector) {
-        return new DeploymentControlService(inspector, mock(EnvironmentStore.class), root.toString());
+        return new DeploymentControlService(inspector, mock(EnvironmentStore.class),
+                mock(top.rongx.agent.domain.settings.DeployServerRepository.class),
+                mock(top.rongx.agent.domain.settings.SshAccess.class), root.toString());
     }
 
     private DeploymentControlService service(RuntimeInspector inspector, EnvironmentStore store) {
-        return new DeploymentControlService(inspector, store, root.toString());
+        return new DeploymentControlService(inspector, store,
+                mock(top.rongx.agent.domain.settings.DeployServerRepository.class),
+                mock(top.rongx.agent.domain.settings.SshAccess.class), root.toString());
     }
 
     @Test
@@ -254,6 +258,40 @@ class DeploymentControlServiceTest {
         assertEquals(List.of("fe ready"), logs.lines());
         assertThrows(PlatformException.class,
                 () -> service.logs("proj", "test", "sha9", "another-container", 50, 60));
+    }
+
+    @Test
+    @DisplayName("远程 SERVER 容器 → 出现在 prod 对应版本，并带服务器名与访问地址")
+    void remoteServerContainersAppearInMatrix() {
+        RuntimeInspector inspector = mock(RuntimeInspector.class);
+        top.rongx.agent.domain.settings.DeployServerRepository servers =
+                mock(top.rongx.agent.domain.settings.DeployServerRepository.class);
+        top.rongx.agent.domain.settings.DeployServer server =
+                new top.rongx.agent.domain.settings.DeployServer("s1", "生产一号", "10.0.0.9", 22,
+                        "deploy", "KEY", "/k", "/opt/agent/deploy", true, true,
+                        false, null, null, null, null, "t", 1L);
+        when(servers.findAll()).thenReturn(List.of(server));
+        when(servers.secretOf("s1")).thenReturn(java.util.Optional.empty());
+        top.rongx.agent.domain.settings.SshAccess ssh =
+                mock(top.rongx.agent.domain.settings.SshAccess.class);
+        when(ssh.run(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                anyString(), org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(top.rongx.agent.domain.settings.SshAccess.Result.ok(
+                        "agent-deploy-proj-prod-1|ci-prod-abc1234|Up 2 hours|"
+                                + "0.0.0.0:18080->8080/tcp||0.1.0|abc1234def||"
+                                + "2026-11-20 10:00:00 +0800 CST"));
+
+        DeploymentControlService service = new DeploymentControlService(inspector,
+                mock(EnvironmentStore.class), servers, ssh, root.toString());
+        Matrix matrix = service.matrix("proj");
+
+        Cell cell = matrix.cells().stream()
+                .filter(c -> "prod".equals(c.env()) && "0.1.0".equals(c.version()))
+                .findFirst().orElseThrow();
+        assertEquals("生产一号", cell.server());
+        assertTrue(cell.running());
+        assertTrue(cell.containers().contains("agent-deploy-proj-prod-1"));
+        assertEquals("http://10.0.0.9:18080", cell.url());
     }
 
     private static ContainerStatus container(String name, String env, String service,

@@ -802,7 +802,7 @@ async function deployVersion(img: ImageVersionView): Promise<void> {
   try {
     const result = await deployImageVersion(pipelineId.value, projectId.value, env.value,
       img.tag, img.gitSha, deployVersionInput.value.trim() || undefined,
-      showVersionControls.value && deployTagged.value)
+      showVersionControls.value && deployTagged.value, branch.value || undefined)
     attachRun(result, { env: env.value, pipelineId: pipelineId.value, sha: img.gitSha })
     ElMessage.success('已触发按版本部署')
     void loadImages()
@@ -1242,9 +1242,13 @@ async function reuseBuild(item: HistoryItem): Promise<void> {
   triggerBusy.value = true
   topError.value = ''
   try {
+    // 该次运行打过 tag（远端已可见/本地已创建）时，复用产物也要落回同一个版本槽；
+    // 否则会按快照覆盖默认部署，把正在运行的正式版本顶掉（这正是"tag 好像没用"的来源）。
+    const tagged = !!item.version
+      && (item.tagStatus === 'PUSHED' || item.tagStatus === 'LOCAL')
     const result = await deployImageVersion(
       item.pipelineId, projectId.value, item.env, image, item.gitSha,
-      item.version || undefined, false)
+      item.version || undefined, tagged, item.branch || branch.value || undefined)
     attachRun(result, { env: item.env, pipelineId: item.pipelineId, sha: item.gitSha })
     ElMessage.success('已复用该次产物部署（跳过构建）')
   } catch (e) {

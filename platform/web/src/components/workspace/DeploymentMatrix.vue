@@ -300,6 +300,7 @@ onUnmounted(() => {
 
             <div class="dv-chips">
               <span class="dv-chip target">{{ cell.target }}</span>
+              <span v-if="cell.server" class="dv-chip">{{ cell.server }}</span>
               <span v-if="cell.ports" class="dv-chip mono">{{ cell.ports }}</span>
               <span v-if="cell.health" class="dv-chip">health · {{ cell.health }}</span>
               <span v-if="cell.containers.length > 1" class="dv-chip">{{ cell.containers.length }} 容器</span>
@@ -394,6 +395,10 @@ onUnmounted(() => {
               <div>
                 <dt>部署目标</dt>
                 <dd>{{ selectedCell.target }}</dd>
+              </div>
+              <div v-if="selectedCell.server">
+                <dt>服务器</dt>
+                <dd>{{ selectedCell.server }}</dd>
               </div>
               <div>
                 <dt>版本号</dt>
