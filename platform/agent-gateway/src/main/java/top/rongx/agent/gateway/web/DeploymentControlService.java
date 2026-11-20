@@ -122,20 +122,33 @@ public class DeploymentControlService {
 
         // 远程 SERVER 部署：容器在远端主机上，本地 docker inspect 看不到，
         // 必须逐个已启用服务器查询（否则生产环境在矩阵里永远是空的）。
-        List<String> remoteNotes = new ArrayList<>();
-        for (DeployServer server : enabledServers()) {
-            try {
-                for (RemoteContainer rc : remoteContainers(server, projectId)) {
-                    if (!ENVS.contains(rc.env())) {
-                        continue;
-                    }
-                    CellAcc acc = cells.computeIfAbsent(rc.env() + "|" + rc.version(),
-                            k -> new CellAcc(rc.env(), rc.version()));
-                    acc.mergeRemote(rc);
-                }
-            } catch (RuntimeException e) {
-                remoteNotes.add(server.name() + "：" + e.getMessage());
+        // 多台服务器并行探测：矩阵是同步接口，串行 SSH 会被一台慢机器拖慢整个工作区。
+        List<String> remoteNotes = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<DeployServer> activeServers = enabledServers();
+        List<RemoteContainer> remoteFound = new ArrayList<>();
+        if (!activeServers.isEmpty()) {
+            try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                List<java.util.concurrent.CompletableFuture<List<RemoteContainer>>> futures =
+                        activeServers.stream()
+                                .map(server -> java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                                    try {
+                                        return remoteContainers(server, projectId);
+                                    } catch (RuntimeException e) {
+                                        remoteNotes.add(server.name() + "：" + e.getMessage());
+                                        return List.<RemoteContainer>of();
+                                    }
+                                }, pool))
+                                .toList();
+                futures.forEach(future -> remoteFound.addAll(future.join()));
             }
+        }
+        for (RemoteContainer rc : remoteFound) {
+            if (!ENVS.contains(rc.env())) {
+                continue;
+            }
+            CellAcc acc = cells.computeIfAbsent(rc.env() + "|" + rc.version(),
+                    k -> new CellAcc(rc.env(), rc.version()));
+            acc.mergeRemote(rc);
         }
 
         // 「当前」= 该环境最近部署的版本（HOST / Docker 都适用，不依赖单一 current 指针）
@@ -1035,12 +1048,18 @@ public class DeploymentControlService {
         return sha.length() > 12 ? sha.substring(0, 12) : sha;
     }
 
-    /** docker ps 的 CreatedAt：{@code 2026-11-20 10:00:00 +0800 CST}。 */
+    /** docker ps 的 CreatedAt：{@code 2026-11-20 10:00:00 +0800 CST}（带时区名）。 */
     private static long parseCreatedAt(String value) {
         if (value == null || value.length() < 19) {
             return 0;
         }
         try {
+            // 先按远端偏移解析（服务器时区可能与本机不同），失败再退回本机时区
+            if (value.length() >= 25) {
+                return java.time.OffsetDateTime.parse(value.substring(0, 25),
+                                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z"))
+                        .toInstant().toEpochMilli();
+            }
             return LocalDateTime.parse(value.substring(0, 19),
                             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                     .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
