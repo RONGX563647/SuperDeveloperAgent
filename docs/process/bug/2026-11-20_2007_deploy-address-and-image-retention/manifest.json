@@ -13,7 +13,7 @@
   "solution": "三个部署器端点改根路径；pruneOldImages 分级保护（当前/上一版本/运行中镜像永不清理，规则外保留 5 个，staleImages 纯函数抽取）；默认部署容器 label 用 versionLabel(test-vN) 区分版本；环境页新增「最近保留的镜像」面板 + 一键重新构建",
   "commits": [
     {
-      "sha": "065cbb1c9fde2cde7eb3997d2c6f356f4329eeaa",
+      "sha": "813904ba7a98f4815dd2ee498f6c72d5ebb7af57",
       "subject": "fix(deploy): 部署地址指向前端页面 + 镜像保留策略分级保护 + 版本标签区分 + 环境页镜像面板",
       "category": "bug",
       "files": [
@@ -83,7 +83,7 @@
       ]
     },
     {
-      "sha": "d4cac4c8eaf12614b79eb5ae75e546788dbd2518",
+      "sha": "342bfd9d1695901290e9bf2449c60707ce258b8f",
       "subject": "test(executor): 镜像清理名单分级保护回归 3 例（staleImages 纯函数抽取）",
       "category": "chore",
       "files": [
@@ -144,6 +144,6 @@
   },
   "chain": {
     "prev": "b5be854cac46d158b9ade18dde839f6a98d153269e62dcc88aaf7bc290d0c31c",
-    "self": "646a687493e571fcd3cd69154045b040dfcd94d8d8807dca9ca1edeb2698973e"
+    "self": "75b66c27d651003779a186fc8138c7e2f3f620b560cbaf7599243fb8251bedb8"
   }
 }
