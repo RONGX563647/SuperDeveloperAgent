@@ -1,5 +1,5 @@
 import { onMounted, ref, watch, type Ref } from 'vue'
-import { listMcpServers, listSkills } from '../api/settings'
+import { listBuiltinTools, listMcpServers, listSkills } from '../api/settings'
 
 /** 对话工具栏里的一个可选能力（MCP 或 Skill）。 */
 export interface CapabilityOption {
@@ -23,6 +23,15 @@ export interface CapabilityOption {
   headerNames?: string[]
 }
 
+/** 本 Agent 内置工具（随 Agent 发布，只读展示，不参与会话开关）。 */
+export interface BuiltinToolOption {
+  name: string
+  description: string
+  readOnly: boolean
+  toolkits: string[]
+  parameterCount: number
+}
+
 const STORAGE_PREFIX = 'agent.capabilities.'
 
 /**
@@ -34,6 +43,8 @@ const STORAGE_PREFIX = 'agent.capabilities.'
 export function useChatCapabilities(sessionId: Ref<string>) {
   const skillOptions = ref<CapabilityOption[]>([])
   const mcpOptions = ref<CapabilityOption[]>([])
+  /** 内置工具目录，与 Skill/MCP 分开：不参与选择，仅展示本轮可调用能力。 */
+  const toolOptions = ref<BuiltinToolOption[]>([])
   const selectedSkills = ref<string[]>([])
   const selectedMcp = ref<string[]>([])
   const ready = ref(false)
@@ -72,9 +83,10 @@ export function useChatCapabilities(sessionId: Ref<string>) {
   async function refresh(): Promise<void> {
     loading.value = true
     try {
-      const [skills, servers] = await Promise.all([
+      const [skills, servers, tools] = await Promise.all([
         listSkills().catch(() => ({ root: '', skills: [] })),
         listMcpServers().catch(() => []),
+        listBuiltinTools().catch(() => ({ count: 0, tools: [] })),
       ])
       skillOptions.value = skills.skills.map((s) => ({
         key: s.dirName,
@@ -97,6 +109,7 @@ export function useChatCapabilities(sessionId: Ref<string>) {
         url: s.url ?? undefined,
         headerNames: s.headerNames,
       }))
+      toolOptions.value = tools.tools
     } finally {
       loading.value = false
     }
@@ -121,6 +134,7 @@ export function useChatCapabilities(sessionId: Ref<string>) {
   return {
     skillOptions,
     mcpOptions,
+    toolOptions,
     selectedSkills,
     selectedMcp,
     ready,

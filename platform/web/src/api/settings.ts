@@ -1217,17 +1217,46 @@ export interface CapabilityMarketPage {
   hasMore: boolean
 }
 
+/** 一个可接入的开源市场来源（官方 Registry / GitHub 仓库 / 精选清单）。 */
+export interface CapabilitySource {
+  id: string
+  kind: 'MCP' | 'SKILL'
+  name: string
+  url: string
+  description: string
+  /** 平台预置（false = 运维自定义接入） */
+  builtin: boolean
+}
+
+export interface CapabilitySourcesResult {
+  items: CapabilitySource[]
+  total: number
+}
+
+/** 当前接入的市场来源清单（设置页渲染来源筛选与接入说明）。 */
+export function listCapabilitySources(
+  kind?: 'MCP' | 'SKILL',
+): Promise<CapabilitySourcesResult> {
+  const params = new URLSearchParams()
+  if (kind) params.set('kind', kind)
+  const suffix = params.toString()
+  return apiFetch(`/api/v1/settings/capabilities/sources${suffix ? `?${suffix}` : ''}`)
+}
+
 /**
  * 市场分页（懒加载）。
  *
+ * @param source  来源 id（CapabilitySource.id）；为空 = 全部来源
  * @param refresh true = 后端清缓存并重新同步远端仓库 / Registry（打开市场、点刷新时用）
  */
 export function listCapabilityMarket(
   kind: 'MCP' | 'SKILL', q = '', offset = 0, limit = 24, refresh = false,
+  source = '',
 ): Promise<CapabilityMarketPage> {
   const params = new URLSearchParams()
   params.set('kind', kind)
   if (q.trim()) params.set('q', q.trim())
+  if (source.trim()) params.set('source', source.trim())
   params.set('offset', String(offset))
   params.set('limit', String(limit))
   if (refresh) params.set('refresh', 'true')
@@ -1239,6 +1268,26 @@ export function installCapability(id: string): Promise<CapabilityInstallResult> 
     method: 'POST',
     body: JSON.stringify({ id })
   })
+}
+
+/** 本 Agent 内置工具（随 Agent 发布，会话里只读展示，不参与开关）。 */
+export interface BuiltinTool {
+  name: string
+  description: string
+  readOnly: boolean
+  /** 所属工具面：full / read-only / supervisor / deploy */
+  toolkits: string[]
+  parameterCount: number
+}
+
+export interface BuiltinToolsResult {
+  count: number
+  tools: BuiltinTool[]
+}
+
+/** 内置工具目录，与导出的 agent-tools.json 同源。 */
+export function listBuiltinTools(): Promise<BuiltinToolsResult> {
+  return apiFetch('/api/v1/settings/builtin-tools')
 }
 
 // ---------------------------------------------------------------- 数据库后端

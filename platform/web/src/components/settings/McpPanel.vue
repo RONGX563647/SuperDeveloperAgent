@@ -3,11 +3,11 @@ import { onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search, SetUp } from '@element-plus/icons-vue'
 import {
-  deleteMcpServer, installCapability, listCapabilityMarket, listMcpServers,
-  listMcpTools, saveMcpDisabledTools, saveMcpServer, testAllMcpServers, testMcpDraft,
-  testMcpServer,
-  type CapabilityEntry, type McpServer, type McpToolInfo, type McpTransport,
-  type TestResult
+  deleteMcpServer, installCapability, listCapabilityMarket, listCapabilitySources,
+  listMcpServers, listMcpTools, saveMcpDisabledTools, saveMcpServer, testAllMcpServers,
+  testMcpDraft, testMcpServer,
+  type CapabilityEntry, type CapabilitySource, type McpServer, type McpToolInfo,
+  type McpTransport, type TestResult
 } from '../../api/settings'
 
 /**
@@ -99,6 +99,9 @@ const MARKET_PAGE = 24
 const marketTotal = ref(0)
 const marketHasMore = ref(false)
 const marketOffset = ref(0)
+/** 已接入的市场来源；当前选中的来源为空 = 全部。 */
+const sources = ref<CapabilitySource[]>([])
+const selectedSource = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 /** 请求序号：搜索/刷新会作废还在路上的旧分页响应。 */
 let loadSeq = 0
@@ -146,7 +149,7 @@ async function loadMarket({ reset = false, sync = false } = {}): Promise<void> {
   const seq = ++loadSeq
   try {
     const page = await listCapabilityMarket('MCP', marketQuery.value, offset,
-      MARKET_PAGE, sync)
+      MARKET_PAGE, sync, selectedSource.value)
     if (seq !== loadSeq) return
     market.value = reset ? page.items : [...market.value, ...page.items]
     marketTotal.value = page.total
@@ -175,11 +178,26 @@ function onMarketScroll(event: Event): void {
   }
 }
 
+async function loadSources(): Promise<void> {
+  try {
+    sources.value = (await listCapabilitySources('MCP')).items
+  } catch {
+    sources.value = []
+  }
+}
+
+/** 切换来源：重置分页并重新加载（来源切换不强求 sync，复用服务端缓存）。 */
+function selectSource(id: string): void {
+  if (selectedSource.value === id) return
+  selectedSource.value = id
+  void loadMarket({ reset: true })
+}
+
 function switchTab(next: 'installed' | 'market'): void {
   tab.value = next
   // 每次进入市场都重新同步远端，避免看到旧目录
   if (next === 'market') {
-    void loadMarket({ reset: true, sync: true })
+    void Promise.all([loadSources(), loadMarket({ reset: true, sync: true })])
   }
 }
 
@@ -586,7 +604,7 @@ defineExpose({ load })
     </div>
     </template>
 
-    <!-- 市场：Awesome-MCP-ZH 精选 + MCP 官方 Registry，一键接入后可在这里启停 -->
+    <!-- 市场：多来源开源目录（Registry / 精选清单），一键接入后可在这里启停 -->
     <template v-else>
       <div class="market-toolbar">
         <el-input
@@ -597,11 +615,30 @@ defineExpose({ load })
         </el-input>
         <el-button
           size="default" :loading="marketLoading"
-          title="重新同步精选清单与 Registry"
+          title="重新同步所有来源"
           @click="loadMarket({ reset: true, sync: true })"
         >
           <el-icon><Refresh /></el-icon>
         </el-button>
+      </div>
+      <!-- 来源筛选：可接入任意多个开源 Registry，点选切换 -->
+      <div v-if="sources.length" class="source-bar">
+        <span class="source-label">来源</span>
+        <button
+          type="button" class="source-chip" :class="{ active: !selectedSource }"
+          @click="selectSource('')"
+        >全部</button>
+        <button
+          v-for="s in sources" :key="s.id" type="button" class="source-chip"
+          :class="{ active: selectedSource === s.id }" :title="`${s.description}\n${s.url}`"
+          @click="selectSource(s.id)"
+        >
+          {{ s.name }}<span v-if="!s.builtin" class="source-custom" title="自定义接入">+</span>
+        </button>
+        <a
+          class="source-help" href="https://github.com/modelcontextprotocol/registry"
+          target="_blank" rel="noopener" title="如何接入开源 MCP 市场"
+        >如何接入？</a>
       </div>
       <div class="panel-scroll" @scroll="onMarketScroll">
       <div v-if="marketLoading" class="empty">正在同步 MCP 市场…</div>
@@ -611,8 +648,8 @@ defineExpose({ load })
       </div>
       <div v-else-if="!market.length" class="empty">没有匹配的 MCP 服务。</div>
       <p v-else class="market-hint">
-        目录 = Awesome-MCP-ZH 精选 + MCP 官方 Registry，共 {{ marketTotal }} 个；
-        精选条目离线也可安装。
+        {{ selectedSource ? `当前来源：${selectedSource}` : `共接入 ${sources.length} 个开源来源` }}，
+        本页 {{ marketTotal }} 个{{ selectedSource ? '' : '（全部来源）' }}；点上方来源可切换。
       </p>
       <div v-for="m in market" :key="m.id" class="market-card">
         <div class="market-main">
@@ -622,7 +659,11 @@ defineExpose({ load })
           </div>
           <div class="market-desc">{{ m.description }}</div>
           <div class="market-meta mono">
-            {{ m.name }} · {{ m.tags.join(' / ') }} · {{ m.source }}
+            {{ m.name }} · {{ m.tags.join(' / ') }}
+            <button
+              type="button" class="market-source" :title="`来自来源：${m.source}（点击只看这个来源）`"
+              @click="selectSource(m.source)"
+            >{{ m.source }}</button>
           </div>
           <div v-if="m.requiredEnv.length" class="market-env">
             首次调用前需配置环境变量：{{ m.requiredEnv.join(' / ') }}
@@ -757,6 +798,67 @@ defineExpose({ load })
   padding: 6px 0 2px;
   text-align: center;
 }
+/* 来源栏：多源接入，点选切换；自定义来源带 + 角标 */
+.source-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 0 2px;
+}
+.source-label {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.source-chip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 3px 9px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+.source-chip:hover { border-color: var(--line-strong); }
+.source-chip.active {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+.source-custom {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--accent-ink);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+}
+.source-help {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+.source-help:hover { text-decoration: underline; }
+.market-source {
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  background: var(--accent-soft);
+  border: 0;
+  border-radius: 999px;
+}
+.market-source:hover { text-decoration: underline; }
 .market-env {
   margin-top: 2px;
   font-size: 10.5px;

@@ -70,6 +70,36 @@ public interface CapabilityMarket {
     record Page(List<Entry> items, int total, boolean hasMore) {
     }
 
+    /**
+     * 市场来源：一个可独立接入的开源目录（官方 Registry / GitHub 仓库 / 精选清单）。
+     *
+     * <p>来源不再写死成「单一仓库」：设置页据此渲染来源筛选与「如何接入」说明，
+     * 运维加一个开源市场只需改配置（见 {@code agent.market.*}）。
+     *
+     * @param id          稳定标识，等于条目的 source 字段，用于筛选
+     * @param kind        MCP / SKILL
+     * @param name        展示名
+     * @param url         人类可访问的主页 / 仓库地址
+     * @param description 一句话说明这个来源提供什么
+     * @param builtin     是否平台预置（false = 运维自定义接入）
+     */
+    record Source(String id, Kind kind, String name, String url,
+                  String description, boolean builtin) {
+    }
+
+    /** 当前接入的市场来源清单（默认空，由实现方覆盖）。 */
+    default List<Source> sources(Kind kind) {
+        return List.of();
+    }
+
+    /**
+     * 带来源筛选的分页：{@code source} 为空/空白时等价于普通分页（兼容旧调用）。
+     */
+    default Page page(Kind kind, String keyword, String source,
+                      int offset, int limit, boolean refresh) {
+        return page(kind, keyword, offset, limit, refresh);
+    }
+
     /** 按 id 取回安装模板；不存在或市场已下架时返回 empty。 */
     Optional<Entry> find(String id);
 }
