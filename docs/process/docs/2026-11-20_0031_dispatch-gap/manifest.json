@@ -13,8 +13,8 @@
   "solution": "把这层区别写成 docs/summary/chore/2026-11_dispatch-gap.md：1) 列出数据库事实（3 SUPERVISOR / 0 子会话 / 票据全 TODO）；2) 列出机制清单与对应测试，说明卡点不在代码；3) 给出三个候选卡点（调度 Agent 未被驱动 / 模型没选对工具 / 历史失败被静默）；4) 给出一次实机验证的具体指令与判定方法，并预先记录基线（children=0, runs=2, tickets=4）；5) 指出 FEAT-3 的 A2A 协议全仓无实现，是真正的新功能、应单独立项。同时把三个只读排查脚本入库（check-dispatch-evidence / list-conversations / dispatch-baseline），下次复核不必重写。",
   "commits": [
     {
-      "sha": "7e5d07b85e660a73fe3e27989166b68cd0a73dd9",
-      "subject": "docs(summary): FEAT-1/2/3 的真实缺口核实",
+      "sha": "83c702f30b885ca924002b52a499dc690073a41c",
+      "subject": "docs(summary): FEAT-1/2/3 的真实缺口核实（历史重写后等价提交）",
       "category": "docs",
       "files": [
         {
@@ -76,6 +76,6 @@
   },
   "chain": {
     "prev": "fe69d1cb6d8eaf6cfb588bed64e3a43377229e47e41e9f9f55fd350940037593",
-    "self": "7e0d5658ba1ba439596096113ffe816db93dfe70625ea7a2edf09408e3c75c80"
+    "self": "30f0b7c16ba8dec49c7f79cf0eaccdfa419eeef69bca781804e3266dd42c9d74"
   }
 }

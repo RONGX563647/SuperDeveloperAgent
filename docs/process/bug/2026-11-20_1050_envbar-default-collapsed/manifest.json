@@ -13,8 +13,8 @@
   "solution": "fix(web): key 按 projectId+env 隔离；ChatView 传 :default-open=false；watch 就地刷新不清空；health 不闪烁；新增 envBarState.test.ts 5 例",
   "commits": [
     {
-      "sha": "0268bcc8fe7e115e25accb26b036955256e8aa7c",
-      "subject": "fix(web): 环境条默认折叠、展开状态按项目/环境隔离、切环境不再抖动（BUG-26/53）",
+      "sha": "e92e7a0af9e0d34ed2e959c97920d2b35f4e0dc6",
+      "subject": "fix(web): 环境条默认折叠、展开状态按项目/环境隔离、切环境不再抖动（BUG-26/53）（历史重写后等价提交）",
       "category": "bug",
       "files": [
         {
@@ -85,7 +85,7 @@
     ]
   },
   "chain": {
-    "prev": "a57f3c620a402d7a45ef2cfc76e59ebaff938dc9c65f804b37a083eca15eb4fa",
-    "self": "459126c04c844dd83ef3c924423682e85cdea89abcd15bce2aecd7cb4f85793d"
+    "prev": "d506a750fa3afa2f3b43eb3d170f7ec5aecc8d00bda42af64d76c2e1408d57f8",
+    "self": "852ec12e625fe4253a740a46b0401c856186ad22bcca9cbffd7a2b3ee44249c7"
   }
 }

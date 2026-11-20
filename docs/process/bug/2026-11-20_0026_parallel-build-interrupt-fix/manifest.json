@@ -13,8 +13,8 @@
   "solution": "fix(pipeline): 中断标志不再泄漏进回滚 DB 读取；同项目同环境多提交并行构建",
   "commits": [
     {
-      "sha": "cd70c9e38425fe9db4abe76925c76f9d93924e10",
-      "subject": "fix(pipeline): 中断标志不再泄漏进回滚 DB 读取；同项目同环境多提交并行构建",
+      "sha": "c16ed3dd594af56768eeb01c939b399bf11a5fe7",
+      "subject": "fix(pipeline): 中断标志不再泄漏进回滚 DB 读取；同项目同环境多提交并行构建（历史重写后等价提交）",
       "category": "bug",
       "files": [
         {
@@ -129,6 +129,6 @@
   },
   "chain": {
     "prev": "d224b6e6926a4c68ef64fde9727c7cb00e9ffd5ed7d3cbae252d00d405f2f15b",
-    "self": "a57f3c620a402d7a45ef2cfc76e59ebaff938dc9c65f804b37a083eca15eb4fa"
+    "self": "d506a750fa3afa2f3b43eb3d170f7ec5aecc8d00bda42af64d76c2e1408d57f8"
   }
 }

@@ -13,8 +13,8 @@
   "solution": "快照生成失败时把现存快照改名隔离（.stale-时间戳）+ log.error 明确告警，api_docs 工具返回不可用而不是过期契约；新增 ApiDocsStaleQuarantineTest 2 例",
   "commits": [
     {
-      "sha": "702e860d7c0006360a9869f0e5d2f9c018fd90bc",
-      "subject": "fix(gateway): OpenAPI 快照生成失败时隔离过期快照，不再静默退回旧契约（BUG-36）",
+      "sha": "d103bd6a37a76abd045403e879d55478ca77b852",
+      "subject": "fix(gateway): OpenAPI 快照生成失败时隔离过期快照，不再静默退回旧契约（BUG-36）（历史重写后等价提交）",
       "category": "bug",
       "files": [
         {
@@ -27,8 +27,8 @@
       ]
     },
     {
-      "sha": "b88647861bae940e7ed68ffdd86ee4ac66f4aaa3",
-      "subject": "test(gateway): BUG-36 隔离行为回归 2 例（失败路径调用隔离 + move 语义）",
+      "sha": "fd015451c3d2cfe3fc70eea0f7050f99f0b45bf7",
+      "subject": "test(gateway): BUG-36 隔离行为回归 2 例（失败路径调用隔离 + move 语义）（历史重写后等价提交）",
       "category": "chore",
       "files": [
         {
@@ -71,7 +71,7 @@
     ]
   },
   "chain": {
-    "prev": "2125cd5a322df3259c26391c2c3f9bd3255c30f2491eb6d2c9f20266d2cf540a",
-    "self": "a50667a7ea2612af0a856f434cf4876f806828655d0b28325c7f1cbf2f76be28"
+    "prev": "8418d11c7173bd4cece64ef0d35d863133fc1eac69943e4ec17baef043a93453",
+    "self": "0823a22ec7d8e3ba8bcfb5f0f1277db701e10ba3c55ab13d08ce2ceb9ab9e2b8"
   }
 }
