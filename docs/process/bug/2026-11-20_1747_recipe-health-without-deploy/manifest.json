@@ -13,7 +13,7 @@
   "solution": "PipelineDefinitionResolver 新增 satisfiesDeployStage 门：health 有而 deploy 无 → 视为部署语义断裂，与 satisfiesDeployTarget 同一退回路径；纯构建流水线（无 deploy 段）放行给引擎报 E-221",
   "commits": [
     {
-      "sha": "c5fbcceb6ecaa2c97b2f63fe55b36486723b530b",
+      "sha": "b5196059332aa173731c9a40ded20ebee3a46903",
       "subject": "fix(executor): 固化脚本有 health 无 deploy 阶段时拒绝回放，退回仓库/平台定义",
       "category": "bug",
       "files": [
@@ -65,6 +65,6 @@
   },
   "chain": {
     "prev": "a7fb640de261dfb828dd8abb9a2b2f18ad32cf1d7d292aa297a10d18e6c2c7a4",
-    "self": "3700b27616a05850adca789f53ae0202ac2f59a3ca9ff8edeb99e356b9d947e3"
+    "self": "b5be854cac46d158b9ade18dde839f6a98d153269e62dcc88aaf7bc290d0c31c"
   }
 }
