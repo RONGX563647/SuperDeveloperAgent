@@ -1,0 +1,107 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "bug/2026-11-20_1702_prod-deploy-options-from-test",
+  "category": "bug",
+  "title": "生产按版本部署：选项改为测试环境成功运行的版本",
+  "createdAt": "2026-11-20T17:02:03+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "生产按版本部署：选项改为测试环境成功运行的版本",
+    "toolCallCount": 0
+  },
+  "problem": "生产按版本部署：选项改为测试环境成功运行的版本",
+  "solution": "fix(deploy): 生产按版本部署的选项改为测试环境成功运行的版本",
+  "commits": [
+    {
+      "sha": "94b4703002334be73b21142513ec1b4feb84b304",
+      "subject": "fix(deploy): 生产按版本部署的选项改为测试环境成功运行的版本",
+      "category": "bug",
+      "files": [
+        {
+          "path": "docs/handbook/l3/executor-pipeline-engine.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "0d7fbecfc228a1cdbbeed22361a1137a9debd85d"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 4,
+          "deletions": 4,
+          "blobHash": "d2b659c7677dfe370e0ea1b3ce6fc18811e58fa9"
+        },
+        {
+          "path": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
+          "status": "M",
+          "additions": 17,
+          "deletions": 3,
+          "blobHash": "289bef0dc1d528efa52a3baff339ee5f78ea8a2f"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/PipelineController.java",
+          "status": "M",
+          "additions": 29,
+          "deletions": 6,
+          "blobHash": "c6e8d5931af11d79f9c537b20fb68e644ab38937"
+        },
+        {
+          "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/PipelineDeployImagesTest.java",
+          "status": "A",
+          "additions": 148,
+          "deletions": 0,
+          "blobHash": "14490fdb55fa1f367822b5fb5eb8a72f660628e7"
+        },
+        {
+          "path": "platform/web/src/api/pipeline.ts",
+          "status": "M",
+          "additions": 6,
+          "deletions": 3,
+          "blobHash": "b121fd0efe6f9495aa1bf430ebfac1f65a2d4245"
+        },
+        {
+          "path": "platform/web/src/views/PipelineView.vue",
+          "status": "M",
+          "additions": 44,
+          "deletions": 12,
+          "blobHash": "3faf23c1469f085a0f35144167687e25cf43fd80"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-gateway/src/test/java/top/rongx/agent/gateway/web/PipelineDeployImagesTest.java",
+        "status": "A",
+        "additions": 148,
+        "deletions": 0,
+        "blobHash": "14490fdb55fa1f367822b5fb5eb8a72f660628e7"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "mvn -B -nsu -pl agent-executor,agent-gateway,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-executor,agent-gateway test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 468, Failures: 0, Errors: 0, Skipped: 5"
+  },
+  "impact": {
+    "modules": [
+      "agent-executor",
+      "agent-gateway",
+      "web"
+    ],
+    "verification": "mvn -pl agent-executor,agent-gateway -am test：247 tests 全过（新增 PipelineDeployImagesTest 5 条覆盖选项来源/徽标归属/老版本兜底/test-dev 不受影响）；spec-checks 33 tests 通过；pnpm typecheck 与 pnpm test（10 个测试文件）通过；pre-commit 门禁 468 tests 全过、前端 10 个自检脚本通过"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_1702_prod-deploy-options-from-test"
+    ]
+  },
+  "chain": {
+    "prev": "132115be87366d0eba774717e1819753be36640d858e5c61257b439857d416b8",
+    "self": "23d301b3de9ffc6ebdc8f42b2a06c05781f2fb68f6db7e1002e4c6578052005d"
+  }
+}
