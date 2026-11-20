@@ -39,6 +39,78 @@
           "blobHash": "04be5b91fba01fceb2e52e2ca424e271f0f5370a"
         }
       ]
+    },
+    {
+      "sha": "fd015451c3d2cfe3fc70eea0f7050f99f0b45bf7",
+      "subject": "test(gateway): BUG-36 隔离行为回归 2 例（失败路径调用隔离 + move 语义）",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "d103bd6a37a76abd045403e879d55478ca77b852",
+      "subject": "fix(gateway): OpenAPI 快照生成失败时隔离过期快照，不再静默退回旧契约（BUG-36）",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "6acdb24ce49fc3b3f938396d474995b38b081581",
+      "subject": "fix(platform): 批量修复 0.1.1/存量 OPEN bug（BUG-27/28/29/30/31/32/35/37/38/39/40/41/42/43/44/45/46/47/48/49/50/51/52/53/33）",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "e92e7a0af9e0d34ed2e959c97920d2b35f4e0dc6",
+      "subject": "fix(web): 环境条默认折叠、展开状态按项目/环境隔离、切环境不再抖动（BUG-26/53）",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "83c702f30b885ca924002b52a499dc690073a41c",
+      "subject": "docs(summary): FEAT-1/2/3 的真实缺口核实",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "c16ed3dd594af56768eeb01c939b399bf11a5fe7",
+      "subject": "fix(pipeline): 中断标志不再泄漏进回滚 DB 读取；同项目同环境多提交并行构建",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "cc2256c8e6edce510fa6538304f1968e3800a626",
+      "subject": "perf(deploy): 部署互斥、镜像复用与幂等重启优化",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "ab86d4e97b729fd0416379008b504fbfa9efe153",
+      "subject": "refactor(deploy): 统一版本槽并增强远端部署自愈与解析健壮性",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "1f84d4929c8a6b5e8f1a1ff288aff8ea60312dcc",
+      "subject": "perf(deploy): 远程部署矩阵并行探测并补齐本地环境标签",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "1b998b8886dbc011754c1e2d7e503894cd6c44cf",
+      "subject": "feat: 分析并修复流水线权限逻辑bug",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "f0a57768497e7b9eb949f6c124e3b54bd344feca",
+      "subject": "feat: 分析并修复流水线权限逻辑bug",
+      "category": "chore",
+      "files": []
+    },
+    {
+      "sha": "25c771694557361e46ead7bba3f706334d16fb51",
+      "subject": "feat: 分析并修复流水线权限逻辑bug",
+      "category": "chore",
+      "files": []
     }
   ],
   "tests": {
@@ -64,6 +136,6 @@
   },
   "chain": {
     "prev": "c09102d4ed523889bceb462334ce7c9027baa15bdf6a3fe8c5bd492349f3f6fe",
-    "self": "89a3a74ecf7fb7836dca2441b6dcbe899a1e6e6d0fa7a54ff3adcfe547c6deff"
+    "self": "86409715c9848bbcbf6763b0a55dcd5f8ad161e1df6385f31934fccbc412dd7b"
   }
 }
