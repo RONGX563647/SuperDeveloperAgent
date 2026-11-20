@@ -4105,15 +4105,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 protectedTags.add(rows.get(1).tag());          // 上一版本
             }
             runningImageTags(state, protectedTags);
-            List<ImageVersion> stale = new ArrayList<>();
-            int kept = 0;
-            for (ImageVersion v : rows) {
-                if (protectedTags.contains(v.tag()) || kept < KEEP_IMAGES) {
-                    kept++;
-                    continue;
-                }
-                stale.add(v);
-            }
+            List<ImageVersion> stale = staleImages(rows, protectedTags, KEEP_IMAGES);
             int removed = 0;
             for (ImageVersion v : stale) {
                 BoundedCommand.Outcome outcome = BoundedCommand.run(
@@ -4154,6 +4146,24 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                 into.add(image);
             }
         }
+    }
+
+    /**
+     * 清理名单选取（纯函数，可单测）：保护名单内的条目豁免；
+     * 其余按账本顺序（最近部署在前）保留前 {@code keep} 个，之后的进清理名单。
+     */
+    static List<ImageVersion> staleImages(List<ImageVersion> rows,
+                                          java.util.Set<String> protectedTags, int keep) {
+        List<ImageVersion> stale = new ArrayList<>();
+        int kept = 0;
+        for (ImageVersion v : rows) {
+            if (protectedTags.contains(v.tag()) || kept < keep) {
+                kept++;
+                continue;
+            }
+            stale.add(v);
+        }
+        return stale;
     }
 
     private static String shorten(String text) {
