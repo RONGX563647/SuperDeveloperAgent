@@ -48,12 +48,18 @@ export function deployReplay(
   env: string,
   sha: string,
   confirmToken?: string,
-  deployTarget?: string
+  deployTarget?: string,
+  version?: string,
+  tag?: boolean
 ): Promise<{ runId: string, env: string, status: string, deployTarget?: string }> {
   const q = new URLSearchParams({ env, sha })
   if (confirmToken) q.set('confirmToken', confirmToken)
   // 目标必须显式下发：不带时后端按固化脚本里的 target 执行，面板上选的方式会被静默丢弃
   if (deployTarget) q.set('deployTarget', deployTarget)
+  // 版本号 + 打 tag 必须随重放下发：有固化脚本时主发布走的就是重放路径，
+  // 少了这两个参数，用户填的版本/打的 tag 会在网关丢失（引擎按快照跑、历史空白）。
+  if (version) q.set('version', version)
+  if (tag) q.set('tag', 'true')
   return apiFetch(`/api/v1/deploy/${encodeURIComponent(projectId)}/replay?${q}`, {
     method: 'POST'
   })

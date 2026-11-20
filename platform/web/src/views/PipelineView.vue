@@ -31,6 +31,7 @@ import { envLabel, envShort, formatBytes, pipelineLabel } from '../utils/pipelin
 import { tagNeedsAttention, tagStateText as releaseTagText } from '../utils/releaseTag'
 import { canReuseBuild, pickReusableImage } from '../utils/reuseBuild'
 import { buildReleaseCandidates, type ReleaseCandidate } from '../utils/releaseCandidates'
+import { asPageUrl } from '../utils/deployLink'
 
 /**
  * 流水线工作台：
@@ -460,19 +461,14 @@ const localLinks = computed<Array<{ label: string, url: string }>>(() => {
   return links
 })
 
-/** deployment 产物的 ref 就是部署端点（docker / host / server 一致），可直接打开。 */
-function asHttpUrl(ref: string | undefined | null): string {
-  const value = (ref ?? '').trim()
-  return /^https?:\/\//i.test(value) ? value : ''
-}
-
 /** 部署地址入口：本机前后端 + 各 deployment 产物端点，按 URL 去重。 */
 const deployLinks = computed<Array<{ label: string, url: string }>>(() => {
   const links = [...localLinks.value]
   const seen = new Set(links.map((l) => l.url.replace(/\/$/, '')))
   for (const a of run.value?.artifacts ?? []) {
     if (a.kind !== 'deployment') continue
-    const url = asHttpUrl(a.ref)
+    // 历史记录里的 ref 可能是 /actuator/health 之类的探活路径，统一归一到首页入口
+    const url = asPageUrl(a.ref)
     const key = url.replace(/\/$/, '')
     if (!url || seen.has(key)) continue
     seen.add(key)
@@ -1016,10 +1012,17 @@ async function triggerSelected(): Promise<void> {
 async function replayEnv(): Promise<void> {
   // 目标必须跟着重放走：脚本里记的是"当初跑通时的目标"，不带 target 时
   // 后端会按脚本里的 host 执行，面板上选的「打包成镜像」被静默丢弃。
+  const version = deployVersionInput.value.trim()
+  const tagged = showVersionControls.value && deployTagged.value
+  assertReleaseVersion(version, tagged)
   const result = await deployReplay(
-    projectId.value, env.value, sha.value, undefined, targetForTrigger())
-  attachRun(result, { env: env.value, pipelineId: 'release', sha: sha.value })
-  ElMessage.success('已按环境脚本重放')
+    projectId.value, env.value, sha.value, undefined, targetForTrigger(),
+    version || undefined, tagged)
+  attachRun(result, {
+    env: env.value, pipelineId: 'release', sha: sha.value,
+    version: version || undefined,
+  })
+  ElMessage.success(tagged ? '已按环境脚本重放并打 tag' : '已按环境脚本重放')
 }
 
 /**
