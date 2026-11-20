@@ -1,7 +1,7 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-68 个会话；检索用 `python tools/docs/find.py --module web`。
+69 个会话；检索用 `python tools/docs/find.py --module web`。
 
 ## 2026-11-20 · 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6`）
 - 问题：0.2 线缺今晚后半段工作：skills 路由层、门禁并发健壮性、防回潮守卫、token/deploy 并行会话成果。
@@ -12,6 +12,11 @@
 - 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …
 - 方案：模型保持 ledger：172 份按 id 吸收（175 行）、复活散文删除、views 重生成、链重排；把并发修复移植到 ledger 版 g…
 - 验证：gate self-test OK（含 PID 判活/僵尸锁回收/活锁不误删）；validate 175 份链全绿；views check 一致…
+
+## 2026-11-20 · 任务版本号选择：建议值进下拉并按类型给目标版本（bug `864e974`）
+- 问题：任务版本号下拉里建议值与任务类型（Feat/Bug）不匹配：选 Feat 却建议补丁版本，且可能建议已打过 tag 的版本。
+- 方案：suggestVersion 增加 kind 口径：Feat 取该 major 已发布最高次版本+1（跨过已发布版本），Bug 维持当前版本线最…
+- 验证：后端 GitIssueVersionSuggestionTest + GitIssueControllerFieldContractTest 通…
 
 ## 2026-11-20 · 0.1→0.2 同步：新归档模型（ledger/views/skills）带入 0.2 线（chore `ceef158` `a163612` `813904b` `342bfd9` `352fc30` `bb27e58` `c1fc559` `c455510` `a27fe76` `2c4af50` `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8`）
 - 问题：0.2 线还停在旧归档格式，两条线门禁模型不一致；合并时暴露迁移版本撞车：两条线各自发过 V5，Flyway 拒启（Found more tha…

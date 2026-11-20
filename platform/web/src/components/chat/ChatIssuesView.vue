@@ -666,32 +666,64 @@ const form = reactive({
   version: '',
 })
 
-/** 关联版本号：候选来自项目现有 git 标签；默认值是当前分支版本线的下一个补丁版本。 */
-const versionOptions = ref<string[]>([])
+/**
+ * 关联版本号：候选 = 建议值 + 项目现有 git 标签。
+ *
+ * 建议值是"下一个还不存在的版本"，永远不在 git 标签里——候选只列标签时它在下拉里
+ * 翻不到，只能靠旁边那个会消失的按钮猜。现在建议值固定排第一并打「推荐」标。
+ */
+const versionTags = ref<string[]>([])
 const versionSuggestion = ref('')
 const versionBranch = ref('')
 let versionLoadedFor = ''
 
+/** 建议值优先且去重：非版本分支时建议值就是最新标签，两者会重。 */
+const versionOptions = computed(() => {
+  const tags = versionTags.value.filter((tag) => tag && tag !== versionSuggestion.value)
+  return versionSuggestion.value ? [versionSuggestion.value, ...tags] : tags
+})
+
 /**
  * 版本上下文全部取自后端 `/git-issues/versions`。
  *
- * 不在前端再算一遍：版本推导规则（版本线取最大补丁 +1、其他分支取最新标签）
+ * 不在前端再算一遍：版本推导规则（Bug 取最大补丁 +1、Feat 取下一个次版本）
  * 一旦两边各写一份，任务栏显示的版本号就会和实际打 tag 的版本号对不上。
+ * kind 参与缓存键：类型切换时建议值要跟着变。
  */
-async function loadVersionContext(projectId: string): Promise<void> {
-  if (!projectId || versionLoadedFor === projectId) return
-  versionLoadedFor = projectId
+async function loadVersionContext(projectId: string, kind = form.kind): Promise<void> {
+  const key = `${projectId}|${kind}`
+  if (!projectId || versionLoadedFor === key) return
+  versionLoadedFor = key
   try {
-    const versions = await getGitIssueVersions(projectId)
+    const versions = await getGitIssueVersions(projectId, kind)
     versionBranch.value = versions.branch
-    versionOptions.value = versions.tags ?? []
+    versionTags.value = versions.tags ?? []
     versionSuggestion.value = versions.suggested ?? ''
   } catch {
     versionBranch.value = ''
-    versionOptions.value = []
+    versionTags.value = []
     versionSuggestion.value = ''
   }
 }
+
+/** 版本上下文所属项目：编辑时跟任务走，新建时跟当前项目走。 */
+function versionProjectId(): string {
+  const row = editingId.value ? items.value.find((i) => i.id === editingId.value) : undefined
+  return (row && row.projectId) || appStore.projectId
+}
+
+/**
+ * 类型决定目标版本（Bug → 下一个补丁、Feat → 下一个次版本），切换后要重新推导。
+ * 只有当前值仍是上一次的建议值（或为空）才替换，用户手选过的版本不动。
+ */
+watch(() => form.kind, (kind) => {
+  const previous = versionSuggestion.value
+  void loadVersionContext(versionProjectId(), kind).then(() => {
+    if (!form.version || form.version === previous) {
+      form.version = versionSuggestion.value
+    }
+  })
+})
 
 const editorTarget = computed(() => {
   const row = editingId.value
@@ -1501,22 +1533,26 @@ defineExpose({ openCreate, focus })
                   <span class="editor-hint">
                     {{ versionBranch ? `当前分支 ${versionBranch}` : '仓库不可用，只能手输' }}
                   </span>
-                  <button
-                    v-if="versionSuggestion && form.version !== versionSuggestion"
-                    type="button" class="editor-upload"
-                    @click="form.version = versionSuggestion"
-                  >
-                    使用默认 {{ versionSuggestion }}
-                  </button>
                 </div>
                 <el-select
                   v-model="form.version" filterable allow-create default-first-option clearable
-                  placeholder="留空 = 当前分支版本；也可选下个版本的标签"
+                  :placeholder="versionSuggestion ? `留空 = 自动取 ${versionSuggestion}` : '仓库不可用，只能手输'"
                 >
-                  <el-option v-for="tag in versionOptions" :key="tag" :label="tag" :value="tag" />
+                  <el-option
+                    v-for="tag in versionOptions" :key="tag" :label="tag" :value="tag"
+                  >
+                    <span class="version-option">
+                      {{ tag }}
+                      <span v-if="tag === versionSuggestion" class="version-option-badge">
+                        推荐 · {{ form.kind === 'FEAT' ? '下一个次版本' : '下一个补丁' }}
+                      </span>
+                    </span>
+                  </el-option>
                 </el-select>
                 <p class="desc-hint">
-                  默认取当前分支版本线的下一个补丁版本；计划下个版本再做的 Feat 可改成目标版本。
+                  {{ form.kind === 'FEAT'
+                    ? 'Feat 默认给下一个次版本，已发布过的不会重复给；要延到下个版本再做就改成目标版本。'
+                    : 'Bug 默认取当前分支版本线的下一个补丁；计划下个版本再做的可改成目标版本。' }}
                 </p>
               </div>
               <div class="editor-target">
@@ -2872,6 +2908,19 @@ defineExpose({ openCreate, focus })
   margin: 4px 0 0;
   font-size: 10px;
   color: var(--ink-faint);
+}
+/* 版本下拉行：建议值排第一并标明它是按类型推出来的目标版本。 */
+.version-option {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+.version-option-badge {
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: var(--radius-pill);
 }
 .hidden-file {
   display: none;

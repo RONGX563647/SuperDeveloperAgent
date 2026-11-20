@@ -27,7 +27,7 @@ budget: 110
 - WorkerRole（PRODUCT/DEV/TEST/OPS，0.2 线引入）：`createDeploy` 是 OPS 特例，
   角色决定工具面——**防回退有 spec-checks 的 `SupervisorToolkitWiringTest` 守着**。
 - 事件 Fast Path（Gitee issue/PR → 建任务）零 LLM，白名单外事件直接 `ignored`；
-  去重靠 `source_ref`/`trigger_type`（迁移 `V7__worker_role_and_trigger`）。
+  去重靠 `source_ref`/`trigger_type`（迁移 `V9__worker_role_and_trigger`）。
 
 ## 怎么验证
 

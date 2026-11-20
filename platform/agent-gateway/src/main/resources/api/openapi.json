@@ -6110,6 +6110,13 @@
           "schema" : {
             "type" : "string"
           }
+        }, {
+          "name" : "kind",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "responses" : {
           "200" : {

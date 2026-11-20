@@ -39,7 +39,7 @@ common/       V1__platform_schema.sql       建表
               V3__platform_indexes.sql      索引
               V5__audit_event.sql           审计事件
               V6__image_readiness.sql       镜像就绪状态（host + image）
-              V7__worker_role_and_trigger.sql  角色 Worker 与触发源维度（只加列，不建新表）
+              V9__worker_role_and_trigger.sql  角色 Worker 与触发源维度（只加列，不建新表）
 sqlite/       V2__identity_tables.sql       自增表（SQLite 方言）
 postgresql/   V2__identity_tables.sql       自增表（PG 方言）
               V4__identity_sequence_resync.sql

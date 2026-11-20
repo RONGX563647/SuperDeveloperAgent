@@ -83,9 +83,17 @@ export interface GitIssueVersions {
   tags: string[]
 }
 
-export function getGitIssueVersions(projectId: string): Promise<GitIssueVersions> {
-  const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
-  return apiFetch(`/api/v1/git-issues/versions${qs}`)
+/**
+ * 版本号候选项：当前分支推导的建议值 + 仓库现有标签。
+ *
+ * @param kind BUG 给下一个补丁、FEAT 给下一个次版本；缺省按 BUG，与后端口径一致
+ */
+export function getGitIssueVersions(projectId: string, kind?: string): Promise<GitIssueVersions> {
+  const params = new URLSearchParams()
+  if (projectId) params.set('projectId', projectId)
+  if (kind) params.set('kind', kind)
+  const qs = params.toString()
+  return apiFetch(`/api/v1/git-issues/versions${qs ? `?${qs}` : ''}`)
 }
 
 export function getGitIssue(id: string): Promise<GitIssueRow> {

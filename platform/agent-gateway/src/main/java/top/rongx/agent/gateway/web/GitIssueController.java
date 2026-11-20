@@ -181,9 +181,12 @@ public class GitIssueController {
      *
      * <p>建任务时 bug/feat 都要关联版本，UI 与 Agent 需要同一份候选来源，
      * 否则只能让用户手输一个必然写错的版本号。
+     *
+     * @param kind BUG 给下一个补丁、FEAT 给下一个次版本；缺省按 BUG
      */
     @GetMapping("/versions")
-    public Map<String, Object> versions(@RequestParam(required = false) String projectId) {
+    public Map<String, Object> versions(@RequestParam(required = false) String projectId,
+                                        @RequestParam(required = false) String kind) {
         if (projectId == null || projectId.isBlank()) {
             return Map.of("branch", "", "suggested", "", "tags", List.of());
         }
@@ -191,7 +194,8 @@ public class GitIssueController {
         List<String> tags = repoLocator.listTags(projectId, 50);
         return Map.of(
                 "branch", branch == null ? "" : branch,
-                "suggested", GitIssueServiceImpl.suggestVersion(branch, tags),
+                "suggested", GitIssueServiceImpl.suggestVersion(
+                        branch, tags, kind == null || kind.isBlank() ? "BUG" : kind),
                 "tags", tags);
     }
 
