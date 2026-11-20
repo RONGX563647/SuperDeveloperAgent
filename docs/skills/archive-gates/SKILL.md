@@ -12,8 +12,8 @@ budget: 150
 
 - **唯一写入点**：`gate.py finish` 往 `docs/ledger/<YYYY-MM>.jsonl` 追加一行（= 一份 manifest，
   schema `process-manifest/v2`）。没有每会话目录、没有散文总结。
-- **视图是投影**：`docs/views/`（index/changelog/weekly/modules）由 `tools/docs/build.py sync` 生成，
-  勿手改；`build.py check` 在 pre-push 强制一致。
+- **视图是投影**：`docs/views/`（index/changelog/weekly/modules）与 `docs/skills/index.md`
+  都由 `tools/docs/build.py sync` 生成，勿手改；`build.py check` 在 pre-push 强制一致。
 - **链**：每分类一条哈希链（`chain.prev`→`chain.self`，按 (createdAt,id) 排序）；
   `self` 只哈希内容，路径搬家不影响链。
 - `docs/summary/` 只剩 plan 双份（§4.6 契约）；session-summary 散文已被 views 取代，validate 会拦。

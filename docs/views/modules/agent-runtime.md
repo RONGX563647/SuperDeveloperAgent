@@ -1,7 +1,22 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-runtime
 
-27 个会话；检索用 `python tools/docs/find.py --module agent-runtime`。
+30 个会话；检索用 `python tools/docs/find.py --module agent-runtime`。
+
+## 2026-11-20 · 合并 token/deploy 并行工作并移植门禁并发健壮性（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe`）
+- 问题：并行分支 81392796 的门禁并发修复写在旧归档模型上，其合并把旧模型整套带回（gate.py 回退、172 份 manifest、346 …
+- 方案：模型保持 ledger：172 份按 id 吸收（175 行）、复活散文删除、views 重生成、链重排；把并发修复移植到 ledger 版 g…
+- 验证：gate self-test OK（含 PID 判活/僵尸锁回收/活锁不误删）；validate 175 份链全绿；views check 一致…
+
+## 2026-11-20 · 补齐 token 治理三条量化验收与插件分项归因（feat `e94171d`）
+- 问题：token 爆炸专项验收 9 项里 6 项功能面通过，但 3 项量化指标（inputTokens 降 40%/命中率 60%/真实请求 toke…
+- 方案：新增 TokenBaselineTest 用真实工具面+评测指令锁定按需 schema 下降≥40%（最坏59.1%）防回涨；
+- 验证：隔离 worktree 全量 verify 1020 例 0失败0错误7跳过；
+
+## 2026-11-20 · 会话能力页增加内置工具展示并改造界面与市场多源接入（feat `a381003` `df34598` `59f07ad` `bd18e87` `7296fc8` `b9add58` `415b525` `43eb19c` `8139279` `35611ee`）
+- 问题：会话能力页缺少内置工具展示、界面信息层级差、MCP/Skill 市场仅单一仓库来源
+- 方案：能力页新增内置工具区（复用 AgentToolCatalog 投影）并重做三卡概览界面；
+- 验证：独立跑通 spec-checks 35 例、市场相关 10 例、前端 13 个测试文件 23 例、vue-tsc 类型检查全绿；
 
 ## 2026-11-20 · 派发票据回写撞主键（closeTicket 误用 INSERT）（bug `03f5aee`）
 - 问题：调度派发票据关单时 closeTicket 对已存在票据用 saveTask（INSERT），每次回写终态都撞 workspace_tasks_…

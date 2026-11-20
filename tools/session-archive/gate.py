@@ -46,7 +46,7 @@ LOCK_STALE = int(os.environ.get("SESSION_ARCHIVE_LOCK_STALE", str(15 * 60)))
 # git index.lock 竞争重试：并行会话/IDE 的 git 写操作会短暂持有 index.lock，
 # write-tree/diff 撞上就 GateError。用指数退避等待，窗口内基本都能等到。
 INDEX_LOCK_RETRY = int(os.environ.get("SESSION_ARCHIVE_INDEX_LOCK_RETRY", "80"))
-PROCESS = ROOT / "docs" / "process"
+LEDGER = ROOT / "docs" / "ledger"
 SUMMARY = ROOT / "docs" / "summary"
 CATEGORIES = ("feat", "bug", "chore", "docs", "deploy")
 TEST_CATEGORIES = ("feat", "bug")
@@ -171,36 +171,61 @@ def load_json(path: Path) -> dict:
         raise GateError(f"{path.relative_to(ROOT)} 读取失败：{exc}") from exc
 
 
-def manifests(root: Path = PROCESS) -> list[tuple[Path, dict]]:
-    if not root.is_dir():
-        return []
+def manifest_lines(path: Path) -> list[dict]:
+    """读取一个 ledger 文件的全部行（每行一份 manifest）。"""
     rows = []
-    for path in sorted(root.glob("*/*/manifest.json")):
-        rows.append((path, load_json(path)))
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
     return rows
 
 
-def reseal_chain(category: str, root: Path = PROCESS) -> list[str]:
+def write_ledger(path: Path, rows: list[dict]) -> None:
+    """整文件回写 ledger（JSONL，每行一份 manifest，行序 = 落盘顺序）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                    encoding="utf-8")
+
+
+def manifests(root: Path = LEDGER) -> list[tuple[Path, dict]]:
+    """全部会话留痕：docs/ledger/*.jsonl，每行一份 manifest（(文件, 行) 列表）。"""
+    if not root.is_dir():
+        return []
+    rows = []
+    for path in sorted(root.glob("*.jsonl")):
+        for manifest in manifest_lines(path):
+            rows.append((path, manifest))
+    return rows
+
+
+def reseal_chain(category: str, root: Path = LEDGER) -> list[str]:
     """按 createdAt 重排某个分类的归档链，重算每份的 prev/self。
 
     <p>并行会话各自 finish 时看到的链尾是同一个（旧的）末端，合并后必然出现
     多条记录指向同一 prev 的断链。链本身由 createdAt 完全决定，所以落盘后
     整体重算一遍即可恢复：prev 依次串起来，self 随内容重算。只改真正变化的文件。
     """
-    rows = [(path, manifest) for path, manifest in manifests(root)
-            if manifest.get("category") == category]
-    rows.sort(key=lambda row: (row[1].get("createdAt", ""), row[1].get("id", "")))
+    files: dict[Path, list[dict]] = {}
+    for path in sorted(root.glob("*.jsonl")):
+        files[path] = manifest_lines(path)
+    entries = [(path, row) for path, rows in files.items() for row in rows
+               if row.get("category") == category]
+    entries.sort(key=lambda entry: (entry[1].get("createdAt", ""), entry[1].get("id", "")))
     changed: list[str] = []
+    touched: set[Path] = set()
     prev = "GENESIS"
-    for path, manifest in rows:
+    for path, manifest in entries:
         chain = manifest.setdefault("chain", {})
         before = (chain.get("prev"), chain.get("self"))
         chain["prev"] = prev
         chain["self"] = manifest_self(manifest)
         if before != (chain["prev"], chain["self"]):
-            write_json(path, manifest)
             changed.append(str(manifest.get("id")))
+            touched.add(path)
         prev = chain["self"]
+    for path in touched:
+        write_ledger(path, files[path])
     return changed
 
 
@@ -342,7 +367,8 @@ def cmd_start(args) -> int:
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M")
     folder = f"{stamp}_{code_slug}"
     seq = 2
-    while (PROCESS / args.category / folder).exists():
+    taken = {m.get("id") for _, m in manifests()}
+    while f"{args.category}/{folder}" in taken:
         folder = f"{stamp}_{code_slug}-{seq}"
         seq += 1
     # 标题带上编码：任务页、归档列表、总结文档标题三处因此能对得上同一个编号
@@ -680,7 +706,7 @@ def pid_alive(pid: int) -> bool:
     """判断 PID 是否仍指向一个存活进程（跨平台，仅用标准库）。
 
     僵尸锁的根因：持锁进程被 SIGTERM/超时杀掉时 {@code __exit__} 不会执行，
-    锁文件残留，但 mtime 很新、90 分钟内不会被判 stale，于是后面每个提交都
+    锁文件残留，但 mtime 很新、stale 阈值内不会被判死，于是后面每个提交都
     排队等待直到超时。锁文件里写了 PID，检测它是否还活着即可秒级回收。
     """
     if pid <= 0:
@@ -752,7 +778,7 @@ class TestLock:
                 time.sleep(1)
 
     def _stale(self) -> bool:
-        # 首选：持锁进程已死 → 立即回收（僵尸锁秒级自愈，不必等满 90 分钟）。
+        # 首选：持锁进程已死 → 立即回收（僵尸锁秒级自愈，不必等满 stale 阈值）。
         pid = read_lock_pid(self.path)
         if pid > 0 and not pid_alive(pid):
             return True
@@ -1088,101 +1114,42 @@ def cmd_finish(args) -> int:
     # 落盘 + 重排整条链：不再用全局互斥锁，改为乐观并发——链由 createdAt 完全决定，
     # 并行 finish 各自接在旧链尾后，reseal_chain 会整体重排收敛，不产生断链。
     manifest["chain"]["self"] = manifest_self(manifest)
-    folder_dir = PROCESS / category / active["folder"]
-    write_json(folder_dir / "manifest.json", manifest)
+    ledger_path = LEDGER / f"{period}.jsonl"
+    write_ledger(ledger_path, manifest_lines(ledger_path) + [manifest])
     resealed = reseal_chain(category)
 
-    write_summary(manifest, active, period)
+    rebuild_views()
     clear_active()
     clear_evidence()
-    out(f"归档完成：docs/process/{category}/{active['folder']}/manifest.json")
+    out(f"归档完成：docs/ledger/{period}.jsonl#{active['id']}")
     if resealed:
         out(f"归档链已重排（{len(resealed)} 份）：{', '.join(resealed)}")
-    out(f"总结：docs/summary/{period}/{active['folder']}.md")
+    out("已刷新 docs/views/（索引/变更日志/模块视图）")
     out("请提交 docs/ 归档后再推送")
     return 0
 
 
-# ------------------------------------------------------------------ summary
+# ------------------------------------------------------------------ views（生成）
 
-def jacoco_coverage() -> str:
-    covered = missed = 0
-    for xml in (ROOT / "platform").glob("*/target/site/jacoco/jacoco.xml"):
-        text = xml.read_text(encoding="utf-8", errors="replace")
-        for match in re.finditer(r'<counter type="LINE" missed="(\d+)" covered="(\d+)"/>', text):
-            missed += int(match.group(1))
-            covered += int(match.group(2))
-    total = covered + missed
-    return f"{covered * 100.0 / total:.1f}%" if total else "N/A"
+def rebuild_views() -> None:
+    """刷新 docs/views/（由 tools/docs/build.py 从 ledger 投影生成）。
+
+    <p>失败不吞归档：留痕是主目的，视图可以事后补生成，所以这里只告警。
+    """
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "docs" / "build.py"), "sync"],
+                          cwd=ROOT, capture_output=True, env=clean_env(), text=True)
+    if proc.returncode != 0:
+        out(f"⚠ 视图生成失败（归档不受影响，可手动 python tools/docs/build.py sync）："
+            f"{(proc.stderr or proc.stdout).strip()[:200]}")
 
 
-def write_summary(manifest: dict, active: dict, period: str) -> None:
-    folder = active["folder"]
-    primary = SUMMARY / period / f"{folder}.md"
-    track_dir = SUMMARY / manifest["category"]
-    secondary = track_dir / f"{period}_{active['slug']}.md"
-    previous = sorted(track_dir.glob("*.md")) if track_dir.is_dir() else []
-    extends = previous[-1].stem.split("_", 1)[-1] if previous else "null"
-    coverage = jacoco_coverage()
-    gate = "PASS" if manifest["tests"]["result"] == "PASSED" else "WARN"
-    tests = manifest["tests"]
-    match = re.search(r"Tests run: (\d+)", tests.get("evidence", ""))
-    cases_total = int(match.group(1)) if match else 0
-    commits = "\n".join(
-        f"| `{c['sha'][:7]}` | {c['category']} | {c['subject']} |" for c in manifest["commits"])
-    body = f"""---
-schema: session-summary/v1
-period: {period}
-createdAt: {now_iso()}
-extends: {extends}
-refs:
-  - {manifest['id']}
-metrics:
-  sessions: 1
-  casesAdded: {tests['casesAdded']}
-  casesTotal: {cases_total}
-  passRate: "{'100%' if tests['result'] == 'PASSED' else '0%'}"
-  lineCoverage: "{coverage}"
-  coverageDelta: "N/A"
-  patchCoverage: "N/A"
-  gate: {gate}
----
-
-# {manifest['title']}
-
-## 概述
-{manifest['problem']}
-{manifest['solution']}
-
-## 交付清单
-| 提交 | 类别 | 说明 |
-|---|---|---|
-{commits}
-
-## 测试与质量总结
-- 命令：`{tests['command']}`
-- 结果：{tests['result']}；{tests['evidence']}
-- 新增用例：{tests['casesAdded']}
-- 行覆盖率：{coverage}（JaCoCo；patch coverage 需按 diff 统计，暂记 N/A）
-- 质量门禁：**{gate}**
-
-## 风险敞口
-- 未覆盖的新增文件：{'无' if tests['result'] == 'PASSED' else '见失败测试'}
-- 跳过用例：见 evidence 中 Skipped 计数
-
-## 遗留与建议
-{chr(10).join('- ' + f for f in manifest.get('followUps', [])) or '- 无'}
-
-## 链接
-- 归档：`docs/process/{manifest['category']}/{folder}/manifest.json`
-- 上一份同域总结：{extends}
-"""
-    for path, canonical_path in ((primary, None), (secondary, primary)):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = body
-        if canonical_path is not None:
-            text = text.replace("---\n", f"---\ncanonical: {canonical_path.relative_to(ROOT).as_posix()}\n", 1)
-        path.write_text(text, encoding="utf-8")
+def views_check() -> int:
+    """docs/views/ 与 ledger 一致性（pre-push 用）。"""
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "docs" / "build.py"), "check"],
+                          cwd=ROOT, capture_output=True, env=clean_env(), text=True)
+    if proc.returncode != 0:
+        out((proc.stderr or proc.stdout).strip()[-1500:])
+    return proc.returncode
 
 
 # ------------------------------------------------------------------ validate
@@ -1200,7 +1167,7 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool,
            实测要 9s 以上，合并成一次之后降到亚秒级。{@code None} 表示本函数自行查。
     """
     errors: list[str] = []
-    rel = path.relative_to(path.parents[2]) if len(path.parents) > 2 else path
+    rel = f"{path.name}#{manifest.get('id', '?')}"
     for key in REQUIRED:
         if key not in manifest:
             errors.append(f"{rel}: 缺少字段 {key}")
@@ -1210,11 +1177,11 @@ def validate_manifest(path: Path, manifest: dict, skip_git: bool,
     if category not in CATEGORIES:
         errors.append(f"{rel}: category 非法")
     ident = manifest.get("id", "")
-    folder = path.parent.name
+    folder = str(ident).split("/", 1)[-1]
     if not FOLDER_RE.fullmatch(folder):
-        errors.append(f"{rel}: 目录名不符合 YYYY-MM-DD_HHMM_<slug>")
+        errors.append(f"{rel}: 归档名不符合 YYYY-MM-DD_HHMM_<slug>")
     if ident != f"{category}/{folder}":
-        errors.append(f"{rel}: id 与目录不一致（应为 {category}/{folder}）")
+        errors.append(f"{rel}: id 与 category 不一致（应为 {category}/{folder}）")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00",
                          manifest.get("createdAt", "")):
         errors.append(f"{rel}: createdAt 必须为 +08:00 ISO 时间")
@@ -1386,14 +1353,25 @@ def validate_plan_doc(path: Path, root: Path, text: str, front: str) -> list[str
 
 def validate_root(root: Path, skip_git: bool = False) -> list[str]:
     errors: list[str] = []
-    process_root = root / "docs" / "process"
+    ledger_root = root / "docs" / "ledger"
     rows = []
-    if process_root.is_dir():
-        for path in sorted(process_root.glob("*/*/manifest.json")):
+    if ledger_root.is_dir():
+        for path in sorted(ledger_root.glob("*.jsonl")):
             try:
-                rows.append((path, load_json(path)))
-            except GateError as exc:
-                errors.append(str(exc))
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line:
+                        rows.append((path, json.loads(line)))
+            except (OSError, json.JSONDecodeError) as exc:
+                errors.append(f"{path.name}: ledger 读取失败：{exc}")
+    # 旧归档模型防回潮：docs/process 是 2026-11-20 之前的每会话目录，
+    # 合并旧基点分支时曾被整套带回来（gate.py 回退 + 500+ 文件复活）。报第一条即止。
+    legacy_root = root / "docs" / "process"
+    if legacy_root.is_dir():
+        for stale in sorted(legacy_root.glob("*/*/manifest.json")):
+            errors.append(f"{stale.relative_to(root)}: 旧归档模型回潮（docs/process 已废止），"
+                          "运行 python tools/session-archive/migrate-to-ledger.py 吸收入 ledger")
+            break
     # 提交存在性：全部归档的 sha 一次性批量查完，再分发给各 manifest。
     # 逐份查会让 117 份归档各起一个 git 子进程（实测 9s+），批量后亚秒级。
     known: set[str] | None = None
@@ -1441,6 +1419,10 @@ def validate_root(root: Path, skip_git: bool = False) -> list[str]:
             meta = frontmatter_scalars(front)
             if meta.get("kind") == "plan" or path.parent == summary_root / "plan":
                 errors.extend(validate_plan_doc(path, root, text, front))
+            elif meta.get("schema") == "session-summary/v1":
+                # 会话总结已由 docs/views/ 生成取代：留痕在 ledger，别再手写散文副本
+                errors.append(f"{path.relative_to(root)}: session-summary 已被 docs/views/ 取代，"
+                              "请删除（见 tools/session-archive/migrate-to-ledger.py）")
     return errors
 
 
@@ -1918,9 +1900,9 @@ def cmd_gate_pre_push(args) -> int:
     if session:
         return fail(f"本 worktree 的会话未归档：{session.get('id')}。"
                     f"先执行 python tools/session-archive/gate.py finish")
-    dirty = git("status", "--porcelain", "docs/process", "docs/summary")
+    dirty = git("status", "--porcelain", "docs/ledger", "docs/summary", "docs/views")
     if dirty:
-        return fail("存在未提交的归档/总结文件，请先提交 docs/ 后再推送")
+        return fail("存在未提交的归档/视图文件，请先提交 docs/ 后再推送")
     missing = unarchived_code_commits()
     if missing:
         return fail(
@@ -1931,6 +1913,8 @@ def cmd_gate_pre_push(args) -> int:
     result = cmd_validate(args)
     if result != 0:
         return result
+    if views_check() != 0:
+        return fail("docs/views/ 与 ledger 不一致：运行 python tools/docs/build.py sync 并提交")
     if handbook_check() != 0:
         return fail("Harness Handbook 已漂移：运行 python tools/handbook/build.py sync 并提交 docs/handbook")
     if web_tests() != 0:
@@ -2170,7 +2154,8 @@ def cmd_self_test(args) -> int:
         # 以下都不该让 spec-checks 重跑
         ("platform/agent-infra/src/test/java/ATest.java", False),
         ("docs/summary/2026-11/x.md", False),
-        ("docs/process/feat/x/manifest.json", False),
+        ("docs/ledger/2026-11.jsonl", False),
+        ("docs/skills/sandbox-images/SKILL.md", False),
         (".github/workflows/ci.yml", False),
         ("tools/task-board/show.py", False),
         ("platform/web/src/views/PipelineView.vue", False),
@@ -2201,20 +2186,24 @@ def cmd_self_test(args) -> int:
             "chain": {"prev": "GENESIS", "self": ""},
         }
         base["chain"]["self"] = manifest_self(base)
-        target = root / "docs" / "process" / "feat" / "2026-11-17_1000_sample" / "manifest.json"
-        write_json(target, base)
+        target = root / "docs" / "ledger" / "2026-11.jsonl"
+
+        def put(*rows: dict) -> None:
+            write_ledger(target, list(rows))
+
+        put(base)
         if validate_root(root, skip_git=True):
             return fail("self-test: 合法样本不应报错")
 
         broken = json.loads(json.dumps(base))
         broken["tests"]["casesAdded"] = 0
-        write_json(target, broken)
+        put(broken)
         if not validate_root(root, skip_git=True):
             return fail("self-test: 缺用例应报错")
 
         tampered = json.loads(json.dumps(base))
         tampered["chain"]["self"] = "f" * 64
-        write_json(target, tampered)
+        put(tampered)
         if not validate_root(root, skip_git=True):
             return fail("self-test: 篡改 self 应报错")
 
@@ -2237,38 +2226,32 @@ def cmd_self_test(args) -> int:
             "chain": {"prev": "GENESIS", "self": ""},
         }
         docs["chain"]["self"] = manifest_self(docs)
-        docs_path = (root / "docs" / "process" / "docs"
-                     / "2026-11-17_0930_chat-summary" / "manifest.json")
-        write_json(docs_path, docs)
-        write_json(target, base)
+        put(base, docs)
         if validate_root(root, skip_git=True):
             return fail("self-test: docs 空提交归档应被接受")
 
         dup = json.loads(json.dumps(base))
         dup["session"]["ideSessionId"] = docs["session"]["ideSessionId"]
         dup["chain"]["self"] = manifest_self(dup)
-        write_json(target, dup)
+        put(dup, docs)
         if not validate_root(root, skip_git=True):
             return fail("self-test: ideSessionId 重复应报错")
 
         # 并行会话各接旧链尾 → 合并后断链；reseal_chain 应把链重排回一致
-        write_json(target, base)
         later = json.loads(json.dumps(base))
         later["id"] = "feat/2026-11-17_1100_sample-later"
         later["createdAt"] = "2026-11-17T11:00:00+08:00"
         later["chain"] = {"prev": "GENESIS", "self": ""}
         later["chain"]["self"] = manifest_self(later)
-        later_path = (root / "docs" / "process" / "feat"
-                      / "2026-11-17_1100_sample-later" / "manifest.json")
-        write_json(later_path, later)
+        put(base, later)
         if not any("chain.prev 断链" in e for e in validate_root(root, skip_git=True)):
             return fail("self-test: 并联接链应被判为断链")
-        resealed = reseal_chain("feat", root / "docs" / "process")
+        resealed = reseal_chain("feat", root / "docs" / "ledger")
         if resealed != ["feat/2026-11-17_1100_sample-later"]:
             return fail(f"self-test: 只应重排后一份归档，实际 {resealed}")
         if validate_root(root, skip_git=True):
             return fail("self-test: 重排后链应恢复一致")
-        if reseal_chain("feat", root / "docs" / "process"):
+        if reseal_chain("feat", root / "docs" / "ledger"):
             return fail("self-test: 链已一致时重排不应再改文件")
 
         # plan 类契约（spec §4.6）：双索引 + 字段 + 必需章节，缺一即红
@@ -2325,6 +2308,16 @@ def cmd_self_test(args) -> int:
 
         plan.unlink()
         primary.unlink()
+    # 旧归档模型防回潮：docs/process 复活（旧基点分支合并带回）必须被拦。
+    with tempfile.TemporaryDirectory() as tmp:
+        legacy_root = Path(tmp)
+        legacy = (legacy_root / "docs" / "process" / "chore"
+                  / "2026-11-19_0000_legacy" / "manifest.json")
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("{}", encoding="utf-8")
+        if not any("旧归档模型回潮" in e for e in validate_root(legacy_root, skip_git=True)):
+            return fail("self-test: docs/process 复活应被拦")
+        legacy.unlink()
 
     # 并发健壮性契约（并行任务不互相卡死）：
     # 1) PID 存活检测：当前进程必须判活，明显不存在的 PID 必须判死。
