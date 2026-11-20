@@ -1,0 +1,303 @@
+{
+  "schema": "process-manifest/v2",
+  "id": "feat/2026-11-20_2210_2026-11-20-harness-agent-migration",
+  "category": "feat",
+  "title": "对话层迁移到 AgentScope 官方 HarnessAgent",
+  "createdAt": "2026-11-20T22:10:31+08:00",
+  "session": {
+    "agentModel": "unknown",
+    "promptSummary": "对话层迁移到 AgentScope 官方 HarnessAgent",
+    "toolCallCount": 0
+  },
+  "problem": "对话层迁移到 AgentScope 官方 HarnessAgent",
+  "solution": "feat(agent): 对话层迁移到 AgentScope 官方 HarnessAgent",
+  "commits": [
+    {
+      "sha": "38597cd045af58cbcef42ede5baba2527d952ad0",
+      "subject": "feat(agent): 对话层迁移到 AgentScope 官方 HarnessAgent",
+      "category": "feat",
+      "files": [
+        {
+          "path": "docs/code-wiki/01-architecture.md",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "cd733eff009b974729b52c38e513be43da584bba"
+        },
+        {
+          "path": "docs/code-wiki/02-modules.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 2,
+          "blobHash": "9bfa9db64fbb6e68e14be6f94d097adca2b4e065"
+        },
+        {
+          "path": "docs/code-wiki/03-core-flows.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "1fd0fa5636738351fbce8b6c9a686a2a00621c7f"
+        },
+        {
+          "path": "docs/code-wiki/07-persistence.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "91df72d3fea2d6a63544e1b98d6c7e5e4311f70f"
+        },
+        {
+          "path": "docs/handbook/index.md",
+          "status": "M",
+          "additions": 0,
+          "deletions": 1,
+          "blobHash": "7a25203dc3576b5f5396f90ca5c0745771728669"
+        },
+        {
+          "path": "docs/handbook/l1/data-flow.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "71f63bbe4ff14db64c8570f1285a4c3df56499ef"
+        },
+        {
+          "path": "docs/handbook/l1/execution-model.md",
+          "status": "M",
+          "additions": 6,
+          "deletions": 6,
+          "blobHash": "49b7e99fbbcda1d0c327ea9658ceb897082384c5"
+        },
+        {
+          "path": "docs/handbook/l1/system-overview.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "f719bde7cf5e8723d178922bc8cb9e80f459503c"
+        },
+        {
+          "path": "docs/handbook/l2/runtime-agent-loop.md",
+          "status": "M",
+          "additions": 4,
+          "deletions": 5,
+          "blobHash": "32646b40119cbb99ecd80a3e989052a194f72410"
+        },
+        {
+          "path": "docs/handbook/l2/session-state-context.md",
+          "status": "M",
+          "additions": 19,
+          "deletions": 24,
+          "blobHash": "6e22df7cd994859a6f9b0f8a639d81e7335ba3a0"
+        },
+        {
+          "path": "docs/handbook/l2/tool-execution.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "32daa7c8e7ecd319a611053e2d6745248a403095"
+        },
+        {
+          "path": "docs/handbook/l3/gateway-chat-controller.md",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "84eafedadd17553f503a69da27c58760eecfd2c1"
+        },
+        {
+          "path": "docs/handbook/l3/runtime-agent-factory.md",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "01229b4cf671f391a26898adb480f03f6023279c"
+        },
+        {
+          "path": "docs/handbook/l3/runtime-chat-service.md",
+          "status": "M",
+          "additions": 2,
+          "deletions": 2,
+          "blobHash": "301f245552c41438262ba49556929a66988546f1"
+        },
+        {
+          "path": "docs/handbook/l3/state-agent-state-store.md",
+          "status": "M",
+          "additions": 5,
+          "deletions": 5,
+          "blobHash": "613ea01344f0e3d6a4cd956e24a97d4897de542b"
+        },
+        {
+          "path": "docs/handbook/l3/state-context-trimmer.md",
+          "status": "D",
+          "additions": 0,
+          "deletions": 36,
+          "blobHash": "-"
+        },
+        {
+          "path": "docs/handbook/manifest.json",
+          "status": "M",
+          "additions": 10,
+          "deletions": 24,
+          "blobHash": "b558706e8d867cf01bd329a0bc6197cdbac6a124"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/api/openapi.json",
+          "status": "M",
+          "additions": 57,
+          "deletions": 2,
+          "blobHash": "5cc7e26d2bc41a8933a01c1ca0b7e3c0f2350de0"
+        },
+        {
+          "path": "platform/agent-gateway/src/main/resources/application.yml",
+          "status": "M",
+          "additions": 0,
+          "deletions": 6,
+          "blobHash": "62a1b811795439c10abdbb0550b18b41a2393ef0"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/AgentStateConfig.java",
+          "status": "M",
+          "additions": 2,
+          "deletions": 6,
+          "blobHash": "6891cbf0e1f527540de33957bcc57a9b87cb294c"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/ConversationContextTrimmer.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 290,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
+          "status": "M",
+          "additions": 4,
+          "deletions": 26,
+          "blobHash": "6c5662ed93c9c8bbb9160b7eb1c7df567b551dc6"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextSummaryTest.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 115,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextTrimmerTest.java",
+          "status": "D",
+          "additions": 0,
+          "deletions": 100,
+          "blobHash": "-"
+        },
+        {
+          "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/EncryptedAgentStateStoreTest.java",
+          "status": "M",
+          "additions": 1,
+          "deletions": 1,
+          "blobHash": "8d1e2d63038346943ed6aafde9aec97498d2f3d5"
+        },
+        {
+          "path": "platform/agent-runtime/pom.xml",
+          "status": "M",
+          "additions": 6,
+          "deletions": 0,
+          "blobHash": "1958e8fca356637de8854ae326e08d93609399a9"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
+          "status": "M",
+          "additions": 37,
+          "deletions": 14,
+          "blobHash": "fbda66fa14859e0465f7e2cbf50ab76343daa95c"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java",
+          "status": "M",
+          "additions": 5,
+          "deletions": 3,
+          "blobHash": "d2947ceab7bc5691d813592eced3220d8d4d5bb8"
+        },
+        {
+          "path": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/OpsAgentRunner.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 3,
+          "blobHash": "90adbdf5e5cf568b023f451be858de70eeff48b2"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AgentFactoryPendingRecoveryTest.java",
+          "status": "M",
+          "additions": 3,
+          "deletions": 2,
+          "blobHash": "8f4452b70d51e5d4aad3f323252c285f56370894"
+        },
+        {
+          "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/HarnessAgentCompatibilityTest.java",
+          "status": "A",
+          "additions": 115,
+          "deletions": 0,
+          "blobHash": "5564b1116d8df80e5991299b1c8743331ae31e9d"
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "required": true,
+    "files": [
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextSummaryTest.java",
+        "status": "D",
+        "additions": 0,
+        "deletions": 115,
+        "blobHash": "-"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/ConversationContextTrimmerTest.java",
+        "status": "D",
+        "additions": 0,
+        "deletions": 100,
+        "blobHash": "-"
+      },
+      {
+        "path": "platform/agent-infra/src/test/java/top/rongx/agent/infra/state/EncryptedAgentStateStoreTest.java",
+        "status": "M",
+        "additions": 1,
+        "deletions": 1,
+        "blobHash": "8d1e2d63038346943ed6aafde9aec97498d2f3d5"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/AgentFactoryPendingRecoveryTest.java",
+        "status": "M",
+        "additions": 3,
+        "deletions": 2,
+        "blobHash": "8f4452b70d51e5d4aad3f323252c285f56370894"
+      },
+      {
+        "path": "platform/agent-runtime/src/test/java/top/rongx/agent/runtime/HarnessAgentCompatibilityTest.java",
+        "status": "A",
+        "additions": 115,
+        "deletions": 0,
+        "blobHash": "5564b1116d8df80e5991299b1c8743331ae31e9d"
+      }
+    ],
+    "casesAdded": 5,
+    "command": "mvn -B -nsu -pl agent-gateway,agent-infra,agent-runtime,!spec-checks -amd -DskipTests -Djacoco.skip=true test-compile && mvn -B -nsu -pl agent-gateway,agent-infra,agent-runtime test -Dsurefire.forkCount=4 -DexcludedGroups=slow",
+    "result": "PASSED",
+    "evidence": "Tests run: 444, Failures: 0, Errors: 0, Skipped: 7"
+  },
+  "impact": {
+    "modules": [
+      "agent-gateway",
+      "agent-infra",
+      "agent-runtime"
+    ],
+    "verification": "Tests run: 444, Failures: 0, Errors: 0, Skipped: 7"
+  },
+  "followUps": [],
+  "links": {
+    "relatedIds": [],
+    "summaryRefs": [
+      "2026-11/2026-11-20_2210_2026-11-20-harness-agent-migration"
+    ]
+  },
+  "chain": {
+    "prev": "70f65d2ee3a87b1690ba3c48dc916885143a8d41f3ee94497606d8b503e0fb47",
+    "self": "565a833dd2a5ff87800c14d347209449bec65a7a1a42683a901f9e5db6a96a9b"
+  }
+}
