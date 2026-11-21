@@ -10,6 +10,7 @@ import { appStore, type SessionItem } from '../../stores/app'
 import { clearHistory } from '../../state/sessionHistory'
 import { disposeSessionChat } from '../../state/sessionChat'
 import { deleteConversation, listConversations } from '../../api/workspace'
+import { relativeTime } from '../../utils/status'
 
 /**
  * 左侧栏 —— 结构对齐 DSH：
@@ -316,15 +317,6 @@ const permissionHint = computed(() => {
   return list.length ? `${list.length} 项权限` : '未加载权限'
 })
 
-/** 相对时间：比绝对时间短，且不会出现「11-08 15:42」这种要换算的字符串。 */
-function formatTime(ms: number): string {
-  const diff = Date.now() - ms
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  return `${Math.floor(diff / 86_400_000)} 天前`
-}
-
 onMounted(async () => {
   await loadProjects()
   await loadServerSessions()
@@ -467,7 +459,7 @@ watch(() => appStore.projectId, () => void loadServerSessions())
                 <button type="button" class="session-item" @click="openSession(s.id)">
                   <el-icon class="session-icon"><Document /></el-icon>
                   <span class="session-title" :title="s.title">{{ s.title }}</span>
-                  <span class="session-time">{{ formatTime(s.at) }}</span>
+                  <span class="session-time">{{ relativeTime(s.at) }}</span>
                 </button>
                 <button
                   type="button" class="session-del" title="删除会话"

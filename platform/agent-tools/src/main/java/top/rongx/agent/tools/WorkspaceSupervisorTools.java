@@ -2,6 +2,7 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import top.rongx.agent.domain.process.LogTail;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -284,7 +285,7 @@ public class WorkspaceSupervisorTools {
                 sb.append("- ").append(issue.id())
                         .append("  [").append(issue.state()).append(']')
                         .append("  ").append(issue.priority())
-                        .append("  ").append(oneLine(issue.title(), 120))
+                        .append("  ").append(LogTail.oneLine(issue.title(), 120))
                         .append('\n');
             }
             return sb.toString().trim();
@@ -311,12 +312,12 @@ public class WorkspaceSupervisorTools {
                 sb.append("- ").append(RECALL_TIME.format(Instant.ofEpochMilli(run.createdAt())))
                         .append("  [").append(run.status()).append(']')
                         .append("  conversation=").append(run.conversationId())
-                        .append("  goal=").append(oneLine(run.goal(), 100)).append('\n');
+                        .append("  goal=").append(LogTail.oneLine(run.goal(), 100)).append('\n');
                 if (!run.result().isBlank()) {
-                    sb.append("  result: ").append(oneLine(run.result(), 280)).append('\n');
+                    sb.append("  result: ").append(LogTail.oneLine(run.result(), 280)).append('\n');
                 }
                 if (!run.error().isBlank()) {
-                    sb.append("  error: ").append(oneLine(run.error(), 200)).append('\n');
+                    sb.append("  error: ").append(LogTail.oneLine(run.error(), 200)).append('\n');
                 }
             }
             return sb.toString().trim();
@@ -362,7 +363,7 @@ public class WorkspaceSupervisorTools {
 
     private static String issueTitle(GitIssue issue) {
         String title = issue.title().isBlank() ? "工单 " + issue.id() : issue.title();
-        return oneLine("[" + (issue.number().isBlank() ? issue.id() : "#" + issue.number()) + "] "
+        return LogTail.oneLine("[" + (issue.number().isBlank() ? issue.id() : "#" + issue.number()) + "] "
                 + title, 60);
     }
 
@@ -494,7 +495,7 @@ public class WorkspaceSupervisorTools {
                         .append("  [").append(task.state()).append("]")
                         .append("  ").append(task.priority())
                         .append("  ").append(task.kind())
-                        .append("  ").append(oneLine(task.title(), 120));
+                        .append("  ").append(LogTail.oneLine(task.title(), 120));
                 if (task.number().isBlank()) {
                     sb.append("  local");
                 } else {
@@ -526,7 +527,7 @@ public class WorkspaceSupervisorTools {
                 sb.append("  archived");
             }
             if (!c.summary().isBlank()) {
-                sb.append("  summary=").append(oneLine(c.summary(), 80));
+                sb.append("  summary=").append(LogTail.oneLine(c.summary(), 80));
             }
             sb.append('\n');
         }
@@ -552,10 +553,10 @@ public class WorkspaceSupervisorTools {
             }
             sb.append('\n');
             if (!node.error().isBlank()) {
-                sb.append("  error: ").append(oneLine(node.error(), 300)).append('\n');
+                sb.append("  error: ").append(LogTail.oneLine(node.error(), 300)).append('\n');
             }
             if (!node.summary().isBlank()) {
-                sb.append("  summary: ").append(oneLine(node.summary(), 600)).append('\n');
+                sb.append("  summary: ").append(LogTail.oneLine(node.summary(), 600)).append('\n');
             }
         }
         String text = sb.toString().trim();
@@ -575,18 +576,14 @@ public class WorkspaceSupervisorTools {
             sb.append("elapsed_ms: ").append(Math.max(0, end - run.startedAt())).append('\n');
         }
         if (!run.error().isBlank()) {
-            sb.append("error: ").append(oneLine(run.error(), 400)).append('\n');
+            sb.append("error: ").append(LogTail.oneLine(run.error(), 400)).append('\n');
         }
         if (!run.result().isBlank()) {
-            sb.append("result:\n---\n").append(oneLine(run.result(), 1_500)).append("\n---");
+            sb.append("result:\n---\n").append(LogTail.oneLine(run.result(), 1_500)).append("\n---");
         }
         return sb.toString().trim();
     }
 
-    private static String oneLine(String text, int max) {
-        String value = text == null ? "" : text.trim().replaceAll("\\s+", " ");
-        return value.length() > max ? value.substring(0, max) + "…" : value;
-    }
 
     /** 工具不应把异常直接抛给 Agent（会中断整轮），统一转成可读的 err 文本。 */
     private static String guard(ToolCall call) {

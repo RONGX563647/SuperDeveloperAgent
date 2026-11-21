@@ -1,5 +1,8 @@
 package top.rongx.agent.infra.conversation;
 
+import top.rongx.agent.domain.text.Texts;
+
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -69,8 +72,7 @@ public class DbConversationStore
     }
 
     private static PlatformDb platformDb(String workspaceRoot) {
-        Path dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db");
+        Path dbFile = WorkspacePaths.db(Path.of(workspaceRoot));
         try {
             Files.createDirectories(dbFile.getParent());
         } catch (IOException e) {
@@ -238,17 +240,13 @@ public class DbConversationStore
         boolean pinned = patch.pinned() == null ? current.pinned() : patch.pinned();
         boolean archived = patch.archived() == null ? current.archived() : patch.archived();
         String modelConnectionId = patch.modelConnectionId() == null
-                ? current.modelConnectionId() : blankToNull(patch.modelConnectionId());
+                ? current.modelConnectionId() : Texts.blankToNull(patch.modelConnectionId());
         String modelName = patch.modelName() == null
-                ? current.modelName() : blankToNull(patch.modelName());
+                ? current.modelName() : Texts.blankToNull(patch.modelName());
         return new Conversation(current.id(), current.projectId(), current.ownerUserId(), title,
                 current.kind(), current.role(), env, worktree, status, summary, pinned, archived,
                 current.parentConversationId(), System.currentTimeMillis(), current.createdAt(),
                 modelConnectionId, modelName);
-    }
-
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private static Conversation mapConversation(Object[] row) {

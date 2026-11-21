@@ -1,9 +1,9 @@
 package top.rongx.agent.gateway.gitissue;
 
-import java.security.SecureRandom;
+import top.rongx.agent.domain.id.Ids;
+
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -102,7 +102,7 @@ public class GitIssueServiceImpl implements GitIssueService {
         GitIssue.Draft resolved = resolveRemote(draft, null);
         String repo = GitIssueRemoteClient.cleanRepo(resolved.repo());
         String version = resolveVersion(resolved.version(), resolved.projectId());
-        GitIssue issue = new GitIssue(newId("task"), "", userId, resolved.projectId(),
+        GitIssue issue = new GitIssue(Ids.newId("task"), "", userId, resolved.projectId(),
                 resolved.provider(),
                 repo, "", resolved.title(), resolved.body(), resolved.state(), resolved.kind(),
                 resolved.priority(), resolved.labels(), "", "PLATFORM", "LOCAL", "",
@@ -184,7 +184,7 @@ public class GitIssueServiceImpl implements GitIssueService {
         if (body == null || body.isBlank()) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "评论内容不能为空");
         }
-        GitIssueComment comment = new GitIssueComment(newId("c"), issueId, userId,
+        GitIssueComment comment = new GitIssueComment(Ids.newId("c"), issueId, userId,
                 body.trim(), "PLATFORM", System.currentTimeMillis());
         issues.addComment(comment);
         if (issue.bound() && pushEnabled(issue.provider())) {
@@ -467,9 +467,4 @@ public class GitIssueServiceImpl implements GitIssueService {
         return text.length() <= 500 ? text : text.substring(0, 500);
     }
 
-    private static String newId(String prefix) {
-        byte[] raw = new byte[5];
-        new SecureRandom().nextBytes(raw);
-        return prefix + "-" + HexFormat.of().formatHex(raw);
-    }
 }

@@ -1,6 +1,5 @@
 package top.rongx.agent.domain.gitissue;
 
-import java.util.List;
 import java.util.Locale;
 
 /**
@@ -71,16 +70,6 @@ public record GitIssueIntegration(
     /** 是否允许 Git → 平台回写。 */
     public boolean pullEnabled() {
         return enabled && !"PUSH_ONLY".equals(syncDirection);
-    }
-
-    public List<String> whitelistEntries() {
-        if (repoWhitelist.isBlank()) {
-            return List.of();
-        }
-        return java.util.Arrays.stream(repoWhitelist.split("[,\\n;\\s]+"))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .toList();
     }
 
     private static String direction(String value) {

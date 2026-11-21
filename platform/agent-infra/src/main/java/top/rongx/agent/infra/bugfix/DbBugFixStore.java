@@ -1,5 +1,6 @@
 package top.rongx.agent.infra.bugfix;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -168,8 +169,7 @@ public class DbBugFixStore implements BugFixRunStore, BugFixPolicyStore, BugFixN
 
     /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public DbBugFixStore(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this(standaloneDb(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")));
+        this(standaloneDb(WorkspacePaths.db(Path.of(workspaceRoot))));
     }
 
     private static PlatformDb standaloneDb(Path dbFile) {

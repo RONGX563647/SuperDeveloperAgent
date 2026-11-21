@@ -8,6 +8,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 import io.agentscope.core.tool.Tool;
+import static top.rongx.agent.domain.text.Slugs.slug;
 import io.agentscope.core.tool.ToolParam;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvResource;
@@ -369,15 +370,6 @@ public class EnvQueryTools {
             }
         }
         return false;
-    }
-
-    private static String slug(String raw) {
-        String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9_.-]", "-");
-        while (value.startsWith("-") || value.startsWith(".")) {
-            value = value.substring(1);
-        }
-        return value;
     }
 
     private static String middlewareLine(EnvResource r) {

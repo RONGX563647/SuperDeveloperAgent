@@ -4,7 +4,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.conversation.WorkerRole;
 import top.rongx.agent.domain.error.ErrorCode;
@@ -53,8 +52,7 @@ public class DbRunLedgerRepository implements RunLedgerRepository {
 
     /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public DbRunLedgerRepository(String workspaceRoot) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")));
+        this(PlatformDb.at(Path.of(workspaceRoot)));
     }
 
     @Override

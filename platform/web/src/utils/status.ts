@@ -37,9 +37,25 @@ export function formatDuration(ms: number): string {
 }
 
 /** 时间戳格式化：MM-DD HH:mm:ss。 */
-export function formatTime(ms: number): string {
+export function formatTime(ms?: number | null): string {
   if (!ms) return '—'
   const d = new Date(ms)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+/** 完整本地时间：2026-11-21 15:42:03（hour12=false）。 */
+export function formatDateTime(ms?: number | null): string {
+  if (!ms) return '—'
+  return new Date(ms).toLocaleString('zh-CN', { hour12: false })
+}
+
+/** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前；无时间戳返回空串。 */
+export function relativeTime(ms?: number | null): string {
+  if (!ms) return ''
+  const diff = Date.now() - ms
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+  return `${Math.floor(diff / 86_400_000)} 天前`
 }

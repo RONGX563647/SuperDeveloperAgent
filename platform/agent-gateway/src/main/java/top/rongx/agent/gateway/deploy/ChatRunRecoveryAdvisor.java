@@ -6,13 +6,12 @@ import io.agentscope.core.event.ThinkingBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import top.rongx.agent.domain.process.LogTail;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.project.Project;
@@ -137,7 +136,8 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
             String name = nullToDash(end.getToolCallName() == null
                     ? toolNames.get(end.getToolCallId()) : end.getToolCallName());
             String state = end.getState() == null ? "" : end.getState().name();
-            String summary = oneLine(toolResults.remove(end.getToolCallId()), MAX_RESULT_LINE);
+            StringBuilder result = toolResults.remove(end.getToolCallId());
+            String summary = LogTail.oneLine(result == null ? null : result.toString(), MAX_RESULT_LINE);
             // 工具内部失败常以错误文本返回，事件状态仍是 SUCCESS（例如"路径不存在"）。
             // 不按文本前缀纠正的话，自愈记录会把失败写成成功，误导后续判断与审计。
             if (!"FAILED".equalsIgnoreCase(state) && isErrorText(summary)) {
@@ -158,7 +158,7 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
 
     /** 思考过程压成一行，帮助复盘模型为什么这么判断。 */
     private static void flushThinking(StringBuilder thinking, List<String> lines) {
-        String line = oneLine(thinking, 600);
+        String line = LogTail.oneLine(thinking.toString(), 600);
         if (!line.isEmpty()) {
             lines.add("诊断思路：" + line);
         }
@@ -177,14 +177,6 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         }
     }
 
-    /** 空白折叠为单行并截断；用于工具结果与思考摘要。 */
-    static String oneLine(CharSequence value, int max) {
-        if (value == null || value.isEmpty()) {
-            return "";
-        }
-        String one = value.toString().replaceAll("\\s+", " ").trim();
-        return one.length() > max ? one.substring(0, max) + "…" : one;
-    }
 
     /** 工具把失败当文本返回（事件状态仍是 SUCCESS）：按约定前缀识别。 */
     static boolean isErrorText(String summary) {

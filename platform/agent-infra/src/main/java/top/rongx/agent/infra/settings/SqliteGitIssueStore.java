@@ -14,6 +14,7 @@ import top.rongx.agent.domain.gitissue.GitIssueComment;
 import top.rongx.agent.domain.gitissue.GitIssueIntegration;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
 import top.rongx.agent.domain.gitissue.GitIssueRepository;
+import top.rongx.agent.domain.gitissue.GitProviders;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
@@ -52,8 +53,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
     public SqliteGitIssueStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")), secretBox);
+        this(PlatformDb.at(Path.of(workspaceRoot)), secretBox);
     }
 
     // ---------------------------------------------------------------- Issue
@@ -333,7 +333,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
 
     @Override
     public Optional<GitIssueIntegration> find(String provider) {
-        String normalized = normalizeProvider(provider);
+        String normalized = GitProviders.normalize(provider);
         try {
             return db.read(em -> PlatformDb.row(em,
                             "SELECT " + INTEGRATION_COLUMNS + " FROM git_integrations WHERE provider = ?",
@@ -346,7 +346,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
 
     @Override
     public Optional<String> secretOf(String provider) {
-        String normalized = normalizeProvider(provider);
+        String normalized = GitProviders.normalize(provider);
         try {
             return db.read(em -> PlatformDb.row(em,
                             "SELECT secret_enc, secret_iv FROM git_integrations WHERE provider = ?",
@@ -365,7 +365,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
 
     @Override
     public GitIssueIntegration save(Draft draft, String webhookSecret, String ownerUserId) {
-        String provider = normalizeProvider(draft.provider());
+        String provider = GitProviders.normalize(draft.provider());
         long now = System.currentTimeMillis();
         try {
             db.inTx(em -> {
@@ -420,7 +420,7 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
 
     @Override
     public void delete(String provider) {
-        String normalized = normalizeProvider(provider);
+        String normalized = GitProviders.normalize(provider);
         try {
             db.run(em -> PlatformDb.update(em,
                     "DELETE FROM git_integrations WHERE provider = ?", normalized));
@@ -482,14 +482,6 @@ public class SqliteGitIssueStore implements GitIssueRepository, GitIssueIntegrat
                 (String) row[7],
                 (String) row[8],
                 ((Number) row[9]).longValue());
-    }
-
-    private static String normalizeProvider(String provider) {
-        String p = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
-        if (!p.equals("GITEE") && !p.equals("GITHUB") && !p.equals("GITLAB")) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "provider 只能是 GITEE / GITHUB / GITLAB");
-        }
-        return p;
     }
 
     private static String normalizeDirection(String value) {

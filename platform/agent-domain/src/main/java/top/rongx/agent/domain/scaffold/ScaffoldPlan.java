@@ -32,4 +32,29 @@ public record ScaffoldPlan(String projectId, String stack, List<ScaffoldFile> fi
     /** 一个生成文件。path 使用正斜杠、相对仓库根。 */
     public record ScaffoldFile(String path, String content) {
     }
+
+    /** 按路径取生成文件内容；不存在时返回空串。 */
+    public String fileContent(String path) {
+        String content = find(path);
+        return content == null ? "" : content;
+    }
+
+    /** 按路径取生成文件内容；不存在时抛 {@link top.rongx.agent.domain.error.BuildException}。 */
+    public String requiredFileContent(String path) {
+        String content = find(path);
+        if (content == null) {
+            throw new top.rongx.agent.domain.error.BuildException(
+                    top.rongx.agent.domain.error.ErrorCode.BUILD_INVALID_STATE,
+                    "脚手架没有生成 " + path + "（项目 " + projectId + "）");
+        }
+        return content;
+    }
+
+    private String find(String path) {
+        return files.stream()
+                .filter(f -> f.path().equals(path))
+                .map(ScaffoldFile::content)
+                .findFirst()
+                .orElse(null);
+    }
 }

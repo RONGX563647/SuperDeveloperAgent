@@ -1,5 +1,6 @@
 package top.rongx.agent.tools;
 
+import top.rongx.agent.domain.hash.Hashes;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.io.IOException;
@@ -422,7 +423,7 @@ public class CiQueryTools {
                 .append("  env=").append(blankDash(h.env()))
                 .append("  ").append(h.pipelineId())
                 .append("  ").append(h.status())
-                .append("  sha=").append(shortSha(h.gitSha()))
+                .append("  sha=").append(Hashes.shortSha(h.gitSha(), 8))
                 .append("  stages=").append(h.stageCount())
                 .append("  duration=").append(duration(h.durationMs()))
                 .append("  at=").append(iso(h.createdAt()));
@@ -460,13 +461,6 @@ public class CiQueryTools {
         long hours = minutes / 60;
         long rest = minutes % 60;
         return hours + "h" + (rest == 0 ? "" : rest + "m");
-    }
-
-    private static String shortSha(String sha) {
-        if (sha == null || sha.isBlank()) {
-            return "-";
-        }
-        return sha.length() <= 8 ? sha : sha.substring(0, 8);
     }
 
     private static String blankDash(String value) {

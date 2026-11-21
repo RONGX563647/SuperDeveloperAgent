@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.web;
 
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.str;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,14 +35,14 @@ public class SkillSettingsController {
 
     @GetMapping
     public Map<String, Object> list() {
-        requireRead();
+        currentUser.requireUserSettingsRead();
         return Map.of("root", skills.root().toString(), "skills", skills.list());
     }
 
     /** 预览 SKILL.md 原文。 */
     @GetMapping("/{name}")
     public Map<String, Object> read(@PathVariable String name) {
-        requireRead();
+        currentUser.requireUserSettingsRead();
         String content = skills.content(name)
                 .orElseThrow(() -> new RunException(ErrorCode.RUN_INVALID_INPUT, "技能不存在：" + name));
         return Map.of("name", name, "content", content);
@@ -50,21 +51,21 @@ public class SkillSettingsController {
     /** 新建 / 覆盖：name + description + 正文（正文自带 frontmatter 时原样保存）。 */
     @PostMapping
     public SkillsStore.Skill create(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         return skills.create(str(body, "name"), str(body, "description"), str(body, "content"));
     }
 
     /** 从本地目录导入（目录必须含 SKILL.md）。 */
     @PostMapping("/import")
     public SkillsStore.Skill importSkill(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         return skills.importFrom(str(body, "path"));
     }
 
     /** 示例问题命中诊断：看描述是否足以被模型选中，并估算注入成本。 */
     @PostMapping("/probe")
     public Map<String, Object> probe(@RequestBody Map<String, Object> body) {
-        requireRead();
+        currentUser.requireUserSettingsRead();
         String query = str(body, "query");
         return Map.of("query", query == null ? "" : query, "matches", skills.probe(query));
     }
@@ -73,7 +74,7 @@ public class SkillSettingsController {
     @PostMapping("/{name}/enabled")
     public Map<String, Object> setEnabled(@PathVariable String name,
                                           @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         boolean enabled = Boolean.parseBoolean(str(body, "enabled"));
         skills.setEnabled(name, enabled);
         return Map.of("ok", true, "name", name, "enabled", enabled);
@@ -81,23 +82,9 @@ public class SkillSettingsController {
 
     @DeleteMapping("/{name}")
     public Map<String, Object> delete(@PathVariable String name) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         skills.delete(name);
         return Map.of("ok", true);
     }
 
-    private void requireRead() {
-        currentUser.requireUserId();
-        currentUser.checkPermission("settings:read");
-    }
-
-    private void requireWrite() {
-        currentUser.requireUserId();
-        currentUser.checkPermission("settings:write");
-    }
-
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? null : String.valueOf(value);
-    }
 }

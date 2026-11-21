@@ -45,8 +45,7 @@ public class SqliteTokenUsageRepository implements TokenUsageRepository {
     /** 测试/独立进程：按工作区根目录定位统一库文件。 */
     public SqliteTokenUsageRepository(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")));
+        this(PlatformDb.at(Path.of(workspaceRoot)));
     }
 
     @Override

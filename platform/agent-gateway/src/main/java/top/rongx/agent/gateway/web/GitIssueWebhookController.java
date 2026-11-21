@@ -1,7 +1,7 @@
 package top.rongx.agent.gateway.web;
 
+import top.rongx.agent.domain.hash.Hashes;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Locale;
@@ -71,21 +71,21 @@ public class GitIssueWebhookController {
                 verifyGithub(secret, body, githubSignature);
                 eventType = githubEvent == null ? "" : githubEvent;
                 eventKey = githubDelivery == null || githubDelivery.isBlank()
-                        ? sha256(body) : githubDelivery;
+                        ? Hashes.sha256Hex(body) : githubDelivery;
             }
             case "GITEE" -> {
                 verifyGitee(secret, body, giteeToken, giteeTimestamp, giteeSignature);
                 eventType = giteeEvent == null ? "" : giteeEvent;
-                eventKey = sha256(body);
+                eventKey = Hashes.sha256Hex(body);
             }
             case "GITLAB" -> {
-                if (gitlabToken == null || !constantEquals(gitlabToken, secret)) {
+                if (gitlabToken == null || !Hashes.constantTimeEquals(gitlabToken, secret)) {
                     throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                             "GitLab X-Gitlab-Token 校验失败");
                 }
                 eventType = gitlabEvent == null ? "" : gitlabEvent;
                 eventKey = gitlabUuid == null || gitlabUuid.isBlank()
-                        ? sha256(body) : gitlabUuid;
+                        ? Hashes.sha256Hex(body) : gitlabUuid;
             }
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "provider 只能是 GITEE / GITHUB / GITLAB");
@@ -117,14 +117,14 @@ public class GitIssueWebhookController {
                     "缺少 X-Hub-Signature-256");
         }
         String expected = "sha256=" + hmacHex(secret, body);
-        if (!constantEquals(signature, expected)) {
+        if (!Hashes.constantTimeEquals(signature, expected)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "GitHub 签名校验失败");
         }
     }
 
     private static void verifyGitee(String secret, String body, String token, String timestamp,
                                     String signature) {
-        if (token != null && constantEquals(token, secret)) {
+        if (token != null && Hashes.constantTimeEquals(token, secret)) {
             return;
         }
         if (signature == null) {
@@ -133,12 +133,12 @@ public class GitIssueWebhookController {
         }
         // 兼容两种常见写法：HMAC(body) 的 hex/base64，以及 Gitee 官方的
         // Base64(HMAC-SHA256(key=secret, data=timestamp + "\n" + secret))。
-        if (constantEquals(signature, hmacHex(secret, body))
-                || constantEquals(signature, hmacBase64(secret, body))) {
+        if (Hashes.constantTimeEquals(signature, hmacHex(secret, body))
+                || Hashes.constantTimeEquals(signature, hmacBase64(secret, body))) {
             return;
         }
         if (timestamp != null
-                && constantEquals(signature,
+                && Hashes.constantTimeEquals(signature,
                 hmacBase64(secret, timestamp + "\n" + secret))) {
             return;
         }
@@ -161,23 +161,5 @@ public class GitIssueWebhookController {
         } catch (Exception e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "HMAC 初始化失败", e);
         }
-    }
-
-    private static String sha256(String value) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(
-                    value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            return Integer.toHexString(String.valueOf(value).hashCode());
-        }
-    }
-
-    private static boolean constantEquals(String a, String b) {
-        if (a == null || b == null) {
-            return false;
-        }
-        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),
-                b.getBytes(StandardCharsets.UTF_8));
     }
 }

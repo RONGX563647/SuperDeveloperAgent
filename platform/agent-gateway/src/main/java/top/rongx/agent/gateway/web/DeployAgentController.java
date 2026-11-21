@@ -5,6 +5,7 @@ import io.agentscope.core.event.AgentEvent;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import top.rongx.agent.domain.error.Errors;
 import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
@@ -191,7 +192,7 @@ public class DeployAgentController {
     private void sendError(SseEmitter emitter, Throwable error) {
         try {
             emitter.send(SseEmitter.event().name("error")
-                    .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
+                    .data(Map.of("message", Errors.safeMessage(error)), MediaType.APPLICATION_JSON));
         } catch (IOException | IllegalStateException ignored) {
             // 客户端已断开，无需再写
         }
@@ -218,11 +219,6 @@ public class DeployAgentController {
                 """.formatted(ctx.projectId(), ctx.env(), sha, pipelineId, bindingId, ctx.userId());
     }
 
-    private static String safeMessage(Throwable error) {
-        String raw = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-        raw = raw.replaceAll("\\s+", " ").trim();
-        return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;
-    }
 
     /** 自动部署请求体；前端额外带的 message 等字段忽略。 */
     @JsonIgnoreProperties(ignoreUnknown = true)

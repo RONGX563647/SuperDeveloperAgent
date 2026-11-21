@@ -103,8 +103,8 @@ public class ProjectScaffoldController {
                 notes.add("平台托管仓库还没有工作树，无法识别技术栈，请先生成流水线定义");
             } else {
                 ScaffoldPlan plan = scaffolder.plan(id, repo, null);
-                String pipelineYaml = fileContent(plan, "ci/pipeline.yml");
-                String actionsYaml = fileContent(plan, "ci/actions.yml");
+                String pipelineYaml = plan.fileContent("ci/pipeline.yml");
+                String actionsYaml = plan.fileContent("ci/actions.yml");
                 if (defStore.write(id, pipelineYaml, actionsYaml)) {
                     prepared.add(preparedRow("pipeline",
                             "已生成平台侧流水线定义（" + plan.stack() + "）"));
@@ -191,8 +191,8 @@ public class ProjectScaffoldController {
                 out.put("skipped", List.of("ci/pipeline.yml", "ci/actions.yml"));
                 out.put("note", "平台侧已有定义，未覆盖（需要重生成请传 overwrite=true）");
             } else {
-                String pipelineYaml = fileContent(plan, "ci/pipeline.yml");
-                String actionsYaml = fileContent(plan, "ci/actions.yml");
+                String pipelineYaml = plan.fileContent("ci/pipeline.yml");
+                String actionsYaml = plan.fileContent("ci/actions.yml");
                 boolean saved = defStore.write(id, pipelineYaml, actionsYaml);
                 if (saved && overwrite) {
                     // 旧的环境脚本是旧定义的固化产物：继续生效会让"重新生成"看起来没作用。
@@ -225,14 +225,6 @@ public class ProjectScaffoldController {
             return null;
         }
         return DeployTarget.fromWire(raw).orElse(DeployTarget.DOCKER);
-    }
-
-    private static String fileContent(ScaffoldPlan plan, String path) {
-        return plan.files().stream()
-                .filter(f -> f.path().equals(path))
-                .map(ScaffoldPlan.ScaffoldFile::content)
-                .findFirst()
-                .orElse("");
     }
 
     /** 可读的仓库根：DIRECT = 用户目录；MANAGED（bare）没有工作树，退回 verify worktree。 */

@@ -273,13 +273,6 @@ public class HostDeployer implements Deployer {
         return HostProcessSupervisor.tail(logFile, 20);
     }
 
-    private static String safePath(String healthPath) {
-        if (healthPath == null || healthPath.isBlank()) {
-            return "/";
-        }
-        return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
-    }
-
     /** 版本槽目录名：只保留安全字符（上游已校验，这里兜底防路径穿越）。 */
     private static String safeSlot(String version) {
         if (version == null || version.isBlank()) {

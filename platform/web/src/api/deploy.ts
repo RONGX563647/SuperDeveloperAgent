@@ -74,11 +74,6 @@ export interface RecipeVersion {
   content: string
 }
 
-export function deployRecipes(projectId: string, env: string): Promise<RecipeVersion[]> {
-  const q = new URLSearchParams({ env })
-  return apiFetch(`/api/v1/deploy/${encodeURIComponent(projectId)}/recipes?${q}`)
-}
-
 export interface DeployAgentRequest {
   env: string
   sha: string
@@ -115,16 +110,4 @@ export async function streamDeployAgent(
     onEvent,
     signal,
   )
-}
-
-/** 把某个历史版本重新设为生效（只切脚本，不触发部署）。 */
-export function activateRecipe(
-  projectId: string,
-  env: string,
-  version: number
-): Promise<{ ok: boolean }> {
-  const q = new URLSearchParams({ env, version: String(version) })
-  return apiFetch(`/api/v1/deploy/${encodeURIComponent(projectId)}/recipes/activate?${q}`, {
-    method: 'POST'
-  })
 }

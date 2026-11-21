@@ -9,7 +9,6 @@ import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.Session;
 import com.jcraft.jsch.SftpException;
 import com.jcraft.jsch.UserInfo;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -17,7 +16,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
-import java.util.Vector;
 
 /**
  * 纯 Java SSH 实现（JSch）——设置页的「测试连接」与远端部署共用。
@@ -500,11 +498,5 @@ public class JschSsh {
     /** 仅用于测试：把 known_hosts 文件路径暴露出来。 */
     Path knownHostsFile() {
         return knownHosts;
-    }
-
-    /** 让 JSch 的 sftp 目录向量不产生告警（保留方法以便未来列目录）。 */
-    @SuppressWarnings("unused")
-    private Vector<ChannelSftp.LsEntry> list(ChannelSftp sftp, String path) throws Exception {
-        return sftp.ls(path);
     }
 }

@@ -1,5 +1,8 @@
 package top.rongx.agent.executor;
 
+import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
+import top.rongx.agent.domain.process.CommandShell;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -27,7 +30,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
-import org.yaml.snakeyaml.Yaml;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.action.ActionId;
@@ -966,7 +968,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private static String shellFor(PipelineDefinition.StageDef stage) {
         boolean inContainer = stage.runner() == null || stage.runner().isBlank()
                 || !"host".equals(stage.runner());
-        return inContainer ? "sh" : (isWindows() ? "pwsh" : "sh");
+        return inContainer ? "sh" : (CommandShell.isWindows() ? "pwsh" : "sh");
     }
 
     private static boolean hasWorkdir(PipelineDefinition.StageDef stage) {
@@ -984,10 +986,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private static String safe(String value) {
         return value == null ? "" : value;
-    }
-
-    private static boolean isWindows() {
-        return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 
     /** argv → 一行可读命令：先掩码敏感值，再按目标 shell 的引号规则转义。 */
@@ -1452,10 +1450,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private String promotionProblem(String projectId, String env, String sha) {
         return top.rongx.agent.domain.deploy.EnvironmentPromotion.problem(
                 recipeStore, this::status, projectId, env, sha);
-    }
-
-    private static String shortSha(String sha) {
-        return sha == null || sha.length() <= 7 ? String.valueOf(sha) : sha.substring(0, 7);
     }
 
     @Override
@@ -2728,7 +2722,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             state.log.append("[definition] ").append(resolved.source()).append(" · ")
                     .append(resolved.note()).append('\n');
             state.log.append("[env] ").append(state.env)
-                    .append(" · 提交 ").append(shortSha(state.gitSha)).append('\n');
+                    .append(" · 提交 ").append(Hashes.shortSha(state.gitSha)).append('\n');
             // 运行模式裁剪只走 applyRunMode：触发与自动续跑必须得到同一份计划，
             // 否则 verify 续跑会退化成完整 release（部署 + 固化配方），只读检查构建污染环境。
             definition = applyRunMode(state, definition);
@@ -3201,12 +3195,12 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             String tagged = existing.get();
             if (tagged.startsWith(sha) || sha.startsWith(tagged)) {
                 state.log.append("[tag] 版本 ").append(version)
-                        .append(" 已指向提交 ").append(shortSha(sha))
+                        .append(" 已指向提交 ").append(Hashes.shortSha(sha))
                         .append("：本次为幂等重发（沿用该版本槽，不覆盖其它版本）\n");
                 return;
             }
             throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "标签 " + version.tagName()
-                    + " 已存在且指向 " + shortSha(tagged) + "，与本次提交 " + shortSha(sha)
+                    + " 已存在且指向 " + Hashes.shortSha(tagged) + "，与本次提交 " + Hashes.shortSha(sha)
                     + " 不一致，请递增补丁号");
         }
         String branch = state.branch;
@@ -3223,7 +3217,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     + version.line() + "，只能发布到分支 " + version.branchName() + "（当前：" + branch + "）");
         }
         if (repoLocator == null || !repoLocator.isCommitOnBranch(state.projectId, branch, sha)) {
-            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "提交 " + shortSha(sha) + " 不在分支 "
+            throw new BuildException(ErrorCode.BUILD_INVALID_INPUT, "提交 " + Hashes.shortSha(sha) + " 不在分支 "
                     + branch + " 上，无法在该分支打版本标签");
         }
         String problem = versionSequenceProblem(version,
@@ -3271,8 +3265,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     private Path versionSlotDir(RunState state) {
         String project = state.projectId.replaceAll("[^A-Za-z0-9._-]", "_");
         String slot = state.deployVersion.replaceAll("[^A-Za-z0-9._-]", "-");
-        return workspaceRoot.toAbsolutePath().normalize()
-                .resolve("_platform").resolve("deploy")
+        return WorkspacePaths.deploy(workspaceRoot)
                 .resolve(project + "-" + state.env)
                 .resolve("versions").resolve(slot);
     }
@@ -3413,7 +3406,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.log.append("[dev] 本机模式：直接使用工作区 ").append(repo)
                 .append("（不检出提交）\n");
         state.log.append("[env] ").append(state.env)
-                .append(" · 提交 ").append(shortSha(state.gitSha)).append('\n');
+                .append(" · 提交 ").append(Hashes.shortSha(state.gitSha)).append('\n');
         state.stages.add(StageResult.success("workspace", 0, List.of(), elapsed(start)));
 
         // dev 固定本机运行：先清掉历史遗留的 dev 应用容器，避免占端口（打开的还是容器里的旧页面）
@@ -4607,7 +4600,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
             snapshotValues.entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
-                    .forEach(e -> snapshot.put("keyHash:" + e.getKey(), sha256(e.getValue())));
+                    .forEach(e -> snapshot.put("keyHash:" + e.getKey(), Hashes.sha256Hex(e.getValue())));
             state.artifacts.add(new ArtifactRef("env-snapshot", "env:" + state.env, digest, 0, snapshot));
         }
 
@@ -5488,23 +5481,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             values.entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
                     .forEach(e -> {
-                        String vh = sha256(e.getValue());
+                        String vh = Hashes.sha256Hex(e.getValue());
                         md.update((e.getKey() + "=" + vh + "\n")
                                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     });
             return java.util.HexFormat.of().formatHex(md.digest());
         } catch (Exception e) {
             throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "环境变量快照摘要失败", e);
-        }
-    }
-
-    private static String sha256(String value) {
-        try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            return java.util.HexFormat.of().formatHex(
-                    md.digest(String.valueOf(value).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "SHA-256 计算失败", e);
         }
     }
 

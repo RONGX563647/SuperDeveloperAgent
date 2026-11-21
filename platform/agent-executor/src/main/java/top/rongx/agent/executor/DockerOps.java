@@ -100,24 +100,6 @@ public final class DockerOps {
         return run(cmd("info", "--format", "{{.ServerVersion}}"), 3_000L).ok();
     }
 
-    /** 守护进程版本（{@code docker version --format {{.Server.Version}}}）；不可用返回空。 */
-    public Optional<String> daemonVersion() {
-        BoundedCommand.Outcome out = run(cmd("version", "--format", "{{.Server.Version}}"),
-                PROBE_TIMEOUT_MS);
-        String text = out.ok() ? out.output().trim() : "";
-        return text.isEmpty() ? Optional.empty() : Optional.of(text);
-    }
-
-    /** 镜像详情（JSON）；不存在或守护进程不可用返回空。 */
-    public Optional<String> imageInspect(String ref) {
-        if (ref == null || ref.isBlank()) {
-            return Optional.empty();
-        }
-        BoundedCommand.Outcome out = run(cmd("image", "inspect", "--format", "{{json .}}", ref));
-        String text = out.ok() ? out.output().trim() : "";
-        return text.isEmpty() ? Optional.empty() : Optional.of(text);
-    }
-
     /** 镜像 ID（{@code sha256:...}）；不存在返回空。 */
     public Optional<String> imageId(String ref) {
         if (ref == null || ref.isBlank()) {

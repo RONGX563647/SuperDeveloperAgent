@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.web;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,8 +33,7 @@ public class GitIssueImageController {
 
     public GitIssueImageController(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this.imageDir = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("issues").resolve("images");
+        this.imageDir = WorkspacePaths.issueImages(Path.of(workspaceRoot));
     }
 
     /** 按文件名读取一张任务配图；未知或非法文件名一律 404。 */

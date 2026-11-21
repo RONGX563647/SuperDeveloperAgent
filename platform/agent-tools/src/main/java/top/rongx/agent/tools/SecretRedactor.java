@@ -1,11 +1,9 @@
 package top.rongx.agent.tools;
 
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
@@ -184,10 +182,5 @@ public class SecretRedactor {
             return "***PEM***";
         }
         return applyPatterns(replaceKnownValues(line, ctx));
-    }
-
-    /** 供测试/诊断：返回命中敏感文件规则的路径列表（不涉及内容）。 */
-    public List<String> sensitiveFiles(List<String> paths) {
-        return paths.stream().filter(this::isSensitiveFile).toList();
     }
 }

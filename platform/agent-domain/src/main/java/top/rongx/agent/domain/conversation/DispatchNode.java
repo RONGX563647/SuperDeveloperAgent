@@ -1,5 +1,7 @@
 package top.rongx.agent.domain.conversation;
 
+import top.rongx.agent.domain.text.Texts;
+
 import java.util.List;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
@@ -53,16 +55,12 @@ public record DispatchNode(
         if (dependsOn.contains(id)) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "节点 " + id + " 不能依赖自己");
         }
-        conversationId = blankToNull(conversationId);
-        title = blankToNull(title);
-        env = blankToNull(env);
-        worktree = blankToNull(worktree);
+        conversationId = Texts.blankToNull(conversationId);
+        title = Texts.blankToNull(title);
+        env = Texts.blankToNull(env);
+        worktree = Texts.blankToNull(worktree);
         timeoutSeconds = timeoutSeconds <= 0
                 ? DEFAULT_TIMEOUT_SECONDS : Math.min(timeoutSeconds, MAX_TIMEOUT_SECONDS);
         retries = Math.max(0, Math.min(retries, MAX_RETRIES));
-    }
-
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
     }
 }

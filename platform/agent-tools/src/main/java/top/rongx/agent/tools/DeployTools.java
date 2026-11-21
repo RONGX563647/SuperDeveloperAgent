@@ -2,6 +2,7 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
@@ -69,8 +70,7 @@ public class DeployTools {
         this.defStore = defStore;
         this.locator = locator;
         this.policy = policy;
-        this.hostDeployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("deploy");
+        this.hostDeployRoot = WorkspacePaths.deploy(Path.of(workspaceRoot));
     }
 
     @Tool(name = "deploy_env_status", description = "Show deploy recipe and evidence status.",

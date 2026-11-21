@@ -1,5 +1,6 @@
 package top.rongx.agent.runtime.workspace;
 
+import top.rongx.agent.domain.process.LogTail;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -299,7 +300,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
             for (ConversationRun run : active) {
                 sb.append("  - ").append(run.id()).append("  [").append(run.status()).append("]  ")
                         .append(run.conversationId()).append("  ")
-                        .append(oneLine(run.goal(), 80)).append('\n');
+                        .append(LogTail.oneLine(run.goal(), 80)).append('\n');
             }
         }
         return sb.toString().trim();
@@ -503,12 +504,12 @@ public class ConversationManager implements WorkspaceSupervisorPort {
                 String evidence = "结果：" + result.status()
                         + (result.conversationId().isBlank() ? "" : "，会话 " + result.conversationId())
                         + (result.runId().isBlank() ? "" : "，运行 " + result.runId())
-                        + (result.error().isBlank() ? "" : "，错误 " + oneLine(result.error(), 200));
+                        + (result.error().isBlank() ? "" : "，错误 " + LogTail.oneLine(result.error(), 200));
                 // 票据已存在（openTicket 落库过），这里必须 UPDATE 而不是 INSERT：
                 // 走 saveTask 会撞 workspace_tasks_pkey（duplicate key），每次关票据都失败，
                 // 任务看板上票据永远停在 RUNNING（结果/终态回写全部丢失）。
                 tasks.updateTask(new WorkspaceTask(task.id(), task.projectId(), task.conversationId(),
-                        task.goal(), oneLine(task.expectedOutput() + "；" + evidence, 600),
+                        task.goal(), LogTail.oneLine(task.expectedOutput() + "；" + evidence, 600),
                         status, task.priority(), task.createdAt(), System.currentTimeMillis(),
                         task.sourceRef(), task.triggerType()));
             }
@@ -582,7 +583,7 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         sb.append("last_run: ").append(latest.id())
                 .append("  ").append(latest.status()).append('\n');
         if (!latest.error().isBlank()) {
-            sb.append("error: ").append(oneLine(latest.error(), 300)).append('\n');
+            sb.append("error: ").append(LogTail.oneLine(latest.error(), 300)).append('\n');
         }
         sb.append("summary:\n---\n")
                 .append(latest.result().isBlank() ? "（无文本输出）" : latest.result())
@@ -663,13 +664,6 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         return oneLine.length() > MAX_TITLE ? oneLine.substring(0, MAX_TITLE) : oneLine;
     }
 
-    private static String oneLine(String text, int max) {
-        if (text == null) {
-            return "";
-        }
-        String oneLine = text.trim().replaceAll("\\s+", " ");
-        return oneLine.length() > max ? oneLine.substring(0, max) + "…" : oneLine;
-    }
 
     private static String goalKey(String text) {
         String normalized = text.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);

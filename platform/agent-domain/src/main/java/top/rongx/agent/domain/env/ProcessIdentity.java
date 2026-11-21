@@ -1,5 +1,7 @@
 package top.rongx.agent.domain.env;
 
+import top.rongx.agent.domain.text.Texts;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -136,7 +138,7 @@ public final class ProcessIdentity {
             if (c.find()) {
                 command = unescape(c.group(1));
             }
-            return Optional.of(new PidRecord(pidValue, start, blankToNull(token), blankToNull(command)));
+            return Optional.of(new PidRecord(pidValue, start, Texts.blankToNull(token), Texts.blankToNull(command)));
         } catch (Exception e) {
             return Optional.empty();
         }
@@ -235,7 +237,4 @@ public final class ProcessIdentity {
         return value.replace("\\\"", "\"").replace("\\\\", "\\");
     }
 
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
-    }
 }

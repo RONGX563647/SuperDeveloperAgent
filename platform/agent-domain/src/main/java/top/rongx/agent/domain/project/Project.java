@@ -31,9 +31,4 @@ public record Project(
             throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "端口段不合法: " + portRangeStart + ">" + portRangeEnd);
         }
     }
-
-    /** 端口是否落在本项目段内（规约：控制器只允许段内操作）。 */
-    public boolean allowsPort(int port) {
-        return port >= portRangeStart && port <= portRangeEnd;
-    }
 }

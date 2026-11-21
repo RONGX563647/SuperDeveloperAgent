@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import top.rongx.agent.domain.process.LogTail;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
@@ -53,14 +54,14 @@ public class VerifyStage implements BugFixStageHandler {
         if (!smoke.passed()) {
             return BugFixStageResult.failed("测试环境冒烟检查未通过：" + smoke.summary()
                     + (smoke.detail() == null || smoke.detail().isBlank() ? ""
-                    : "\n" + AnalyzeStage.clip(smoke.detail(), 1500)));
+                    : "\n" + LogTail.prefix(smoke.detail(), 1500, "…")));
         }
         String prompt = prompts.render("verify", Map.of(
                 "testEnv", AnalyzeStage.safe(policy.testEnv()),
                 "fixSha", AnalyzeStage.safe(run.fixSha()),
                 "issueTitle", AnalyzeStage.safe(run.issueTitle()),
-                "analysis", FixStage.untrusted(AnalyzeStage.clip(run.analysis(), 6000)),
-                "fixSummary", FixStage.untrusted(AnalyzeStage.clip(run.fixSummary(), 4000)),
+                "analysis", FixStage.untrusted(LogTail.prefix(run.analysis(), 6000, "…")),
+                "fixSummary", FixStage.untrusted(LogTail.prefix(run.fixSummary(), 4000, "…")),
                 "smoke", AnalyzeStage.safe(smoke.summary())));
         VerifyOutput output;
         try {
@@ -74,7 +75,7 @@ public class VerifyStage implements BugFixStageHandler {
         String evidence = BugFixOutputValidation.text(output.evidence());
         if (!Boolean.TRUE.equals(output.fixed())) {
             return BugFixStageResult.failed("验证未通过：Bug 仍然存在"
-                    + (evidence.isBlank() ? "" : "（" + AnalyzeStage.clip(evidence, 300) + "）"));
+                    + (evidence.isBlank() ? "" : "（" + LogTail.prefix(evidence, 300, "…") + "）"));
         }
         if (evidence.isBlank()) {
             return BugFixStageResult.blocked("验证结论缺少证据，已停在 PR 创建前");

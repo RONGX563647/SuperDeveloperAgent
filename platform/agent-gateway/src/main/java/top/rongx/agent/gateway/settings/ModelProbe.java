@@ -2,7 +2,6 @@ package top.rongx.agent.gateway.settings;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
-import java.net.http.HttpClient;
 import top.rongx.agent.domain.http.HttpClients;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;

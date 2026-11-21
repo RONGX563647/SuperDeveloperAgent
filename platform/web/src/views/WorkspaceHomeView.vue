@@ -21,6 +21,7 @@ import {
 } from '../api/workspace'
 import { closeGitIssue, listGitIssues, type GitIssueRow } from '../api/issues'
 import { envLabel } from '../utils/pipelineLabels'
+import { formatTime } from '../utils/status'
 import ChatIssuesView from '../components/chat/ChatIssuesView.vue'
 import DeploymentMatrix from '../components/workspace/DeploymentMatrix.vue'
 
@@ -655,11 +656,6 @@ function openLedgerRun(run: RunLedgerRow): void {
     return
   }
   void router.push('/pipeline')
-}
-
-function formatTime(ms: number): string {
-  if (!ms) return '—'
-  return new Date(ms).toLocaleString('zh-CN', { hour12: false })
 }
 
 function runDuration(run: RunRow): string {

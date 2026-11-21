@@ -1,7 +1,6 @@
 package top.rongx.agent.gateway.web;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;

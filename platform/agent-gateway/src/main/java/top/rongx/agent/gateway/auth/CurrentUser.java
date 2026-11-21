@@ -37,4 +37,26 @@ public class CurrentUser {
         }
         StpUtil.checkPermission(permissions[0]);
     }
+
+    /** 设置页只读（不要求登录态显式存在，沿用 Sa-Token 的会话判定）。 */
+    public void requireSettingsRead() {
+        checkPermission("settings:read");
+    }
+
+    /** 设置页写操作。 */
+    public void requireSettingsWrite() {
+        checkPermission("settings:write");
+    }
+
+    /** 设置页只读，且必须能取到 userId（按用户隔离的数据）。 */
+    public void requireUserSettingsRead() {
+        requireUserId();
+        checkPermission("settings:read");
+    }
+
+    /** 设置页写操作，且必须能取到 userId（按用户隔离的数据）。 */
+    public void requireUserSettingsWrite() {
+        requireUserId();
+        checkPermission("settings:write");
+    }
 }

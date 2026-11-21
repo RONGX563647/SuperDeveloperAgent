@@ -384,7 +384,7 @@ public class ProjectIntakeService {
             report.put("pipeline", null);
             try {
                 plan = scaffolder.plan(projectIdOf(repoRoot), repoRoot, null);
-                pipelineYaml = fileContent(plan, "ci/pipeline.yml");
+                pipelineYaml = plan.fileContent("ci/pipeline.yml");
                 report.put("stack", plan.stack());
                 report.put("summary", plan.meta());
                 report.put("scaffoldFiles", plan.files().stream()
@@ -585,16 +585,8 @@ public class ProjectIntakeService {
     }
 
     private boolean planProvidesAction(ScaffoldPlan plan, String wire) {
-        String actionsYaml = fileContent(plan, "ci/actions.yml");
+        String actionsYaml = plan.fileContent("ci/actions.yml");
         return actionsYaml.contains("\n  " + wire + ":") || actionsYaml.startsWith("  " + wire + ":");
-    }
-
-    private String fileContent(ScaffoldPlan plan, String path) {
-        return plan.files().stream()
-                .filter(f -> f.path().equals(path))
-                .map(ScaffoldPlan.ScaffoldFile::content)
-                .findFirst()
-                .orElse("");
     }
 
     private String readText(Path file) {

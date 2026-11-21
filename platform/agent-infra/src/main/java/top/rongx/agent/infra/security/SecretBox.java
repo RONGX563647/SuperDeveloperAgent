@@ -1,5 +1,6 @@
 package top.rongx.agent.infra.security;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -8,7 +9,6 @@ import java.nio.file.attribute.AclEntry;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
-import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.UserPrincipal;
 import java.security.SecureRandom;
 import java.util.Base64;
@@ -46,8 +46,7 @@ public class SecretBox {
 
     public SecretBox(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
                      @Value("${agent.security.master-key:}") String masterKeyB64) {
-        Path keyFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.key");
+        Path keyFile = WorkspacePaths.key(Path.of(workspaceRoot));
         this.masterKey = resolveMasterKey(masterKeyB64, keyFile);
     }
 

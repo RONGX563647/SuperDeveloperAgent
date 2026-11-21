@@ -1,6 +1,7 @@
 package top.rongx.agent.governance;
 
 import jakarta.persistence.EntityManager;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -47,8 +48,7 @@ public class PatchRegistry implements PatchStore {
 
     /** 独立运行时要保证库文件所在目录存在；schema 仍由 Hibernate 生成。 */
     private static Path platformDbFile(String workspaceRoot) {
-        Path dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db");
+        Path dbFile = WorkspacePaths.db(Path.of(workspaceRoot));
         try {
             Files.createDirectories(dbFile.getParent());
         } catch (IOException e) {

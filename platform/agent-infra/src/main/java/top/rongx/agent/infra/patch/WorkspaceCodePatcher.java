@@ -1,16 +1,13 @@
 package top.rongx.agent.infra.patch;
 
+import top.rongx.agent.domain.hash.Hashes;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.CodePatcher;
@@ -114,7 +111,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
         int added = 0;
         int removed = 0;
         for (CodePatch.FileEdit edit : edits) {
-            String path = normalize(edit.path());
+            String path = PathGuard.normalizeRelative(edit.path());
             // 先过守卫：路径被拒时立刻抛结构化异常，不进入 diff 生成（省一次 git 子进程）
             guard(path);
             if (edit.content().length() > MAX_CONTENT_CHARS) {
@@ -137,7 +134,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "补丁没有产生任何改动：内容与 base_sha 一致");
         }
         String text = diff.toString();
-        return new Staged(text, sha256(text), added, removed, files);
+        return new Staged(text, Hashes.sha256Hex(text), added, removed, files);
     }
 
     @Override
@@ -150,7 +147,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
                 : git.addWorktree(patch.projectId(), name, patch.baseSha());
         try {
             for (CodePatch.FileEdit edit : patch.edits()) {
-                String relative = normalize(edit.path());
+                String relative = PathGuard.normalizeRelative(edit.path());
                 // 应用阶段再校一次：补丁可能来自持久化存储，不能只信 stage 时的判断
                 guard(relative);
                 Path target = PathGuard.resolveInside(worktree, relative);
@@ -235,13 +232,6 @@ public class WorkspaceCodePatcher implements CodePatcher {
         }
     }
 
-    private static String normalize(String path) {
-        String value = path == null ? "" : path.trim().replace('\\', '/');
-        while (value.startsWith("./")) {
-            value = value.substring(2);
-        }
-        return value;
-    }
 
     private static boolean allowed(String path) {
         if (path.isBlank() || path.startsWith("/") || path.contains("..")) {
@@ -277,12 +267,4 @@ public class WorkspaceCodePatcher implements CodePatcher {
                 && (name.endsWith(".yml") || name.endsWith(".yaml") || name.endsWith(".properties"));
     }
 
-    private static String sha256(String text) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            return UUID.randomUUID().toString();
-        }
-    }
 }

@@ -1,9 +1,9 @@
 package top.rongx.agent.infra.settings;
 
+import top.rongx.agent.domain.id.Ids;
+
 import jakarta.persistence.EntityManager;
 import java.nio.file.Path;
-import java.security.SecureRandom;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,8 +40,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
     public SqliteModelConnectionStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")), secretBox);
+        this(PlatformDb.at(Path.of(workspaceRoot)), secretBox);
     }
 
     @Override
@@ -81,7 +80,7 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
 
     @Override
     public ModelConnection save(ModelConnectionView v, String apiKey, String updatedBy) {
-        String id = v.id() == null || v.id().isBlank() ? newId() : v.id();
+        String id = v.id() == null || v.id().isBlank() ? Ids.newId("mdl") : v.id();
         long now = System.currentTimeMillis();
         try {
             db.inTx(em -> {
@@ -226,9 +225,4 @@ public class SqliteModelConnectionStore implements ModelConnectionRepository {
         return value == null ? null : ((Number) value).longValue();
     }
 
-    private String newId() {
-        byte[] raw = new byte[4];
-        new SecureRandom().nextBytes(raw);
-        return "mdl-" + HexFormat.of().formatHex(raw);
-    }
 }

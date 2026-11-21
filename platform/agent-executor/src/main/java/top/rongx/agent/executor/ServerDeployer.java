@@ -1,5 +1,6 @@
 package top.rongx.agent.executor;
 
+import top.rongx.agent.domain.hash.Hashes;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -177,9 +178,9 @@ public class ServerDeployer implements Deployer {
 
         Path workdir = Path.of(request.workspace());
         Path localTar = workdir.resolve(".agent/deploy")
-                .resolve(request.projectId() + "-" + shortSha(request.gitSha()) + ".tar");
+                .resolve(request.projectId() + "-" + Hashes.shortSha(request.gitSha()) + ".tar");
         String remoteTar = remoteDir + "/" + request.projectId() + "-"
-                + shortSha(request.gitSha()) + ".tar";
+                + Hashes.shortSha(request.gitSha()) + ".tar";
         String quotedTar = JschSsh.shellQuote(remoteTar);
         boolean uploaded = false;
         Path localEnvFile = null;
@@ -276,7 +277,7 @@ public class ServerDeployer implements Deployer {
             // 环境变量很多时会超出 ssh 单条命令长度上限：改成上传 600 权限的 env-file。
             String envFileArg = null;
             if (needsEnvFile(request.env())) {
-                String envName = request.projectId() + "-" + shortSha(request.gitSha()) + ".env";
+                String envName = request.projectId() + "-" + Hashes.shortSha(request.gitSha()) + ".env";
                 localEnvFile = localTar.resolveSibling(envName);
                 try {
                     Files.writeString(localEnvFile, envFileContent(request.env()),
@@ -1060,20 +1061,6 @@ public class ServerDeployer implements Deployer {
     private static String displayVersion(DeployRequest request) {
         return request.version() == null || request.version().isBlank()
                 ? "latest" : request.version().trim();
-    }
-
-    private static String shortSha(String sha) {
-        if (sha == null || sha.isBlank()) {
-            return "0000000";
-        }
-        return sha.length() > 7 ? sha.substring(0, 7) : sha;
-    }
-
-    private static String safePath(String healthPath) {
-        if (healthPath == null || healthPath.isBlank()) {
-            return "/";
-        }
-        return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
     }
 
     /** 部署命令不支持取消（语义上由超时兜底）。 */

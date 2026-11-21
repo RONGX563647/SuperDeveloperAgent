@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.str;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,6 +26,7 @@ import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvResource;
+import top.rongx.agent.domain.env.EnvSecretKeys;
 import top.rongx.agent.domain.env.EnvRuntime;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvVariable;
@@ -92,7 +94,7 @@ public class EnvironmentController {
 
     @GetMapping("/envs")
     public List<Map<String, Object>> templates() {
-        requireRead();
+        currentUser.requireSettingsRead();
         List<Map<String, Object>> out = new ArrayList<>();
         for (EnvTemplate t : envStore.templates()) {
             // 首次进入时把资源连接信息落成模板变量，卡片上的变量数才和详情一致。
@@ -118,7 +120,7 @@ public class EnvironmentController {
 
     @GetMapping("/envs/{env}")
     public Map<String, Object> detail(@PathVariable String env) {
-        requireRead();
+        currentUser.requireSettingsRead();
         // 每次打开详情时把中间件连接信息同步成模板变量（幂等），
         // 让"发现/导入"得到的账号密码可以直接看到、也可以在部署时注入。
         syncResourceVars(env);
@@ -131,7 +133,7 @@ public class EnvironmentController {
 
     @PutMapping("/envs/{env}")
     public EnvTemplate saveTemplate(@PathVariable String env, @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         EnvTemplate current = envStore.template(env).orElse(
                 new EnvTemplate(env, null, "docker", 8080, "/healthz", 0));
         int port = body.get("defaultPort") instanceof Number n ? n.intValue() : current.defaultPort();
@@ -154,7 +156,7 @@ public class EnvironmentController {
     @PostMapping("/envs/{env}/discover")
     public List<Map<String, Object>> discover(@PathVariable String env,
                                               @RequestBody(required = false) Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String source = str(body, "source", "local");
         EnvTemplate template = envStore.template(env).orElse(null);
         String serverId = str(body, "serverId",
@@ -176,7 +178,7 @@ public class EnvironmentController {
     @PostMapping("/envs/{env}/import")
     public List<Map<String, Object>> importCandidates(@PathVariable String env,
                                                       @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         Object raw = body.get("ids");
         List<String> ids = raw instanceof List<?> list
                 ? list.stream().map(String::valueOf).toList() : List.of();
@@ -201,7 +203,7 @@ public class EnvironmentController {
     @PostMapping("/envs/{env}/resources")
     public Map<String, Object> saveResource(@PathVariable String env,
                                             @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         EnvResource saved = envStore.saveResource(new EnvResource(
                 str(body, "id", null), env,
                 str(body, "kind", "mysql"),
@@ -222,7 +224,7 @@ public class EnvironmentController {
 
     @DeleteMapping("/envs/{env}/resources/{id}")
     public Map<String, Object> deleteResource(@PathVariable String env, @PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         envStore.deleteResource(id);
         syncResourceVars(env);
         return Map.of("ok", true);
@@ -230,7 +232,7 @@ public class EnvironmentController {
 
     @PostMapping("/envs/{env}/resources/{id}/check")
     public Map<String, Object> checkResource(@PathVariable String env, @PathVariable String id) {
-        requireRead();
+        currentUser.requireSettingsRead();
         EnvResource r = envStore.resource(id).orElseThrow(() ->
                 new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "资源不存在：" + id));
         Health health = check(r);
@@ -244,7 +246,7 @@ public class EnvironmentController {
     /** 启动某个中间件（本机 docker / 远程 SSH）。 */
     @PostMapping("/envs/{env}/resources/{id}/start")
     public Map<String, Object> startResource(@PathVariable String env, @PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         EnvRuntime.Result result = envRuntime.start(id);
         syncResourceVars(env);
         return runtimeView(id, result);
@@ -253,7 +255,7 @@ public class EnvironmentController {
     /** 停止某个中间件。 */
     @PostMapping("/envs/{env}/resources/{id}/stop")
     public Map<String, Object> stopResource(@PathVariable String env, @PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         EnvRuntime.Result result = envRuntime.stop(id);
         syncResourceVars(env);
         return runtimeView(id, result);
@@ -265,7 +267,7 @@ public class EnvironmentController {
     @GetMapping("/projects/{projectId}/services")
     public List<Map<String, Object>> localServices(@PathVariable String projectId,
                                                   @RequestParam(defaultValue = "dev") String env) {
-        requireRead();
+        currentUser.requireSettingsRead();
         return localServices.services(projectId, env);
     }
 
@@ -275,7 +277,7 @@ public class EnvironmentController {
                                                 @PathVariable String service,
                                                 @RequestParam(defaultValue = "dev") String env,
                                                 @RequestParam(defaultValue = "120") int lines) {
-        requireRead();
+        currentUser.requireSettingsRead();
         int size = Math.min(Math.max(lines, 1), 500);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("service", service);
@@ -287,7 +289,7 @@ public class EnvironmentController {
     public Map<String, Object> startService(@PathVariable String projectId,
                                             @PathVariable String service,
                                             @RequestParam(defaultValue = "dev") String env) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         log.info("[audit] 启动本地服务 project={} env={} service={} by={}",
                 projectId, env, service, currentUser.requireUserId());
         return serviceResult(projectId, env, localServices.start(projectId, env, service));
@@ -297,7 +299,7 @@ public class EnvironmentController {
     public Map<String, Object> stopService(@PathVariable String projectId,
                                            @PathVariable String service,
                                            @RequestParam(defaultValue = "dev") String env) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         log.info("[audit] 停止本地服务 project={} env={} service={} by={}",
                 projectId, env, service, currentUser.requireUserId());
         return serviceResult(projectId, env, localServices.stop(projectId, env, service));
@@ -307,7 +309,7 @@ public class EnvironmentController {
     public Map<String, Object> restartService(@PathVariable String projectId,
                                               @PathVariable String service,
                                               @RequestParam(defaultValue = "dev") String env) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         log.info("[audit] 重启本地服务 project={} env={} service={} by={}",
                 projectId, env, service, currentUser.requireUserId());
         return serviceResult(projectId, env, localServices.restart(projectId, env, service));
@@ -329,13 +331,13 @@ public class EnvironmentController {
 
     @GetMapping("/envs/{env}/vars")
     public List<EnvVariable> vars(@PathVariable String env) {
-        requireRead();
+        currentUser.requireSettingsRead();
         return envStore.envVars(env);
     }
 
     @PutMapping("/envs/{env}/vars")
     public EnvVariable saveVar(@PathVariable String env, @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String key = str(body, "key", null);
         if (key == null || key.isBlank()) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "变量名必填");
@@ -346,7 +348,7 @@ public class EnvironmentController {
 
     @DeleteMapping("/envs/{env}/vars/{key}")
     public Map<String, Object> deleteVar(@PathVariable String env, @PathVariable String key) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         envStore.deleteEnvVar(env, key);
         return Map.of("ok", true);
     }
@@ -370,14 +372,14 @@ public class EnvironmentController {
     @GetMapping("/projects/{projectId}/overrides")
     public List<EnvVariable> overrides(@PathVariable String projectId,
                                        @RequestParam(defaultValue = "test") String env) {
-        requireRead();
+        currentUser.requireSettingsRead();
         return envStore.overrides(projectId, env);
     }
 
     @PutMapping("/projects/{projectId}/overrides")
     public EnvVariable saveOverride(@PathVariable String projectId,
                                     @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String env = str(body, "env", "test");
         String key = str(body, "key", null);
         if (key == null || key.isBlank()) {
@@ -390,7 +392,7 @@ public class EnvironmentController {
     @DeleteMapping("/projects/{projectId}/overrides/{key}")
     public Map<String, Object> deleteOverride(@PathVariable String projectId, @PathVariable String key,
                                               @RequestParam(defaultValue = "test") String env) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         envStore.deleteOverride(projectId, env, key);
         return Map.of("ok", true);
     }
@@ -398,7 +400,7 @@ public class EnvironmentController {
     @GetMapping("/projects/{projectId}/effective")
     public Map<String, Object> effective(@PathVariable String projectId,
                                          @RequestParam(defaultValue = "test") String env) {
-        requireRead();
+        currentUser.requireSettingsRead();
         EffectiveEnvironment e = envStore.effective(projectId, env);
         Map<String, String> projectSource = bindings.sourceValues(projectId);
         Set<String> projectKeys = new HashSet<>();
@@ -463,7 +465,7 @@ public class EnvironmentController {
     @GetMapping("/projects/{projectId}/env-check")
     public Map<String, Object> envCheck(@PathVariable String projectId,
                                         @RequestParam(defaultValue = "test") String env) {
-        requireRead();
+        currentUser.requireSettingsRead();
         EffectiveEnvironment e = envStore.effective(projectId, env);
         Map<String, String> sourceValues = bindings.sourceValues(projectId);
         Set<String> projectKeys = new HashSet<>();
@@ -561,7 +563,7 @@ public class EnvironmentController {
         sourceValues.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .forEach(entry -> {
-                    boolean secret = EnvBindingService.looksSecret(entry.getKey());
+                    boolean secret = EnvSecretKeys.looksSecret(entry.getKey());
                     String current = effectiveValues.get(entry.getKey());
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("key", entry.getKey());
@@ -640,7 +642,7 @@ public class EnvironmentController {
 
     @GetMapping("/projects/{projectId}/env-binding/{bindingId}")
     public EnvBinding binding(@PathVariable String projectId, @PathVariable String bindingId) {
-        requireRead();
+        currentUser.requireSettingsRead();
         return envStore.binding(bindingId).orElseThrow(() ->
                 new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "环境绑定不存在：" + bindingId));
     }
@@ -658,7 +660,7 @@ public class EnvironmentController {
     public Map<String, Object> bindingHistory(@PathVariable String projectId,
                                               @RequestParam String env,
                                               @RequestParam(defaultValue = "20") int limit) {
-        requireRead();
+        currentUser.requireSettingsRead();
         List<EnvBinding> rows = envStore.bindings(projectId, env, limit);
         EnvBinding current = rows.stream().filter(EnvBinding::usable).findFirst().orElse(null);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -796,14 +798,6 @@ public class EnvironmentController {
 
     // ---------------------------------------------------------------- 工具
 
-    private void requireRead() {
-        currentUser.checkPermission("settings:read");
-    }
-
-    private void requireWrite() {
-        currentUser.checkPermission("settings:write");
-    }
-
     /**
      * 查看明文单独授权：管理员（settings:write / *）与运维（settings:reveal）可看，
      * 只读账号仍然拒绝。运维能排障但改不了环境配置，且每次查看都会写审计日志。
@@ -814,8 +808,4 @@ public class EnvironmentController {
         }
     }
 
-    private static String str(Map<String, Object> body, String key, String fallback) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? fallback : String.valueOf(value);
-    }
 }

@@ -1,11 +1,11 @@
 package top.rongx.agent.infra.settings;
 
+import top.rongx.agent.domain.id.Ids;
+
 import jakarta.persistence.EntityManager;
 import java.nio.file.Path;
-import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -50,8 +50,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
     public SqliteMcpServerStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")), secretBox);
+        this(PlatformDb.at(Path.of(workspaceRoot)), secretBox);
     }
 
     @Override
@@ -86,7 +85,7 @@ public class SqliteMcpServerStore implements McpServerRepository {
         if ("http".equals(transport) && blank(view.url())) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "http 传输必须填写服务 URL");
         }
-        String id = blank(view.id()) ? newId() : view.id();
+        String id = blank(view.id()) ? Ids.newId("mcp") : view.id();
         long now = System.currentTimeMillis();
         try {
             db.inTx(em -> {
@@ -300,9 +299,4 @@ public class SqliteMcpServerStore implements McpServerRepository {
         return s == null || s.isBlank() ? null : s.trim();
     }
 
-    private String newId() {
-        byte[] raw = new byte[4];
-        new SecureRandom().nextBytes(raw);
-        return "mcp-" + HexFormat.of().formatHex(raw);
-    }
 }

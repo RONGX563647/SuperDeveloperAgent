@@ -1,6 +1,7 @@
 package top.rongx.agent.infra.state;
 
 import io.agentscope.core.state.AgentStateStore;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.FileSystems;
@@ -51,8 +52,7 @@ public class AgentStateConfig {
      */
     static Path stateDirectory(String stateRoot, String workspaceRoot) {
         Path dir = stateRoot == null || stateRoot.isBlank()
-                ? Path.of(workspaceRoot).toAbsolutePath().normalize()
-                        .resolve("_platform").resolve("agent-state")
+                ? WorkspacePaths.agentState(Path.of(workspaceRoot))
                 : Path.of(stateRoot).toAbsolutePath().normalize();
         try {
             Files.createDirectories(dir);

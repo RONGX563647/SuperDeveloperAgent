@@ -1,5 +1,7 @@
 package top.rongx.agent.infra.git;
 
+import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -12,7 +14,6 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.action.ActionResult;
-import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
 import top.rongx.agent.domain.process.BoundedCommand;
@@ -202,15 +203,6 @@ public class GitWorktreeManager {
         return (name.isBlank() || "HEAD".equals(name)) ? "main" : name;
     }
 
-    /** 用户目录是否已登记为 bare 的 worktree。 */
-    private boolean isWorktree(Path bare, Path local) {
-        ActionResult out = run(bare, List.of("git", "worktree", "list", "--porcelain"), "git worktree list");
-        return out.logTail().lines()
-                .filter(l -> l.startsWith("worktree "))
-                .anyMatch(l -> Path.of(l.substring("worktree ".length()).trim())
-                        .toAbsolutePath().normalize().equals(local));
-    }
-
     // ---------------------------------------------------------------- worktree 生命周期
 
     /**
@@ -233,11 +225,6 @@ public class GitWorktreeManager {
         run(bare, List.of("git", "worktree", "add", "--quiet", "--detach", posix(wt), sha),
                 "git worktree add " + name);
         return wt;
-    }
-
-    /** 建 worktree（检出指定分支/引用的最新提交）。 */
-    public Path addWorktreeAtRef(String projectId, String name, String ref) {
-        return addWorktree(projectId, name, revParse(bareDir(projectId), ref));
     }
 
     /** 移除 worktree（不存在则静默）。 */
@@ -437,7 +424,7 @@ public class GitWorktreeManager {
      * 用于设置页「测试仓库可达」；返回分支引用行（已去掉 token 等敏感信息）。
      */
     public List<String> lsRemote(String repoUrl, GitAuth auth) {
-        Path dir = workspaceRoot.resolve("_platform");
+        Path dir = WorkspacePaths.platform(workspaceRoot);
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {
@@ -754,7 +741,7 @@ public class GitWorktreeManager {
                 return;
             }
             throw new GitIntakeException("标签 " + name + " 已存在且指向 "
-                    + shortSha(current) + "，与本次提交 " + shortSha(sha) + " 不一致，请换一个版本号");
+                    + Hashes.shortSha(current) + "，与本次提交 " + Hashes.shortSha(sha) + " 不一致，请换一个版本号");
         }
         run(repoDir, List.of("git", "tag", name, sha), "git tag " + name, 30);
     }
@@ -786,10 +773,6 @@ public class GitWorktreeManager {
         run(repoDir, List.of("git", "push", "--quiet", remoteUrl,
                 "refs/tags/" + name + ":refs/tags/" + name),
                 "git push tag " + name, GIT_TIMEOUT_SECONDS, false, auth);
-    }
-
-    private static String shortSha(String sha) {
-        return sha == null || sha.length() <= 7 ? String.valueOf(sha) : sha.substring(0, 7);
     }
 
     private static String validTag(String tag) {
@@ -980,7 +963,7 @@ public class GitWorktreeManager {
     /** askpass 脚本（POSIX 上 700，内容不含密钥）；按 OS 生成，首次调用时写入，之后复用。 */
     private synchronized Path askpassFile() {
         boolean windows = CommandShell.isWindows();
-        Path file = workspaceRoot.resolve("_platform")
+        Path file = WorkspacePaths.platform(workspaceRoot)
                 .resolve(windows ? "git-askpass.cmd" : "git-askpass.sh");
         try {
             Files.createDirectories(file.getParent());

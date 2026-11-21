@@ -1,8 +1,10 @@
 package top.rongx.agent.gateway.web;
 
+import top.rongx.agent.domain.error.Errors;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.str;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -62,7 +64,7 @@ public class DatabaseSettingsController {
      */
     @GetMapping
     public Map<String, Object> status() {
-        requireRead();
+        currentUser.requireSettingsRead();
         Map<String, String> saved = DbBackendConfig.read(configFile());
         Map<String, Object> out = new LinkedHashMap<>();
         // backend 取自实际连接池而不是配置：热切换之后配置仍是启动时那套，只有连接池知道真相
@@ -89,7 +91,7 @@ public class DatabaseSettingsController {
      */
     @PostMapping("/test")
     public Map<String, Object> test(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String url = requirePostgresUrl(body);
         String username = str(body, "username");
         String password = resolvePassword(body);
@@ -106,7 +108,7 @@ public class DatabaseSettingsController {
             // 连接失败必须回成"可读原因"而不是 500：用户在填表阶段就要看到哪一项不对
             out.put("ok", false);
             out.put("serverVersion", null);
-            out.put("message", "连接失败：" + rootMessage(e));
+            out.put("message", "连接失败：" + Errors.rootMessage(e));
         }
         out.put("latencyMs", (System.nanoTime() - start) / 1_000_000L);
         return out;
@@ -122,7 +124,7 @@ public class DatabaseSettingsController {
      */
     @PostMapping("/switch")
     public Map<String, Object> switchToPostgres(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String url = requirePostgresUrl(body);
         String username = str(body, "username");
         String password = resolvePassword(body);
@@ -153,7 +155,7 @@ public class DatabaseSettingsController {
      */
     @PostMapping("/migrate")
     public Map<String, Object> migrate(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String url = requirePostgresUrl(body);
         String username = str(body, "username");
         String password = resolvePassword(body);
@@ -185,7 +187,7 @@ public class DatabaseSettingsController {
      */
     @PostMapping
     public Map<String, Object> save(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String url = requirePostgresUrl(body);
         String username = str(body, "username");
         String password = resolvePassword(body);
@@ -206,7 +208,7 @@ public class DatabaseSettingsController {
      */
     @DeleteMapping
     public Map<String, Object> switchToSqlite() {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         DatabaseHotSwapper.Result result = swapper.switchToSqlite(properties);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", result.ok());
@@ -222,14 +224,6 @@ public class DatabaseSettingsController {
 
     private Path configFile() {
         return DbBackendConfig.file(Path.of(properties.sqliteFile()));
-    }
-
-    private void requireRead() {
-        currentUser.checkPermission("settings:read");
-    }
-
-    private void requireWrite() {
-        currentUser.checkPermission("settings:write");
     }
 
     private static String requirePostgresUrl(Map<String, Object> body) {
@@ -271,20 +265,5 @@ public class DatabaseSettingsController {
         return url.replaceAll("(?i)(password|user)=[^&;]*", "$1=****");
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? null : String.valueOf(value);
-    }
 
-    private static String rootMessage(Throwable error) {
-        Throwable cause = error;
-        while (cause.getCause() != null && cause.getCause() != cause) {
-            cause = cause.getCause();
-        }
-        String message = cause.getMessage();
-        if (message == null || message.isBlank()) {
-            return cause.getClass().getSimpleName();
-        }
-        return message.length() > 300 ? message.substring(0, 300) + "…" : message;
-    }
 }

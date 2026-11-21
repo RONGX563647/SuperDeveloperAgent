@@ -92,10 +92,6 @@ public record BugFixStageResult(
         return copy(null, null, null, null, value, null, null, null, null, null);
     }
 
-    public BugFixStageResult withBranch(String value) {
-        return copy(null, null, null, null, null, value, null, null, null, null);
-    }
-
     public BugFixStageResult withFixSha(String value) {
         return copy(null, null, null, null, null, null, value, null, null, null);
     }

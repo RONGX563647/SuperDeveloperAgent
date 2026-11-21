@@ -1,5 +1,6 @@
 package top.rongx.agent.domain.deploy;
 
+import top.rongx.agent.domain.hash.Hashes;
 import java.util.function.Function;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.run.StageStatus;
@@ -59,13 +60,10 @@ public final class EnvironmentPromotion {
         }
         if (sha != null && !sha.isBlank() && recipe.gitSha() != null && !recipe.gitSha().isBlank()
                 && !recipe.gitSha().equals(sha)) {
-            return "测试环境验证的是提交 " + shortSha(recipe.gitSha())
-                    + "，本次发布是 " + shortSha(sha) + "：请先在测试环境验证该提交";
+            return "测试环境验证的是提交 " + Hashes.shortSha(recipe.gitSha())
+                    + "，本次发布是 " + Hashes.shortSha(sha) + "：请先在测试环境验证该提交";
         }
         return null;
     }
 
-    private static String shortSha(String sha) {
-        return sha == null || sha.length() <= 7 ? String.valueOf(sha) : sha.substring(0, 7);
-    }
 }

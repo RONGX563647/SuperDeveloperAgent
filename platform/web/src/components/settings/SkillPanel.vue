@@ -2,6 +2,7 @@
 import { onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
+import { formatTime } from '../../utils/status'
 import {
   deleteSkill, importSkill, installCapability, listCapabilityMarket, listCapabilitySources,
   listSkills, probeSkills, readSkill, saveSkill, setSkillEnabled,
@@ -246,11 +247,6 @@ async function remove(skill: SkillEntry): Promise<void> {
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '删除失败')
   }
-}
-
-function formatTime(ts: number): string {
-  if (!ts) return ''
-  return new Date(ts).toLocaleString('zh-CN', { hour12: false })
 }
 
 // ---------------------------------------------------------------- 质量检查 / 命中试跑

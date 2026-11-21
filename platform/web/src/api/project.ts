@@ -142,18 +142,6 @@ export function intakeStatus(projectId: string): Promise<IntakeStatus> {
   return apiFetch(`/api/v1/projects/intake/${encodeURIComponent(projectId)}/status`)
 }
 
-export function intakeValidate(p: {
-  projectId: string
-  localPath?: string
-  repoUrl?: string
-  type?: string
-}): Promise<{ ok: boolean; error?: string }> {
-  return apiFetch('/api/v1/projects/intake/validate', {
-    method: 'POST',
-    body: JSON.stringify(p)
-  })
-}
-
 // ---------------------------------------------------------------- 文件浏览（本机后端）
 
 export interface FsEntry {
@@ -174,15 +162,6 @@ export interface FsListing {
 export function fsLs(path?: string): Promise<FsListing> {
   const q = path ? `?path=${encodeURIComponent(path)}` : ''
   return apiFetch(`/api/v1/fs/ls${q}`)
-}
-
-export function fsProbe(path: string): Promise<{
-  exists: boolean
-  git: boolean
-  normalized: string
-  withinSharedRoot?: boolean
-}> {
-  return apiFetch(`/api/v1/fs/probe?path=${encodeURIComponent(path)}`)
 }
 
 // ---------------------------------------------------------------- 快捷位置（选择器侧栏）
@@ -483,16 +462,6 @@ export interface GitBranchesView {
 
 export function gitBranches(projectId: string): Promise<GitBranchesView> {
   return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/branches`)
-}
-
-/** 创建版本线分支（只建引用，不切工作区）；from 为空 = 当前 HEAD。 */
-export function createGitBranch(
-  projectId: string, branch: string, from = ''
-): Promise<{ ok: boolean; created: boolean; branch: string; head: string }> {
-  return apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/git/branches`, {
-    method: 'POST',
-    body: JSON.stringify({ branch, from })
-  })
 }
 
 // ---------------------------------------------------------------- worktree

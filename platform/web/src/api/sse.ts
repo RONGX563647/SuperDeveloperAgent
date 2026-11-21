@@ -8,8 +8,7 @@ import { notifyUnauthorized } from './auth'
  * - SseFrameDecoder：跨 chunk 分帧、4 MiB 帧上限、支持 event/id/data/retry 字段；
  * - streamAgentEvents：指数退避重连（500ms → 8s），`afterSequence` 续传 +
  *   `Last-Event-ID` 头；4xx（非 408/429）不重试；event:error 帧直接抛出；
- * - 后端当前是 POST /api/v1/chat 单流（无 runId 游标），因此本模块同时暴露
- *   streamChatOnce（POST 单流）与 streamEvents（GET 续传流，后端补端点后启用）。
+ * - streamChatOnce（POST 单流）：当前后端 /api/v1/chat 的形态。
  */
 
 export interface SseFrame {
@@ -23,13 +22,6 @@ export class SseProtocolError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'SseProtocolError'
-  }
-}
-
-class NonRetryableStreamError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'NonRetryableStreamError'
   }
 }
 
@@ -109,7 +101,7 @@ function sequenceOf(frame: SseFrame, payload: Record<string, unknown>, fallback:
  * 归一化 SSE 帧 → AgentEvent。
  * type 优先取 payload.type（AgentEventMapper 的稳定枚举），退化用 SSE event: 行。
  */
-export function normalizeAgentEvent(frame: SseFrame, fallbackSequence: number): AgentEvent {
+function normalizeAgentEvent(frame: SseFrame, fallbackSequence: number): AgentEvent {
   let parsed: unknown
   try {
     parsed = JSON.parse(frame.data) as unknown
@@ -128,134 +120,6 @@ export function normalizeAgentEvent(frame: SseFrame, fallbackSequence: number): 
     sequence: sequenceOf(frame, parsed, fallbackSequence),
     payload: isRecord(parsed.payload) ? parsed.payload : {},
   }
-}
-
-export interface AgentEventStreamOptions {
-  /** 断线续传游标；后端支持 afterSequence 时才生效。 */
-  afterSequence?: number
-  signal: AbortSignal
-  onEvent: (event: AgentEvent) => void | Promise<void>
-  onConnectionChange?: (state: 'CONNECTING' | 'OPEN' | 'RECONNECTING' | 'CLOSED') => void
-  fetchImpl?: typeof fetch
-  initialRetryMillis?: number
-  maxRetryMillis?: number
-}
-
-const terminalEvents = new Set(['run.completed', 'run.failed', 'run.cancelled'])
-
-function abortError(): DOMException {
-  return new DOMException('The operation was aborted', 'AbortError')
-}
-
-function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(abortError())
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      globalThis.clearTimeout(timeout)
-      reject(abortError())
-    }
-    const timeout = globalThis.setTimeout(() => {
-      signal.removeEventListener('abort', onAbort)
-      resolve()
-    }, milliseconds)
-    signal.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
-/**
- * GET 事件流（带重连 + 续传）。后端补齐 `GET /api/v1/runs/{runId}/events/stream` 后启用；
- * 终端事件（run.completed/failed/cancelled）到达后正常返回。
- */
-export async function streamEvents(
-  url: string,
-  headersInit: HeadersInit,
-  options: AgentEventStreamOptions,
-): Promise<number> {
-  const fetchImpl = options.fetchImpl ?? fetch
-  let cursor = Math.max(0, options.afterSequence ?? 0)
-  let retryMillis = Math.max(10, options.initialRetryMillis ?? 500)
-  const maxRetryMillis = Math.max(retryMillis, options.maxRetryMillis ?? 8_000)
-  let firstAttempt = true
-
-  while (!options.signal.aborted) {
-    options.onConnectionChange?.(firstAttempt ? 'CONNECTING' : 'RECONNECTING')
-    const query = new URLSearchParams({ afterSequence: String(cursor) })
-    const headers = new Headers(headersInit)
-    headers.set('Accept', 'text/event-stream')
-    if (cursor > 0) headers.set('Last-Event-ID', String(cursor))
-
-    try {
-      const response = await fetchImpl(`${url}${url.includes('?') ? '&' : '?'}${query}`, {
-        method: 'GET',
-        headers,
-        signal: options.signal,
-      })
-      if (!response.ok || !response.body) {
-        const payload = await readErrorPayload(response)
-        const message = payload.message ?? `事件流连接失败 (${response.status} ${response.statusText})`
-        // 401：会话失效，交给统一处理跳登录页（不能当成可重试的流中断）
-        if (response.status === 401) notifyUnauthorized()
-        if (response.status >= 400 && response.status < 500
-          && response.status !== 408 && response.status !== 429) {
-          throw new NonRetryableStreamError(message)
-        }
-        throw new Error(message)
-      }
-      const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
-      if (!contentType.includes('text/event-stream')) {
-        throw new NonRetryableStreamError(
-          `事件流返回了错误的 Content-Type: ${contentType || 'missing'}`,
-        )
-      }
-      options.onConnectionChange?.('OPEN')
-      firstAttempt = false
-      retryMillis = Math.max(10, options.initialRetryMillis ?? 500)
-      const reader = response.body.getReader()
-      const textDecoder = new TextDecoder()
-      const decoder = new SseFrameDecoder()
-      let terminal = false
-      let fallbackSequence = cursor
-      while (!terminal) {
-        const { done, value } = await reader.read()
-        const frames = decoder.push(
-          textDecoder.decode(value ?? new Uint8Array(), { stream: !done }),
-          done,
-        )
-        for (const frame of frames) {
-          if (frame.retry !== undefined) {
-            retryMillis = Math.max(10, Math.min(frame.retry, maxRetryMillis))
-          }
-          const event = normalizeAgentEvent(frame, fallbackSequence + 1)
-          if (event.sequence <= cursor) continue
-          await options.onEvent(event)
-          cursor = event.sequence
-          fallbackSequence = cursor
-          terminal = terminalEvents.has(event.type)
-          if (terminal) break
-        }
-        if (done) break
-      }
-      reader.releaseLock()
-      if (terminal) {
-        options.onConnectionChange?.('CLOSED')
-        return cursor
-      }
-    } catch (error) {
-      if (options.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
-        options.onConnectionChange?.('CLOSED')
-        throw abortError()
-      }
-      if (error instanceof NonRetryableStreamError || error instanceof SseProtocolError) {
-        options.onConnectionChange?.('CLOSED')
-        throw error
-      }
-    }
-
-    await wait(retryMillis, options.signal)
-    retryMillis = Math.min(retryMillis * 2, maxRetryMillis)
-  }
-  options.onConnectionChange?.('CLOSED')
-  throw abortError()
 }
 
 /** 单次 POST 事件流（当前后端 /api/v1/chat 的形态；不重连，错误帧直接抛出）。 */

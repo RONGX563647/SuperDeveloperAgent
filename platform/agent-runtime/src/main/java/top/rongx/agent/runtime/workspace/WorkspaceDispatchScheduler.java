@@ -1,5 +1,6 @@
 package top.rongx.agent.runtime.workspace;
 
+import top.rongx.agent.domain.error.Errors;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -281,13 +282,13 @@ public final class WorkspaceDispatchScheduler {
             conversationId = node.conversationId() != null ? node.conversationId()
                     : backend.createConversation(titleOf(node), node.env(), node.worktree());
         } catch (RuntimeException e) {
-            return completedFailure(node, "", "", safeMessage(e), start);
+            return completedFailure(node, "", "", Errors.briefMessage(e), start);
         }
         String runId;
         try {
             runId = backend.send(conversationId, node.message());
         } catch (RuntimeException e) {
-            return completedFailure(node, conversationId, "", safeMessage(e), start);
+            return completedFailure(node, conversationId, "", Errors.briefMessage(e), start);
         }
         // send 的契约是「要么返回 runId，要么抛异常」。这里不再靠 "err:" 前缀猜错误：
         // 前缀判断曾经掩盖了一个真实缺陷（send 返回错误文案被当成 runId 用），
@@ -309,7 +310,7 @@ public final class WorkspaceDispatchScheduler {
                 result = await(node, active, backend, start);
             } catch (RuntimeException e) {
                 result = new DispatchNodeResult(node.id(), conversationId,
-                        active.runId(), "FAILED", false, "", truncate(safeMessage(e), MAX_ERROR_CHARS),
+                        active.runId(), "FAILED", false, "", truncate(Errors.briefMessage(e), MAX_ERROR_CHARS),
                         System.currentTimeMillis() - start);
             }
             DispatchNodeResult tagged = result.withTicket(ticketId);
@@ -324,7 +325,7 @@ public final class WorkspaceDispatchScheduler {
         try {
             backend.closeTicket(ticketId, result);
         } catch (RuntimeException e) {
-            log.warn("票据回写失败 ticket={}：{}", ticketId, safeMessage(e));
+            log.warn("票据回写失败 ticket={}：{}", ticketId, Errors.briefMessage(e));
         }
     }
 
@@ -368,7 +369,7 @@ public final class WorkspaceDispatchScheduler {
             } catch (RuntimeException e) {
                 return new DispatchNodeResult(node.id(), active.conversationId(),
                         active.runId(), "FAILED", false, "",
-                        truncate("已重试 " + attempt + " 次；" + safeMessage(e), MAX_ERROR_CHARS),
+                        truncate("已重试 " + attempt + " 次；" + Errors.briefMessage(e), MAX_ERROR_CHARS),
                         System.currentTimeMillis() - start);
             }
         }
@@ -390,7 +391,7 @@ public final class WorkspaceDispatchScheduler {
                 run = backend.waitForRun(runId, Math.min(remaining, WAIT_SLICE_MILLIS));
             } catch (RuntimeException e) {
                 return new DispatchNodeResult(node.id(), active.conversationId(), runId, "FAILED",
-                        false, "", safeMessage(e), System.currentTimeMillis() - start);
+                        false, "", Errors.briefMessage(e), System.currentTimeMillis() - start);
             }
             if (run != null && run.status().terminal()) {
                 return toResult(node, active.conversationId(), run, start);
@@ -460,7 +461,7 @@ public final class WorkspaceDispatchScheduler {
         try {
             return future.join();
         } catch (RuntimeException e) {
-            return new DispatchNodeResult("", "", "", "FAILED", false, "", safeMessage(e), 0);
+            return new DispatchNodeResult("", "", "", "FAILED", false, "", Errors.briefMessage(e), 0);
         }
     }
 
@@ -533,8 +534,4 @@ public final class WorkspaceDispatchScheduler {
         return LogTail.prefix(value, max, "…");
     }
 
-    private static String safeMessage(Throwable error) {
-        String message = error.getMessage();
-        return message == null || message.isBlank() ? error.getClass().getSimpleName() : message;
-    }
 }

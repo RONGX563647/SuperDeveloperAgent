@@ -147,16 +147,8 @@ export function listRunLedger(projectId: string, limit = 50): Promise<RunLedgerR
   return apiFetch(`/api/v1/run-ledger?projectId=${encodeURIComponent(projectId)}&limit=${limit}`)
 }
 
-export function listConversationRuns(conversationId: string, limit = 20): Promise<RunRow[]> {
-  return apiFetch(`/api/v1/conversations/${conversationId}/runs?limit=${limit}`)
-}
-
 export function cancelRun(runId: string): Promise<{ cancelled: boolean }> {
   return apiFetch(`/api/v1/runs/${runId}/cancel`, { method: 'POST' })
-}
-
-export function listTasks(projectId: string): Promise<TaskRow[]> {
-  return apiFetch(`/api/v1/workspaces/${projectId}/tasks`)
 }
 
 /** 环境矩阵：一个版本在某环境里的部署产物与运行状态。 */

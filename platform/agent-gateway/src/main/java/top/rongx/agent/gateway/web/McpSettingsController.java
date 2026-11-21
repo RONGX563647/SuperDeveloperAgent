@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.str;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -65,7 +66,7 @@ public class McpSettingsController {
 
     @GetMapping
     public List<McpServer> list() {
-        requireRead();
+        currentUser.requireUserSettingsRead();
         return servers.findAll();
     }
 
@@ -83,7 +84,7 @@ public class McpSettingsController {
 
     @DeleteMapping("/{id}")
     public Map<String, Object> delete(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         servers.delete(id);
         return Map.of("ok", true);
     }
@@ -91,7 +92,7 @@ public class McpSettingsController {
     /** 已保存配置的连通性测试。 */
     @PostMapping("/{id}/test")
     public Map<String, Object> test(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         McpServer server = servers.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "MCP 服务不存在：" + id));
         return probe(server.transport(), server.command(), server.url(), servers.headersOf(id));
@@ -100,7 +101,7 @@ public class McpSettingsController {
     /** 保存前测试当前表单（headers 为空时沿用已保存值）。 */
     @PostMapping("/test")
     public Map<String, Object> testDraft(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         String id = str(body, "id");
         Map<String, String> headers = headers(body);
         if (headers.isEmpty() && id != null && !id.isBlank() && servers.find(id).isPresent()) {
@@ -113,7 +114,7 @@ public class McpSettingsController {
     /** 批量测试已保存服务：设置页「全部测试」用一次请求拿齐健康状态。 */
     @PostMapping("/test-all")
     public List<Map<String, Object>> testAll() {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         List<Map<String, Object>> out = new ArrayList<>();
         for (McpServer server : servers.findAll()) {
             Map<String, Object> result = new LinkedHashMap<>(
@@ -136,7 +137,7 @@ public class McpSettingsController {
      */
     @PostMapping("/{id}/tools")
     public Map<String, Object> tools(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         McpServer server = servers.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "MCP 服务不存在：" + id));
         List<String> disabled = servers.disabledToolsOf(id);
@@ -173,7 +174,7 @@ public class McpSettingsController {
     @PutMapping("/{id}/tools")
     public Map<String, Object> updateTools(@PathVariable String id,
                                            @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         servers.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "MCP 服务不存在：" + id));
         List<String> disabled = stringList(body == null ? null : body.get("disabled"));
@@ -392,24 +393,10 @@ public class McpSettingsController {
         return out;
     }
 
-    private void requireRead() {
-        currentUser.requireUserId();
-        currentUser.checkPermission("settings:read");
-    }
-
-    private void requireWrite() {
-        currentUser.requireUserId();
-        currentUser.checkPermission("settings:write");
-    }
-
     private String requireWriteUser() {
         String userId = currentUser.requireUserId();
         currentUser.checkPermission("settings:write");
         return userId;
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? null : String.valueOf(value);
-    }
 }

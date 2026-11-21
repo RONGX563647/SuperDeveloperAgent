@@ -1,9 +1,9 @@
 package top.rongx.agent.infra.settings;
 
+import top.rongx.agent.domain.id.Ids;
+
 import jakarta.persistence.EntityManager;
 import java.nio.file.Path;
-import java.security.SecureRandom;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,8 +59,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
     public SqliteDeployServerStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")), secretBox);
+        this(PlatformDb.at(Path.of(workspaceRoot)), secretBox);
     }
 
     @Override
@@ -100,7 +99,7 @@ public class SqliteDeployServerStore implements DeployServerRepository {
 
     @Override
     public DeployServer save(DeployServerView view, String secret, String updatedBy) {
-        String id = view.id() == null || view.id().isBlank() ? newId() : view.id();
+        String id = view.id() == null || view.id().isBlank() ? Ids.newId("srv") : view.id();
         long now = System.currentTimeMillis();
         SecretBox.Sealed sealed = secret == null || secret.isBlank()
                 ? null : secretBox.encrypt(secret);
@@ -258,9 +257,4 @@ public class SqliteDeployServerStore implements DeployServerRepository {
         return value == null ? null : ((Number) value).longValue();
     }
 
-    private String newId() {
-        byte[] raw = new byte[4];
-        new SecureRandom().nextBytes(raw);
-        return "srv-" + HexFormat.of().formatHex(raw);
-    }
 }

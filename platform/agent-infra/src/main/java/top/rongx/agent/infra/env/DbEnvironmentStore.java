@@ -1,5 +1,9 @@
 package top.rongx.agent.infra.env;
 
+import top.rongx.agent.domain.id.Ids;
+
+import top.rongx.agent.domain.text.Texts;
+
 import jakarta.persistence.EntityManager;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -16,6 +20,7 @@ import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvNames;
+import top.rongx.agent.domain.env.EnvSecretKeys;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvVariable;
@@ -78,8 +83,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
     public DbEnvironmentStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")), secretBox);
+        this(PlatformDb.at(Path.of(workspaceRoot)), secretBox);
     }
 
     private void seedTemplates() {
@@ -153,7 +157,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
                         updated_at=excluded.updated_at
                     """,
                     t.env(),
-                    blankToNull(t.network()),
+                    Texts.blankToNull(t.network()),
                     t.defaultTarget() == null || t.defaultTarget().isBlank()
                             ? "docker" : t.defaultTarget(),
                     t.defaultPort() <= 0 ? 8080 : t.defaultPort(),
@@ -163,7 +167,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
                             ? RuntimeMode.defaultFor(t.env()).name() : t.runtimeMode(),
                     t.namespace() == null || t.namespace().isBlank()
                             ? EnvTemplate.defaultNamespace(t.env()) : t.namespace(),
-                    blankToNull(t.serverId()),
+                    Texts.blankToNull(t.serverId()),
                     System.currentTimeMillis()));
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境模板保存失败：" + e.getMessage(), e);
@@ -204,7 +208,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
     @Override
     public EnvResource saveResource(EnvResource r) {
         requireEnv(r.env());
-        String id = r.id() == null || r.id().isBlank() ? newId("res") : r.id();
+        String id = r.id() == null || r.id().isBlank() ? Ids.newId("res") : r.id();
         SecretBox.Sealed sealed = r.password() == null || r.password().isEmpty()
                 ? null : secretBox.encrypt(r.password());
         long now = System.currentTimeMillis();
@@ -236,17 +240,17 @@ public class DbEnvironmentStore implements EnvironmentStore {
                     r.host(),
                     r.port(),
                     r.containerPort(),
-                    blankToNull(r.internalHost()),
-                    blankToNull(r.databaseName()),
-                    blankToNull(r.username()),
+                    Texts.blankToNull(r.internalHost()),
+                    Texts.blankToNull(r.databaseName()),
+                    Texts.blankToNull(r.username()),
                     sealed == null ? null : sealed.cipherB64(),
                     sealed == null ? null : sealed.ivB64(),
-                    blankToNull(r.network()),
-                    blankToNull(r.serverId()),
+                    Texts.blankToNull(r.network()),
+                    Texts.blankToNull(r.serverId()),
                     r.source() == null ? "MANUAL" : r.source(),
                     r.lastCheckAt() > 0 && r.running() ? 1 : 0,
                     r.lastCheckAt(),
-                    blankToNull(r.lastError()),
+                    Texts.blankToNull(r.lastError()),
                     now));
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "中间件资源保存失败：" + e.getMessage(), e);
@@ -270,7 +274,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
             db.run(em -> PlatformDb.update(em, """
                     UPDATE env_resources SET running=?, last_check_at=?, last_error=?, updated_at=?
                     WHERE id=?
-                    """, running ? 1 : 0, now, blankToNull(error), now, id));
+                    """, running ? 1 : 0, now, Texts.blankToNull(error), now, id));
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "健康检查结果写入失败：" + e.getMessage(), e);
         }
@@ -413,7 +417,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
             if (e.getValue().equals(current.get(key))) {
                 continue;
             }
-            saveEnvVar(env, key, e.getValue(), looksSecret(key), "RESOURCE");
+            saveEnvVar(env, key, e.getValue(), EnvSecretKeys.looksSecret(key), "RESOURCE");
             written++;
         }
         return written;
@@ -832,7 +836,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
                     ? isSecretOverride(projectId, env, key)
                     : templateVars.containsKey(key)
                     ? isSecretEnvVar(env, key)
-                    : looksSecret(key));
+                    : EnvSecretKeys.looksSecret(key));
             String shown;
             if (ref != null) {
                 shown = "secret://" + ref;
@@ -877,11 +881,6 @@ public class DbEnvironmentStore implements EnvironmentStore {
         }
     }
 
-    private static boolean looksSecret(String key) {
-        String k = key.toUpperCase(java.util.Locale.ROOT);
-        return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
-                || k.endsWith("_KEY") || k.contains("PRIVATE");
-    }
 
     // ---------------------------------------------------------------- 绑定
 
@@ -889,7 +888,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
     public EnvBinding saveBinding(EnvBinding b) {
         requireProject(b.projectId());
         requireEnv(b.env());
-        String id = b.id() == null || b.id().isBlank() ? newId("bind") : b.id();
+        String id = b.id() == null || b.id().isBlank() ? Ids.newId("bind") : b.id();
         long now = System.currentTimeMillis();
         try {
             db.run(em -> PlatformDb.update(em, """
@@ -1164,13 +1163,7 @@ public class DbEnvironmentStore implements EnvironmentStore {
                 projectId, env, key).isPresent();
     }
 
-    private static String newId(String prefix) {
-        return prefix + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
-    }
 
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
-    }
 
     private static void requireProject(String projectId) {
         if (projectId == null || !projectId.matches("[A-Za-z0-9_-]{1,32}")) {

@@ -2,9 +2,9 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
+import top.rongx.agent.domain.process.PortProbe;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -70,8 +70,7 @@ public class RuntimeTools {
         this.services = services;
         this.inspector = inspector;
         this.redactor = redactor;
-        this.hostDeployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("deploy");
+        this.hostDeployRoot = WorkspacePaths.deploy(Path.of(workspaceRoot));
     }
 
     @Tool(name = "env_runtime_status", description = "Show app runtime status in an env.",
@@ -265,7 +264,7 @@ public class RuntimeTools {
             return "err: port 必须是 1-65535";
         }
         boolean loopback = isLoopback(hostValue);
-        boolean open = tcpOpen(hostValue, port);
+        boolean open = PortProbe.isOpen(hostValue, port, 1500);
         StringBuilder sb = new StringBuilder();
         sb.append("host: ").append(hostValue).append('\n')
                 .append("port: ").append(port).append('\n')
@@ -334,16 +333,6 @@ public class RuntimeTools {
     }
 
     // ---------------------------------------------------------------- 内部
-
-    /** TCP 连通性探测：只连不读写，1.5s 超时。 */
-    private static boolean tcpOpen(String host, int port) {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), 1500);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     private static boolean isLoopback(String host) {
         String value = host.toLowerCase(Locale.ROOT);
@@ -457,15 +446,7 @@ public class RuntimeTools {
     }
 
     private static String readText(Path file) {
-        try {
-            if (!Files.isRegularFile(file)) {
-                return null;
-            }
-            String value = Files.readString(file, StandardCharsets.UTF_8).trim();
-            return value.isEmpty() ? null : value;
-        } catch (IOException e) {
-            return null;
-        }
+        return top.rongx.agent.domain.fs.TextFiles.readTrimmedOrNull(file);
     }
 
     private static int parseHostPort(Path logFile) {

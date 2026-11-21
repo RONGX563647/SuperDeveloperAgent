@@ -293,30 +293,6 @@ export interface ProjectEnvVar {
   updatedAt: number
 }
 
-export function listProjectEnvVars(projectId: string, env: string): Promise<ProjectEnvVar[]> {
-  const q = new URLSearchParams({ env })
-  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/envs?${q}`)
-}
-
-/** 新增/修改；value 留空表示保持原值（新建时必填）。 */
-export function saveProjectEnvVar(
-  projectId: string,
-  input: { env: string, key: string, value?: string, secret?: boolean }
-): Promise<ProjectEnvVar> {
-  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/envs`, {
-    method: 'PUT',
-    body: JSON.stringify(input)
-  })
-}
-
-export function deleteProjectEnvVar(projectId: string, env: string, key: string): Promise<void> {
-  const q = new URLSearchParams({ env })
-  return apiFetch(
-    `/api/v1/settings/projects/${encodeURIComponent(projectId)}/envs/${encodeURIComponent(key)}?${q}`,
-    { method: 'DELETE' }
-  )
-}
-
 // ---------------------------------------------------------------- 环境模板（dev/test/prod）
 
 export type RuntimeMode = 'LOCAL_DEV' | 'LOCAL_TEST' | 'SERVER'
@@ -600,10 +576,6 @@ export function checkProjectEnv(projectId: string, env: string): Promise<EnvChec
   return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/env-check?${q}`)
 }
 
-export function listEnvTemplateVars(env: string): Promise<EnvVariableView[]> {
-  return apiFetch(`/api/v1/settings/envs/${encodeURIComponent(env)}/vars`)
-}
-
 export function saveEnvTemplateVar(
   env: string, input: { key: string, value?: string, secret?: boolean }
 ): Promise<EnvVariableView> {
@@ -618,11 +590,6 @@ export function deleteEnvTemplateVar(env: string, key: string): Promise<void> {
     `/api/v1/settings/envs/${encodeURIComponent(env)}/vars/${encodeURIComponent(key)}`,
     { method: 'DELETE' }
   )
-}
-
-export function listEnvOverrides(projectId: string, env: string): Promise<EnvVariableView[]> {
-  const q = new URLSearchParams({ env })
-  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/overrides?${q}`)
 }
 
 export function saveEnvOverride(
@@ -677,23 +644,6 @@ export interface EnvBindingHistory {
   /** 为空 = 当前没有可用绑定（需要重新生成并确认）。 */
   currentBindingId: string
   bindings: EnvBindingView[]
-}
-
-export function listEnvBindings(
-  projectId: string,
-  env: string,
-  limit = 20,
-): Promise<EnvBindingHistory> {
-  const q = new URLSearchParams({ env, limit: String(limit) })
-  return apiFetch(`/api/v1/settings/projects/${encodeURIComponent(projectId)}/env-bindings?${q}`)
-}
-
-/** 解绑：标记 REVOKED 并保留记录（历史仍可查）。 */
-export function revokeEnvBinding(projectId: string, bindingId: string): Promise<EnvBindingView> {
-  return apiFetch(
-    `/api/v1/settings/projects/${encodeURIComponent(projectId)}/env-bindings/${encodeURIComponent(bindingId)}/revoke`,
-    { method: 'POST' }
-  )
 }
 
 export function listPortLeases(projectId: string, env: string): Promise<PortLeaseView[]> {
@@ -984,14 +934,6 @@ export function gitOauthStart(provider: 'github' | 'gitlab'): Promise<{
   provider: string
 }> {
   return apiFetch(`/api/v1/settings/git-hosts/oauth/${provider}/start`)
-}
-
-/** 解绑某平台的全部应用授权（等价于删除该平台下的托管账号）。 */
-export function gitOauthUnbind(provider: 'github' | 'gitlab'): Promise<{
-  ok: boolean
-  removed: number
-}> {
-  return apiFetch(`/api/v1/settings/git-hosts/oauth/${provider}`, { method: 'DELETE' })
 }
 
 // ---------------------------------------------------------------- MCP

@@ -1,5 +1,8 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.error.Errors;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -56,13 +59,13 @@ public class AnalyzeStage implements BugFixStageHandler {
             git.sync(run.projectId());
         } catch (RuntimeException e) {
             log.warn("分析前同步仓库失败，继续使用本地基线 project={}：{}", run.projectId(),
-                    message(e));
+                    Errors.briefMessage(e));
         }
         String baseSha;
         try {
             baseSha = git.headSha(run.projectId());
         } catch (RuntimeException e) {
-            return BugFixStageResult.blocked("无法读取仓库基线提交：" + message(e));
+            return BugFixStageResult.blocked("无法读取仓库基线提交：" + Errors.briefMessage(e));
         }
         if (baseSha == null || baseSha.isBlank()) {
             return BugFixStageResult.blocked("仓库没有可用提交，无法分析版本");
@@ -71,13 +74,13 @@ public class AnalyzeStage implements BugFixStageHandler {
                 "projectId", safe(run.projectId()),
                 "issueNumber", safe(run.issueNumber()),
                 "issueTitle", safe(run.issueTitle()),
-                "issueBody", FixStage.untrusted(clip(run.issueBody(), 8000)),
+                "issueBody", FixStage.untrusted(LogTail.prefix(run.issueBody(), 8000, "\n...(已截断)")),
                 "baseSha", safe(baseSha)));
         AnalyzeOutput output;
         try {
             output = agent.runStructured(run, prompt, AnalyzeOutput.class);
         } catch (RuntimeException e) {
-            return BugFixStageResult.blocked("分析 Agent 不可用：" + message(e));
+            return BugFixStageResult.blocked("分析 Agent 不可用：" + Errors.briefMessage(e));
         }
         if (output == null) {
             return BugFixStageResult.blocked("分析 Agent 未返回结构化结论");
@@ -112,7 +115,7 @@ public class AnalyzeStage implements BugFixStageHandler {
                 blankAsUnknown(output.commitRange()), rootCause,
                 bullets(output.reproSteps()), bullets(targetFiles),
                 ReproduceStage.percent(confidence));
-        return BugFixStageResult.ok("分析完成，基线 " + shortSha(baseSha), summary)
+        return BugFixStageResult.ok("分析完成，基线 " + Hashes.shortSha(baseSha, 8), summary)
                 .withAnalysis(summary)
                 .withAnalysisJson(artifact)
                 .withArtifact(artifact)
@@ -127,10 +130,6 @@ public class AnalyzeStage implements BugFixStageHandler {
         return value == null || value.isBlank() ? "未确定" : value;
     }
 
-    static String shortSha(String sha) {
-        return sha == null ? "" : sha.substring(0, Math.min(8, sha.length()));
-    }
-
     static String bullets(List<String> values) {
         if (values == null || values.isEmpty()) {
             return "未提供";
@@ -142,13 +141,6 @@ public class AnalyzeStage implements BugFixStageHandler {
             }
         }
         return builder.isEmpty() ? "未提供" : builder.toString().stripTrailing();
-    }
-
-    static String clip(String value, int max) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= max ? value : value.substring(0, max) + "\n...(已截断)";
     }
 
     static String message(RuntimeException e) {

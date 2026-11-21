@@ -15,6 +15,7 @@ import {
 } from '../../api/issues'
 import MarkdownView from './MarkdownView.vue'
 import { appStore } from '../../stores/app'
+import { formatTime } from '../../utils/status'
 import { listProjects, type ProjectRow } from '../../api/project'
 import {
   filterByVersion, versionFilterOptions,
@@ -508,13 +509,6 @@ function syncLabel(row: GitIssueRow): string {
   if (row.syncStatus === 'FAILED') return '同步失败'
   if (row.syncStatus === 'PENDING') return '同步中'
   return '仅本地'
-}
-
-function formatTime(ts?: number): string {
-  if (!ts) return ''
-  return new Date(ts).toLocaleString('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  })
 }
 
 function labelList(labels: string): string[] {

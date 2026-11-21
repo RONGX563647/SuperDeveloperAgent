@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import top.rongx.agent.domain.process.LogTail;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.bugfix.BugFixGitPort;
@@ -47,9 +48,9 @@ public class PullRequestStage implements BugFixStageHandler {
                         "baseSha", AnalyzeStage.safe(run.baseSha()),
                         "branch", AnalyzeStage.safe(run.branch()),
                         "fixSha", AnalyzeStage.safe(run.fixSha()),
-                        "analysis", AnalyzeStage.clip(run.analysis(), 4000),
-                        "fixSummary", AnalyzeStage.clip(run.fixSummary(), 2000),
-                        "evidence", AnalyzeStage.clip(run.evidence(), 2000))));
+                        "analysis", LogTail.prefix(run.analysis(), 4000, "…"),
+                        "fixSummary", LogTail.prefix(run.fixSummary(), 2000, "…"),
+                        "evidence", LogTail.prefix(run.evidence(), 2000, "…"))));
         try {
             String url = git.openPullRequest(run, title, body);
             return BugFixStageResult.ok("PR 已创建，等待人工合并", url).withPrUrl(url);

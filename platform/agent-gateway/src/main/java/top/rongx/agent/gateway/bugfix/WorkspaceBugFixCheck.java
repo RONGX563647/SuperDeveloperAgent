@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.bugfix;
 
+import top.rongx.agent.domain.process.LogTail;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -126,7 +127,7 @@ public class WorkspaceBugFixCheck implements BugFixCheckPort {
             // 4xx 说明服务已起来（可能需要登录/路由不存在），5xx 或连不上才算冒烟失败
             if (status >= 500) {
                 return CheckResult.fail("测试环境返回 " + status + "：" + baseUrl,
-                        clip(response.body()));
+                        LogTail.prefix(response.body(), MAX_OUTPUT_CHARS, "…"));
             }
             return CheckResult.pass("测试环境可访问（HTTP " + status + "）", "");
         } catch (IOException | InterruptedException | IllegalArgumentException e) {
@@ -159,23 +160,16 @@ public class WorkspaceBugFixCheck implements BugFixCheckPort {
         }
         BoundedCommand.Outcome outcome = BoundedCommand.run(
                 CommandShell.argv(shellPrefix, command), worktree, COMMAND_TIMEOUT_MS);
-        String output = clip(outcome.output());
+        String output = LogTail.prefix(outcome.output(), MAX_OUTPUT_CHARS, "…");
         if (outcome.ok()) {
             return new CommandResult(true, outcome.exitCode(), output);
         }
         String reason = outcome.timedOut()
                 ? "命令超时（" + (COMMAND_TIMEOUT_MS / 1000) + " 秒），已终止进程树"
                 : outcome.detail();
-        return new CommandResult(false, outcome.exitCode(), clip(reason + "\n" + output));
+        return new CommandResult(false, outcome.exitCode(), LogTail.prefix(reason + "\n" + output, MAX_OUTPUT_CHARS, "…"));
     }
 
-    private static String clip(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= MAX_OUTPUT_CHARS ? value
-                : value.substring(0, MAX_OUTPUT_CHARS) + "…";
-    }
 
     private record CommandResult(boolean passed, int exitCode, String output) {
     }

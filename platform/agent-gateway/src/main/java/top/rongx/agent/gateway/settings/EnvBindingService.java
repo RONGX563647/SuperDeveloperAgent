@@ -1,13 +1,11 @@
 package top.rongx.agent.gateway.settings;
 
+import top.rongx.agent.domain.hash.Hashes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import top.rongx.agent.domain.json.JsonMappers;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,6 +17,7 @@ import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.EnvResource;
+import top.rongx.agent.domain.env.EnvSecretKeys;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.ProjectEnvFiles;
 import top.rongx.agent.domain.env.StackAdapter;
@@ -67,14 +66,14 @@ public class EnvBindingService implements EnvBindingPort {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("key", key);
             row.put("source", v == null ? "UNKNOWN" : v.source());
-            row.put("secret", v == null ? looksSecret(key) : v.secret());
+            row.put("secret", v == null ? EnvSecretKeys.looksSecret(key) : v.secret());
             row.put("required", required.contains(key));
             // 只放值的哈希：既能发现"配置被改过"，又不在绑定记录里留下明文
             String plain = effective.values().get(key);
             if (plain == null || plain.isBlank()) {
                 plain = sourceValues.get(key);
             }
-            row.put("valueHash", plain == null || plain.isBlank() ? "" : sha256(plain));
+            row.put("valueHash", plain == null || plain.isBlank() ? "" : Hashes.sha256Hex(plain));
             if (required.contains(key) && (plain == null || plain.isBlank())) {
                 missing.add(key);
             }
@@ -111,7 +110,7 @@ public class EnvBindingService implements EnvBindingPort {
         } catch (Exception e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "生成映射草案失败：" + e.getMessage(), e);
         }
-        String hash = sha256(projectId + "|" + env + "|" + mappingJson);
+        String hash = Hashes.sha256Hex(projectId + "|" + env + "|" + mappingJson);
         EnvBinding binding = new EnvBinding(null, projectId, env, mappingJson, hash,
                 actor == null ? "agent" : actor, null, 0, 0, "DRAFT");
         return envStore.saveBinding(binding);
@@ -174,8 +173,8 @@ public class EnvBindingService implements EnvBindingPort {
         StringBuilder canonical = new StringBuilder();
         effective.digestValues().entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
-                .forEach(e -> canonical.append(e.getKey()).append('=').append(sha256(e.getValue())).append('\n'));
-        return sha256(canonical.toString());
+                .forEach(e -> canonical.append(e.getKey()).append('=').append(Hashes.sha256Hex(e.getValue())).append('\n'));
+        return Hashes.sha256Hex(canonical.toString());
     }
 
     private EnvBinding requireBinding(String bindingId) {
@@ -204,19 +203,4 @@ public class EnvBindingService implements EnvBindingPort {
         return ProjectEnvFiles.scan(repo);
     }
 
-    /** 变量名是否像敏感信息（设置页据此决定是否掩码）。 */
-    public static boolean looksSecret(String key) {
-        String k = key.toUpperCase(java.util.Locale.ROOT);
-        return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
-                || k.endsWith("_KEY");
-    }
-
-    static String sha256(String text) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "计算映射哈希失败", e);
-        }
-    }
 }

@@ -1,5 +1,6 @@
 package top.rongx.agent.executor;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.nio.file.Path;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,8 +48,7 @@ public class PipelineConfig {
             @Value("${agent.deploy.use-docker-context:false}") boolean useDockerContext) {
         // HOST 部署状态放在平台数据目录（跨运行稳定）：工作树随每次运行重建，
         // 状态目录若落在里面，日志会消失、previous 指针永远为空（回滚 E-507）。
-        Path deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("deploy");
+        Path deployRoot = WorkspacePaths.deploy(Path.of(workspaceRoot));
         // 镜像准入策略只有一份：构建沙箱判定 stage.image，部署器判定 deploy.image，
         // 两处必须用同一个策略实例，否则"沙箱放行、部署拦截"会让排障变成猜谜。
         SandboxImagePolicy imagePolicy = sandbox.imagePolicy();
@@ -64,8 +64,7 @@ public class PipelineConfig {
     @Bean
     public top.rongx.agent.domain.settings.SshAccess sshAccess(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        Path knownHosts = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("known_hosts");
+        Path knownHosts = WorkspacePaths.knownHosts(Path.of(workspaceRoot));
         return new SshExec(knownHosts);
     }
 
@@ -106,8 +105,7 @@ public class PipelineConfig {
             top.rongx.agent.domain.env.EnvironmentStore envStore,
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         // 与 LocalProcessServiceRuntime 的 stateRoot 对齐：app_logs dev 读同一份 backend.log
-        var logRoot = java.nio.file.Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("local");
+        var logRoot = WorkspacePaths.local(Path.of(workspaceRoot));
         return new LocalDevHostDeployer(envStore, logRoot);
     }
 

@@ -17,15 +17,5 @@ public enum ToolLevel {
     L2_EXECUTE_ISOLATED,
 
     /** 影响生产，必须持有 confirmToken。 */
-    L3_EXECUTE_PROD;
-
-    /** 是否属于写操作。 */
-    public boolean mutating() {
-        return this == L2_EXECUTE_ISOLATED || this == L3_EXECUTE_PROD;
-    }
-
-    /** 是否需要确认令牌。 */
-    public boolean requiresConfirmToken() {
-        return this == L3_EXECUTE_PROD;
-    }
+    L3_EXECUTE_PROD
 }

@@ -20,6 +20,7 @@ import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvironmentStore;
+import top.rongx.agent.domain.env.EnvSecretKeys;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.ProjectEnvFiles;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
@@ -144,7 +145,7 @@ public class ConfigResolver {
             }
             String declaredValue = declared.values().get(key);
             if (declaredValue != null && !declaredValue.isBlank()) {
-                boolean secretValue = looksSecret(key) || looksSecretValue(declaredValue);
+                boolean secretValue = EnvSecretKeys.looksSecret(key) || looksSecretValue(declaredValue);
                 resolved.put(key, secretValue ? "****" : declaredValue);
                 sources.put(key, "REPO_DECLARED");
                 continue;
@@ -240,7 +241,7 @@ public class ConfigResolver {
     }
 
     private static Candidate candidate(String key, String value, String source, String hint) {
-        boolean secret = looksSecret(key) || looksSecretValue(value);
+        boolean secret = EnvSecretKeys.looksSecret(key) || looksSecretValue(value);
         return new Candidate(key, secret ? "" : value, source, secret, hint);
     }
 
@@ -260,12 +261,6 @@ public class ConfigResolver {
                 || upper.endsWith("URL") || upper.endsWith("URI") || upper.contains("TOKEN")
                 || upper.contains("SECRET") || upper.contains("PASSWORD") || upper.endsWith("KEY")
                 || upper.endsWith("VERSION") || upper.endsWith("DATABASE") || upper.endsWith("REDIS");
-    }
-
-    private static boolean looksSecret(String key) {
-        String upper = key.toUpperCase(Locale.ROOT);
-        return upper.contains("PASSWORD") || upper.contains("SECRET") || upper.contains("TOKEN")
-                || upper.endsWith("_KEY") || upper.contains("PRIVATE_KEY") || upper.contains("CREDENTIAL");
     }
 
     /** 值本身的凭据特征：连接串内嵌用户名/密码，或高熵长串。 */

@@ -3,8 +3,6 @@ package top.rongx.agent.infra.settings;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import top.rongx.agent.domain.http.HttpClients;
@@ -19,7 +17,6 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
-import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 模型发现：请求 OpenAI 兼容端点的 {@code GET /models}，解析出可选模型列表。

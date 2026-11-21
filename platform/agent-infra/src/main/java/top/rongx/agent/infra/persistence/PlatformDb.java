@@ -23,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 
 /**
  * 平台统一的 JPA 持久化入口。
@@ -99,6 +100,11 @@ public final class PlatformDb implements AutoCloseable {
         Path file = dbFile.toAbsolutePath().normalize();
         String key = "jdbc:sqlite:" + file;
         return STANDALONE.computeIfAbsent(key, PlatformDb::createSqlite);
+    }
+
+    /** 按工作区根目录定位统一库文件（{@code <root>/_platform/platform.db}）。 */
+    public static PlatformDb at(Path workspaceRoot) {
+        return sqlite(WorkspacePaths.db(workspaceRoot));
     }
 
     public DataSource dataSource() {

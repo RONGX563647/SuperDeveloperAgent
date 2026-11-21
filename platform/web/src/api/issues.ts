@@ -96,10 +96,6 @@ export function getGitIssueVersions(projectId: string, kind?: string): Promise<G
   return apiFetch(`/api/v1/git-issues/versions${qs ? `?${qs}` : ''}`)
 }
 
-export function getGitIssue(id: string): Promise<GitIssueRow> {
-  return apiFetch(`/api/v1/git-issues/${encodeURIComponent(id)}`)
-}
-
 export function createGitIssue(input: GitIssueInput): Promise<GitIssueRow> {
   return apiFetch('/api/v1/git-issues', { method: 'POST', body: JSON.stringify(input) })
 }

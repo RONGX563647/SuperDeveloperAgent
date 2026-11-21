@@ -238,8 +238,7 @@ public class AppRuntimeInspector implements RuntimeInspector {
     }
 
     private static String slug(String raw) {
-        String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9_.-]", "-");
+        String value = top.rongx.agent.domain.text.Slugs.slug(raw);
         return value.isEmpty() ? "unknown" : value;
     }
 

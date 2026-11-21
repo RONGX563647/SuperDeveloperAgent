@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.auth;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -83,8 +84,7 @@ public class UserStore implements UserRolePort {
                      @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
                      @Value("${agent.auth.seed-passwords:}") String seedPasswords) {
         this.db = db;
-        Path platformDir = Path.of(workspaceRoot).toAbsolutePath().normalize().resolve("_platform");
-        this.seedFile = platformDir.resolve("seed-passwords.txt");
+        this.seedFile = WorkspacePaths.seedPasswords(Path.of(workspaceRoot));
         this.initialPasswords = initialPasswords(seedPasswords);
         if (count() == 0) {
             seed();
@@ -100,8 +100,7 @@ public class UserStore implements UserRolePort {
 
     /** 独立运行时要保证库文件所在目录存在；schema 仍由 Hibernate 生成。 */
     private static Path platformDbFile(String workspaceRoot) {
-        Path dbFile = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db");
+        Path dbFile = WorkspacePaths.db(Path.of(workspaceRoot));
         try {
             Files.createDirectories(dbFile.getParent());
         } catch (IOException e) {

@@ -2,6 +2,7 @@ package top.rongx.agent.gateway.web;
 
 import java.util.List;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.trimmed;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -71,7 +72,7 @@ public class BugFixController {
     public BugFixRun start(@RequestBody Map<String, Object> body) {
         currentUser.checkPermission("action:run");
         String userId = currentUser.requireUserId();
-        String issueId = str(body, "issueId");
+        String issueId = trimmed(body, "issueId");
         if (issueId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "缺少 issueId");
         }
@@ -123,20 +124,20 @@ public class BugFixController {
     @PutMapping("/policy")
     public BugFixPolicy savePolicy(@RequestBody Map<String, Object> body) {
         currentUser.checkPermission("action:run");
-        String projectId = str(body, "projectId");
+        String projectId = trimmed(body, "projectId");
         BugFixPolicy current = policies.load(projectId);
         BugFixPolicy next = new BugFixPolicy(
                 bool(body, "enabled", current.enabled()),
                 bool(body, "autoDeploy", current.autoDeploy()),
                 bool(body, "autoCreatePr", current.autoCreatePr()),
-                body.containsKey("testEnv") ? str(body, "testEnv") : current.testEnv(),
-                body.containsKey("bindingId") ? str(body, "bindingId") : current.bindingId(),
+                body.containsKey("testEnv") ? trimmed(body, "testEnv") : current.testEnv(),
+                body.containsKey("bindingId") ? trimmed(body, "bindingId") : current.bindingId(),
                 body.containsKey("maxAttempts") ? integer(body, "maxAttempts",
                         current.maxAttempts()) : current.maxAttempts(),
-                body.containsKey("baseUrl") ? str(body, "baseUrl") : current.baseUrl(),
-                body.containsKey("buildCommand") ? str(body, "buildCommand")
+                body.containsKey("baseUrl") ? trimmed(body, "baseUrl") : current.baseUrl(),
+                body.containsKey("buildCommand") ? trimmed(body, "buildCommand")
                         : current.buildCommand(),
-                body.containsKey("testCommand") ? str(body, "testCommand") : current.testCommand(),
+                body.containsKey("testCommand") ? trimmed(body, "testCommand") : current.testCommand(),
                 0);
         try {
             // 保存前拒绝生产/预生产环境，避免把全局策略改成线上
@@ -147,10 +148,6 @@ public class BugFixController {
         return policies.save(projectId, next);
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? "" : String.valueOf(value).trim();
-    }
 
     private static boolean bool(Map<String, Object> body, String key, boolean fallback) {
         Object value = body == null ? null : body.get(key);

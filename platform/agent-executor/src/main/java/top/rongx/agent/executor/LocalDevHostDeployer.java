@@ -1,8 +1,8 @@
 package top.rongx.agent.executor;
 
+import top.rongx.agent.domain.process.CommandShell;
+import top.rongx.agent.domain.process.PortProbe;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -390,9 +390,9 @@ public class LocalDevHostDeployer {
 
     /** 优先仓库自带的 {@code ./mvnw}，否则用 PATH 里的 mvn；构建阶段跳过测试。 */
     public int mvnPackage(Path backendRoot, Path logFile) {
-        boolean wrapper = Files.isRegularFile(backendRoot.resolve(isWindows() ? "mvnw.cmd" : "mvnw"));
+        boolean wrapper = Files.isRegularFile(backendRoot.resolve(CommandShell.isWindows() ? "mvnw.cmd" : "mvnw"));
         List<String> argv;
-        if (isWindows()) {
+        if (CommandShell.isWindows()) {
             // spec-ignore: R02 Windows 的 mvn/mvnw 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
             argv = List.of("cmd", "/c", (wrapper ? "mvnw.cmd" : "mvn") + " -q -T 1C -DskipTests package");
         } else {
@@ -410,7 +410,7 @@ public class LocalDevHostDeployer {
         List<String> argv;
         Map<String, String> extra = new TreeMap<>();
         extra.put("NODE_OPTIONS", "--openssl-legacy-provider");
-        if (isWindows()) {
+        if (CommandShell.isWindows()) {
             // spec-ignore: R02 Windows 的 npm 是 .cmd 批处理，CreateProcess 只能经 cmd /c 启动，参数全是常量无拼接
             argv = List.of("cmd", "/c", "npm run " + script);
         } else {
@@ -465,7 +465,7 @@ public class LocalDevHostDeployer {
     private String awaitBackend(Process process, int port) {
         long deadline = System.currentTimeMillis() + BACKEND_READY_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
-            if (portOpen(port)) {
+            if (PortProbe.isOpen("127.0.0.1", port, 800)) {
                 return null;
             }
             if (!process.isAlive()) {
@@ -479,7 +479,7 @@ public class LocalDevHostDeployer {
     private String awaitFrontend(Process process, int port) {
         long deadline = System.currentTimeMillis() + FRONTEND_READY_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
-            if (portOpen(port)) {
+            if (PortProbe.isOpen("127.0.0.1", port, 800)) {
                 return null;
             }
             if (!process.isAlive()) {
@@ -488,18 +488,6 @@ public class LocalDevHostDeployer {
             sleep(300);
         }
         return "等待 " + (FRONTEND_READY_TIMEOUT_MS / 1000) + " 秒后端口仍未监听";
-    }
-
-    private static boolean portOpen(int port) {
-        if (port <= 0) {
-            return false;
-        }
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", port), 800);
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
     }
 
     private static void sleep(long ms) {
@@ -513,7 +501,7 @@ public class LocalDevHostDeployer {
     /** 结束进程树（后端会派生子进程；Windows 用 taskkill /T）。 */
     private static void kill(long pid) {
         try {
-            if (isWindows()) {
+            if (CommandShell.isWindows()) {
                 Process killer = new ProcessBuilder("taskkill", "/T", "/F", "/PID",
                         String.valueOf(pid)).redirectErrorStream(true).start();
                 killer.waitFor(15, TimeUnit.SECONDS);
@@ -566,11 +554,7 @@ public class LocalDevHostDeployer {
     }
 
     private static String nodeBin() {
-        return isWindows() ? "node.exe" : "node";
-    }
-
-    private static boolean isWindows() {
-        return System.getProperty("os.name", "").toLowerCase().contains("win");
+        return CommandShell.isWindows() ? "node.exe" : "node";
     }
 
     private static String normalize(String value) {

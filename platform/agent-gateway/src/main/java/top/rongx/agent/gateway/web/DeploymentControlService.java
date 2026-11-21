@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.web;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
@@ -87,8 +88,7 @@ public class DeploymentControlService {
         this.servers = servers;
         this.ssh = ssh;
         this.engine = engine;
-        this.deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("deploy");
+        this.deployRoot = WorkspacePaths.deploy(Path.of(workspaceRoot));
     }
 
     // ------------------------------------------------------------------ 查询

@@ -157,15 +157,7 @@ public final class HostProcessSupervisor {
 
     /** 读文本；文件缺失或为空返回 {@code null}。 */
     public static String readText(Path file) {
-        try {
-            if (!Files.isRegularFile(file)) {
-                return null;
-            }
-            String value = Files.readString(file, StandardCharsets.UTF_8).trim();
-            return value.isEmpty() ? null : value;
-        } catch (IOException e) {
-            return null;
-        }
+        return top.rongx.agent.domain.fs.TextFiles.readTrimmedOrNull(file);
     }
 
     /** 读 pid；文件缺失或非法返回 0。 */

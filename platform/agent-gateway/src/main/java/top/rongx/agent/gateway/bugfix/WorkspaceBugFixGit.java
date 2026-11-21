@@ -84,7 +84,7 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "一次最多 " + MAX_EDITS + " 处改动，收到 "
                     + edits.size());
         }
-        long files = edits.stream().map(edit -> normalize(edit.path())).distinct().count();
+        long files = edits.stream().map(edit -> PathGuard.normalizeRelative(edit.path())).distinct().count();
         if (files > MAX_FILES) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "一次最多修改 " + MAX_FILES + " 个文件，收到 " + files);
         }
@@ -122,7 +122,7 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
     /** 按顺序应用改动：同一文件的多个片段替换会依次叠加。 */
     private static void applyEdits(Path worktree, List<BugFixEdit> edits) {
         for (BugFixEdit edit : edits) {
-            String path = normalize(edit.path());
+            String path = PathGuard.normalizeRelative(edit.path());
             validate(path, edit.replaceMode() ? edit.newText() : edit.content());
             Path target = PathGuard.resolveInside(worktree, path);
             String text;
@@ -260,13 +260,6 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
         return repo;
     }
 
-    private static String normalize(String path) {
-        String value = path == null ? "" : path.trim().replace('\\', '/');
-        while (value.startsWith("./")) {
-            value = value.substring(2);
-        }
-        return value;
-    }
 
     private static void validate(String path, String content) {
         if (path.isBlank() || path.startsWith("/") || path.contains("..")) {

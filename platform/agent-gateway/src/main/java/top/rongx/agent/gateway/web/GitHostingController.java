@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.str;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -218,8 +219,4 @@ public class GitHostingController {
         return userId;
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? null : String.valueOf(value);
-    }
 }

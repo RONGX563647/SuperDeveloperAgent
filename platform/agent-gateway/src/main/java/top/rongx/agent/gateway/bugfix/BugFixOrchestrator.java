@@ -1,7 +1,10 @@
 package top.rongx.agent.gateway.bugfix;
 
+import top.rongx.agent.domain.hash.Hashes;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.error.Errors;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -384,7 +387,7 @@ public class BugFixOrchestrator {
                 result = handler.execute(run, policy);
             } catch (RuntimeException e) {
                 log.warn("阶段执行失败 run={} stage={}：{}", id, stage, e.getMessage());
-                result = BugFixStageResult.failed(message(e));
+                result = BugFixStageResult.failed(Errors.briefMessage(e));
             }
             long endedAt = System.currentTimeMillis();
             BugFixRun latest = runs.find(id).orElse(null);
@@ -409,8 +412,8 @@ public class BugFixOrchestrator {
                         case BLOCKED -> BugFixStageRun.BLOCKED;
                         case FAILED -> BugFixStageRun.FAILED;
                     },
-                    AnalyzeClip.clip(result.message(), 4000),
-                    result.artifact() == null ? AnalyzeClip.clip(result.evidence(), 20_000)
+                    LogTail.prefix(result.message(), 4000, "…"),
+                    result.artifact() == null ? LogTail.prefix(result.evidence(), 20_000, "…")
                             : result.artifact(),
                     endedAt, endedAt - startedAt);
             if (!apply(latest, result, policy, endedAt)) {
@@ -471,7 +474,7 @@ public class BugFixOrchestrator {
                         - 基线提交：`%s`
                         - 根因与版本：
                         %s
-                        """.formatted(shortSha(run.baseSha()), clip(run.analysis(), 1200));
+                        """.formatted(Hashes.shortSha(run.baseSha(), 8), LogTail.prefix(run.analysis(), 1200, "…"));
             } else if (stage == BugFixStage.PULL_REQUEST) {
                 message = "自动修复 · PR 已创建，等待人工 Review 与合并：" + run.prUrl();
             }
@@ -480,7 +483,7 @@ public class BugFixOrchestrator {
             message = "自动修复 · %s\n\n- 阶段：%s\n- 原因：%s\n- 修复分支：`%s`"
                     .formatted(result.outcome() == BugFixStageResult.Outcome.BLOCKED
                                     ? "已暂停，等待人工处理" : "执行失败",
-                            stage.label(), clip(run.message(), 800),
+                            stage.label(), LogTail.prefix(run.message(), 800, "…"),
                             run.branch() == null ? "" : run.branch());
         }
         if (message == null) {
@@ -571,42 +574,13 @@ public class BugFixOrchestrator {
         }
     }
 
-    private static String shortSha(String sha) {
-        return sha == null ? "" : sha.substring(0, Math.min(8, sha.length()));
-    }
-
     private static String safeUrl(String url) {
         return url == null ? "" : url;
-    }
-
-    private static String clip(String value, int max) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= max ? value : value.substring(0, max) + "…";
-    }
-
-    private static String message(RuntimeException e) {
-        String text = e.getMessage();
-        return text == null || text.isBlank() ? e.getClass().getSimpleName() : text;
     }
 
     @PreDestroy
     void shutdown() {
         retryScheduler.shutdownNow();
         executor.shutdownNow();
-    }
-
-    /** 阶段层共用的裁剪逻辑（避免结果字段无限长落库）。 */
-    static final class AnalyzeClip {
-        private AnalyzeClip() {
-        }
-
-        static String clip(String value, int max) {
-            if (value == null) {
-                return "";
-            }
-            return value.length() <= max ? value : value.substring(0, max) + "…";
-        }
     }
 }

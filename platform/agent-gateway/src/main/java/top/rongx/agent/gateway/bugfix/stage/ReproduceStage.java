@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import top.rongx.agent.domain.process.LogTail;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
@@ -44,7 +45,7 @@ public class ReproduceStage implements BugFixStageHandler {
                 "testEnv", AnalyzeStage.safe(policy.testEnv()),
                 "baseSha", AnalyzeStage.safe(run.baseSha()),
                 "issueTitle", AnalyzeStage.safe(run.issueTitle()),
-                "analysis", FixStage.untrusted(AnalyzeStage.clip(run.analysis(), 6000))));
+                "analysis", FixStage.untrusted(LogTail.prefix(run.analysis(), 6000, "…"))));
         ReproduceOutput output;
         try {
             output = agent.runStructured(run, prompt, ReproduceOutput.class);

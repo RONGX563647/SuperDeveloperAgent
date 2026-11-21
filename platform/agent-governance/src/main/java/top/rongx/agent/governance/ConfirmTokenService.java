@@ -1,5 +1,6 @@
 package top.rongx.agent.governance;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,8 +46,7 @@ public class ConfirmTokenService {
 
     /** 独立进程：按工作区根目录定位统一库文件。 */
     public ConfirmTokenService(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this(Clock.systemUTC(), platformDbFile(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")));
+        this(Clock.systemUTC(), platformDbFile(WorkspacePaths.db(Path.of(workspaceRoot))));
     }
 
     /** 供测试注入固定时钟（{@code db == null} 时为纯内存，不触碰磁盘）。 */

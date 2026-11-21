@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import top.rongx.agent.domain.process.LogTail;
 
 /** 修复日志的格式化规则：结论不能被截掉，工具结果压成一行。 */
 class ChatRunRecoveryAdvisorFormatTest {
@@ -32,11 +33,11 @@ class ChatRunRecoveryAdvisorFormatTest {
     @Test
     @DisplayName("工具结果折叠为单行并截断")
     void oneLineCollapsesWhitespace() {
-        String result = ChatRunRecoveryAdvisor.oneLine("第一行\n\n  第二行\t第三行", 200);
+        String result = LogTail.oneLine("第一行\n\n  第二行\t第三行", 200);
         assertEquals("第一行 第二行 第三行", result);
 
         String longText = "x".repeat(300);
-        String cut = ChatRunRecoveryAdvisor.oneLine(longText, 240);
+        String cut = LogTail.oneLine(longText, 240);
         assertEquals(241, cut.length(), "应截断并追加省略号");
         assertTrue(cut.endsWith("…"));
     }

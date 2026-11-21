@@ -1,9 +1,9 @@
 package top.rongx.agent.infra.settings;
 
+import top.rongx.agent.domain.id.Ids;
+
 import java.net.URI;
 import java.nio.file.Path;
-import java.security.SecureRandom;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -56,8 +56,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
     public SqliteGitHostingAccountStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")), secretBox);
+        this(PlatformDb.at(Path.of(workspaceRoot)), secretBox);
     }
 
     @Override
@@ -90,7 +89,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
         long now = System.currentTimeMillis();
         try {
             String existingId = existingId(userId, provider, host, view.id());
-            String id = existingId == null ? newId() : existingId;
+            String id = existingId == null ? Ids.newId("git") : existingId;
             String username = view.username() == null || view.username().isBlank()
                     ? defaultUsername(provider) : view.username().trim();
             if (token != null && !token.isBlank()) {
@@ -242,9 +241,4 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
                 ((Number) row[6]).longValue());
     }
 
-    private String newId() {
-        byte[] raw = new byte[4];
-        new SecureRandom().nextBytes(raw);
-        return "git-" + HexFormat.of().formatHex(raw);
-    }
 }

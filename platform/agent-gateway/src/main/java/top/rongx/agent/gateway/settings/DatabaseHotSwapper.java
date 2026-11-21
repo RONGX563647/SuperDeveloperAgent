@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.settings;
 
+import top.rongx.agent.domain.error.Errors;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -150,7 +151,7 @@ public class DatabaseHotSwapper {
             // 拿到连接即算通过
         } catch (SQLException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
-                    "目标库连接失败（现有后端未改变）：" + rootMessage(e), e);
+                    "目标库连接失败（现有后端未改变）：" + Errors.rootMessage(e), e);
         }
     }
 
@@ -177,7 +178,7 @@ public class DatabaseHotSwapper {
                     .migrate();
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
-                    "目标库建表失败（检查账号是否有 DDL 权限）：" + rootMessage(e), e);
+                    "目标库建表失败（检查账号是否有 DDL 权限）：" + Errors.rootMessage(e), e);
         }
     }
 
@@ -202,7 +203,7 @@ public class DatabaseHotSwapper {
             return String.valueOf(Math.max(latest, 1));
         } catch (java.io.IOException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL,
-                    "扫描迁移脚本版本失败：" + rootMessage(e), e);
+                    "扫描迁移脚本版本失败：" + Errors.rootMessage(e), e);
         }
     }
 
@@ -285,7 +286,7 @@ public class DatabaseHotSwapper {
             return top.rongx.agent.infra.persistence.SqliteToTargetCopier.copy(source, target);
         } catch (SQLException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
-                    "数据搬运失败（现有后端未改变）：" + rootMessage(e), e);
+                    "数据搬运失败（现有后端未改变）：" + Errors.rootMessage(e), e);
         }
     }
 
@@ -334,17 +335,6 @@ public class DatabaseHotSwapper {
         }
     }
 
-    private static String rootMessage(Throwable error) {
-        Throwable cause = error;
-        while (cause.getCause() != null && cause.getCause() != cause) {
-            cause = cause.getCause();
-        }
-        String message = cause.getMessage();
-        if (message == null || message.isBlank()) {
-            return cause.getClass().getSimpleName();
-        }
-        return message.length() > 300 ? message.substring(0, 300) + "…" : message;
-    }
 
     /** 供上层展示：当前实际生效的后端（来源是连接池，不是配置）。 */
     public Map<String, Object> liveStatus() {

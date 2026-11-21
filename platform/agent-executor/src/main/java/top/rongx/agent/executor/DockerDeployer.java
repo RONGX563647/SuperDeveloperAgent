@@ -437,11 +437,4 @@ public class DockerDeployer implements Deployer {
                 .replaceAll("[^a-z0-9_.-]", "-");
         return value.isEmpty() ? fallback : value;
     }
-
-    private static String safePath(String healthPath) {
-        if (healthPath == null || healthPath.isBlank()) {
-            return "/";
-        }
-        return healthPath.startsWith("/") ? healthPath : "/" + healthPath;
-    }
 }

@@ -1,5 +1,8 @@
 package top.rongx.agent.gateway.bugfix.stage;
 
+import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.fs.PathGuard;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -16,7 +19,6 @@ import top.rongx.agent.gateway.bugfix.BugFixJson;
 import top.rongx.agent.gateway.bugfix.BugFixOutputValidation;
 import top.rongx.agent.gateway.bugfix.BugFixPromptTemplates;
 import top.rongx.agent.gateway.bugfix.BugFixStageHandler;
-import top.rongx.agent.gateway.bugfix.PatchApplier;
 import top.rongx.agent.gateway.bugfix.structured.AnalyzeOutput;
 import top.rongx.agent.gateway.bugfix.structured.FixOutput;
 import top.rongx.agent.domain.error.PlatformException;
@@ -65,10 +67,10 @@ public class FixStage implements BugFixStageHandler {
     public BugFixStageResult execute(BugFixRun run, BugFixPolicy policy) {
         String basePrompt = prompts.render("fix", Map.of(
                 "issueTitle", AnalyzeStage.safe(run.issueTitle()),
-                "issueBody", untrusted(AnalyzeStage.clip(run.issueBody(), 6000)),
+                "issueBody", untrusted(LogTail.prefix(run.issueBody(), 6000, "…")),
                 "baseSha", AnalyzeStage.safe(run.baseSha()),
                 "branch", AnalyzeStage.safe(run.branch()),
-                "analysis", untrusted(AnalyzeStage.clip(analysisForPrompt(run), 8000))));
+                "analysis", untrusted(LogTail.prefix(analysisForPrompt(run), 8000, "…"))));
         // 闸门 2（前置）：提交前先校验补丁路径是否落在分析确认的目标文件内。
         // 原来先 commit 再校验，越界改动会在分支上留下一个提交，重试还会叠加上去。
         List<String> targets = targetFiles(run);
@@ -83,7 +85,7 @@ public class FixStage implements BugFixStageHandler {
         while (sha == null) {
             String prompt = applyFeedback.isBlank() ? basePrompt
                     : basePrompt + "\n\n上一次补丁应用失败，请针对性修正后重新输出完整补丁：\n"
-                            + untrusted(AnalyzeStage.clip(applyFeedback, 2000));
+                            + untrusted(LogTail.prefix(applyFeedback, 2000, "…"));
             try {
                 output = agent.runStructured(run, prompt, FixOutput.class);
             } catch (RuntimeException e) {
@@ -153,13 +155,13 @@ public class FixStage implements BugFixStageHandler {
         if (!check.passed()) {
             return BugFixStageResult.failed("确定性构建/测试未通过：" + check.summary()
                     + (check.detail() == null || check.detail().isBlank() ? ""
-                    : "\n" + AnalyzeStage.clip(check.detail(), 2000)));
+                    : "\n" + LogTail.prefix(check.detail(), 2000, "…")));
         }
         String summary = BugFixOutputValidation.text(output.summary());
         String evidence = (summary.isBlank() ? "修复已提交到 " + run.branch()
                 : summary + "\n\n修复已提交到 " + run.branch())
                 + (check.skipped() ? "" : "\n\n确定性检查：" + check.summary());
-        return BugFixStageResult.ok("修复已提交到 " + run.branch() + "（" + AnalyzeStage.shortSha(sha)
+        return BugFixStageResult.ok("修复已提交到 " + run.branch() + "（" + Hashes.shortSha(sha, 8)
                         + "）", evidence)
                 .withFixSha(sha)
                 .withFixSummary(summary.isBlank()
@@ -172,8 +174,8 @@ public class FixStage implements BugFixStageHandler {
         if (structured == null || structured.isBlank()) {
             return raw;
         }
-        return "结构化分析（JSON）：\n" + AnalyzeStage.clip(structured, 6000)
-                + "\n\n完整分析：\n" + AnalyzeStage.clip(raw, 4000);
+        return "结构化分析（JSON）：\n" + LogTail.prefix(structured, 6000, "…")
+                + "\n\n完整分析：\n" + LogTail.prefix(raw, 4000, "…");
     }
 
     /** 把不可信文本（Issue 正文、日志、上一阶段结论）包进数据边界，提示模型只当资料。 */
@@ -200,14 +202,7 @@ public class FixStage implements BugFixStageHandler {
     }
 
     private static boolean sameFile(String target, String changed) {
-        return normalize(target).equals(normalize(changed));
+        return PathGuard.normalizeRelative(target).equals(PathGuard.normalizeRelative(changed));
     }
 
-    private static String normalize(String path) {
-        String value = path == null ? "" : path.trim().replace('\\', '/');
-        while (value.startsWith("./")) {
-            value = value.substring(2);
-        }
-        return value;
-    }
 }

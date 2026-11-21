@@ -3,8 +3,6 @@ package top.rongx.agent.infra.settings;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ProxySelector;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -39,7 +37,6 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.settings.CapabilityMarket;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
-import top.rongx.agent.domain.error.PlatformException;
 
 /**
  * 外部能力市场：MCP 官方 Registry + Awesome-MCP-ZH 精选 + 公开 Skill 仓库

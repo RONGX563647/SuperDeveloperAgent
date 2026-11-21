@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import jakarta.annotation.PreDestroy;
+import top.rongx.agent.domain.error.Errors;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -240,7 +241,7 @@ public class WorkspaceRunExecutor implements RunAborter {
                     conversation == null ? null : conversation.modelConnectionId(),
                     conversation == null ? null : conversation.modelName());
         } catch (RuntimeException e) {
-            return new Results("", safeMessage(e));
+            return new Results("", Errors.briefMessage(e));
         }
         Disposable subscription = flux.subscribe(
                 event -> onEvent(event, run, output, handle),
@@ -261,7 +262,7 @@ public class WorkspaceRunExecutor implements RunAborter {
         }
         subscription.dispose();
         Throwable error = failure.get();
-        return new Results(trim(output.toString()), error == null ? "" : safeMessage(error));
+        return new Results(trim(output.toString()), error == null ? "" : Errors.briefMessage(error));
     }
 
     private void onEvent(AgentEvent event, ConversationRun run, StringBuilder output, Handle handle) {
@@ -453,10 +454,6 @@ public class WorkspaceRunExecutor implements RunAborter {
         return value.length() > MAX_RESULT_CHARS ? value.substring(0, MAX_RESULT_CHARS) : value;
     }
 
-    private static String safeMessage(Throwable error) {
-        String message = error.getMessage();
-        return message == null || message.isBlank() ? error.getClass().getSimpleName() : message;
-    }
 
     @PreDestroy
     void shutdown() {

@@ -1,6 +1,7 @@
 package top.rongx.agent.infra.settings;
 
 import io.agentscope.core.skill.util.MarkdownSkillParser;
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -47,8 +48,7 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
     private final Object stateLock = new Object();
 
     public SkillsStore(@Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
-        this.root = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("skills");
+        this.root = WorkspacePaths.skills(Path.of(workspaceRoot));
         this.stateFile = this.root.getParent().resolve(STATE_FILE);
     }
 

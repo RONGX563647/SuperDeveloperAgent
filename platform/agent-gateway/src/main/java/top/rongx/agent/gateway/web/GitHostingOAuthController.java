@@ -208,10 +208,6 @@ public class GitHostingOAuthController {
                 saved.enabled());
     }
 
-    private static String providerName(ProviderConfig cfg) {
-        return "GITHUB".equals(cfg.provider()) ? "GitHub" : "GitLab";
-    }
-
     private String exchangeToken(ProviderConfig cfg, String code) {
         String body = "grant_type=authorization_code"
                 + "&code=" + encode(code)

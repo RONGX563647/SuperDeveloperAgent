@@ -13,8 +13,6 @@ import top.rongx.agent.domain.port.PipelineDefStore;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
-import top.rongx.agent.domain.error.ErrorCode;
-import top.rongx.agent.domain.error.BuildException;
 
 /**
  * 流水线定义解析：决定**这次用哪份定义**。
@@ -200,8 +198,8 @@ public final class PipelineDefinitionResolver {
         // 选不了时定义里会留阻塞项，而不是生成一个必然 E-501 的 docker 目标）
         ScaffoldPlan plan = scaffolder.plan(projectId, repoRoot != null && Files.isDirectory(repoRoot)
                 ? repoRoot : root, null);
-        String pipelineYaml = fileContent(plan, "ci/pipeline.yml");
-        String actionsYaml = fileContent(plan, "ci/actions.yml");
+        String pipelineYaml = plan.requiredFileContent("ci/pipeline.yml");
+        String actionsYaml = plan.requiredFileContent("ci/actions.yml");
         String note = "按仓库结构自动生成（stack=" + plan.stack() + "）";
 
         boolean unknownStack = "UNKNOWN".equals(plan.stack());
@@ -337,13 +335,5 @@ public final class PipelineDefinitionResolver {
         } catch (RuntimeException e) {
             return false;
         }
-    }
-
-    private static String fileContent(ScaffoldPlan plan, String path) {
-        return plan.files().stream()
-                .filter(f -> f.path().equals(path))
-                .map(ScaffoldPlan.ScaffoldFile::content)
-                .findFirst()
-                .orElseThrow(() -> new BuildException(ErrorCode.BUILD_INVALID_STATE, "脚手架没有生成 " + path + "（项目 " + plan.projectId() + "）"));
     }
 }

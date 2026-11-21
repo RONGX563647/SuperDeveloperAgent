@@ -3,6 +3,7 @@ package top.rongx.agent.gateway.web;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.trimmed;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,7 +11,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
@@ -59,11 +59,11 @@ public class GitIssueIntegrationController {
         GitIssueIntegrationRepository.Draft draft = new GitIssueIntegrationRepository.Draft(
                 p,
                 bool(body, "enabled"),
-                str(body, "repoWhitelist"),
+                trimmed(body, "repoWhitelist"),
                 bool(body, "autoCreateTask"),
-                str(body, "syncDirection"),
-                str(body, "conflictPolicy"));
-        String secret = str(body, "webhookSecret");
+                trimmed(body, "syncDirection"),
+                trimmed(body, "conflictPolicy"));
+        String secret = trimmed(body, "webhookSecret");
         GitIssueIntegration saved = integrations.save(draft, secret,
                 currentUser.requireUserId());
         return view(p, saved);
@@ -97,10 +97,6 @@ public class GitIssueIntegrationController {
         return p;
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? "" : String.valueOf(value).trim();
-    }
 
     private static boolean bool(Map<String, Object> body, String key) {
         Object value = body == null ? null : body.get(key);

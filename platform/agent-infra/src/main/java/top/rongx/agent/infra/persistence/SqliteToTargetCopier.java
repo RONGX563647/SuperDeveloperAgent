@@ -1,5 +1,6 @@
 package top.rongx.agent.infra.persistence;
 
+import top.rongx.agent.domain.error.Errors;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -84,7 +85,7 @@ public final class SqliteToTargetCopier {
                 sourceTotal += sourceRows;
                 results.add(new TableResult(table, copied, sourceRows, null));
             } catch (SQLException e) {
-                results.add(new TableResult(table, 0, 0, "复制失败：" + rootMessage(e)));
+                results.add(new TableResult(table, 0, 0, "复制失败：" + Errors.rootMessage(e)));
             }
         }
         return new Report(List.copyOf(results), copiedTotal, sourceTotal);
@@ -203,15 +204,4 @@ public final class SqliteToTargetCopier {
     }
 
     /** 异常根因的简短描述：批处理失败时常被包两层，前端只显示最内层。 */
-    private static String rootMessage(Throwable error) {
-        Throwable cause = error;
-        while (cause.getCause() != null && cause.getCause() != cause) {
-            cause = cause.getCause();
-        }
-        String message = cause.getMessage();
-        if (message == null || message.isBlank()) {
-            return cause.getClass().getSimpleName();
-        }
-        return message.length() > 300 ? message.substring(0, 300) + "…" : message;
-    }
 }

@@ -1,5 +1,6 @@
 package top.rongx.agent.infra.env;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -60,8 +61,7 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
         this.store = store;
         this.repos = repos;
-        this.stateRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("local");
+        this.stateRoot = WorkspacePaths.local(Path.of(workspaceRoot));
     }
 
     @Override
@@ -263,7 +263,7 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
                 return new Availability(true, "没有 jar，将用 " + wrapperName() + " spring-boot:run 启动（首次较慢）");
             }
             if (Files.isRegularFile(dir.resolve("pom.xml"))) {
-                if (commandOnPath(isWindows() ? "mvn.cmd" : "mvn") == null) {
+                if (commandOnPath(CommandShell.isWindows() ? "mvn.cmd" : "mvn") == null) {
                     return new Availability(false,
                             "没有可运行 jar，也没找到 mvn/mvnw：请先在 backend 执行 mvn package");
                 }
@@ -276,7 +276,7 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
             if (dir == null) {
                 return new Availability(false, "仓库里没有前端模块（需要 frontend/ 或 web/ 且含 package.json）");
             }
-            if (commandOnPath(isWindows() ? "npm.cmd" : "npm") == null) {
+            if (commandOnPath(CommandShell.isWindows() ? "npm.cmd" : "npm") == null) {
                 return new Availability(false, "未找到 npm：请安装 Node.js 并把 npm 加入 PATH");
             }
             return new Availability(true, "使用 npm run dev 启动");
@@ -311,22 +311,22 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
                     "-Dspring-boot.run.arguments=--server.port=" + port);
         }
         if (Files.isRegularFile(dir.resolve("pom.xml"))) {
-            String mvn = commandOnPath(isWindows() ? "mvn.cmd" : "mvn");
-            return List.of(mvn == null ? (isWindows() ? "mvn.cmd" : "mvn") : mvn, "spring-boot:run",
+            String mvn = commandOnPath(CommandShell.isWindows() ? "mvn.cmd" : "mvn");
+            return List.of(mvn == null ? (CommandShell.isWindows() ? "mvn.cmd" : "mvn") : mvn, "spring-boot:run",
                     "-Dspring-boot.run.arguments=--server.port=" + port);
         }
         return null;
     }
 
     private List<String> frontendCmd(int port) {
-        String resolved = commandOnPath(isWindows() ? "npm.cmd" : "npm");
-        String npm = resolved == null ? (isWindows() ? "npm.cmd" : "npm") : resolved;
+        String resolved = commandOnPath(CommandShell.isWindows() ? "npm.cmd" : "npm");
+        String npm = resolved == null ? (CommandShell.isWindows() ? "npm.cmd" : "npm") : resolved;
         return List.of(npm, "run", "dev", "--", "--port", String.valueOf(port),
                 "--strictPort", "--host", "127.0.0.1");
     }
 
     private static String wrapperName() {
-        return isWindows() ? "mvnw.cmd" : "mvnw";
+        return CommandShell.isWindows() ? "mvnw.cmd" : "mvnw";
     }
 
     /** 在 PATH 中查找可执行文件（Windows 兼容 npm.cmd / mvn.cmd），找不到返回 null。 */
@@ -426,10 +426,6 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
     /** 与当前 JVM 一致的 java，不回退到 PATH 上可能是另一个版本的 {@code "java"}。 */
     private static String javaBin() {
         return JavaRuntime.javaBinary();
-    }
-
-    private static boolean isWindows() {
-        return CommandShell.isWindows();
     }
 
     // ---------------------------------------------------------------- 目录

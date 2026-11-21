@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvBindingPort;
 import top.rongx.agent.domain.env.EnvBindingWire;
+import top.rongx.agent.domain.env.EnvSecretKeys;
 import top.rongx.agent.domain.env.EnvVariable;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.policy.PolicyPort;
@@ -169,7 +170,7 @@ public class EnvCommandTools {
             return "err: value 不能为空；如需删除变量请调用 env_var_unset";
         }
         boolean sensitive = secret == null || secret.isBlank()
-                ? looksSecret(name) : Boolean.parseBoolean(secret.trim());
+                ? EnvSecretKeys.looksSecret(name) : Boolean.parseBoolean(secret.trim());
         EnvVariable saved = envStore.saveOverride(ctx.projectId(), target, name, value, sensitive);
         return """
                 saved: %s
@@ -205,13 +206,6 @@ public class EnvCommandTools {
                 env: %s
                 next: 重新调用 env_mapping_draft 并请人确认新绑定
                 evidence: project:%s/env:%s""".formatted(name, target, ctx.projectId(), target);
-    }
-
-    /** 变量名是否像敏感信息（与设置页的掩码规则保持一致）。 */
-    private static boolean looksSecret(String key) {
-        String k = key.toUpperCase(java.util.Locale.ROOT);
-        return k.contains("PASSWORD") || k.contains("SECRET") || k.contains("TOKEN")
-                || k.endsWith("_KEY");
     }
 
     private Map<?, ?> parse(String mappingJson) {

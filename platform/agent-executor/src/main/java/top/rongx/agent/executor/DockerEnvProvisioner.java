@@ -1,8 +1,6 @@
 package top.rongx.agent.executor;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,7 +24,6 @@ import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.StackAdapter;
-import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.process.PortProbe;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
@@ -641,12 +638,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         } catch (NumberFormatException e) {
             return false;
         }
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(cleanHost, number), (int) PROBE_TIMEOUT.toMillis());
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
+        return PortProbe.isOpen(cleanHost, number, (int) PROBE_TIMEOUT.toMillis());
     }
 
     private static String hostKey(String kind) {
@@ -1065,12 +1057,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     }
 
     private static String slug(String raw) {
-        String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9_.-]", "-");
-        while (value.startsWith("-") || value.startsWith(".")) {
-            value = value.substring(1);
-        }
-        return value;
+        return top.rongx.agent.domain.text.Slugs.slug(raw);
     }
 
     private static String defaultDatabase(String projectId, String kind) {

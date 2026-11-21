@@ -473,11 +473,6 @@ public class RecipeActionResolver implements ActionResolver {
         }
     }
 
-    /** 供测试与诊断：内置默认的动作集合。 */
-    public static Map<ActionId, List<List<String>>> builtinSteps() {
-        return new LinkedHashMap<>(BUILTIN_STEPS);
-    }
-
     /** 从 {@code Map<?,?>} 里安全取字符串（避开通配符捕获的泛型问题；null 时返回 fallback）。 */
     private static String str(Map<?, ?> map, String key, String fallback) {
         Object value = map.get(key);

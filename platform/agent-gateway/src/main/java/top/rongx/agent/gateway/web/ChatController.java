@@ -7,6 +7,7 @@ import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import top.rongx.agent.domain.error.Errors;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -366,7 +367,7 @@ public class ChatController {
         try {
             synchronized (sendLock) {
                 emitter.send(SseEmitter.event().name("error")
-                        .data(Map.of("message", safeMessage(error)), MediaType.APPLICATION_JSON));
+                        .data(Map.of("message", Errors.safeMessage(error)), MediaType.APPLICATION_JSON));
             }
         } catch (IOException | IllegalStateException ignored) {
             // 客户端已断开，无需再写
@@ -418,9 +419,4 @@ public class ChatController {
     }
 
     /** 对外只暴露简短、无内部细节的错误文案（规约 §3）。 */
-    private String safeMessage(Throwable error) {
-        String raw = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-        raw = raw.replaceAll("\\s+", " ").trim();
-        return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;
-    }
 }

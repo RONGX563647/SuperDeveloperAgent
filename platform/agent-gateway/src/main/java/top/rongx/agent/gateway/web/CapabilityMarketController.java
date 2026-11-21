@@ -52,7 +52,7 @@ public class CapabilityMarketController {
                                       @RequestParam(defaultValue = "0") int offset,
                                       @RequestParam(defaultValue = "24") int limit,
                                       @RequestParam(defaultValue = "false") boolean refresh) {
-        requireRead();
+        currentUser.requireUserSettingsRead();
         CapabilityMarket.Kind type = CapabilityMarket.Kind.parse(kind).orElse(null);
         CapabilityMarket.Page page = market.page(type, q, source, offset, limit, refresh);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -69,7 +69,7 @@ public class CapabilityMarketController {
      */
     @GetMapping("/sources")
     public Map<String, Object> sources(@RequestParam(required = false) String kind) {
-        requireRead();
+        currentUser.requireUserSettingsRead();
         CapabilityMarket.Kind type = CapabilityMarket.Kind.parse(kind).orElse(null);
         List<Map<String, Object>> items = new ArrayList<>();
         for (CapabilityMarket.Source source : market.sources(type)) {
@@ -91,7 +91,7 @@ public class CapabilityMarketController {
     /** 安装：id 用市场返回的完整标识（含 MCP registry 原始名 / Skill 仓库路径）。 */
     @PostMapping("/market/install")
     public CapabilityInstaller.Result install(@RequestBody InstallRequest request) {
-        requireWrite();
+        currentUser.requireUserSettingsWrite();
         if (request == null || request.id() == null || request.id().isBlank()) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "能力 id 不能为空");
         }
@@ -162,16 +162,6 @@ public class CapabilityMarketController {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
-    }
-
-    private void requireRead() {
-        currentUser.requireUserId();
-        currentUser.checkPermission("settings:read");
-    }
-
-    private void requireWrite() {
-        currentUser.requireUserId();
-        currentUser.checkPermission("settings:write");
     }
 
     public record InstallRequest(String id) {

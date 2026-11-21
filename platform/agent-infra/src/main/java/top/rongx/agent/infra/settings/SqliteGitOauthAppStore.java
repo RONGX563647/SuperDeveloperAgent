@@ -2,13 +2,13 @@ package top.rongx.agent.infra.settings;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.GitOauthApp;
 import top.rongx.agent.domain.settings.GitOauthAppRepository;
+import top.rongx.agent.domain.gitissue.GitProviders;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
@@ -52,8 +52,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
     public SqliteGitOauthAppStore(
             @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
             SecretBox secretBox) {
-        this(PlatformDb.sqlite(Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("platform.db")), secretBox);
+        this(PlatformDb.at(Path.of(workspaceRoot)), secretBox);
     }
 
     @Override
@@ -69,7 +68,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
 
     @Override
     public Optional<GitOauthApp> find(String provider) {
-        String normalized = normalizeProvider(provider);
+        String normalized = GitProviders.normalize(provider);
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT " + COLUMNS + " FROM git_oauth_apps WHERE provider = ?",
@@ -81,7 +80,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
 
     @Override
     public GitOauthApp save(GitOauthAppView view, String clientSecret) {
-        String provider = normalizeProvider(view.provider());
+        String provider = GitProviders.normalize(view.provider());
         String clientId = view.clientId() == null ? "" : view.clientId().trim();
         if (clientId.isBlank()) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "Client ID 不能为空");
@@ -131,7 +130,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
 
     @Override
     public Optional<String> secretOf(String provider) {
-        String normalized = normalizeProvider(provider);
+        String normalized = GitProviders.normalize(provider);
         try {
             return db.read(em -> PlatformDb.row(em,
                     "SELECT secret_enc, secret_iv FROM git_oauth_apps WHERE provider = ?",
@@ -144,7 +143,7 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
 
     @Override
     public void delete(String provider) {
-        String normalized = normalizeProvider(provider);
+        String normalized = GitProviders.normalize(provider);
         try {
             db.run(em -> PlatformDb.update(em,
                     "DELETE FROM git_oauth_apps WHERE provider = ?", normalized));
@@ -165,14 +164,6 @@ public class SqliteGitOauthAppStore implements GitOauthAppRepository {
                 !plain.isBlank(),
                 masked,
                 ((Number) row[7]).longValue());
-    }
-
-    private static String normalizeProvider(String provider) {
-        String p = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
-        if (!p.equals("GITEE") && !p.equals("GITHUB") && !p.equals("GITLAB")) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "provider 只能是 GITEE / GITHUB / GITLAB");
-        }
-        return p;
     }
 
     private static String defaultScopes(String provider) {

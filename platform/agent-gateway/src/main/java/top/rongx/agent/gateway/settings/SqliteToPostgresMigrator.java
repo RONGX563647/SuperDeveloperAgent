@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.settings;
 
+import top.rongx.agent.domain.error.Errors;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -88,7 +89,7 @@ public class SqliteToPostgresMigrator {
                     .migrate();
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
-                    "目标库建表失败（检查账号是否有 DDL 权限）：" + rootMessage(e), e);
+                    "目标库建表失败（检查账号是否有 DDL 权限）：" + Errors.rootMessage(e), e);
         }
     }
 
@@ -103,7 +104,7 @@ public class SqliteToPostgresMigrator {
             return SqliteToTargetCopier.copy(source, target);
         } catch (SQLException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
-                    "迁移失败：" + rootMessage(e), e);
+                    "迁移失败：" + Errors.rootMessage(e), e);
         }
     }
 
@@ -121,15 +122,4 @@ public class SqliteToPostgresMigrator {
         return rows;
     }
 
-    private static String rootMessage(Throwable error) {
-        Throwable cause = error;
-        while (cause.getCause() != null && cause.getCause() != cause) {
-            cause = cause.getCause();
-        }
-        String message = cause.getMessage();
-        if (message == null || message.isBlank()) {
-            return cause.getClass().getSimpleName();
-        }
-        return message.length() > 300 ? message.substring(0, 300) + "…" : message;
-    }
 }

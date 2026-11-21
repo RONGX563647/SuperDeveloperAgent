@@ -1,11 +1,6 @@
 package top.rongx.agent.domain.change;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
-import top.rongx.agent.domain.error.ErrorCode;
-import top.rongx.agent.domain.error.PromotionException;
+import top.rongx.agent.domain.hash.Hashes;
 
 /**
  * 计划哈希（规约 §4.10 第三道守卫）。
@@ -39,16 +34,7 @@ public final class PlanHasher {
             }
         }
         // 2. 取 SHA-256 作为计划指纹（确认令牌绑定此值）
-        return sha256(sb.toString());
-    }
-
-    private static String sha256(String text) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(text.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new PromotionException(ErrorCode.PROMOTION_INVALID_STATE, "SHA-256 不可用", e);
-        }
+        return Hashes.sha256Hex(sb.toString());
     }
 
     private static String nullToEmpty(String s) {

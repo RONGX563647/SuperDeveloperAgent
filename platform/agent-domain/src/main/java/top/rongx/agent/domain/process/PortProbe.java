@@ -48,6 +48,24 @@ public final class PortProbe {
     }
 
     /**
+     * 目标地址当前是否可建立 TCP 连接（只连不读写）。
+     *
+     * @param timeoutMs 连接超时；{@code <= 0} 时回退 1500ms
+     */
+    public static boolean isOpen(String host, int port, int timeoutMs) {
+        if (host == null || host.isBlank() || port <= 0 || port > 65535) {
+            return false;
+        }
+        try (java.net.Socket socket = new java.net.Socket()) {
+            socket.connect(new InetSocketAddress(host, port),
+                    timeoutMs > 0 ? timeoutMs : 1500);
+            return true;
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
      * 从 {@code base} 起找一个空闲端口。
      *
      * @param base  起始端口（含）

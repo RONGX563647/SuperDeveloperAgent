@@ -14,6 +14,7 @@ import {
 } from '../../api/workspace'
 import { triggerPipeline } from '../../api/pipeline'
 import { envShort } from '../../utils/pipelineLabels'
+import { formatDateTime, relativeTime } from '../../utils/status'
 
 /**
  * 环境与版本：按环境展示流水线部署出的产物（HOST jar 进程 / DOCKER 容器）。
@@ -103,20 +104,6 @@ function runningOfEnv(env: string): number {
 function shortVersion(version: string): string {
   if (!version || version === 'latest') return 'latest'
   return version.length > 18 ? `${version.slice(0, 17)}…` : version
-}
-
-function relativeTime(at: number): string {
-  if (!at) return ''
-  const diff = Date.now() - at
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  return `${Math.floor(diff / 86_400_000)} 天前`
-}
-
-function absoluteTime(at: number): string {
-  if (!at) return '—'
-  return new Date(at).toLocaleString('zh-CN', { hour12: false })
 }
 
 function stateLabel(cell: DeploymentCell): string {
@@ -337,7 +324,7 @@ onUnmounted(() => {
             </div>
 
             <div class="dv-card-foot">
-              <span class="dv-time" :title="absoluteTime(cell.deployedAt)">
+              <span class="dv-time" :title="formatDateTime(cell.deployedAt)">
                 {{ cell.deployedAt ? `${relativeTime(cell.deployedAt)}部署` : '—' }}
               </span>
               <div class="dv-card-actions">
@@ -382,7 +369,7 @@ onUnmounted(() => {
             <span class="dv-chip">{{ sizeLabel(img.sizeBytes) }}</span>
           </div>
           <div class="dv-image-foot">
-            <span class="dv-time" :title="absoluteTime(img.deployedAt)">
+            <span class="dv-time" :title="formatDateTime(img.deployedAt)">
               {{ img.deployedAt ? `${relativeTime(img.deployedAt)}部署` : '未部署' }}
             </span>
             <button
@@ -483,7 +470,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <dt>部署时间</dt>
-                <dd>{{ absoluteTime(selectedCell.deployedAt) }}</dd>
+                <dd>{{ formatDateTime(selectedCell.deployedAt) }}</dd>
               </div>
               <div class="full">
                 <dt>镜像</dt>

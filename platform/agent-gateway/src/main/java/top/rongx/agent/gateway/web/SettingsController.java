@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.str;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -68,19 +69,19 @@ public class SettingsController {
 
     @GetMapping("/servers")
     public List<DeployServer> listServers() {
-        requireRead();
+        currentUser.requireSettingsRead();
         return servers.findAll();
     }
 
     @PostMapping("/servers")
     public DeployServer createServer(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         return servers.save(serverView(body), str(body, "secret"), currentUser.requireUserId());
     }
 
     @PutMapping("/servers/{id}")
     public DeployServer updateServer(@PathVariable String id, @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         Map<String, Object> withId = new LinkedHashMap<>(body);
         withId.put("id", id);
         return servers.save(serverView(withId), str(body, "secret"), currentUser.requireUserId());
@@ -88,7 +89,7 @@ public class SettingsController {
 
     @DeleteMapping("/servers/{id}")
     public Map<String, Object> deleteServer(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         DeployServer server = servers.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "服务器不存在：" + id));
         servers.delete(id);
@@ -106,7 +107,7 @@ public class SettingsController {
 
     @PostMapping("/servers/{id}/default")
     public Map<String, Object> defaultServer(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         servers.find(id).orElseThrow(() -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "服务器不存在：" + id));
         servers.markDefault(id);
         return Map.of("ok", true);
@@ -115,7 +116,7 @@ public class SettingsController {
     /** 已保存服务器的连通性测试。 */
     @PostMapping("/servers/{id}/test")
     public Map<String, Object> testServer(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         DeployServer server = servers.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "服务器不存在：" + id));
         return runServerTest(server, servers.secretOf(id).orElse(null), id);
@@ -129,7 +130,7 @@ public class SettingsController {
      */
     @PostMapping("/servers/test")
     public Map<String, Object> testServerDraft(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         DeployServerRepository.DeployServerView view = serverView(body);
         String secret = str(body, "secret");
         String sourceId = str(body, "id");
@@ -197,13 +198,13 @@ public class SettingsController {
 
     @GetMapping("/models")
     public List<ModelConnection> listModels() {
-        requireRead();
+        currentUser.requireSettingsRead();
         return models.findAll();
     }
 
     @PostMapping("/models")
     public ModelConnection createModel(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         ModelConnection saved = models.save(modelView(body), str(body, "apiKey"),
                 currentUser.requireUserId());
         syncCatalog(saved);
@@ -212,7 +213,7 @@ public class SettingsController {
 
     @PutMapping("/models/{id}")
     public ModelConnection updateModel(@PathVariable String id, @RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         Map<String, Object> withId = new LinkedHashMap<>(body);
         withId.put("id", id);
         ModelConnection saved = models.save(modelView(withId), str(body, "apiKey"),
@@ -223,7 +224,7 @@ public class SettingsController {
 
     @DeleteMapping("/models/{id}")
     public Map<String, Object> deleteModel(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         ModelConnection connection = models.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         if (connection.isDefault()) {
@@ -241,7 +242,7 @@ public class SettingsController {
      */
     @PostMapping("/models/{id}/discover")
     public Map<String, Object> discoverModels(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         ModelConnection connection = models.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         List<String> ids;
@@ -301,7 +302,7 @@ public class SettingsController {
 
     @PostMapping("/models/{id}/default")
     public Map<String, Object> defaultModel(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         models.find(id).orElseThrow(() -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         models.markDefault(id);
         return Map.of("ok", true);
@@ -310,7 +311,7 @@ public class SettingsController {
     /** 已保存模型的连通性测试。 */
     @PostMapping("/models/{id}/test")
     public Map<String, Object> testModel(@PathVariable String id) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         ModelConnection connection = models.find(id).orElseThrow(
                 () -> new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "模型不存在：" + id));
         String apiKey = models.apiKeyOf(id).orElse("");
@@ -324,7 +325,7 @@ public class SettingsController {
     /** 未保存配置的测试（保存前验证）。 */
     @PostMapping("/models/test")
     public Map<String, Object> testModelDraft(@RequestBody Map<String, Object> body) {
-        requireWrite();
+        currentUser.requireSettingsWrite();
         String baseUrl = str(body, "baseUrl");
         String modelName = str(body, "modelName");
         if (baseUrl == null || baseUrl.isBlank() || modelName == null || modelName.isBlank()) {
@@ -437,16 +438,4 @@ public class SettingsController {
 
     // ---------------------------------------------------------------- 权限 / 工具
 
-    private void requireRead() {
-        currentUser.checkPermission("settings:read");
-    }
-
-    private void requireWrite() {
-        currentUser.checkPermission("settings:write");
-    }
-
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? null : String.valueOf(value);
-    }
 }

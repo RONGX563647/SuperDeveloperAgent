@@ -96,6 +96,23 @@ public final class PathGuard {
     }
 
     /**
+     * 统一仓库内相对路径写法：去空白、反斜杠转正斜杠、去掉前导 {@code ./}。
+     *
+     * <p>同一段逻辑曾在 code patch / bugfix 修复 / bugfix git 三处各写一遍，
+     * 任何一处漏掉反斜杠都会让同一份补丁在不同环节匹配失败。
+     */
+    public static String normalizeRelative(String path) {
+        if (path == null) {
+            return "";
+        }
+        String value = path.trim().replace('\\', '/');
+        while (value.startsWith("./")) {
+            value = value.substring(2);
+        }
+        return value;
+    }
+
+    /**
      * 取 {@code file} 相对 {@code root} 的路径（{@code /} 分隔）。
      *
      * @return 不在根内返回 {@code null}

@@ -1,5 +1,6 @@
 package top.rongx.agent.gateway.web;
 
+import top.rongx.agent.domain.workspace.WorkspacePaths;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -8,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import static top.rongx.agent.gateway.web.RequestBodies.trimmed;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -75,8 +77,7 @@ public class GitIssueController {
         this.issues = issues;
         this.currentUser = currentUser;
         this.repoLocator = repoLocator;
-        this.imageDir = Path.of(workspaceRoot).toAbsolutePath().normalize()
-                .resolve("_platform").resolve("issues").resolve("images");
+        this.imageDir = WorkspacePaths.issueImages(Path.of(workspaceRoot));
     }
 
     @GetMapping
@@ -227,7 +228,7 @@ public class GitIssueController {
 
     @PostMapping("/{id}/comments")
     public GitIssueComment comment(@PathVariable String id, @RequestBody Map<String, Object> body) {
-        String text = str(body, "body");
+        String text = trimmed(body, "body");
         if (text.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "评论内容不能为空");
         }
@@ -323,8 +324,4 @@ public class GitIssueController {
         return value == null ? "" : String.valueOf(value).trim();
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body == null ? null : body.get(key);
-        return value == null ? "" : String.valueOf(value).trim();
-    }
 }

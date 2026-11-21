@@ -1,7 +1,7 @@
 package top.rongx.agent.gateway.web;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import top.rongx.agent.domain.hash.Hashes;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -195,10 +195,10 @@ public class GiteeWebhookController {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                     "未配置 agent.webhook.gitee-secret，拒绝未鉴权 webhook");
         }
-        if (token != null && constantEquals(token, secret)) {
+        if (token != null && Hashes.constantTimeEquals(token, secret)) {
             return;
         }
-        if (signature != null && constantEquals(signature, hmac(body))) {
+        if (signature != null && Hashes.constantTimeEquals(signature, hmac(body))) {
             return;
         }
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "webhook 签名校验失败");
@@ -212,11 +212,6 @@ public class GiteeWebhookController {
         } catch (Exception e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "HMAC 初始化失败", e);
         }
-    }
-
-    private static boolean constantEquals(String a, String b) {
-        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),
-                b.getBytes(StandardCharsets.UTF_8));
     }
 
     private static String jsonString(String body, String key) {
