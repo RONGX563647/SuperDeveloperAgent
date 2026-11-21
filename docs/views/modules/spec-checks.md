@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：spec-checks
 
-30 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+31 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+
+## 2026-11-21 · 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复）（chore `f5c15a1` `b908869` `24906a0` `c1e3777` `f082fb5` `8398697` `20b85e4` `9cdd275`）
+- 问题：推送被拒（fetch first）：远端并行会话与本会话对同一批问题各自修复——都把 HostProcessSupervisor 移入 doma…
+- 方案：合并 origin/0.2.0-snapshot：A1/EC5 修复取远端已推送版本（EnvironmentException 方案，domai…
+- 验证：pre-commit 门禁 agent-domain 全量 141 用例 PASSED（含 PathGuardTest 7/7）；
 
 ## 2026-11-21 · 补录 0.1.1 已发布迁移 V5-V8 基线，恢复 pre-push 门禁（chore `8398697`）
 - 问题：pre-push 规约门禁失败：0.1.1 tag 已含 V5-V8 迁移，但 migration-baseline.txt 仅登记 V1-V4…

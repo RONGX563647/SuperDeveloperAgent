@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-99 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+100 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-21 · 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复）（chore `f5c15a1` `b908869` `24906a0` `c1e3777` `f082fb5` `8398697` `20b85e4` `9cdd275`）
+- 问题：推送被拒（fetch first）：远端并行会话与本会话对同一批问题各自修复——都把 HostProcessSupervisor 移入 doma…
+- 方案：合并 origin/0.2.0-snapshot：A1/EC5 修复取远端已推送版本（EnvironmentException 方案，domai…
+- 验证：pre-commit 门禁 agent-domain 全量 141 用例 PASSED（含 PathGuardTest 7/7）；
 
 ## 2026-11-21 · 修复 refactor 线引入的 A1 分层违规与 EC5 通用 throw（chore `7e02977`）
 - 问题：并行会话的 refactor 线推送后 0.2 spec-checks 红：A1 分层——gateway 的 DeploymentControl…
