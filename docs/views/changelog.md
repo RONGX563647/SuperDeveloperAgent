@@ -1,10 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（184 个），完整数据在 `docs/ledger/`。
+每行一个会话（185 个），完整数据在 `docs/ledger/`。
 
 ## 2026-11-21
 
+- **bug** BUG-8 重放打 tag 失败：branch 未透传到引擎（`ee4bc36`）— BUG-8：test 环境有固化脚本时，点主发布按钮打 tag 触发失败，报『正式发布必须选择版本分支（例如 0.1.0-snapshot）』(…
 - **chore** 补录 0.1.1 已发布迁移 V5-V8 基线，恢复 pre-push 门禁（`8398697`）— pre-push 规约门禁失败：0.1.1 tag 已含 V5-V8 迁移，但 migration-baseline.txt 仅登记 V1-V4…
 - **bug** BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ（`24906a0` `c1e3777`）— 流水线 release 部署成功后，打开部署地址前端白屏：HTML 与各 JS/CSS 资源均返回 200，但 Vue 未挂载、#app 为空。
 - **bug** 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期（`d4320a7`）— 部署平台自镜像后 health 阶段失败：容器内 agent.sandbox.mode=docker 但无 Docker daemon，Sand…

@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-86 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+87 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-21 · BUG-8 重放打 tag 失败：branch 未透传到引擎（bug `ee4bc36`）
+- 问题：BUG-8：test 环境有固化脚本时，点主发布按钮打 tag 触发失败，报『正式发布必须选择版本分支（例如 0.1.0-snapshot）』(…
+- 方案：根因是 a2aa87e9 修复重放丢 version/tag 时漏了 branch：replayEnv→deployReplay→DeployC…
+- 验证：新增 DeployControllerReplayTargetTest 2 例（带 branch 下发/不带不下发）；DeployControl…
 
 ## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
 - 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…
