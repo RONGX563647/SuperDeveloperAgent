@@ -50,16 +50,19 @@ export function deployReplay(
   confirmToken?: string,
   deployTarget?: string,
   version?: string,
-  tag?: boolean
+  tag?: boolean,
+  branch?: string
 ): Promise<{ runId: string, env: string, status: string, deployTarget?: string }> {
   const q = new URLSearchParams({ env, sha })
   if (confirmToken) q.set('confirmToken', confirmToken)
   // 目标必须显式下发：不带时后端按固化脚本里的 target 执行，面板上选的方式会被静默丢弃
   if (deployTarget) q.set('deployTarget', deployTarget)
-  // 版本号 + 打 tag 必须随重放下发：有固化脚本时主发布走的就是重放路径，
-  // 少了这两个参数，用户填的版本/打的 tag 会在网关丢失（引擎按快照跑、历史空白）。
+  // 版本号 + 打 tag + 版本分支必须随重放下发：有固化脚本时主发布走的就是重放路径，
+  // 少了这三个参数，用户填的版本/打的 tag/选的分支会在网关丢失
+  // （引擎按快照跑、历史空白；打 tag 时缺 branch 会报「正式发布必须选择版本分支」）。
   if (version) q.set('version', version)
   if (tag) q.set('tag', 'true')
+  if (branch) q.set('branch', branch)
   return apiFetch(`/api/v1/deploy/${encodeURIComponent(projectId)}/replay?${q}`, {
     method: 'POST'
   })

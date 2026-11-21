@@ -142,16 +142,28 @@ public class DeployController {
                                       String sha,
                                       String confirmToken,
                                       String deployTarget) {
-        return replay(projectId, env, sha, confirmToken, deployTarget, null, null);
+        return replay(projectId, env, sha, confirmToken, deployTarget, null, null, null);
+    }
+
+    /** 兼容旧调用（不携带版本分支）：委托给带分支参数的重载。 */
+    public Map<String, Object> replay(String projectId,
+                                      String env,
+                                      String sha,
+                                      String confirmToken,
+                                      String deployTarget,
+                                      String version,
+                                      String tag) {
+        return replay(projectId, env, sha, confirmToken, deployTarget, version, tag, null);
     }
 
     /**
      * 重放并携带发布版本信息。
      *
-     * <p>{@code version} / {@code tag} 必须跟着重放一起下发：test 环境点主发布按钮时，
-     * 有固化脚本会走重放路径（{@code replayEnv}），若这里不接收，用户填的版本号与
-     * 打 tag 开关就在网关这段被丢掉——引擎按快照构建跑，git tag 不打、历史里
-     * version/tagStatus 全空，表现就是「打了 tag 却显示是空的」。
+     * <p>{@code version} / {@code tag} / {@code branch} 必须跟着重放一起下发：test 环境点主发布
+     * 按钮时，有固化脚本会走重放路径（{@code replayEnv}），若这里不接收，用户填的版本号、
+     * 打 tag 开关与所选版本分支就在网关这段被丢掉——引擎按快照构建跑，git tag 不打、历史里
+     * version/tagStatus 全空；更严重的是打 tag 时引擎拿不到 branch，直接抛
+     * 「正式发布必须选择版本分支」，表现就是「打了 tag 却提示必须选版本分支」。
      */
     @PostMapping("/{projectId}/replay")
     public Map<String, Object> replay(@PathVariable String projectId,
@@ -160,7 +172,8 @@ public class DeployController {
                                       @RequestParam(required = false) String confirmToken,
                                       @RequestParam(required = false) String deployTarget,
                                       @RequestParam(required = false) String version,
-                                      @RequestParam(required = false) String tag) {
+                                      @RequestParam(required = false) String tag,
+                                      @RequestParam(required = false) String branch) {
         currentUser.requireUserId();
         String target = normalizeTarget(deployTarget);
         // prod 允许用"测试环境固化脚本"晋升（证据由 DeployGate 校验）；其他环境必须自己有脚本
@@ -183,6 +196,11 @@ public class DeployController {
         }
         if (tag != null && !tag.isBlank()) {
             params.put("tag", tag);
+        }
+        // 版本分支必须与 version/tag 一起下发：打 tag 时引擎校验提交归属与标签序列都要用 branch，
+        // 缺了它会在 requireVersionBranch 抛「正式发布必须选择版本分支」。
+        if (branch != null && !branch.isBlank()) {
+            params.put("branch", branch.trim());
         }
         String runId = engine.trigger(projectId, releasePipeline(projectId), params);
         return Map.of("runId", runId, "env", env, "status", engine.status(runId).name(),
