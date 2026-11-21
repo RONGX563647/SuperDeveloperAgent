@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-72 个会话；检索用 `python tools/docs/find.py --module web`。
+73 个会话；检索用 `python tools/docs/find.py --module web`。
+
+## 2026-11-21 · BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ（bug `24906a0` `c1e3777`）
+- 问题：流水线 release 部署成功后，打开部署地址前端白屏：HTML 与各 JS/CSS 资源均返回 200，但 Vue 未挂载、#app 为空。
+- 方案：根因：vite.config 的 manualChunks 把 element-plus / vue / 其余 node_modules 拆成三…
+- 验证：新增 chunkSplit.test.ts 回归断言所有第三方依赖同处一个 vendor chunk；Edge headless 加载新构建：修…
 
 ## 2026-11-21 · 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
 - 问题：trae 会话在远程 0.2 推送了 8 条 refactor 提交（d0aaa4d4..781ba1f5），未走会话归档门禁，导致 0.1 修…

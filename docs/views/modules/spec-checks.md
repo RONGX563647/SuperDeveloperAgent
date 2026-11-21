@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：spec-checks
 
-29 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+30 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+
+## 2026-11-21 · 补录 0.1.1 已发布迁移 V5-V8 基线，恢复 pre-push 门禁（chore `8398697`）
+- 问题：pre-push 规约门禁失败：0.1.1 tag 已含 V5-V8 迁移，但 migration-baseline.txt 仅登记 V1-V4…
+- 方案：按守卫官方处方，用 mvn -pl spec-checks -Dtest=MigrationGuardTest -Dmigration.base…
+- 验证：MigrationGuardTest 正常模式 8 用例全过；pre-commit spec-checks 35 用例全过，失败 0。
 
 ## 2026-11-21 · 合并后重算迁移基线（V7/V8 补登记）（chore `2358d08`）
 - 问题：0.1→0.2 合并后 migration-baseline.txt 取了 0.1.0 侧（5 条），覆盖不到合并后已发布的 V7/V8，spe…
