@@ -3,6 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { manualChunkOf } from './src/utils/chunkSplit'
 
 const MOCK_DIR = fileURLToPath(new URL('./mock/', import.meta.url))
 
@@ -63,18 +64,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // 第三方依赖统一进单一 vendor chunk。
-        //
-        // 曾经按 element-plus / vue / 其余拆成三块，但 element-plus 内部与
-        // @vue/runtime-core、@vueuse 等存在循环引用；拆到不同 chunk 后，
-        // 浏览器按 ES module 拓扑执行时会踩到 TDZ：
-        //   Uncaught ReferenceError: Cannot access '$' before initialization
-        // 表现为部署后前端白屏（HTML/JS 都是 200，但 Vue 挂不上）。
-        // 业务代码更新仍不影响 vendor 缓存命中（hash 稳定），合并 vendor 不影响这一点。
-        manualChunks(id) {
-          if (!id.includes('node_modules')) return undefined
-          return 'vendor'
-        },
+        // 第三方依赖统一进单一 vendor chunk，规则见 src/utils/chunkSplit.ts。
+        // 拆分 element-plus / vue / 其余会触发跨 chunk 循环依赖 TDZ → 部署后白屏。
+        manualChunks: manualChunkOf,
       },
     },
   },
