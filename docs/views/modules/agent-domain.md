@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-domain
 
-51 个会话；检索用 `python tools/docs/find.py --module agent-domain`。
+52 个会话；检索用 `python tools/docs/find.py --module agent-domain`。
+
+## 2026-11-21 · 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
+- 问题：0.2.0-snapshot 上 8 个 refactor 提交（d0aaa4d4..781ba1f5）由并行会话推送时未走会话归档，pre-p…
+- 方案：开 chore 会话把 baseHead 定在 c784ff18 补录 8 个 refactor 提交的归档缺口；
+- 验证：pre-commit 门禁增量测试 PASSED（agent-executor: DockerActionRunnerPrepareTest/D…
 
 ## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
 - 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…

@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-tools
 
-36 个会话；检索用 `python tools/docs/find.py --module agent-tools`。
+37 个会话；检索用 `python tools/docs/find.py --module agent-tools`。
+
+## 2026-11-21 · 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
+- 问题：0.2.0-snapshot 上 8 个 refactor 提交（d0aaa4d4..781ba1f5）由并行会话推送时未走会话归档，pre-p…
+- 方案：开 chore 会话把 baseHead 定在 c784ff18 补录 8 个 refactor 提交的归档缺口；
+- 验证：pre-commit 门禁增量测试 PASSED（agent-executor: DockerActionRunnerPrepareTest/D…
 
 ## 2026-11-20 · 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6`）
 - 问题：0.2 线缺今晚后半段工作：skills 路由层、门禁并发健壮性、防回潮守卫、token/deploy 并行会话成果。
