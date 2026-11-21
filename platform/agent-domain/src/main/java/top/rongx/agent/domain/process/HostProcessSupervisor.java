@@ -1,4 +1,4 @@
-package top.rongx.agent.executor;
+package top.rongx.agent.domain.process;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -10,12 +10,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
-import top.rongx.agent.domain.process.LogTail;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * HOST 目标进程的托管原语（唯一实现）。
  *
- * <p>流水线部署（{@link HostDeployer}）与控制台启停（网关 {@code DeploymentControlService}）
+ * <p>流水线部署（{@code top.rongx.agent.executor.HostDeployer}）与控制台启停（网关
+ * {@code DeploymentControlService}）
  * 曾各写一套「写 pid → 起进程 → 探早退 → 停旧进程」：pid 文件名一致，但一边按 pid 停、
  * 一边校验命令行；一边有 {@code app.pids} 追加登记，一边没有。结果是控制台停不掉的遗留
  * 进程，流水线下一次部署才清掉。
@@ -24,6 +28,8 @@ import top.rongx.agent.domain.process.LogTail;
  * Docker 的 {@code run}/{@code start} 语义不在此列。
  */
 public final class HostProcessSupervisor {
+
+    private static final Logger log = LoggerFactory.getLogger(HostProcessSupervisor.class);
 
     /** 当前进程 pid 文件。 */
     public static final String PID_FILE = "app.pid";
@@ -75,7 +81,7 @@ public final class HostProcessSupervisor {
      * 停止本槽进程：先停 pid 文件指向的进程，再回收 {@code app.pids} 里仍存活的遗留进程。
      *
      * @param verifyAppJar 为 {@code true} 时校验命令行含 {@code app.jar}，防止 pid 复用误杀
-     * @throws IllegalStateException 校验失败（pid 已被无关进程复用）
+     * @throws RunException RUN_INVALID_STATE：校验失败（pid 已被无关进程复用）
      */
     public static void stop(Path stateDir, boolean verifyAppJar, StringBuilder log) {
         Path pidFile = stateDir.resolve(PID_FILE);
@@ -86,7 +92,7 @@ public final class HostProcessSupervisor {
                 if (verifyAppJar) {
                     String commandLine = handle.get().info().commandLine().orElse("");
                     if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
-                        throw new IllegalStateException("pid=" + pid
+                        throw new RunException(ErrorCode.RUN_INVALID_STATE, "pid=" + pid
                                 + " 不是平台部署的 app.jar，拒绝停止（可能是 pid 被复用）");
                     }
                 }
@@ -151,7 +157,7 @@ public final class HostProcessSupervisor {
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND);
         } catch (IOException e) {
-            ProcessExecutor.warn("进程登记写入失败：" + e.getMessage());
+            log.warn("进程登记写入失败：{}", e.getMessage());
         }
     }
 
@@ -213,7 +219,7 @@ public final class HostProcessSupervisor {
 
     /** 日志尾部（已脱敏）。 */
     public static String tail(Path logFile, int lines) {
-        return ProcessExecutor.redact(LogTail.lastLines(logFile, lines));
+        return LogRedactor.redact(LogTail.lastLines(logFile, lines));
     }
 
     private static void terminate(ProcessHandle handle) {

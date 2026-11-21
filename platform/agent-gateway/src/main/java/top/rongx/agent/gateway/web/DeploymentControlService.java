@@ -36,7 +36,7 @@ import top.rongx.agent.gateway.bugfix.BugFixRedactor;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.DeployException;
 import top.rongx.agent.domain.error.PlatformException;
-import top.rongx.agent.executor.HostProcessSupervisor;
+import top.rongx.agent.domain.process.HostProcessSupervisor;
 
 /**
  * 工作区「环境」视图：按 版本 × 环境 汇总部署产物（Docker 容器 / HOST 进程）并支持一键启停。

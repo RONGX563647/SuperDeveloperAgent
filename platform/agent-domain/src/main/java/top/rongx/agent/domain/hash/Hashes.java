@@ -11,6 +11,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.RunException;
 
 /**
  * 摘要与提交号展示的统一原语。
@@ -31,7 +33,7 @@ public final class Hashes {
             return HexFormat.of().formatHex(
                     md.digest(String.valueOf(text).getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+            throw new RunException(ErrorCode.RUN_INTERNAL, "JVM 缺少 SHA-256 实现", e);
         }
     }
 
@@ -46,9 +48,9 @@ public final class Hashes {
             }
             return HexFormat.of().formatHex(md.digest());
         } catch (IOException e) {
-            throw new IllegalStateException("读取文件失败：" + file, e);
+            throw new RunException(ErrorCode.RUN_INTERNAL, "读取文件失败：" + file, e);
         } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+            throw new RunException(ErrorCode.RUN_INTERNAL, "JVM 缺少 SHA-256 实现", e);
         }
     }
 
@@ -61,7 +63,7 @@ public final class Hashes {
             }
             return HexFormat.of().formatHex(md.digest());
         } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+            throw new RunException(ErrorCode.RUN_INTERNAL, "JVM 缺少 SHA-256 实现", e);
         }
     }
 
@@ -72,7 +74,7 @@ public final class Hashes {
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
         } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("JVM 缺少 HMAC-SHA256 实现", e);
+            throw new RunException(ErrorCode.RUN_INTERNAL, "JVM 缺少 HMAC-SHA256 实现", e);
         }
     }
 

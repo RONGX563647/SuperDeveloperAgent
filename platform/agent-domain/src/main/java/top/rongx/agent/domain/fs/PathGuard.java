@@ -92,7 +92,18 @@ public final class PathGuard {
         }
         Path base = realOr(root.toAbsolutePath().normalize());
         Path normalized = target.toAbsolutePath().normalize();
-        return normalized.equals(base) || normalized.startsWith(base);
+        // 目标可能尚不存在：沿祖先找到最近存在的目录做真实路径解析，再拼回剩余后缀。
+        // Windows 下 temp 目录的 8.3 短名/大小写差异若不解析，root 内的目标会被误判越界
+        //（isInsideIncludesRoot 曾因此红）。
+        Path existing = normalized;
+        while (existing.getParent() != null && !Files.exists(existing)) {
+            existing = existing.getParent();
+        }
+        Path real = realOr(existing);
+        Path resolved = existing.equals(normalized)
+                ? real
+                : real.resolve(existing.relativize(normalized));
+        return resolved.equals(base) || resolved.startsWith(base);
     }
 
     /**
