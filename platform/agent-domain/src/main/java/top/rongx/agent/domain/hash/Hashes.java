@@ -9,6 +9,8 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -31,7 +33,7 @@ public final class Hashes {
             return HexFormat.of().formatHex(
                     md.digest(String.valueOf(text).getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL, "JVM 缺少 SHA-256 实现", e);
         }
     }
 
@@ -46,9 +48,9 @@ public final class Hashes {
             }
             return HexFormat.of().formatHex(md.digest());
         } catch (IOException e) {
-            throw new IllegalStateException("读取文件失败：" + file, e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL, "读取文件失败：" + file, e);
         } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL, "JVM 缺少 SHA-256 实现", e);
         }
     }
 
@@ -61,7 +63,7 @@ public final class Hashes {
             }
             return HexFormat.of().formatHex(md.digest());
         } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL, "JVM 缺少 SHA-256 实现", e);
         }
     }
 
@@ -72,7 +74,7 @@ public final class Hashes {
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
         } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("JVM 缺少 HMAC-SHA256 实现", e);
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INTERNAL, "JVM 缺少 HMAC-SHA256 实现", e);
         }
     }
 

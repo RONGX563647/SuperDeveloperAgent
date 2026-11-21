@@ -1,4 +1,4 @@
-package top.rongx.agent.executor;
+package top.rongx.agent.domain.process;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -10,12 +10,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
-import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.error.EnvironmentException;
 
 /**
  * HOST 目标进程的托管原语（唯一实现）。
  *
- * <p>流水线部署（{@link HostDeployer}）与控制台启停（网关 {@code DeploymentControlService}）
+ * <p>流水线部署（HOST 部署器）与控制台启停（网关 {@code DeploymentControlService}）
  * 曾各写一套「写 pid → 起进程 → 探早退 → 停旧进程」：pid 文件名一致，但一边按 pid 停、
  * 一边校验命令行；一边有 {@code app.pids} 追加登记，一边没有。结果是控制台停不掉的遗留
  * 进程，流水线下一次部署才清掉。
@@ -75,7 +76,7 @@ public final class HostProcessSupervisor {
      * 停止本槽进程：先停 pid 文件指向的进程，再回收 {@code app.pids} 里仍存活的遗留进程。
      *
      * @param verifyAppJar 为 {@code true} 时校验命令行含 {@code app.jar}，防止 pid 复用误杀
-     * @throws IllegalStateException 校验失败（pid 已被无关进程复用）
+     * @throws EnvironmentException 校验失败（pid 已被无关进程复用）
      */
     public static void stop(Path stateDir, boolean verifyAppJar, StringBuilder log) {
         Path pidFile = stateDir.resolve(PID_FILE);
@@ -86,7 +87,7 @@ public final class HostProcessSupervisor {
                 if (verifyAppJar) {
                     String commandLine = handle.get().info().commandLine().orElse("");
                     if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
-                        throw new IllegalStateException("pid=" + pid
+                        throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "pid=" + pid
                                 + " 不是平台部署的 app.jar，拒绝停止（可能是 pid 被复用）");
                     }
                 }
@@ -151,7 +152,8 @@ public final class HostProcessSupervisor {
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND);
         } catch (IOException e) {
-            ProcessExecutor.warn("进程登记写入失败：" + e.getMessage());
+            // best-effort：登记失败不影响进程已启动的事实；domain 层无结构化日志，
+            // 这里静默忽略（读取端 readPid / stopRecorded 仍能按 pid 文件主记录工作）。
         }
     }
 
@@ -213,7 +215,7 @@ public final class HostProcessSupervisor {
 
     /** 日志尾部（已脱敏）。 */
     public static String tail(Path logFile, int lines) {
-        return ProcessExecutor.redact(LogTail.lastLines(logFile, lines));
+        return LogRedactor.redact(LogTail.lastLines(logFile, lines));
     }
 
     private static void terminate(ProcessHandle handle) {
