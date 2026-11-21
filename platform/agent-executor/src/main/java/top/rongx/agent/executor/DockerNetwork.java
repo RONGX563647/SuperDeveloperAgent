@@ -31,14 +31,25 @@ final class DockerNetwork {
     }
 
     /**
+     * 内置/空网络判定（本地与远端两条 ensure 路径共用同一份语义）。
+     *
+     * <p>抽出来的原因：SERVER 目标也要确保远端网络，若各自手写一份内置网络名单，
+     * 迟早出现"本地跳过 host、远端却去 create host"的漂移。
+     */
+    static boolean isBuiltIn(String network) {
+        return network == null || network.isBlank()
+                || "bridge".equals(network) || "host".equals(network)
+                || "none".equals(network);
+    }
+
+    /**
      * 确保网络存在：已存在直接返回；缺失则创建（幂等）。
      *
      * @return true = 已存在或创建成功
      */
     static boolean ensure(Exec exec, DockerCli docker, Path dir, String network,
                           StringBuilder log) {
-        if (network == null || network.isBlank() || "bridge".equals(network)
-                || "host".equals(network) || "none".equals(network)) {
+        if (isBuiltIn(network)) {
             return true; // docker 内置网络，永远存在
         }
         BooleanSupplier never = () -> false;
