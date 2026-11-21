@@ -1,12 +1,13 @@
 <!-- 由 tools/docs/build.py 生成，勿手改；文档地图见 ../README.md -->
 # 近期变更索引
 
-留痕数据：`docs/ledger/*.jsonl`（183 个会话，截至 2026-11-21）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
+留痕数据：`docs/ledger/*.jsonl`（184 个会话，截至 2026-11-21）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
 
 ## 最近 10 个会话
 
 | 日期 | 类别 | 标题 | 模块 | 提交 |
 |---|---|---|---|---|
+| 2026-11-21 | chore | 补录 0.1.1 已发布迁移 V5-V8 基线，恢复 pre-push 门禁 | spec-checks | `8398697` |
 | 2026-11-21 | bug | BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ | web | `24906a0` `c1e3777` |
 | 2026-11-21 | bug | 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期 | agent-executor | `d4320a7` |
 | 2026-11-21 | bug | 沙箱与 Docker 机制缺陷修复与重复实现收敛 | agent-domain, agent-executor, agent-gateway, agent-infra, spec-checks | `e427338` `7c654cf` |
@@ -16,18 +17,17 @@
 | 2026-11-20 | chore | 补齐 skill 路由层：三张新卡 + 生成式路由索引 | other | `3dc7dc1` |
 | 2026-11-20 | chore | 合并 token 量化基线与部署矩阵修复到当前分支 | agent-gateway | `a533133` |
 | 2026-11-20 | bug | 任务版本号选择：建议值进下拉并按类型给目标版本 | agent-gateway, web | `864e974` |
-| 2026-11-20 | feat | 对话层迁移到 AgentScope 官方 HarnessAgent | agent-gateway, agent-infra, agent-runtime | `24b81db` |
 
 ## 模块索引
 
 | 模块 | 会话数 | 最近变更 | 详见 |
 |---|---|---|---|
+| spec-checks | 26 | 2026-11-21 补录 0.1.1 已发布迁移 V5-V8 基线，恢复 pre-push 门禁 | [modules/spec-checks.md](modules/spec-checks.md) |
 | web | 66 | 2026-11-21 BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ | [modules/web.md](modules/web.md) |
 | agent-executor | 54 | 2026-11-21 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期 | [modules/agent-executor.md](modules/agent-executor.md) |
 | agent-domain | 47 | 2026-11-21 沙箱与 Docker 机制缺陷修复与重复实现收敛 | [modules/agent-domain.md](modules/agent-domain.md) |
 | agent-gateway | 86 | 2026-11-21 沙箱与 Docker 机制缺陷修复与重复实现收敛 | [modules/agent-gateway.md](modules/agent-gateway.md) |
 | agent-infra | 51 | 2026-11-21 沙箱与 Docker 机制缺陷修复与重复实现收敛 | [modules/agent-infra.md](modules/agent-infra.md) |
-| spec-checks | 25 | 2026-11-21 沙箱与 Docker 机制缺陷修复与重复实现收敛 | [modules/spec-checks.md](modules/spec-checks.md) |
 | other | 40 | 2026-11-20 防旧归档模型回潮：validate 拦截 docs/process 复活 | [modules/other.md](modules/other.md) |
 | agent-runtime | 31 | 2026-11-20 合并 token/deploy 并行工作并移植门禁并发健壮性 | [modules/agent-runtime.md](modules/agent-runtime.md) |
 | agent-tools | 33 | 2026-11-20 合并 token/deploy 并行工作并移植门禁并发健壮性 | [modules/agent-tools.md](modules/agent-tools.md) |

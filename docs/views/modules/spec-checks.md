@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：spec-checks
 
-25 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+26 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+
+## 2026-11-21 · 补录 0.1.1 已发布迁移 V5-V8 基线，恢复 pre-push 门禁（chore `8398697`）
+- 问题：pre-push 规约门禁失败：0.1.1 tag 已含 V5-V8 迁移，但 migration-baseline.txt 仅登记 V1-V4…
+- 方案：按守卫官方处方，用 mvn -pl spec-checks -Dtest=MigrationGuardTest -Dmigration.base…
+- 验证：MigrationGuardTest 正常模式 8 用例全过；pre-commit spec-checks 35 用例全过，失败 0。
 
 ## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
 - 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…
