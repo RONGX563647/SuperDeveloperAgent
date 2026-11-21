@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-21T21:01:42+08:00",
-  "sourceCommit": "047b4e6711fa943a84627a62a4008f83e4be21e6",
+  "generatedAt": "2026-11-21T21:05:23+08:00",
+  "sourceCommit": "08805b701a85913f0b7fe0e4fcf5e30d60825b37",
   "docs": [
     {
       "level": "L1",
@@ -172,6 +172,16 @@
       "module": "agent-runtime",
       "start": 81,
       "end": 110
+    },
+    {
+      "id": "state-agent-state-store/save",
+      "doc": "state-agent-state-store",
+      "label": "会话状态加密落盘",
+      "symbol": "EncryptedAgentStateStore#save",
+      "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
+      "module": "agent-infra",
+      "start": 74,
+      "end": 84
     },
     {
       "id": "tools-deploy-tools/env-status",

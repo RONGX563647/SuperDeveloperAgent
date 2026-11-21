@@ -70,6 +70,7 @@ public class EncryptedAgentStateStore implements AgentStateStore {
     public record EncryptedState(String token) implements State {
     }
 
+    // @handbook state-agent-state-store/save | 会话状态加密落盘
     @Override
     public void save(String userId, String sessionId, String key, State state) {
         if (state == null || isAnonymous(userId)) {

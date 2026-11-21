@@ -11,7 +11,7 @@ summary: 按会话加锁加密写入，目录权限收紧到属主；上下文�
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 会话状态加密落盘 | `EncryptedAgentStateStore#save` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java:67-76` | agent-infra |
+| 会话状态加密落盘 | `EncryptedAgentStateStore#save` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java:74-84` | agent-infra |
 <!-- generated:end -->
 
 ## 行为拆解
