@@ -208,8 +208,7 @@ public class ChatRunRecoveryAdvisor implements RunRecoveryAdvisor {
         if (message == null || message.isBlank()) {
             return "未知原因";
         }
-        String oneLine = message.replaceAll("\\s+", " ").trim();
-        return oneLine.length() > 300 ? oneLine.substring(0, 300) + "…" : oneLine;
+        return LogTail.oneLine(message, 300);
     }
 
     /** 交给部署 Agent 的任务：不追问、先定位、能修就修、需要确认就登记变更单。 */

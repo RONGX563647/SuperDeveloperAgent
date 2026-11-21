@@ -1,6 +1,7 @@
 package top.rongx.agent.domain.conversation;
 
 import java.util.List;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * 子会话结论摘要：父（调度）会话汇报时读的就是这个。
@@ -54,7 +55,7 @@ public record ChildDigest(
     /** 一行摘要：结论优先，其次是错误，最后是「还没有结论」。 */
     public String oneLine() {
         String text = !summary.isBlank() ? summary : !error.isBlank() ? "错误：" + error : "（还没有结论）";
-        return text.replaceAll("\\s+", " ").trim();
+        return LogTail.fold(text);
     }
 
     /** 一份人类可读的汇总（调度会话直接贴进回复）。 */

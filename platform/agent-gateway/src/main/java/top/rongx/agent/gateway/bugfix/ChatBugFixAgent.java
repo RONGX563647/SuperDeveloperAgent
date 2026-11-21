@@ -14,6 +14,7 @@ import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.error.Errors;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import top.rongx.agent.domain.bugfix.BugFixAgentPort;
@@ -205,8 +206,6 @@ public class ChatBugFixAgent implements BugFixAgentPort {
     }
 
     private static String safe(Throwable error) {
-        String raw = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-        raw = raw.replaceAll("\\s+", " ").trim();
-        return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;
+        return Errors.safeMessage(error);
     }
 }

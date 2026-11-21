@@ -7,6 +7,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import top.rongx.agent.domain.docker.ContainerState;
+import top.rongx.agent.domain.hash.Hashes;
 
 /**
  * 远端 {@code docker ps} 输出解析（纯函数，可单测）。
@@ -95,7 +96,7 @@ final class RemoteDockerPs {
         if (sha == null || sha.isBlank()) {
             return "";
         }
-        return sha.length() > 12 ? sha.substring(0, 12) : sha;
+        return Hashes.shortSha(sha, 12);
     }
 
     /** docker ps 的 CreatedAt：{@code 2026-11-20 10:00:00 +0800 CST}（带时区名）。 */

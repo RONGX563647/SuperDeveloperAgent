@@ -74,7 +74,7 @@ public class FixStage implements BugFixStageHandler {
         // 闸门 2（前置）：提交前先校验补丁路径是否落在分析确认的目标文件内。
         // 原来先 commit 再校验，越界改动会在分支上留下一个提交，重试还会叠加上去。
         List<String> targets = targetFiles(run);
-        String title = AnalyzeStage.safe(run.issueTitle()).replaceAll("\\s+", " ").trim();
+        String title = LogTail.fold(AnalyzeStage.safe(run.issueTitle()));
         String message = "fix(bug): " + (title.isBlank() ? run.id() : title);
         FixOutput output = null;
         List<BugFixEdit> edits = List.of();

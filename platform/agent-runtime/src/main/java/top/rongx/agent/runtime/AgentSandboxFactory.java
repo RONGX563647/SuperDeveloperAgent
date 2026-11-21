@@ -13,6 +13,7 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import top.rongx.agent.domain.fs.PathGuard;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.project.ProjectContext;
 
@@ -118,6 +119,6 @@ public class AgentSandboxFactory {
 
     /** Docker 只接受 POSIX 风格路径，Windows 反斜杠在这里归一。 */
     private static String posix(Path path) {
-        return path.toAbsolutePath().normalize().toString().replace('\\', '/');
+        return PathGuard.absoluteUnix(path);
     }
 }

@@ -21,6 +21,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.id.Ids;
 import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.CodePatcher;
@@ -231,7 +232,7 @@ public class DockerfileTools {
             } catch (PlatformException | IllegalArgumentException e) {
                 return "err: " + e.getMessage();
             }
-            String patchId = "pt-" + UUID.randomUUID().toString().substring(0, 8);
+            String patchId = Ids.newId("pt");
             String branch = "agent/fix-" + patchId;
             String summary = "自动补齐 Docker 镜像发布链路（Dockerfile + image_package）";
             CodePatch patch = new CodePatch(patchId, ctx.projectId(), ctx.env(),

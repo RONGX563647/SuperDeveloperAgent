@@ -93,12 +93,22 @@ public final class LogTail {
     }
 
     /**
+     * 折叠为单行：空白（含换行）压成一个空格并去首尾空白。
+     *
+     * <p>「把多行错误/诊断压成一行」曾在错误处理、缺陷修复、Git 远程调用等处各写一遍，
+     * 漏掉 trim 的一方会把结尾空格带进日志与幂等键。
+     */
+    public static String fold(String value) {
+        return value == null ? "" : value.replaceAll("\\s+", " ").trim();
+    }
+
+    /**
      * 折叠为单行后再按开头截断：空白（含换行）压成一个空格，超长追加 {@code …}。
      *
      * <p>用于错误摘要、诊断这类会拼进一行提示的文本。
      */
     public static String oneLine(String value, int maxChars) {
-        String one = value == null ? "" : value.replaceAll("\\s+", " ").trim();
+        String one = fold(value);
         return one.length() > maxChars ? one.substring(0, maxChars) + "…" : one;
     }
 }

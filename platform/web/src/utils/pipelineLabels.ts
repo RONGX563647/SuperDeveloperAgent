@@ -71,9 +71,9 @@ export function previewLabel(stage: PreviewStage): string {
   return stageLabel({ id: stage.id, type: stage.type, action: stage.action })
 }
 
-/** 文件大小格式化（产物栏用）。 */
-export function formatBytes(bytes: number): string {
-  if (!bytes || bytes < 0) return '—'
+/** 文件大小格式化（产物栏 / 技能目录共用）。 */
+export function formatBytes(bytes: number, empty = '—'): string {
+  if (!bytes || bytes < 0) return empty
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`

@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 import top.rongx.agent.domain.settings.GitHostingAccount;
+import top.rongx.agent.domain.gitissue.GitProviders;
 import top.rongx.agent.domain.settings.GitHostingAccountRepository;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
@@ -193,11 +194,7 @@ public class SqliteGitHostingAccountStore implements GitHostingAccountRepository
     }
 
     private static String normalizeProvider(String provider) {
-        String p = provider == null || provider.isBlank() ? "CUSTOM" : provider.trim().toUpperCase(Locale.ROOT);
-        if (!p.equals("GITHUB") && !p.equals("GITLAB") && !p.equals("CUSTOM")) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "provider 只能是 GITHUB / GITLAB / CUSTOM");
-        }
-        return p;
+        return GitProviders.normalize(provider, true);
     }
 
     private static String normalizeHost(String host) {

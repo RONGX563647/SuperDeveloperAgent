@@ -1,9 +1,16 @@
 package top.rongx.agent.domain.hash;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * 摘要与提交号展示的统一原语。
@@ -25,6 +32,47 @@ public final class Hashes {
                     md.digest(String.valueOf(text).getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+        }
+    }
+
+    /** 文件内容摘要（流式读取，不把大文件整个读进内存）。 */
+    public static String sha256Hex(Path file) {
+        try (InputStream in = Files.newInputStream(file)) {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) >= 0) {
+                md.update(buffer, 0, read);
+            }
+            return HexFormat.of().formatHex(md.digest());
+        } catch (IOException e) {
+            throw new IllegalStateException("读取文件失败：" + file, e);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+        }
+    }
+
+    /** 多段文本的摘要（按迭代顺序依次 update，不拼接成一个大字符串）。 */
+    public static String sha256Hex(Iterable<String> chunks) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            for (String chunk : chunks) {
+                md.update(String.valueOf(chunk).getBytes(StandardCharsets.UTF_8));
+            }
+            return HexFormat.of().formatHex(md.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JVM 缺少 SHA-256 实现", e);
+        }
+    }
+
+    /** HMAC-SHA256 原始字节；调用方按协议自行编码为 hex / base64。 */
+    public static byte[] hmacSha256(String secret, String data) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("JVM 缺少 HMAC-SHA256 实现", e);
         }
     }
 

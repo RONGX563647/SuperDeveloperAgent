@@ -3,6 +3,7 @@ import { onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import { formatTime } from '../../utils/status'
+import { formatBytes } from '../../utils/pipelineLabels'
 import {
   deleteSkill, importSkill, installCapability, listCapabilityMarket, listCapabilitySources,
   listSkills, probeSkills, readSkill, saveSkill, setSkillEnabled,
@@ -251,13 +252,6 @@ async function remove(skill: SkillEntry): Promise<void> {
 
 // ---------------------------------------------------------------- 质量检查 / 命中试跑
 
-/** 体积按 KB / MB 展示，避免一长串字节。 */
-function sizeText(bytes: number): string {
-  if (!bytes) return '0 KB'
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
 /** 返回可操作的描述/体积问题；空数组表示没有明显问题。 */
 function issuesOf(skill: SkillEntry): string[] {
   const issues: string[] = []
@@ -270,7 +264,7 @@ function issuesOf(skill: SkillEntry): string[] {
     issues.push('description 过长，会稀释其他技能的匹配度')
   }
   if (skill.sizeBytes > 300 * 1024) {
-    issues.push(`目录 ${sizeText(skill.sizeBytes)}，建议把大文件放到 references 按需读取`)
+    issues.push(`目录 ${formatBytes(skill.sizeBytes, '0 KB')}，建议把大文件放到 references 按需读取`)
   }
   return issues
 }
@@ -406,7 +400,7 @@ defineExpose({ load })
         <div class="skill-title">
           <span class="skill-name mono">{{ s.name }}</span>
           <span class="skill-meta">{{ s.fileCount }} 个文件</span>
-          <span class="skill-meta mono">{{ sizeText(s.sizeBytes) }}</span>
+          <span class="skill-meta mono">{{ formatBytes(s.sizeBytes, '0 KB') }}</span>
           <span v-if="s.updatedAt" class="skill-meta">{{ formatTime(s.updatedAt) }}</span>
           <span v-if="issuesOf(s).length" class="quality-badge">
             检查 {{ issuesOf(s).length }}

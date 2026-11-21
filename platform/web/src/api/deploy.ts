@@ -1,5 +1,4 @@
-import { apiFetch } from './http'
-import { getToken } from './auth'
+import { apiFetch, authHeaders } from './http'
 import { streamChatOnce } from './sse'
 import type { AgentEvent } from '../types'
 
@@ -95,7 +94,6 @@ export async function streamDeployAgent(
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const token = getToken()
   await streamChatOnce(
     `/api/v1/deploy/${encodeURIComponent(projectId)}/agent`,
     {
@@ -103,7 +101,7 @@ export async function streamDeployAgent(
       headers: {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...authHeaders(),
       },
       body: JSON.stringify(req),
     },

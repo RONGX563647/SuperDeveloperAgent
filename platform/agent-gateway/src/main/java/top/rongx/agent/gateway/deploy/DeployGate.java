@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.change.PlanHasher;
 import top.rongx.agent.domain.deploy.EnvironmentPromotion;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.hash.Hashes;
 import top.rongx.agent.domain.error.PromotionException;
 import top.rongx.agent.domain.port.PipelineEngine;
 import top.rongx.agent.domain.port.RecipeStore;
@@ -64,7 +65,7 @@ public class DeployGate {
     }
 
     public static String changeId(String projectId, String env, String sha) {
-        return "deploy:" + projectId + ":" + env + ":" + sha.substring(0, 7);
+        return "deploy:" + projectId + ":" + env + ":" + Hashes.shortSha(sha);
     }
 
     /** 计划哈希：绑定"在哪个环境发哪个提交"，防止确认 A 执行 B。 */

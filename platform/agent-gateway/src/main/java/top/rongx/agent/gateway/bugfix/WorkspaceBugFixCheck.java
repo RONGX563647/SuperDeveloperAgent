@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.bugfix;
 
 import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.id.Ids;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -70,7 +71,7 @@ public class WorkspaceBugFixCheck implements BugFixCheckPort {
         if (!Files.exists(repo.resolve(".git")) && !Files.isDirectory(repo.resolve("objects"))) {
             return CheckResult.fail("项目目录不是 git 仓库根目录：" + repo, "");
         }
-        String name = "wt-check-" + run.id() + "-" + UUID.randomUUID().toString().substring(0, 6);
+        String name = "wt-check-" + run.id() + "-" + Ids.newId(null, 6);
         ProjectRepoLocator.StorageMode mode = locator.modeOf(run.projectId());
         Path worktree = mode == ProjectRepoLocator.StorageMode.DIRECT
                 ? git.addWorktreeAt(repo, name, sha)

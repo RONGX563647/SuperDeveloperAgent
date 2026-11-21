@@ -35,7 +35,7 @@ public final class Errors {
         }
         String raw = error.getMessage() == null
                 ? error.getClass().getSimpleName() : error.getMessage();
-        raw = raw.replaceAll("\\s+", " ").trim();
+        raw = top.rongx.agent.domain.process.LogTail.fold(raw);
         return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;
     }
 

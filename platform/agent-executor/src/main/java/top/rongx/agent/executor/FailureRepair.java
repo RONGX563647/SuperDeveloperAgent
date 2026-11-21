@@ -5,6 +5,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import top.rongx.agent.domain.process.LogTail;
 import top.rongx.agent.domain.run.RunRecoveryAdvisor;
 
 /**
@@ -58,10 +59,7 @@ interface FailureRepair {
 
         /** 单行摘要，避免把整段错误塞进日志。 */
         String brief() {
-            String one = (message == null ? "" : message).replaceAll("\\s+", " ").trim();
-            if (one.length() > 240) {
-                one = one.substring(0, 240) + "…";
-            }
+            String one = LogTail.oneLine(message, 240);
             return (errorCode == null ? "" : errorCode + " ") + one;
         }
     }

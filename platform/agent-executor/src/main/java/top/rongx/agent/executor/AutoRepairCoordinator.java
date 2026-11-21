@@ -1,6 +1,7 @@
 package top.rongx.agent.executor;
 
 import java.util.List;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * 自动修复协调器（纯逻辑，不依赖 Spring / Docker / 引擎状态）：
@@ -105,7 +106,6 @@ final class AutoRepairCoordinator {
 
     private static String brief(Throwable e) {
         String msg = e.getMessage() == null ? e.toString() : e.getMessage();
-        String one = msg.replaceAll("\\s+", " ").trim();
-        return one.length() > 200 ? one.substring(0, 200) + "…" : one;
+        return LogTail.oneLine(msg, 200);
     }
 }

@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import static top.rongx.agent.gateway.web.RequestBodies.str;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +26,8 @@ import top.rongx.agent.domain.env.EnvAddressing;
 import top.rongx.agent.domain.env.EnvBinding;
 import top.rongx.agent.domain.env.EnvResource;
 import top.rongx.agent.domain.env.EnvSecretKeys;
+import top.rongx.agent.domain.id.Ids;
+import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.env.EnvRuntime;
 import top.rongx.agent.domain.env.EnvTemplate;
 import top.rongx.agent.domain.env.EnvVariable;
@@ -69,6 +70,7 @@ public class EnvironmentController {
     private final CurrentUser currentUser;
     private final PipelineEngine pipelineEngine;
     private final AuditTrail audit;
+    private final SecretBox secretBox;
 
     /** 发现候选暂存：密码留在后端，前端只拿 candidateId。 */
     private final Map<String, EnvResource> candidates = new ConcurrentHashMap<>();
@@ -77,7 +79,7 @@ public class EnvironmentController {
                                  EnvBindingService bindings, DeployServerRepository servers,
                                  SshAccess ssh, EnvRuntime envRuntime,
                                  LocalServiceManager localServices, CurrentUser currentUser,
-                                 PipelineEngine pipelineEngine, AuditTrail audit) {
+                                 PipelineEngine pipelineEngine, AuditTrail audit, SecretBox secretBox) {
         this.envStore = envStore;
         this.discovery = discovery;
         this.bindings = bindings;
@@ -88,6 +90,7 @@ public class EnvironmentController {
         this.currentUser = currentUser;
         this.pipelineEngine = pipelineEngine;
         this.audit = audit;
+        this.secretBox = secretBox;
     }
 
     // ---------------------------------------------------------------- 模板
@@ -166,7 +169,7 @@ public class EnvironmentController {
                 : discovery.discoverLocal(env, template);
         List<Map<String, Object>> out = new ArrayList<>();
         for (EnvResource r : found) {
-            String id = "cand-" + UUID.randomUUID().toString().substring(0, 8);
+            String id = Ids.newId("cand");
             candidates.put(id, r);
             Map<String, Object> row = resourceView(r);
             row.put("candidateId", id);
@@ -567,19 +570,12 @@ public class EnvironmentController {
                     String current = effectiveValues.get(entry.getKey());
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("key", entry.getKey());
-                    row.put("value", secret ? maskSourceValue(entry.getValue()) : entry.getValue());
+                    row.put("value", secret ? secretBox.mask(entry.getValue()) : entry.getValue());
                     row.put("secret", secret);
                     row.put("overridden", current != null && !current.isBlank());
                     rows.add(row);
                 });
         return rows;
-    }
-
-    private static String maskSourceValue(String value) {
-        if (value == null || value.isBlank()) {
-            return "";
-        }
-        return value.length() > 4 ? "****" + value.substring(value.length() - 4) : "****";
     }
 
     private Map<String, Object> resourceBrief(EnvResource r) {

@@ -1,5 +1,4 @@
-import { apiBlob, apiFetch } from './http'
-import { getToken } from './auth'
+import { apiBlob, apiFetch, authHeaders } from './http'
 
 /** 平台任务页的 Issue 任务（与 Git 双向同步）。 */
 export type GitIssueProvider = 'GITEE' | 'GITHUB' | 'GITLAB' | ''
@@ -154,10 +153,9 @@ export function deleteGitIssueComment(
 export async function uploadIssueImage(file: File): Promise<string> {
   const body = new FormData()
   body.append('file', file)
-  const token = getToken()
   const res = await fetch('/api/v1/git-issues/images', {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: authHeaders(),
     body,
   })
   if (!res.ok) {

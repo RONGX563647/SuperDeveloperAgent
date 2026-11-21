@@ -986,7 +986,7 @@ public class ServerDeployer implements Deployer {
 
     private static String shortId(String imageId) {
         String value = imageId.startsWith("sha256:") ? imageId.substring(7) : imageId;
-        return value.length() > 12 ? value.substring(0, 12) : value;
+        return value.isBlank() ? value : Hashes.shortSha(value, 12);
     }
 
     /**

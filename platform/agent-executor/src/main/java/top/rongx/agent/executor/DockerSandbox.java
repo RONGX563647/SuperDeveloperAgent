@@ -9,6 +9,9 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.LongPredicate;
 import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.fs.PathGuard;
+import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.id.Ids;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
 import top.rongx.agent.domain.error.SandboxDeniedException;
@@ -362,7 +365,7 @@ public class DockerSandbox {
 
     /** 宿主路径 → Docker 可识别的 POSIX 风格绝对路径（Windows 下把反斜杠换掉）。 */
     static String hostPath(Path workspace) {
-        String absolute = workspace.toAbsolutePath().normalize().toString().replace('\\', '/');
+        String absolute = PathGuard.absoluteUnix(workspace);
         // Windows 下 E:\x → E:/x 即可被 Docker Desktop 接受；若以 / 开头说明已是 POSIX
         return absolute;
     }
@@ -399,16 +402,7 @@ public class DockerSandbox {
 
     /** 路径的稳定指纹：SHA-256 前 16 位小写 hex（碰撞概率足够低，且不会像截断那样丢熵）。 */
     private static String pathHash(Path root) {
-        try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            return java.util.HexFormat.of()
-                    .formatHex(md.digest(root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
-                    .substring(0, 16);
-        } catch (java.security.NoSuchAlgorithmException e) {
-            // 平台只跑在 JDK 21 上，SHA-256 必然存在；真缺失时退回路径 hashCode，
-            // 宁可退化也不能让整个构建因为缓存卷命名而失败。
-            return Integer.toHexString(root.toString().hashCode());
-        }
+        return Hashes.shortSha(Hashes.sha256Hex(root.toString()), 16);
     }
 
     /** 卷名（未启用缓存时返回 null）。 */
@@ -419,8 +413,7 @@ public class DockerSandbox {
 
     /** 开始一次容器执行：生成容器名并绑定到当前线程，供超时清理使用。 */
     public String beginContainer() {
-        String name = CONTAINER_PREFIX + java.util.UUID.randomUUID().toString()
-                .replace("-", "").substring(0, 12);
+        String name = CONTAINER_PREFIX + Ids.newId(null, 12);
         ACTIVE_CONTAINER.set(name);
         return name;
     }
@@ -436,8 +429,7 @@ public class DockerSandbox {
         if (base.length() > 40) {
             base = base.substring(0, 40);
         }
-        return INIT_PREFIX + base + "-" + java.util.UUID.randomUUID().toString()
-                .replace("-", "").substring(0, 8);
+        return INIT_PREFIX + base + "-" + Ids.newId(null);
     }
 
     /** 是否为平台自己起、可被清扫的容器名（活动容器与初始化容器都算）。 */

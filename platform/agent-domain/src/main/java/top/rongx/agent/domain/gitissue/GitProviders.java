@@ -16,10 +16,23 @@ public final class GitProviders {
     }
 
     public static String normalize(String provider) {
+        return normalize(provider, false);
+    }
+
+    /**
+     * @param allowCustom 是否允许自建托管方（{@code CUSTOM}；空值视为 CUSTOM）
+     */
+    public static String normalize(String provider, boolean allowCustom) {
         String p = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
-        if (!p.equals("GITEE") && !p.equals("GITHUB") && !p.equals("GITLAB")) {
+        if (allowCustom && p.isEmpty()) {
+            p = "CUSTOM";
+        }
+        boolean known = p.equals("GITEE") || p.equals("GITHUB") || p.equals("GITLAB")
+                || (allowCustom && p.equals("CUSTOM"));
+        if (!known) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT,
-                    "provider 只能是 GITEE / GITHUB / GITLAB");
+                    allowCustom ? "provider 只能是 GITHUB / GITLAB / CUSTOM"
+                            : "provider 只能是 GITEE / GITHUB / GITLAB");
         }
         return p;
     }

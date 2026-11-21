@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import top.rongx.agent.domain.json.JsonMappers;
 import jakarta.annotation.PreDestroy;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
@@ -15,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.gitissue.GitIssue;
+import top.rongx.agent.domain.hash.Hashes;
 import top.rongx.agent.domain.gitissue.GitIssueComment;
 import top.rongx.agent.domain.gitissue.GitIssueIntegration;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
@@ -331,13 +331,7 @@ public class GitIssueSyncService {
     }
 
     static String hash(String value) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(
-                    value == null ? new byte[0] : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            return Integer.toHexString(String.valueOf(value).hashCode());
-        }
+        return Hashes.sha256Hex(value == null ? "" : value);
     }
 
     private static String randomHex() {

@@ -12,6 +12,8 @@ import java.util.HexFormat;
  */
 public final class Ids {
 
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     private Ids() {
     }
 
@@ -21,9 +23,21 @@ public final class Ids {
      * @param prefix 前缀（空/null 时只返回随机段）
      */
     public static String newId(String prefix) {
-        byte[] raw = new byte[4];
-        new SecureRandom().nextBytes(raw);
-        String tail = HexFormat.of().formatHex(raw);
+        return newId(prefix, 8);
+    }
+
+    /**
+     * 生成指定十六进制位数的随机 ID。
+     *
+     * <p>位数只用于兼容既有外部契约（如缺陷运行号要求 12 位），新代码优先用 8 位。
+     *
+     * @param hexChars 随机段长度（2–64，奇数位会截断）
+     */
+    public static String newId(String prefix, int hexChars) {
+        int length = Math.max(2, Math.min(64, hexChars));
+        byte[] raw = new byte[(length + 1) / 2];
+        RANDOM.nextBytes(raw);
+        String tail = HexFormat.of().formatHex(raw).substring(0, length);
         return prefix == null || prefix.isBlank() ? tail : prefix + "-" + tail;
     }
 }

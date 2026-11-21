@@ -1,14 +1,11 @@
 package top.rongx.agent.runtime.workspace;
 
 import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.id.Ids;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
@@ -28,6 +25,7 @@ import top.rongx.agent.domain.conversation.DispatchNodeResult;
 import top.rongx.agent.domain.conversation.DispatchPlan;
 import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.RunStatus;
+import top.rongx.agent.domain.hash.Hashes;
 import top.rongx.agent.domain.conversation.SessionDataCleaner;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.TimelineEntry;
@@ -660,24 +658,18 @@ public class ConversationManager implements WorkspaceSupervisorPort {
         if (text == null || text.isBlank()) {
             return "新会话";
         }
-        String oneLine = text.trim().replaceAll("\\s+", " ");
+        String oneLine = LogTail.fold(text);
         return oneLine.length() > MAX_TITLE ? oneLine.substring(0, MAX_TITLE) : oneLine;
     }
 
 
     private static String goalKey(String text) {
-        String normalized = text.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(normalized.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest).substring(0, 32);
-        } catch (NoSuchAlgorithmException e) {
-            return Integer.toHexString(normalized.hashCode());
-        }
+        String normalized = LogTail.fold(text).toLowerCase(Locale.ROOT);
+        return Hashes.shortSha(Hashes.sha256Hex(normalized), 32);
     }
 
     private static String shortId() {
-        return UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        return Ids.newId(null, 12);
     }
 
     private static boolean validId(String id) {

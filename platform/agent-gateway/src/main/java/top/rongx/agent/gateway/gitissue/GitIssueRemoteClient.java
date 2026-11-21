@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import top.rongx.agent.domain.http.HttpClients;
 import top.rongx.agent.domain.json.JsonMappers;
+import top.rongx.agent.domain.process.LogTail;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -528,11 +529,7 @@ public class GitIssueRemoteClient {
     }
 
     private static String snippet(String body) {
-        if (body == null) {
-            return "";
-        }
-        String s = body.replaceAll("\\s+", " ").trim();
-        return s.length() <= 200 ? s : s.substring(0, 200) + "…";
+        return LogTail.prefix(LogTail.fold(body), 200, "…");
     }
 
     private static String enc(String value) {

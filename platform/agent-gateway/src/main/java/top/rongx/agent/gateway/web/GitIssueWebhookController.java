@@ -1,13 +1,9 @@
 package top.rongx.agent.gateway.web;
 
-import top.rongx.agent.domain.hash.Hashes;
-import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -19,9 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import top.rongx.agent.domain.gitissue.GitIssueIntegrationRepository;
+import top.rongx.agent.domain.hash.Hashes;
 import top.rongx.agent.gateway.gitissue.GitIssueSyncService;
-import top.rongx.agent.domain.error.ErrorCode;
-import top.rongx.agent.domain.error.IntakeException;
 
 /**
  * Git Issue Webhook 入口（Gitee / GitHub / GitLab 各一套签名规则）。
@@ -146,20 +141,10 @@ public class GitIssueWebhookController {
     }
 
     private static String hmacHex(String secret, String data) {
-        return HexFormat.of().formatHex(hmac(secret, data));
+        return HexFormat.of().formatHex(Hashes.hmacSha256(secret, data));
     }
 
     private static String hmacBase64(String secret, String data) {
-        return Base64.getEncoder().encodeToString(hmac(secret, data));
-    }
-
-    private static byte[] hmac(String secret, String data) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "HMAC 初始化失败", e);
-        }
+        return Base64.getEncoder().encodeToString(Hashes.hmacSha256(secret, data));
     }
 }

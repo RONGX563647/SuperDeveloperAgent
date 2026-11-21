@@ -113,6 +113,16 @@ public final class PathGuard {
     }
 
     /**
+     * 绝对路径的 POSIX 写法（Windows 下 {@code E:\x} → {@code E:/x}）。
+     *
+     * <p>给 git / docker / 日志用时必须统一分隔符；同一段转换曾在 executor / runtime
+     * 三处各写一遍。
+     */
+    public static String absoluteUnix(Path path) {
+        return path.toAbsolutePath().normalize().toString().replace('\\', '/');
+    }
+
+    /**
      * 取 {@code file} 相对 {@code root} 的路径（{@code /} 分隔）。
      *
      * @return 不在根内返回 {@code null}

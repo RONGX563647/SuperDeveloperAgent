@@ -8,6 +8,8 @@ import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import java.util.ArrayList;
+import top.rongx.agent.domain.error.Errors;
+import top.rongx.agent.domain.id.Ids;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -69,7 +71,7 @@ public class OpsAgentRunner implements OpsAgentPort {
         }
         HarnessAgent agent = agentFactory.createDeploy(ctx);
         String sessionId = "ops-" + ctx.projectId() + "-" + ctx.env() + "-"
-                + UUID.randomUUID().toString().substring(0, 8);
+                + Ids.newId(null);
         RuntimeContext runtime = RuntimeContext.builder()
                 .userId(ctx.userId())
                 .sessionId(sessionId)
@@ -165,8 +167,6 @@ public class OpsAgentRunner implements OpsAgentPort {
     }
 
     private static String safe(Throwable error) {
-        String raw = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-        raw = raw.replaceAll("\\s+", " ").trim();
-        return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;
+        return Errors.safeMessage(error);
     }
 }

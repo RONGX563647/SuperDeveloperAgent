@@ -1,12 +1,8 @@
 package top.rongx.agent.gateway.web;
 
-import java.nio.charset.StandardCharsets;
-import top.rongx.agent.domain.hash.Hashes;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,13 +12,13 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
-import top.rongx.agent.domain.port.PipelineEngine;
-import top.rongx.agent.domain.port.ProjectRepository;
 import top.rongx.agent.domain.conversation.TaskStatus;
 import top.rongx.agent.domain.conversation.WorkspaceTask;
 import top.rongx.agent.domain.conversation.WorkspaceTaskRepository;
-import top.rongx.agent.domain.error.ErrorCode;
-import top.rongx.agent.domain.error.IntakeException;
+import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.id.Ids;
+import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.port.ProjectRepository;
 
 /**
  * Gitee webhook 接入：push 事件自动触发流水线。
@@ -129,7 +125,7 @@ public class GiteeWebhookController {
             return Map.of("duplicate", true, "sourceRef", sourceRef);
         }
         long now = System.currentTimeMillis();
-        String suffix = java.util.UUID.randomUUID().toString().substring(0, 8);
+        String suffix = Ids.newId(null);
         WorkspaceTask task;
         try {
             task = tasks.saveTask(new WorkspaceTask("task-" + suffix, projectId, null,
@@ -205,13 +201,7 @@ public class GiteeWebhookController {
     }
 
     private String hmac(String body) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            return HexFormat.of().formatHex(mac.doFinal(body.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            throw new IntakeException(ErrorCode.INTAKE_INVALID_STATE, "HMAC 初始化失败", e);
-        }
+        return HexFormat.of().formatHex(Hashes.hmacSha256(secret, body));
     }
 
     private static String jsonString(String body, String key) {

@@ -1,14 +1,11 @@
 package top.rongx.agent.executor;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
-import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
@@ -18,6 +15,7 @@ import top.rongx.agent.domain.action.ActionResult;
 import top.rongx.agent.domain.action.ActionSpec;
 import top.rongx.agent.domain.artifact.ArtifactRef;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.hash.Hashes;
 import top.rongx.agent.domain.port.ActionRunner;
 import top.rongx.agent.domain.run.StageResult;
 
@@ -220,15 +218,9 @@ public abstract class AbstractActionRunner implements ActionRunner {
     }
 
     private String sha256(Path file) {
-        try (InputStream in = Files.newInputStream(file)) {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) >= 0) {
-                md.update(buffer, 0, read);
-            }
-            return HexFormat.of().formatHex(md.digest());
-        } catch (Exception e) {
+        try {
+            return Hashes.sha256Hex(file);
+        } catch (RuntimeException e) {
             return null;
         }
     }

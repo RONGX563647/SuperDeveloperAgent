@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.bugfix;
 
 import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.id.Ids;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import top.rongx.agent.domain.process.LogTail;
@@ -9,7 +10,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -78,7 +78,7 @@ public class BugFixOrchestrator {
     private final Set<String> executing = ConcurrentHashMap.newKeySet();
     private final Set<String> rerunRequested = ConcurrentHashMap.newKeySet();
     private final Object[] runLocks = new Object[LOCK_STRIPES];
-    private final String instanceId = "gw-" + UUID.randomUUID().toString().substring(0, 8);
+    private final String instanceId = Ids.newId("gw");
 
     public BugFixOrchestrator(BugFixRunStore runs, BugFixPolicyStore policies,
                               List<BugFixStageHandler> handlers, BugFixNotifier notifier,
@@ -130,7 +130,7 @@ public class BugFixOrchestrator {
                     throw new RunException(ErrorCode.RUN_INVALID_STATE, "该任务已自动修复并创建 PR：" + run.prUrl());
                 });
         long now = System.currentTimeMillis();
-        String id = "bf-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        String id = Ids.newId("bf", 12);
         // 任务编码参与 git：修复分支带上 BUG-x / FEAT-x，方便从分支反查任务
         String code = issue.code() == null || issue.code().isBlank()
                 ? id.substring(3) : issue.code().toLowerCase(java.util.Locale.ROOT);
@@ -277,7 +277,7 @@ public class BugFixOrchestrator {
         }
         Semaphore projectLock = null;
         String projectKey = null;
-        String owner = instanceId + "-" + UUID.randomUUID().toString().substring(0, 8);
+        String owner = Ids.newId(instanceId);
         boolean leased = false;
         try {
             BugFixRun latest = runs.find(id).orElse(null);

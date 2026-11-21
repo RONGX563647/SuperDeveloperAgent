@@ -4,9 +4,9 @@ import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.change.ChangePlan;
+import top.rongx.agent.domain.id.Ids;
 import top.rongx.agent.domain.patch.CodePatch;
 import top.rongx.agent.domain.port.ChangeStore;
 import top.rongx.agent.domain.port.CodePatcher;
@@ -91,7 +91,7 @@ public class PatchTools {
             return "err: " + e.getMessage();
         }
 
-        String patchId = "pt-" + UUID.randomUUID().toString().substring(0, 8);
+        String patchId = Ids.newId("pt");
         String branch = "agent/fix-" + patchId;
         CodePatch patch = new CodePatch(patchId, ctx.projectId(), ctx.env(), baseSha.trim(),
                 branch, files, staged.diff(), staged.diffHash(), staged.added(), staged.removed(), 0L);

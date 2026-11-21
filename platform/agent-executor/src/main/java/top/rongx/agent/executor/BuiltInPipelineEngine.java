@@ -1,6 +1,8 @@
 package top.rongx.agent.executor;
 
+import top.rongx.agent.domain.fs.PathGuard;
 import top.rongx.agent.domain.hash.Hashes;
+import top.rongx.agent.domain.id.Ids;
 import top.rongx.agent.domain.workspace.WorkspacePaths;
 import top.rongx.agent.domain.process.CommandShell;
 import java.io.IOException;
@@ -8,20 +10,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -1045,13 +1043,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     private static String sha256Short(String text) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(text.getBytes(StandardCharsets.UTF_8)))
-                    .substring(0, 12);
-        } catch (Exception e) {
-            return "";
-        }
+        return Hashes.shortSha(Hashes.sha256Hex(text), 12);
     }
 
     /** verify 预览里被裁掉的那一步为什么跳过（执行期同样不跑）。 */
@@ -1368,7 +1360,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     "项目仓库不可用：请先在「项目接入」页完成 clone / 本地登记，"
                             + "或在项目详情里执行「同步到平台」后重试");
         }
-        String runId = "run-" + UUID.randomUUID().toString().substring(0, 8);
+        String runId = Ids.newId("run");
         RunState state = new RunState(runId, projectId, env, pipelineId, sha);
         // 构建序号（项目 + 环境内从 1 开始）：既是历史列表的顺序，也是镜像版本 vN
         state.seq = history.nextSeq(projectId, env);
@@ -2525,9 +2517,9 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
         Map<String, String> vars = state.keptVars;
         if (vars == null) {
-            String tag = imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
+            String tag = imagePrefix + "-" + state.env + "-" + Hashes.shortSha(state.gitSha);
             vars = Map.of("gitSha", state.gitSha,
-                    "gitSha7", state.gitSha.substring(0, 7), "tag", tag);
+                    "gitSha7", Hashes.shortSha(state.gitSha), "tag", tag);
         }
         prepareResume(state, definition, idx);
         state.status = StageStatus.RUNNING;
@@ -2751,7 +2743,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             // 镜像 tag 只由「环境 + 提交」决定：同一提交重复构建复用同一个 tag（不会堆 vN），
             // 版本号 vN 只写进产物 meta，用于页面展示与回滚谱系。
             String tag = state.deployImage != null ? state.deployImage
-                    : imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
+                    : imagePrefix + "-" + state.env + "-" + Hashes.shortSha(state.gitSha);
             if (state.deployImage == null) {
                 if ("verify".equals(state.pipelineId)) {
                     // 检查构建不打包、不记账：别让日志宣称"镜像版本 vN"
@@ -2764,7 +2756,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
             Map<String, String> vars = Map.of(
                     "gitSha", state.gitSha,
-                    "gitSha7", state.gitSha.substring(0, 7),
+                    "gitSha7", Hashes.shortSha(state.gitSha),
                     "tag", tag);
             state.definition = definition;
             // 自动续跑要复用同一份变量（tag / sha），不能靠重建，否则按版本部署会串 tag
@@ -3080,10 +3072,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.autoRepairAttempts = 0;
         state.autoRepairResumed = false;
 
-        String tag = imagePrefix + "-" + state.env + "-" + state.gitSha.substring(0, 7);
+        String tag = imagePrefix + "-" + state.env + "-" + Hashes.shortSha(state.gitSha);
         Map<String, String> vars = Map.of(
                 "gitSha", state.gitSha,
-                "gitSha7", state.gitSha.substring(0, 7),
+                "gitSha7", Hashes.shortSha(state.gitSha),
                 "tag", tag);
         state.status = StageStatus.RUNNING;
         state.cancelled = false;
@@ -5300,11 +5292,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     /** 摘要里的响应体：压成一行并截断，避免整页 HTML 淹没错误信息。 */
     private static String brief(String text) {
-        if (text == null || text.isBlank()) {
-            return "";
-        }
-        String oneLine = text.replaceAll("\\s+", " ").trim();
-        return oneLine.length() > 120 ? oneLine.substring(0, 120) + "…" : oneLine;
+        return text == null || text.isBlank() ? "" : LogTail.oneLine(text, 120);
     }
 
     /** 本次运行部署出来的容器资源名（取最后一个 deployment 产物）。 */
@@ -5471,24 +5459,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     /** 路径给 git / docker 用时统一成 POSIX 风格（Windows 下 E:\x → E:/x）。 */
     private String posix(Path path) {
-        return path.toAbsolutePath().normalize().toString().replace('\\', '/');
+        return PathGuard.absoluteUnix(path);
     }
 
     /** 环境变量快照摘要：对 key + 值哈希做 SHA-256，可用于比对两次运行是否用了同一套变量。 */
     private static String envDigest(Map<String, String> values) {
-        try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            values.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey())
-                    .forEach(e -> {
-                        String vh = Hashes.sha256Hex(e.getValue());
-                        md.update((e.getKey() + "=" + vh + "\n")
-                                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                    });
-            return java.util.HexFormat.of().formatHex(md.digest());
-        } catch (Exception e) {
-            throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "环境变量快照摘要失败", e);
-        }
+        List<String> lines = values.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(e -> e.getKey() + "=" + Hashes.sha256Hex(e.getValue()) + "\n")
+                .toList();
+        return Hashes.sha256Hex(lines);
     }
 
     private long elapsed(long startNanos) {

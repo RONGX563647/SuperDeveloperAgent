@@ -12,6 +12,12 @@ export class ApiError extends Error {
   }
 }
 
+/** 登录头（无 token 时为空对象），供不能走 apiFetch 的流式 / multipart 请求复用。 */
+export function authHeaders(): Record<string, string> {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken()
   const res = await fetch(path, {
