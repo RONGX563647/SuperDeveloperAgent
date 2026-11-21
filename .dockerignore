@@ -12,3 +12,15 @@ data
 logs
 docs
 **/node_modules
+# 会话工作区与编译产物：.gitignore / platform/.gitignore 早已排除，但 Docker 上下文
+# 有自己的一份规则，漏掉就是每次构建白传 320MB+ / 8200 文件（.agent 166MB、
+# agent-gateway/target 154MB）。实测：387.2MB / 11245 文件 → 17.7MB / 1030 文件。
+#
+# 注意不能用 `**/target/`：那会把目录本身排除，导致 Dockerfile 的
+#   COPY platform/agent-gateway/target/*-exec.jar /app/app.jar
+# 直接找不到文件（可执行包正是构建上下文唯一需要的 target 产物）。
+# 因此只排除 target 下的内容，再对唯一需要的 jar 放行。
+.agent/
+**/target/*
+!platform/agent-gateway/target/*-exec.jar
+!platform/web/dist/

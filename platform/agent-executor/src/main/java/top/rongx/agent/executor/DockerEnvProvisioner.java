@@ -2,8 +2,9 @@ package top.rongx.agent.executor;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -26,6 +27,7 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.RuntimeMode;
 import top.rongx.agent.domain.env.StackAdapter;
 import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.process.PortProbe;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
 
@@ -57,6 +59,8 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     private static final long TIMEOUT_MS = 180_000;
     private static final long WAIT_MS = 45_000;
     private static final long POLL_MS = 750;
+    /** compose 等待 healthcheck 的秒数：比自造轮询的 45s 更宽（首次初始化库文件要时间）。 */
+    private static final int COMPOSE_WAIT_SECONDS = 120;
     private static final Duration PROBE_TIMEOUT = Duration.ofMillis(1500);
     private static final Pattern NAME = Pattern.compile("[a-z0-9][a-z0-9_.-]{0,63}");
     private static final Pattern KEY = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,63}");
@@ -94,6 +98,10 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     private final boolean precheckImages;
     /** Docker CLI 可执行文件（可指向 podman 等兼容实现）。 */
     private final DockerCli docker;
+    /** 是否用 {@code docker compose up --wait} 一次起齐中间件（默认开；极简安装可关）。 */
+    private boolean composeEnabled = true;
+    /** compose 可用性缓存（null = 尚未探测）。 */
+    private Boolean composeOk;
 
     public DockerEnvProvisioner(EnvironmentStore store) {
         this(store, null);
@@ -121,6 +129,18 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         this.middlewareImages = middlewareImages == null ? Map.of() : Map.copyOf(middlewareImages);
         this.precheckImages = precheckImages;
         this.docker = docker == null ? DockerCli.defaults() : docker;
+    }
+
+    /**
+     * 打开/关闭 compose 中间件路径（{@code agent.env.compose-enabled}）。
+     *
+     * <p>关掉时逐容器 {@code docker run}——保留这条路径是因为 compose 插件不是 docker 的
+     * 必然组件（极简安装里常常只有 CLI），但默认走 compose：加固参数是声明式的、
+     * 就绪判定由 healthcheck 负责、多个中间件一次起完。
+     */
+    public DockerEnvProvisioner setComposeEnabled(boolean enabled) {
+        this.composeEnabled = enabled;
+        return this;
     }
 
     /** 解析 {@code mysql=xxx,redis=yyy} 形式的镜像覆盖；非法条目直接报出，不静默忽略。 */
@@ -183,6 +203,31 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         }
         ensureNetwork(network);
 
+        // compose 路径（D14）：一次起齐所有中间件，并让 compose 自己等 healthcheck。
+        // 关掉时逐容器 docker run（逃生门，保留一个版本）：compose 依赖 docker compose 插件，
+        // 极简安装里可能只有 docker CLI。
+        if (composeEnabled && !kinds.isEmpty() && composeAvailable()) {
+            try {
+                if (ensureByCompose(projectId, env, namespace, network, kinds,
+                        created, started, failed)) {
+                    generated.addAll(generateMissingSecrets(projectId, env, requiredKeys));
+                    if (!failed.isEmpty()) {
+                        Result partial = Result.ok(created, started, injected, generated);
+                        return new Result(false, partial.created(), partial.started(),
+                                partial.injected(), partial.generated(), List.copyOf(failed),
+                                "环境容器自愈未完成：" + String.join("；", failed));
+                    }
+                    return Result.ok(created, started, injected, generated);
+                }
+            } catch (RuntimeException e) {
+                // compose 失败不吞掉：记日志后逐容器回退，最终仍能起来就是可用性优先
+                log.warn("compose 准备中间件失败，回退逐容器创建：{}", e.toString());
+                created.clear();
+                started.clear();
+                failed.clear();
+            }
+        }
+
         for (String kind : kinds) {
             String name = containerName(namespace, projectId, kind);
             if (!NAME.matcher(name).matches()) {
@@ -205,6 +250,148 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                     List.copyOf(failed), "环境容器自愈未完成：" + String.join("；", failed));
         }
         return Result.ok(created, started, injected, generated);
+    }
+
+    // ---------------------------------------------------------------- compose 路径
+
+    /**
+     * compose 可用性：{@code docker compose version} 能跑才走 compose 路径。
+     *
+     * <p>结论缓存一次：极简安装（只有 docker CLI、没有 compose 插件）会每次都失败，
+     * 而每轮环境准备都探测一次纯属浪费。
+     */
+    private boolean composeAvailable() {
+        Boolean cached = composeOk;
+        if (cached != null) {
+            return cached;
+        }
+        boolean ok = ops().run(MiddlewareCompose.versionArgv(docker)).ok();
+        composeOk = ok;
+        if (!ok) {
+            log.info("未检测到 docker compose 插件，环境中间件回落逐容器 docker run");
+        }
+        return ok;
+    }
+
+    /**
+     * 用 compose 一次起齐中间件。
+     *
+     * @return true = compose 路径已处理（含部分失败并已写入 failed）；
+     *         false = 有服务需要逐容器处理（凭据不一致需要重建卷等），交给调用方回退
+     */
+    private boolean ensureByCompose(String projectId, String env, String namespace, String network,
+                                    List<String> kinds, List<String> created, List<String> started,
+                                    List<String> failed) {
+        List<MiddlewareCompose.Service> services = new ArrayList<>();
+        List<String> toRename = new ArrayList<>();
+        for (String kind : kinds) {
+            String name = containerName(namespace, projectId, kind);
+            if (!NAME.matcher(name).matches()) {
+                failed.add(name + "：容器名不合法（只允许小写字母/数字/._-）");
+                continue;
+            }
+            Creds creds = declaredCreds(projectId, env, kind);
+            EnvResource existing = findByName(env, name);
+            boolean running = Boolean.TRUE.equals(liveRunning(name));
+            if (existing != null && running && sameCreds(existing, creds)) {
+                // 已就绪：记健康即可，不需要 compose 参与
+                store.recordHealth(existing.id(), true, null);
+                applyOverrides(projectId, existing, true);
+                continue;
+            }
+            // 凭据不一致 → 必须重建（MySQL/Postgres 的初始化密码只认数据卷里的值），
+            // 这类"要删卷"的动作不适合塞进 compose，交回逐容器路径。
+            if (containerExists(name) && !sameCreds(existing, creds)) {
+                return false;
+            }
+            int port = existing != null && existing.port() > 0
+                    ? existing.port() : allocatePort(kind, env, projectId);
+            services.add(new MiddlewareCompose.Service(kind, name, imageOf(kind), port,
+                    name + "-data", volumePath(kind), middlewareEnv(kind, creds),
+                    middlewareCommand(kind, creds)));
+            toRename.add(name + "(" + port + ")");
+        }
+        if (services.isEmpty()) {
+            return true;     // 全部已就绪，什么都不用做
+        }
+
+        Path file = CWD.resolve(".agent").resolve("env").resolve(env).resolve("docker-compose.yml");
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, MiddlewareCompose.render(namespace, network, services),
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.warn("写 compose 文件失败，回退逐容器创建：{}", e.toString());
+            return false;
+        }
+
+        StringBuilder sink = new StringBuilder();
+        ProcessExecutor.StepOutcome up = executor.exec(CWD,
+                MiddlewareCompose.upArgv(docker, file.toString(), namespace, COMPOSE_WAIT_SECONDS),
+                TIMEOUT_MS, sink, () -> false);
+        if (up.exitCode() != 0) {
+            // compose 起来了部分容器也算失败：调用方据此报错，但已起的不再重复创建
+            failed.add("compose up 失败：" + ProcessExecutor.redact(ProcessExecutor.tail(sink)));
+            services.forEach(s -> failed.add(s.containerName() + "：未确认就绪"));
+            return true;
+        }
+        log.info("环境中间件已由 compose 就绪：{}", MiddlewareCompose.describe(services));
+        for (MiddlewareCompose.Service service : services) {
+            Creds creds = declaredCreds(projectId, env, service.kind());
+            EnvResource existing = findByName(env, service.containerName());
+            EnvResource saved = store.saveResource(new EnvResource(
+                    existing == null ? null : existing.id(), env, service.kind(),
+                    service.containerName(), "127.0.0.1", service.hostPort(),
+                    defaultPort(service.kind()), service.containerName(), creds.database(),
+                    creds.username(), creds.password(), network,
+                    existing == null ? null : existing.serverId(), "LOCAL_DOCKER", true,
+                    System.currentTimeMillis(), null));
+            applyOverrides(projectId, saved, true);
+            (existing == null ? created : started).add(service.containerName()
+                    + "(" + service.hostPort() + ")");
+        }
+        return true;
+    }
+
+    /** 中间件的环境变量（compose 与单容器路径共用，避免两处各拼一遍）。 */
+    static Map<String, String> middlewareEnv(String kind, Creds creds) {
+        Map<String, String> env = new LinkedHashMap<>();
+        switch (kind) {
+            case "mysql", "mariadb" -> {
+                env.put("MYSQL_ROOT_PASSWORD", nullSafe(creds.password()));
+                env.put("MYSQL_DATABASE", nullSafe(creds.database()));
+            }
+            case "postgres" -> {
+                env.put("POSTGRES_USER", nullSafe(creds.username()));
+                env.put("POSTGRES_PASSWORD", nullSafe(creds.password()));
+                env.put("POSTGRES_DB", nullSafe(creds.database()));
+            }
+            case "rabbitmq" -> {
+                env.put("RABBITMQ_DEFAULT_USER", nullSafe(creds.username()));
+                env.put("RABBITMQ_DEFAULT_PASS", nullSafe(creds.password()));
+            }
+            case "minio" -> {
+                env.put("MINIO_ROOT_USER", nullSafe(creds.username()));
+                env.put("MINIO_ROOT_PASSWORD", nullSafe(creds.password()));
+            }
+            case "mongo" -> {
+                env.put("MONGO_INITDB_ROOT_USERNAME", nullSafe(creds.username()));
+                env.put("MONGO_INITDB_ROOT_PASSWORD", nullSafe(creds.password()));
+            }
+            default -> {
+                // redis 无环境变量需求（密码走 command）
+            }
+        }
+        return Map.copyOf(env);
+    }
+
+    /** 中间件的启动命令（只有 redis 需要）。 */
+    static List<String> middlewareCommand(String kind, Creds creds) {
+        if ("redis".equals(kind) && creds != null
+                && creds.password() != null && !creds.password().isBlank()) {
+            return List.of("redis-server", "--requirepass", creds.password());
+        }
+        return List.of();
     }
 
     // ---------------------------------------------------------------- 容器对账
@@ -675,59 +862,45 @@ public class DockerEnvProvisioner implements EnvProvisioner {
 
     // ---------------------------------------------------------------- Docker 辅助
 
+    /**
+     * Docker 运维操作（唯一入口）。
+     *
+     * <p>原先本类自带 {@code dockerProblem} / {@code ensureNetwork} / {@code liveRunning} /
+     * {@code containerExists} / {@code removeContainer} 五份私有实现，而 {@code DockerNetwork}
+     * 与 {@code AppRuntimeInspector} 里还各有一份语义相同的代码——超时从 15s 到 60s 不等、
+     * 运行态判据也不一致。现在统一走 {@link DockerOps}，调用方只表达"要什么事实"。
+     */
+    private DockerOps ops() {
+        return new DockerOps(docker.binary(), CWD);
+    }
+
     private String dockerProblem() {
-        StringBuilder sink = new StringBuilder();
-        ProcessExecutor.StepOutcome outcome =
-                executor.exec(CWD, docker.cmd("version", "--format", "{{.Server.Version}}"),
-                        20_000, sink, () -> false);
-        if (outcome.exitCode() == 0) {
-            return null;
-        }
-        return "本机 Docker 不可用：" + ProcessExecutor.redact(ProcessExecutor.tail(sink));
+        return ops().available() ? null : "本机 Docker 不可用：docker info 探测失败";
     }
 
     private void ensureNetwork(String network) {
         if (!NAME.matcher(network).matches()) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_INPUT, "网络名不合法：" + network);
         }
-        StringBuilder sink = new StringBuilder();
-        ProcessExecutor.StepOutcome inspect =
-                executor.exec(CWD, docker.cmd("network", "inspect", network), 15_000,
-                        sink, () -> false);
-        if (inspect.exitCode() == 0) {
-            return;
-        }
-        ProcessExecutor.StepOutcome created = executor.exec(CWD,
-                docker.cmd("network", "create", network), 30_000, sink, () -> false);
-        if (created.exitCode() != 0) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "环境网络创建失败 " + network + "："
-                    + ProcessExecutor.redact(ProcessExecutor.tail(sink)));
+        String problem = ops().ensureNetwork(network);
+        if (problem != null) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
+                    "环境网络未就绪：" + problem);
         }
     }
 
     /** @return true/false 运行状态；null 表示容器不存在或 docker 不可用。 */
     private Boolean liveRunning(String name) {
-        StringBuilder sink = new StringBuilder();
-        ProcessExecutor.StepOutcome outcome = executor.exec(CWD,
-                docker.cmd("inspect", "--format", "{{.State.Running}}", name), 15_000,
-                sink, () -> false);
-        if (outcome.exitCode() != 0) {
-            return null;
-        }
-        return "true".equalsIgnoreCase(ProcessExecutor.tail(sink).trim());
+        return ops().containerRunning(name).orElse(null);
     }
 
     private boolean containerExists(String name) {
-        StringBuilder sink = new StringBuilder();
-        ProcessExecutor.StepOutcome outcome = executor.exec(CWD,
-                docker.cmd("inspect", "--format", "{{.Name}}", name), 15_000, sink,
-                () -> false);
-        return outcome.exitCode() == 0;
+        return ops().containerRunning(name).isPresent()
+                || ops().run(ops().cmd("inspect", "--format", "{{.Name}}", name)).ok();
     }
 
     private void removeContainer(String name) {
-        StringBuilder sink = new StringBuilder();
-        executor.exec(CWD, docker.cmd("rm", "-f", name), 60_000, sink, () -> false);
+        ops().removeContainer(name);
     }
 
     private void removeVolume(String name) {
@@ -737,19 +910,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     }
 
     private boolean waitRunning(String name) {
-        long deadline = System.currentTimeMillis() + WAIT_MS;
-        while (System.currentTimeMillis() < deadline) {
-            if (Boolean.TRUE.equals(liveRunning(name))) {
-                return true;
-            }
-            try {
-                Thread.sleep(POLL_MS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        return Boolean.TRUE.equals(liveRunning(name));
+        return ops().awaitRunning(name, WAIT_MS, POLL_MS, null);
     }
 
     /** 执行 docker run；成功返回 null，失败返回可读原因（不含密码）。 */
@@ -757,16 +918,11 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                                 String username, String password, String network) {
         String image = imageOf(kind);
         // 启动前预检：缺镜像时 docker run 会自行拉取，网络不通就是一次长达 180s 的静默等待。
-        // 先用 docker image inspect 在 5s 内确认，缺了直接给出可操作的两条路径。
-        if (precheckImages) {
-            BoundedCommand.Outcome check = BoundedCommand.run(
-                    docker.cmd("image", "inspect", image), 5_000L);
-            if (!check.ok()) {
-                return "环境中间件镜像未就绪（" + image + "）：请先执行 docker pull " + image
-                        + "，或通过 agent.env.middleware-images." + kind
-                        + " 指定本机已有的镜像（预检 " + check.detail() + "）；"
-                        + "也可设 agent.env.precheck-images=false 关闭预检";
-            }
+        // 先用 image inspect 在 5s 内确认，缺了直接给出可操作的两条路径。
+        if (precheckImages && !ops().imageExists(image)) {
+            return "环境中间件镜像未就绪（" + image + "）：请先执行 docker pull " + image
+                    + "，或通过 agent.env.middleware-images." + kind
+                    + " 指定本机已有的镜像；也可设 agent.env.precheck-images=false 关闭预检";
         }
         StringBuilder sink = new StringBuilder();
         ProcessExecutor.StepOutcome outcome =
@@ -800,11 +956,18 @@ public class DockerEnvProvisioner implements EnvProvisioner {
                                 String network, Map<String, String> images) {
         List<String> argv = new ArrayList<>(docker.cmd("run", "-d", "--name", name,
                 "--restart", "unless-stopped", "--network", network,
+                // 与应用容器同一套加固（G5）：中间件容器过去是整条链路里唯一零安全参数的容器，
+                // 容器内提权后可横向移动到同网络的应用容器。
+                // 中间件（mysql/redis/...）都不需要额外 capability，也不需要 setuid 提权。
+                "--security-opt", "no-new-privileges",
+                "--cap-drop", "ALL",
+                // 只绑回环：中间件绝不对外暴露，应用容器走环境网络（<namespace>-net）访问。
+                "-p", "127.0.0.1:" + port + ":" + defaultPort(kind),
                 // 与应用容器同一 compose 组：Docker Desktop 里一个环境一个组
                 "--label", "com.docker.compose.project="
                         + DockerDeployer.composeProject(network, null),
                 "--label", "com.docker.compose.service=" + kind,
-                "-p", "127.0.0.1:" + port + ":" + defaultPort(kind)));
+                "--label", "agent.env.middleware=" + kind));
         String volume = volumePath(kind);
         if (volume != null) {
             argv.add("-v");
@@ -932,7 +1095,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         return true;
     }
 
-    private static int defaultPort(String kind) {
+    static int defaultPort(String kind) {
         return switch (kind) {
             case "mysql", "mariadb" -> 3306;
             case "redis" -> 6379;
@@ -944,7 +1107,7 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         };
     }
 
-    private static String volumePath(String kind) {
+    static String volumePath(String kind) {
         return switch (kind) {
             case "mysql", "mariadb" -> "/var/lib/mysql";
             case "redis" -> "/data";
@@ -992,14 +1155,14 @@ public class DockerEnvProvisioner implements EnvProvisioner {
         throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, kind + " 端口段 " + base + "–" + (base + 99) + " 已耗尽");
     }
 
+    /**
+     * 端口是否空闲（走 {@link PortProbe}）。
+     *
+     * <p>中间件必须事先知道端口：它要写进应用的环境变量（{@code DB_PORT} 等），
+     * 所以不能像应用容器那样交给 docker 分配。这是"必须探测"的正当场景之一。
+     */
     private static boolean free(int port) {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(false);
-            socket.bind(new InetSocketAddress("127.0.0.1", port));
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
+        return PortProbe.isFree(port);
     }
 
     private EnvResource findByName(String env, String name) {
@@ -1031,6 +1194,6 @@ public class DockerEnvProvisioner implements EnvProvisioner {
     }
 
     /** 一个中间件容器应有的凭据（来自项目声明或平台生成）。 */
-    private record Creds(String database, String username, String password) {
+    record Creds(String database, String username, String password) {
     }
 }

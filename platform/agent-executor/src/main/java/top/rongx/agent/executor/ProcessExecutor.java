@@ -5,15 +5,14 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.process.LogRedactor;
 
 /**
  * 单条命令的执行内核（宿主进程与容器共用）。
@@ -339,34 +338,14 @@ final class ProcessExecutor {
     }
 
     /**
-     * 日志脱敏（规约 §1.6 redactor）：过滤常见的密钥/凭证形状，避免写入证据链。
-     * 仅做形态匹配，不做内容解析；命中即替换为 {@code ***}。
+     * 日志脱敏（规约 §1.6 redactor）。
+     *
+     * <p><b>规则只有一份</b>：实现见 {@link LogRedactor}。本方法保留为薄委托，
+     * 因为调用方遍布部署器、沙箱与引擎；规则本体收在 domain 层，网关的
+     * {@code BugFixRedactor} 也走同一份，避免"某个出口漏了一条规则"。
      */
     static String redact(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        // 1. Authorization / Bearer / token 赋值
-        //    Bearer 阈值 8：与 agent-tools SecretRedactor 对齐（7 位以下不构成有效凭证，
-        //    统一阈值才能保证同一段密钥在所有出口的行为一致）。
-        text = text.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._-]{8,}", "$1***");
-        text = text.replaceAll("(?i)((?:" + "token|secret|password|passwd|api[_-]?key|access[_-]?key"
-                + "|authorization" + ")\\s*[=:]\\s*)[^\\s\"']{8,}", "$1***");
-        // 1a. TOKEN_PREFIX：OpenAI/Anthropic、GitHub、GitLab、Slack、AWS 等前缀形凭证。
-        //     与 SecretRedactor 的 TOKEN_PREFIX 规则对齐；sk-proj- / sk-ant- 由 sk- 覆盖。
-        text = text.replaceAll("(?i)(sk-[A-Za-z0-9_-]{4,}"
-                + "|gh[pousr]_[A-Za-z0-9]{4,}"
-                + "|glpat-[A-Za-z0-9_-]{4,}"
-                + "|xox[baprs]-[A-Za-z0-9_-]{4,}"
-                + "|AKIA[0-9A-Z]{8,})", "***");
-        // 2. 长十六进制串（jwt 第二段等）按行内孤立 token 处理；
-        //    但 `sha256:<hex>` 是镜像/产物的公开指纹，属于构建证据，必须保留（否则页面上只剩 ***）。
-        text = text.replaceAll("(?<!sha256:)(?<!sha512:)\\b[0-9a-fA-F]{64}\\b", "***");
-        // 3. 形如 -----BEGIN ... PRIVATE KEY----- 的 PEM 块
-        text = text.replaceAll("(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "***PEM***");
-        // 4. Cookie / Set-Cookie 整行（与 SecretRedactor 对齐：整行都是会话凭证）
-        text = text.replaceAll("(?im)^\\s*(?:set-)?cookie\\s*:.*$", "***COOKIE***");
-        return text;
+        return LogRedactor.redact(text);
     }
 
     /**
@@ -376,22 +355,7 @@ final class ProcessExecutor {
      * 运行日志写盘前用环境里的真实密钥值兜底，避免明文进入证据链。
      */
     static String redact(String text, Collection<String> sensitiveValues) {
-        String out = redact(text);
-        if (out == null || out.isEmpty() || sensitiveValues == null || sensitiveValues.isEmpty()) {
-            return out;
-        }
-        List<String> values = sensitiveValues.stream()
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                // 太短的值（如 "1"、"true"）替换会把正常日志打碎，且不构成有效密钥。
-                .filter(v -> v.length() >= 4)
-                .distinct()
-                .sorted(Comparator.comparingInt(String::length).reversed())
-                .toList();
-        for (String value : values) {
-            out = out.replace(value, "***");
-        }
-        return out;
+        return LogRedactor.redact(text, sensitiveValues);
     }
 
     static void warn(String message) {

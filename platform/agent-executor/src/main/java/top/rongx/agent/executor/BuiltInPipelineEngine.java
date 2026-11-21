@@ -2,8 +2,6 @@ package top.rongx.agent.executor;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -65,6 +63,7 @@ import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.StagePreview;
 import top.rongx.agent.domain.release.ReleaseVersion;
 import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.process.PortProbe;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
 import top.rongx.agent.executor.RunHistoryStore.RunSnapshot;
@@ -1849,7 +1848,13 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
 
     private boolean dockerImageExists(String tag) {
         // 只读预检：缺镜像是配置问题，5s 内给出 false，由调用方转成 E-705 明确阻塞原因。
-        return BoundedCommand.run(dockerCli.cmd("image", "inspect", tag), 5_000L).ok();
+        // 走 DockerOps：探针超时与"存在性"判据全平台只有一份（原实现散在 7 处，5s~15s 不等）。
+        return dockerOps().imageExists(tag);
+    }
+
+    /** 本机 Docker 运维操作入口（与部署器/沙箱共用同一份探测语义）。 */
+    private DockerOps dockerOps() {
+        return new DockerOps(dockerCli.binary());
     }
 
     @Override
@@ -4871,9 +4876,21 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
-     * 宿主端口分配：优先沿用租约；冲突则在期望端口之后找空闲端口。
+     * 宿主端口决策。
      *
-     * <p>SERVER 目标不在本机检查（远端由部署器报错），只沿用/记录租约。
+     * <p><b>DOCKER 目标不再自己找端口</b>：期望端口（或租约端口）被占用时返回 {@code 0}，
+     * 由部署器交给 docker 分配（{@code -p 127.0.0.1::<containerPort>}），成功后再用
+     * {@code docker port} 回读实际端口并回写租约。
+     *
+     * <p>为什么改：原实现在这里"试绑一个候选、释放、再交给 docker 绑定"，中间永远有
+     * TOCTOU 窗口（释放到 docker 真正绑定之间会被别的进程抢走），失败后还要在
+     * 200 个候选端口里循环重试。让 docker 自己分配没有窗口，也不需要猜。
+     *
+     * <p>HOST / SERVER 目标保留本机探测：
+     * <ul>
+     *   <li>HOST：{@code java -jar --server.port=N} 必须先把 N 告诉 JVM，没有"让内核挑"的余地；</li>
+     *   <li>SERVER：不在本机检查（远端由部署器报错），只沿用/记录租约。</li>
+     * </ul>
      */
     private int allocateHostPort(RunState state, DeployTarget target, int desired, int containerPort) {
         if (envStore == null) {
@@ -4884,13 +4901,14 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         int candidate = lease == null ? desired : lease.hostPort();
         boolean free = target == DeployTarget.SERVER || portFree(candidate);
         if (!free) {
-            int found = -1;
-            for (int p = Math.max(1, desired) + 1; p <= desired + 200; p++) {
-                if (portFree(p)) {
-                    found = p;
-                    break;
-                }
+            if (target == DeployTarget.DOCKER) {
+                // 交给 docker：容器端口固定，宿主端口由内核挑，事后回读
+                state.log.append("[port] ").append(candidate)
+                        .append(" 被占用 → 交给 docker 分配宿主端口（避免试绑竞态）\n");
+                state.deployHostPort = 0;      // 0 = 待回读，不是"没有端口"
+                return 0;
             }
+            int found = PortProbe.firstFree(Math.max(1, desired) + 1, 200);
             if (found < 0) {
                 throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "端口分配失败：从 " + desired
                         + " 起 200 个端口都不可用（宿主端口耗尽）");
@@ -4937,14 +4955,16 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         throw new BuildException(ErrorCode.BUILD_INVALID_STATE, "端口分配失败：从 " + desired + " 起找不到可用端口");
     }
 
+    /**
+     * 端口是否可绑定。
+     *
+     * <p>只有 HOST 目标还需要它（{@code java -jar --server.port=N} 必须先把端口告诉 JVM）。
+     * DOCKER 目标已改为让 docker 自己分配 + {@code docker port} 回读（无 TOCTOU），
+     * 实现见 {@link PortProbe}（全平台唯一一份，原来这里与另外 3 处各写一遍、
+     * 绑定地址还不一致）。
+     */
     private static boolean portFree(int port) {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(false);
-            socket.bind(new InetSocketAddress("0.0.0.0", port));
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+        return PortProbe.isFree(port);
     }
 
     /** 从部署 endpoint 取出实际端口（http://host:port/path）；解析失败返回 -1。 */

@@ -26,6 +26,7 @@ import top.rongx.agent.domain.port.ActionResolver;
 import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RecipeException;
+import top.rongx.agent.domain.image.ImageBuildCommand;
 
 /**
  * 配方解析（方案 D）。
@@ -69,8 +70,9 @@ public class RecipeActionResolver implements ActionResolver {
             ActionId.FRONTEND_TEST, List.of(List.of("pnpm", "test")),
             // 镜像打包没有"仓库必须自定义"的理由：标准做法就是 BuildKit（docker buildx build），
             // 给一份内置配方后，仓库里的同名配方反而可以被引擎拒绝上宿主（见 trustedForHost）。
-            ActionId.IMAGE_PACKAGE, List.of(
-                    List.of("docker", "buildx", "build", "--load", "-q", "-t", "${tag}", ".")));
+            // 命令本体只有一份（ImageBuildCommand）：内置配方、骨架生成、文档都引用它，
+            // 否则三处字面量必然漂移（历史上就出现过 build 与 buildx --load 并存）。
+            ActionId.IMAGE_PACKAGE, List.of(ImageBuildCommand.standard("${tag}")));
 
     /** 动作级默认超时：测试给足 20m，构建/镜像 10~20m，其余 15m。 */
     private static final Map<ActionId, Duration> DEFAULT_TIMEOUTS = Map.of(

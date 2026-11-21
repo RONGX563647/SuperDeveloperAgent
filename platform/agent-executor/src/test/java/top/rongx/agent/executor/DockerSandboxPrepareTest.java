@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import top.rongx.agent.domain.error.PlatformException;
@@ -96,7 +97,10 @@ class DockerSandboxPrepareTest {
         List<String> cmd = sandbox.wrap(Path.of("E:/work/P"), List.of("mvn", "-v"));
 
         assertTrue(recorder.commands.isEmpty(), "命令构造不应有任何副作用");
-        assertTrue(cmd.contains("agent-cache-p:/cache"), "缓存卷挂载仍要正确生成：" + cmd);
+        // 卷名 = 可读前缀 + 路径哈希：可读部分便于 docker volume ls 排障，
+        // 哈希部分是唯一性来源（原实现只看目录名，同名工程会撞卷）。
+        assertTrue(cmd.stream().anyMatch(a -> a.matches("agent-cache-p-[0-9a-f]{16}:/cache")),
+                "缓存卷挂载仍要正确生成且带路径哈希：" + cmd);
         assertTrue(cmd.contains("COREPACK_HOME=/cache/corepack"),
                 "有缓存卷时 corepack 必须用卷内目录：" + cmd);
     }
@@ -129,6 +133,39 @@ class DockerSandboxPrepareTest {
         assertTrue(recorder.commands.get(3).contains("chown"));
         assertTrue(recorder.commands.get(4).contains("touch"));
         assertTrue(live.toString().contains("[sandbox] $ "), "准备命令要写进实时日志");
+    }
+
+    @Test
+    @DisplayName("初始化容器带生命周期标签与固定名字：否则被杀后 --rm 不生效、清扫也看不见")
+    void initContainersAreLabeledAndNamed() {
+        Recorder recorder = new Recorder(freshVolume());
+
+        sandbox(recorder).prepareCacheVolume(Path.of("E:/work/P"), () -> false, null);
+
+        // 每一步初始化命令（探测 + mkdir + chmod + chown + touch）都必须带标签和名字：
+        // 只有标签没有名字 → CLI 被 kill 时容器残留；只有名字没有标签 → 清扫按
+        // MANAGED_LABEL 过滤，永远看不到它。两者缺一都会在 `docker ps -a` 里长期留垃圾。
+        assertFalse(recorder.commands.isEmpty(), "初始化必须真的执行了命令");
+        for (List<String> cmd : recorder.commands) {
+            String joined = String.join(" ", cmd);
+            assertTrue(joined.contains("agent.sandbox.managed=true"),
+                    "初始化容器必须带生命周期标签：" + joined);
+            assertTrue(joined.contains("agent.sandbox.owner="),
+                    "初始化容器必须带归属标签（清扫据此判断进程是否已退出）：" + joined);
+            assertTrue(cmd.contains("--name"),
+                    "初始化容器必须有名字，否则 --rm 失效后无法精确回收：" + joined);
+            String name = cmd.get(cmd.indexOf("--name") + 1);
+            assertTrue(name.startsWith("agent-act-init-"),
+                    "初始化容器名必须在清扫前缀内：" + name);
+            assertTrue(name.length() <= 63, "docker 容器名上限 63：" + name);
+        }
+        // 同一卷的多次初始化不能复用同一个名字（docker run 遇重名会直接失败）
+        List<String> names = recorder.commands.stream()
+                .filter(c -> c.contains("--name"))
+                .map(c -> c.get(c.indexOf("--name") + 1))
+                .toList();
+        assertEquals(names.size(), names.stream().distinct().count(),
+                "同一次准备里的初始化容器名必须互不相同：" + names);
     }
 
     @Test
@@ -188,7 +225,7 @@ class DockerSandboxPrepareTest {
             }
             // 项目 A 的初始化（mkdir/chown/touch）一直卡着，模拟大缓存的 chown -R
             if (cmd.stream().anyMatch(a -> a.contains(":/cache"))
-                    && String.join(" ", cmd).contains("agent-cache-a:")) {
+                    && String.join(" ", cmd).contains("agent-cache-a-")) {
                 aInitializing.countDown();
                 try {
                     releaseA.await(10, java.util.concurrent.TimeUnit.SECONDS);
@@ -208,8 +245,8 @@ class DockerSandboxPrepareTest {
                     () -> sandbox.prepareCacheVolume(Path.of("E:/work/B"), () -> false, null));
 
             b.get(5, java.util.concurrent.TimeUnit.SECONDS); // 全局锁时这里会超时
-            assertTrue(sandbox.wrap(Path.of("E:/work/B"), List.of("mvn", "-v"))
-                    .contains("agent-cache-b:/cache"), "项目 B 的缓存卷独立");
+            assertTrue(sandbox.wrap(Path.of("E:/work/B"), List.of("mvn", "-v")).stream()
+                    .anyMatch(arg -> arg.startsWith("agent-cache-b-")), "项目 B 的缓存卷独立");
 
             releaseA.countDown();
             a.get(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -231,8 +268,10 @@ class DockerSandboxPrepareTest {
                 String user = cmd.get(cmd.indexOf("--user") + 1);
                 attemptedUsers.add(user);
                 if ("1000:1000".equals(user)) {
-                    // 全新卷的 /cache 属主是 root，1000 用户写不了
-                    return ProcessExecutor.StepOutcome.failed(1, "E-101", "mkdir: Permission denied");
+                    // 全新卷的 /cache 属主是 root，1000 用户写不了。
+                    // 错误码必须是真实的 E-104（busybox mkdir 属 SCRIPT 类）——
+                    // 早先实现只对 E-101 回退，于是这条回退分支在生产里从未生效。
+                    return ProcessExecutor.StepOutcome.failed(1, "E-104", "mkdir: Permission denied");
                 }
             }
             return ok();
@@ -244,6 +283,47 @@ class DockerSandboxPrepareTest {
                 "被拒后必须换 root 再试一次，而不是直接失败");
         assertTrue(recorder.commands.get(recorder.commands.size() - 1).contains("touch"),
                 "回退成功后仍要写完成标记");
+    }
+
+    @Test
+    @DisplayName("回退判定按「命令失败」而非特定错误码：E-101 与 E-104 都要回退，超时/取消不回退")
+    void rootFallbackCoversAllCommandFailures() {
+        // 回归背景：原实现写死只认 E-101，而初始化容器的失败是 E-104，
+        // 结果冷卷（属主 root）永远初始化失败。这里把三种真实错误码都钉住。
+        for (String code : List.of("E-101", "E-104", "E-209")) {
+            List<String> users = new ArrayList<>();
+            Recorder recorder = new Recorder(cmd -> {
+                if (isReadyProbe(cmd)) {
+                    return ProcessExecutor.StepOutcome.failed(1, null, "not found");
+                }
+                if (cmd.contains("mkdir")) {
+                    String user = cmd.get(cmd.indexOf("--user") + 1);
+                    users.add(user);
+                    return "1000:1000".equals(user)
+                            ? ProcessExecutor.StepOutcome.failed(1, code, "denied")
+                            : ok();
+                }
+                return ok();
+            });
+
+            sandbox(recorder).prepareCacheVolume(Path.of("E:/work/" + code.replace("-", "")),
+                    () -> false, null);
+
+            assertEquals(List.of("1000:1000", "0:0"), users, code + " 必须触发 root 回退");
+        }
+
+        // 超时换用户也没用：不应把等待时间翻倍
+        List<String> onTimeout = new ArrayList<>();
+        Recorder recorder = new Recorder(cmd -> {
+            if (isReadyProbe(cmd)) {
+                return ProcessExecutor.StepOutcome.failed(1, null, "not found");
+            }
+            onTimeout.add(cmd.get(cmd.indexOf("--user") + 1));
+            return ProcessExecutor.StepOutcome.failed(124, "E-302", "执行超时");
+        });
+        assertThrows(PlatformException.class,
+                () -> sandbox(recorder).prepareCacheVolume(Path.of("E:/work/TO"), () -> false, null));
+        assertTrue(onTimeout.stream().noneMatch("0:0"::equals), "超时不应触发 root 重试");
     }
 
     @Test

@@ -61,10 +61,26 @@ public class ServerDeployer implements Deployer {
     private final ProcessExecutor executor = new ProcessExecutor();
     private final DeployServerRepository servers;
     private final SshAccess ssh;
+    /** 是否走 {@code docker --context} 路径（默认关闭：需要运维侧先建好 context）。 */
+    private boolean useDockerContext;
+    /** 镜像准入策略（与构建沙箱共用同一份判定）；null 视为不限制。 */
+    private SandboxImagePolicy imagePolicy = SandboxImagePolicy.permissive();
 
     public ServerDeployer(DeployServerRepository servers, SshAccess ssh) {
         this.servers = servers;
         this.ssh = ssh;
+    }
+
+    /** 注入镜像准入策略（与 DockerDeployer / DockerSandbox 共用，保证判定一致）。 */
+    public ServerDeployer setImagePolicy(SandboxImagePolicy policy) {
+        this.imagePolicy = policy == null ? SandboxImagePolicy.permissive() : policy;
+        return this;
+    }
+
+    /** 打开/关闭 {@code docker --context} 部署路径（{@code agent.deploy.use-docker-context}）。 */
+    public ServerDeployer setUseDockerContext(boolean enabled) {
+        this.useDockerContext = enabled;
+        return this;
     }
 
     /** 没有配置存储时的占位实现（测试/默认装配用）：一律 E-505。 */
@@ -129,7 +145,11 @@ public class ServerDeployer implements Deployer {
         }
         try {
             image = ImageRef.require(image, "deploy.image");
+            imagePolicy.require(image, SandboxImagePolicy.Source.DEPLOY);
         } catch (RecipeException e) {
+            return DeployResult.failed(DeployTarget.SERVER, e.code(), e.getMessage(), "");
+        } catch (top.rongx.agent.domain.error.SandboxDeniedException e) {
+            // 镜像不在允许列表 / 浮动 tag：策略拒绝（E-707），不是部署失败
             return DeployResult.failed(DeployTarget.SERVER, e.code(), e.getMessage(), "");
         }
 
@@ -173,6 +193,13 @@ public class ServerDeployer implements Deployer {
         }
 
         try {
+            // docker --context 路径（D17，可选）：本机 CLI 直连远端守护进程，
+            // 镜像由 docker 自己传（ssh:// 通道或 registry），不走 save/tar/load。
+            // 开关默认关闭：context 需要运维一次性 `docker context create`，配错时的
+            // 报错远不如现有 SSH 诊断清晰，因此不改变默认行为。
+            if (useContext(server) && contextReady(server, secret, log)) {
+                return deployViaContext(request, server, secret, image, container, slot);
+            }
             // 远端已有完全相同的镜像（同 Image ID）时跳过 save/传输/load：
             // 重复发布同一提交不再传几百 MB，也不会因为临时磁盘不足而失败。
             String localImageId = localImageId(workdir, image);
@@ -377,8 +404,169 @@ public class ServerDeployer implements Deployer {
     }
 
     /**
-     * 探测远端 docker：优先普通用户，权限不足时尝试 {@code sudo -n}。
+     * context 是否真的指向这台服务器且远端 docker 可用。
      *
+     * <p>校验两件事，缺一不可：
+     * <ol>
+     *   <li>本机存在该 context（{@code docker context inspect}）；</li>
+     *   <li>经该 context 能问到远端守护进程的版本。</li>
+     * </ol>
+     * 任一失败就<b>回落到 SSH 路径</b>并把原因写进日志——context 是可选优化，
+     * 不能因为它把一条原本能成功的部署弄失败。
+     */
+    private boolean contextReady(DeployServer server, String secret, StringBuilder log) {
+        String name = contextName(server);
+        ProcessExecutor.StepOutcome inspect = executor.exec(Path.of("."),
+                List.of("docker", "context", "inspect", name), PROBE_TIMEOUT_MS,
+                new StringBuilder(), BooleanSupplierNever.INSTANCE);
+        if (inspect.exitCode() != 0) {
+            log.append("[deploy] 未找到 docker context ").append(name)
+                    .append("，回落到 SSH + save/load 路径（如需启用请执行 "
+                            + "docker context create ").append(name)
+                    .append(" --docker host=ssh://").append(server.sshUser())
+                    .append('@').append(server.host()).append("）\n");
+            return false;
+        }
+        ProcessExecutor.StepOutcome version = executor.exec(Path.of("."),
+                List.of("docker", "--context", name, "version", "--format", "{{.Server.Version}}"),
+                PROBE_TIMEOUT_MS, new StringBuilder(), BooleanSupplierNever.INSTANCE);
+        if (version.exitCode() != 0) {
+            log.append("[deploy] context ").append(name)
+                    .append(" 无法连到远端守护进程，回落到 SSH 路径\n");
+            return false;
+        }
+        log.append("[deploy] 使用 docker context ").append(name).append(" 直连远端（跳过 save/tar/load）\n");
+        return true;
+    }
+
+    /**
+     * 经 {@code docker --context} 部署：不需要 save/ssh/load，镜像由 docker 自己传输。
+     *
+     * <p>失败语义与 SSH 路径一致：先删同名容器，再起新的；起不来时用上一版恢复。
+     * 端口沿用"先看旧容器、再看远端监听"的策略，但读取都走 context（本机 CLI 执行）。
+     */
+    private DeployResult deployViaContext(DeployRequest request, DeployServer server,
+                                          String secret, String image, String container,
+                                          String slot) {
+        StringBuilder log = new StringBuilder();
+        String name = contextName(server);
+        // 1. 远端是否已有该镜像；没有就先 pull（镜像同名时必须能被 registry 解析，
+        //    否则会明确报"镜像不存在"，而不是像 save/load 那样传几百 MB 才发现）
+        ProcessExecutor.StepOutcome exists = executor.exec(Path.of("."),
+                List.of("docker", "--context", name, "image", "inspect", "-f", "{{.Id}}", image),
+                PROBE_TIMEOUT_MS, new StringBuilder(), BooleanSupplierNever.INSTANCE);
+        if (exists.exitCode() != 0) {
+            log.append("[image] 远端缺少镜像 ").append(image).append("，尝试 docker pull\n");
+            ProcessExecutor.StepOutcome pull = executor.exec(Path.of("."),
+                    List.of("docker", "--context", name, "pull", image),
+                    TRANSFER_TIMEOUT_MS, log, BooleanSupplierNever.INSTANCE);
+            if (pull.exitCode() != 0) {
+                return DeployResult.failed(DeployTarget.SERVER,
+                        ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                        "远端缺少镜像且 pull 失败：" + image
+                                + "；请把镜像推到远端可访问的 registry，"
+                                + "或关闭 agent.deploy.use-docker-context 改用 save/load 传输",
+                        redact(log));
+            }
+        }
+
+        // 2. 旧容器的版本/镜像/端口：新版本起不来时原地恢复
+        PreviousContainer previous = previousContainerViaContext(name, container,
+                request.containerPort());
+        int previousPort = previous == null ? 0 : previous.hostPort();
+        if (previous != null && previous.running() && previousPort > 0
+                && request.runId() != null && request.runId().equals(previous.runId())) {
+            log.append("[deploy] 本次运行已部署且镜像一致，跳过重复重启\n");
+            return DeployResult.ok(DeployTarget.SERVER,
+                    "http://" + server.host() + ":" + previousPort + "/",
+                    server.host() + ":" + container, redact(log));
+        }
+
+        // 3. 删旧 + 起新（先删后起的语义与原路径一致：同名容器不能并存）
+        executor.exec(Path.of("."),
+                List.of("docker", "--context", name, "rm", "-f", container),
+                SSH_TIMEOUT_MS, log, BooleanSupplierNever.INSTANCE);
+        int hostPort = previousPort > 0 ? previousPort : request.hostPort();
+        String envFile = null;   // context 模式用 -e，不落远端临时文件（少一处密钥留痕）
+        java.util.List<String> argv = contextArgv("docker", name, image, request, container,
+                hostPort, displayVersion(request), envFile);
+        ProcessExecutor.StepOutcome run = executor.exec(Path.of("."), argv, SSH_TIMEOUT_MS,
+                log, BooleanSupplierNever.INSTANCE);
+        if (run.exitCode() != 0) {
+            // 端口冲突：换下一个端口重试（与 SSH 路径同策略，最多 PORT_RETRY_LIMIT 次）
+            for (int attempt = 0; attempt < PORT_RETRY_LIMIT && portConflict(run.summary()); attempt++) {
+                hostPort = hostPort < 65535 ? hostPort + 1 : -1;
+                if (hostPort < 0) {
+                    break;
+                }
+                log.append("[port] 端口冲突，改用 ").append(hostPort).append('\n');
+                run = executor.exec(Path.of("."), contextArgv("docker", name, image, request,
+                        container, hostPort, displayVersion(request), envFile), SSH_TIMEOUT_MS,
+                        log, BooleanSupplierNever.INSTANCE);
+                if (run.exitCode() == 0) {
+                    break;
+                }
+            }
+        }
+        if (run.exitCode() != 0) {
+            if (previous != null && previousPort > 0) {
+                ProcessExecutor.StepOutcome restore = executor.exec(Path.of("."),
+                        contextArgv("docker", name, previous.image(), request, container,
+                                previousPort, previous.version(), envFile),
+                        SSH_TIMEOUT_MS, log, BooleanSupplierNever.INSTANCE);
+                if (restore.exitCode() == 0) {
+                    log.append("[rollback] 新版本启动失败，已用上一版恢复：")
+                            .append(previous.image()).append("（端口 ").append(previousPort).append("）\n");
+                    return DeployResult.failed(DeployTarget.SERVER,
+                            ErrorCode.DEPLOY_START_FAILED.code(),
+                            "远端容器启动失败：" + DockerDeployer.sanitize(run.summary(), request.env())
+                                    + "；已自动恢复上一版 " + previous.version(),
+                            redact(log));
+                }
+            }
+            return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_START_FAILED.code(),
+                    "远端容器启动失败：" + DockerDeployer.sanitize(run.summary(), request.env()),
+                    redact(log));
+        }
+        return DeployResult.ok(DeployTarget.SERVER,
+                "http://" + server.host() + ":" + hostPort + "/",
+                server.host() + ":" + container, redact(log));
+    }
+
+    /** context 模式下读取旧容器的镜像/版本/端口（等价于 {@link #previousContainer}）。 */
+    private PreviousContainer previousContainerViaContext(String contextName, String container,
+                                                         int containerPort) {
+        ProcessExecutor.StepOutcome inspect = executor.exec(Path.of("."),
+                List.of("docker", "--context", contextName, "inspect", "-f",
+                        "{{.Config.Image}}|{{.Image}}|{{.State.Running}}|"
+                                + "{{index .Config.Labels \"agent.version\"}}|"
+                                + "{{index .Config.Labels \"agent.run\"}}", container),
+                PROBE_TIMEOUT_MS, new StringBuilder(), BooleanSupplierNever.INSTANCE);
+        if (inspect.exitCode() != 0 || inspect.summary() == null || inspect.summary().isBlank()) {
+            return null;
+        }
+        String[] parts = inspect.summary().trim().split("\\|", -1);
+        String image = parts[0].trim();
+        if (image.isEmpty() || "null".equals(image)) {
+            return null;
+        }
+        int port = 0;
+        if (containerPort > 0) {
+            ProcessExecutor.StepOutcome mapped = executor.exec(Path.of("."),
+                    List.of("docker", "--context", contextName, "port", container,
+                            containerPort + "/tcp"),
+                    PROBE_TIMEOUT_MS, new StringBuilder(), BooleanSupplierNever.INSTANCE);
+            port = mapped.exitCode() == 0 ? parseMappedPort(mapped.summary()) : 0;
+        }
+        boolean running = parts.length > 2 && "true".equalsIgnoreCase(parts[2].trim());
+        String version = parts.length > 3 ? parts[3].trim() : "";
+        String runId = parts.length > 4 ? parts[4].trim() : "";
+        return new PreviousContainer(image, parts.length > 1 ? parts[1].trim() : "", running,
+                version.isEmpty() ? "previous" : version, runId, port);
+    }
+
+    /**
+     * 探测远端 docker：优先普通用户，权限不足时尝试 {@code sudo -n}。     *
      * @return 可用的 docker 前缀（{@code docker} / {@code sudo -n docker}）；不可用返回 null
      */
     private String dockerPrefix(DeployServer server, String secret, StringBuilder log) {
@@ -555,20 +743,30 @@ public class ServerDeployer implements Deployer {
                 || text.contains("bind for");
     }
 
+    /**
+     * 远端 {@code docker run} 命令。
+     *
+     * <p>加固与应用容器（{@link DockerDeployer}）保持<b>同一份标准</b>：
+     * {@code no-new-privileges} + {@code --cap-drop ALL}。原实现这两项全缺，
+     * 远端容器是整条链路里唯一"可以容器内提权后横向移动"的容器。
+     *
+     * <p>{@code -p} 绑 {@code 127.0.0.1}：与 {@link DockerDeployer} 一致，
+     * 并且与回报给用户的 endpoint 语义一致。原先绑 0.0.0.0 却回报
+     * {@code http://host:port}（本机语义），界面与实际暴露面相反。
+     */
     private static String runCommand(String docker, String image, DeployRequest request,
                                      String container, int hostPort, String labelVersion,
                                      String envFile) {
-        StringBuilder command = new StringBuilder(docker)
-                .append(" run -d --name ").append(container)
-                .append(" --restart unless-stopped")
-                .append(" --label agent.project=").append(JschSsh.shellQuote(request.projectId()))
+        StringBuilder command = new StringBuilder(docker).append(' ').append(
+                String.join(" ", hardeningFlags(hostPort, request.containerPort())));
+        command.append(" --label agent.project=").append(JschSsh.shellQuote(request.projectId()))
                 .append(" --label agent.env=").append(JschSsh.shellQuote(
                         request.envName() == null ? "" : request.envName()))
                 .append(" --label agent.version=").append(JschSsh.shellQuote(labelVersion))
                 .append(" --label agent.sha=").append(JschSsh.shellQuote(request.gitSha()))
                 .append(" --label agent.run=").append(JschSsh.shellQuote(
                         request.runId() == null ? "" : request.runId()))
-                .append(" -p ").append(hostPort).append(':').append(request.containerPort());
+                .append(" --name ").append(JschSsh.shellQuote(container));
         if (request.network() != null && !request.network().isBlank()) {
             command.append(" --network ").append(JschSsh.shellQuote(request.network().trim()));
         }
@@ -579,6 +777,93 @@ public class ServerDeployer implements Deployer {
         }
         command.append(' ').append(image);
         return command.toString();
+    }
+
+    /**
+     * 远端容器与本地应用容器共用的加固参数（<b>唯一来源</b>）。
+     *
+     * <p>两条路径（SSH 字符串 / {@code --context} argv）都从这里取，
+     * 否则"远端少了 --cap-drop"这类漂移会再次出现。
+     */
+    static java.util.List<String> hardeningFlags(int hostPort, int containerPort) {
+        return java.util.List.of(
+                "run", "-d",
+                "--restart", "unless-stopped",
+                "--security-opt", "no-new-privileges",
+                "--cap-drop", "ALL",
+                // 宿主端口只绑回环：与 DockerDeployer 一致，也与回报给用户的 endpoint 语义一致。
+                // 需要对外暴露时由运维在服务器侧加反向代理/防火墙。
+                "-p", bindHost() + ":" + hostPort + ":" + containerPort);
+    }
+
+    /**
+     * 宿主侧绑定地址。
+     *
+     * <p>固定 {@code 127.0.0.1}：远程部署的入口应是反向代理，而不是直接暴露 docker 端口。
+     * 若某台服务器确实需要对外直连，正确做法是在部署机上加 nginx/防火墙规则，
+     * 而不是让平台在所有服务器上都监听 {@code 0.0.0.0}。
+     */
+    static String bindHost() {
+        return "127.0.0.1";
+    }
+
+    /**
+     * {@code docker --context} 模式下的 argv（D17）。
+     *
+     * <p>为什么要有这条路：默认路径是 {@code docker save} → SSH 上传 tar → 远端
+     * {@code docker load}，跨公网传几百 MB，且远端命令是拼接出来的字符串（要自己
+     * {@code shellQuote}）。当运维在本机建好指向服务器的 docker context
+     * （{@code docker context create x --docker host=ssh://user@host}）后，本机 CLI 可以
+     * <b>直接</b>操作远端守护进程：传输改由 docker 自己走，命令是 argv 而不是字符串。
+     *
+     * <p>这是<b>可选</b>路径（{@code agent.deploy.use-docker-context=true}）：context 依赖
+     * 运维侧一次性配置，配错时的报错远不如现有 SSH 诊断清晰，因此默认仍走 SSH 字符串模式。
+     */
+    static java.util.List<String> contextArgv(String dockerBinary, String contextName,
+                                              String image, DeployRequest request,
+                                              String container, int hostPort,
+                                              String labelVersion, String envFile) {
+        java.util.List<String> argv = new java.util.ArrayList<>();
+        // --context 是全局选项，必须插在子命令 run 之前
+        argv.add(dockerBinary);
+        argv.add("--context");
+        argv.add(contextName);
+        argv.addAll(hardeningFlags(hostPort, request.containerPort()));
+        argv.addAll(java.util.List.of(
+                "--label", "agent.project=" + request.projectId(),
+                "--label", "agent.env=" + (request.envName() == null ? "" : request.envName()),
+                "--label", "agent.version=" + labelVersion,
+                "--label", "agent.sha=" + request.gitSha(),
+                "--label", "agent.run=" + (request.runId() == null ? "" : request.runId()),
+                "--name", container));
+        if (request.network() != null && !request.network().isBlank()) {
+            argv.addAll(java.util.List.of("--network", request.network().trim()));
+        }
+        if (envFile == null) {
+            new java.util.TreeMap<>(request.env()).forEach((key, value) ->
+                    argv.addAll(java.util.List.of("-e", key + "=" + (value == null ? "" : value))));
+        } else {
+            argv.addAll(java.util.List.of("--env-file", envFile));
+        }
+        argv.add(image);
+        return java.util.List.copyOf(argv);
+    }
+
+    /**
+     * 服务器对应的 docker context 名。
+     *
+     * <p>带 {@code server.id()} 而非主机名：同一台机器可能配两条记录（不同 SSH 用户/端口），
+     * 用主机名会让两条记录共用一个 context，后建的覆盖先建的。
+     */
+    static String contextName(DeployServer server) {
+        String id = server == null || server.id() == null || server.id().isBlank()
+                ? "default" : server.id();
+        return "agent-" + id.replaceAll("[^A-Za-z0-9_.-]", "-").toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** 该服务器是否应走 {@code docker --context} 路径（配置开关 + context 名可用）。 */
+    boolean useContext(DeployServer server) {
+        return useDockerContext && server != null;
     }
 
     /**

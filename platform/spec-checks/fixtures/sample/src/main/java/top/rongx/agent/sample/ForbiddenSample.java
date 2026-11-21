@@ -64,4 +64,12 @@ class ForbiddenSample {
     String r14() {
         return "E-123";
     }
+
+    /** R15：waitFor 之前的无界读流（CLI 不退出 = 超时不存在）。 */
+    String r15() throws java.io.IOException {
+        Process process = new ProcessBuilder("docker", "info").start();
+        byte[] output = process.getInputStream().readAllBytes();
+        process.waitFor();
+        return new String(output);
+    }
 }
