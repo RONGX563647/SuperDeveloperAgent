@@ -1,8 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（180 个），完整数据在 `docs/ledger/`。
+每行一个会话（181 个），完整数据在 `docs/ledger/`。
 
+## 2026-11-21
+
+- **bug** 沙箱与 Docker 机制缺陷修复与重复实现收敛（`e427338` `7c654cf`）— 沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…
 ## 2026-11-20
 
 - **bug** 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效（`a2aa87e`）— 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效

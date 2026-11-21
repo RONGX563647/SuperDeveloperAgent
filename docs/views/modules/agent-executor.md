@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-52 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+53 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
+- 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…
+- 方案：接线 require* 隔离策略并在起容器前 fail-closed；Dockerfile 改 dind sidecar + 非 root + …
+- 验证：全平台 mvn -o verify 9/9 模块通过（agent-executor 321 绿）；pre-commit spec-checks …
 
 ## 2026-11-20 · 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效（bug `a2aa87e`）
 - 问题：修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效
