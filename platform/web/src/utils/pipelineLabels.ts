@@ -31,12 +31,6 @@ export function pipelineLabel(id: string): string {
   return id || '—'
 }
 
-export function pipelineDesc(id: string): string {
-  if (id === 'release') return '构建 → 部署 → 健康检查'
-  if (id === 'verify') return '只构建，不部署'
-  return '仓库自定义'
-}
-
 const STAGE_LABELS: Record<string, string> = {
   checkout: '检出',
   build: '构建',
