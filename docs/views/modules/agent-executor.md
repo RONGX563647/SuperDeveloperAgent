@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-56 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+57 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-21 · 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期（bug `d4320a7`）
+- 问题：部署平台自镜像后 health 阶段失败：容器内 agent.sandbox.mode=docker 但无 Docker daemon，Sand…
+- 方案：将 daemon 可用性检查从启动期后移到执行期：SandboxConfig.dockerRunner 不再探测 daemon、仅装配 Dock…
+- 验证：mvn -f platform/pom.xml -pl agent-executor -am test -Dsurefire.forkCount…
 
 ## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
 - 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…

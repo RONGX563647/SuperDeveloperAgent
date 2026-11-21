@@ -16,8 +16,9 @@ import top.rongx.agent.domain.image.ImageReadinessStore;
  *
  * <p>{@code agent.sandbox.mode}：
  * <ul>
- *   <li>{@code docker}（默认）—— 强制容器；不可用则**启动失败**
- *       （不让"以为隔离了其实没隔离"发生）；</li>
+ *   <li>{@code docker}（默认）—— 强制容器；守护进程可用性在<b>执行动作时</b>检查：
+ *       不可用则该次动作失败（fail-closed），但平台本身照常启动、health 正常
+ *       （不让"以为隔离了其实没隔离"发生，也不让没有 daemon 的平台起不来）；</li>
  *   <li>{@code process} —— 强制宿主（仅开发，必须显式开启）。</li>
  * </ul>
  *
@@ -93,8 +94,8 @@ public class SandboxConfig {
      *
      * <p>取值只有两个，<b>没有默认兜底分支</b>：
      * <ul>
-     *   <li>{@code docker}（默认）—— 强制容器；守护进程不可用则<b>启动失败</b>
-     *       （不让"以为隔离了其实没隔离"发生）；</li>
+     *   <li>{@code docker}（默认）—— 强制容器；守护进程不可用则<b>执行动作时失败</b>
+     *       （不让"以为隔离了其实没隔离"发生；但平台启动与 health 不依赖 daemon）；</li>
      *   <li>{@code process} —— 强制宿主（仅开发，必须显式开启）。</li>
      * </ul>
      *
@@ -120,14 +121,18 @@ public class SandboxConfig {
         };
     }
 
-    /** 起容器执行器；Docker 不可用直接失败，绝不降级为宿主执行。 */
+    /**
+     * 起容器执行器。
+     *
+     * <p>守护进程可用性<b>不在这里检查</b>：过去在此调用 {@code available()} 失败会直接抛异常，
+     * 让整个 Spring context 起不来、平台 health 永远不通——即使平台只是启动 UI / 配置管理，
+     * 根本不跑构建动作（典型场景：单独用平台镜像部署、没有 dind sidecar）。
+     * 现在把检查后移到 {@link DockerActionRunner#run} 每次执行动作之前：无守护进程则该次动作
+     * 结构化失败（fail-closed），平台本身照常启动、health 正常。安全属性不变——不可信的构建
+     * 配方永远不会以无隔离的宿主进程模式执行。
+     */
     private ActionRunner dockerRunner(DockerSandbox sandbox) {
-        if (!sandbox.available()) {
-            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
-                    "agent.sandbox.mode=docker 但 Docker 守护进程不可用；"
-                            + "请启动 Docker，或仅限本地开发显式设置 agent.sandbox.mode=process（无隔离）");
-        }
-        log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
+        log.info("动作执行模式：容器沙箱（{}）；守护进程可用性在执行动作时检查", sandbox.describe());
         sweep(sandbox);
         return new DockerActionRunner(sandbox);
     }
