@@ -1,12 +1,13 @@
 <!-- 由 tools/docs/build.py 生成，勿手改；文档地图见 ../README.md -->
 # 近期变更索引
 
-留痕数据：`docs/ledger/*.jsonl`（194 个会话，截至 2026-11-21）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
+留痕数据：`docs/ledger/*.jsonl`（195 个会话，截至 2026-11-21）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
 
 ## 最近 10 个会话
 
 | 日期 | 类别 | 标题 | 模块 | 提交 |
 |---|---|---|---|---|
+| 2026-11-21 | chore | 修复远端 refactor 引入的规约违规（A1 分层 / EC5 错误码 / R11 禁令） | agent-domain, agent-executor, agent-gateway | `b908869` |
 | 2026-11-21 | chore | 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛 | agent-domain, agent-executor, agent-gateway, agent-governance, agent-infra, agent-runtime, agent-tools, web | `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58` |
 | 2026-11-21 | bug | 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期 | agent-executor | `d4320a7` |
 | 2026-11-21 | chore | 合并后重算迁移基线（V7/V8 补登记） | spec-checks | `2358d08` |
@@ -16,15 +17,14 @@
 | 2026-11-20 | chore | 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线 | agent-domain, agent-gateway, agent-infra, agent-runtime, agent-tools, spec-checks, web | `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6` |
 | 2026-11-20 | chore | 防旧归档模型回潮：validate 拦截 docs/process 复活 | other | `dc587a0` |
 | 2026-11-20 | chore | 合并 token/deploy 并行工作并移植门禁并发健壮性 | agent-domain, agent-gateway, agent-infra, agent-runtime, agent-tools, spec-checks, web | `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` |
-| 2026-11-20 | chore | 补齐 skill 路由层：三张新卡 + 生成式路由索引 | other | `3dc7dc1` |
 
 ## 模块索引
 
 | 模块 | 会话数 | 最近变更 | 详见 |
 |---|---|---|---|
-| agent-domain | 52 | 2026-11-21 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛 | [modules/agent-domain.md](modules/agent-domain.md) |
-| agent-executor | 58 | 2026-11-21 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛 | [modules/agent-executor.md](modules/agent-executor.md) |
-| agent-gateway | 96 | 2026-11-21 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛 | [modules/agent-gateway.md](modules/agent-gateway.md) |
+| agent-domain | 53 | 2026-11-21 修复远端 refactor 引入的规约违规（A1 分层 / EC5 错误码 / R11 禁令） | [modules/agent-domain.md](modules/agent-domain.md) |
+| agent-executor | 59 | 2026-11-21 修复远端 refactor 引入的规约违规（A1 分层 / EC5 错误码 / R11 禁令） | [modules/agent-executor.md](modules/agent-executor.md) |
+| agent-gateway | 97 | 2026-11-21 修复远端 refactor 引入的规约违规（A1 分层 / EC5 错误码 / R11 禁令） | [modules/agent-gateway.md](modules/agent-gateway.md) |
 | agent-governance | 15 | 2026-11-21 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛 | [modules/agent-governance.md](modules/agent-governance.md) |
 | agent-infra | 56 | 2026-11-21 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛 | [modules/agent-infra.md](modules/agent-infra.md) |
 | agent-runtime | 35 | 2026-11-21 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛 | [modules/agent-runtime.md](modules/agent-runtime.md) |

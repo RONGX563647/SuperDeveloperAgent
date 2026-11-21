@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-96 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+97 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-21 · 修复远端 refactor 引入的规约违规（A1 分层 / EC5 错误码 / R11 禁令）（chore `b908869`）
+- 问题：合并 0.1 health 修复到 0.2 后，pre-push 门禁检测到远程 8 条 refactor 遗留的三处规约违规（A1 分层：Ho…
+- 方案：A1：将 HostProcessSupervisor 从 executor 移到 domain.process（只依赖 JDK + domain…
+- 验证：pre-commit 门禁跑 agent-domain/agent-executor/agent-gateway/spec-checks 共 1…
 
 ## 2026-11-21 · 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
 - 问题：trae 会话在远程 0.2 推送了 8 条 refactor 提交（d0aaa4d4..781ba1f5），未走会话归档门禁，导致 0.1 修…
