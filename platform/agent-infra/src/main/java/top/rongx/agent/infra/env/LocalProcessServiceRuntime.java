@@ -25,6 +25,7 @@ import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.process.CommandShell;
 import top.rongx.agent.domain.process.JavaRuntime;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * 本机进程服务运行时（dev 专用）：平台负责把项目前后端拉起来 / 停掉 / 探活。
@@ -586,12 +587,6 @@ public class LocalProcessServiceRuntime implements ServiceRuntime {
     }
 
     private static String tail(Path logFile) {
-        try {
-            List<String> lines = Files.readAllLines(logFile, StandardCharsets.UTF_8);
-            int from = Math.max(0, lines.size() - 12);
-            return String.join(" | ", lines.subList(from, lines.size()));
-        } catch (IOException e) {
-            return "（无日志）";
-        }
+        return LogTail.lastLines(logFile, 12, " | ", "（无日志）");
     }
 }

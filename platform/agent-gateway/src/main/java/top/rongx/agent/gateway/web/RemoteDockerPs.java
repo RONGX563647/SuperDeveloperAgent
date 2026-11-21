@@ -6,6 +6,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import top.rongx.agent.domain.docker.ContainerState;
 
 /**
  * 远端 {@code docker ps} 输出解析（纯函数，可单测）。
@@ -69,7 +70,7 @@ final class RemoteDockerPs {
                 version = "latest";
             }
             String status = f[2].trim();
-            boolean running = status.startsWith("Up") && !status.contains("(Paused)");
+            boolean running = ContainerState.running(null, status);
             rows.add(new Row(name, f[1].trim(), env, version, sha, status, f[3].trim(),
                     running, parseCreatedAt(f[7].trim())));
         }

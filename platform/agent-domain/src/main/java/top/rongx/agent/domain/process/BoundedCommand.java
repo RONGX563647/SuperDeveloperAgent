@@ -1,9 +1,6 @@
 package top.rongx.agent.domain.process;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -33,12 +30,6 @@ import java.util.concurrent.TimeUnit;
  * 由调用方通过 {@link CommandShell} 按 OS 自适应决定，不在此处写死路径。
  */
 public final class BoundedCommand {
-
-    /** 输出上限：探测命令不需要完整日志，防止异常 CLI 刷爆内存。 */
-    private static final int MAX_OUTPUT_CHARS = 200_000;
-
-    /** 超时后等待读线程收敛的上限。 */
-    private static final long READER_JOIN_MS = 3_000L;
 
     private BoundedCommand() {
     }
@@ -101,76 +92,30 @@ public final class BoundedCommand {
         }
 
         StringBuilder sink = new StringBuilder();
-        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink));
+        Thread reader = Thread.ofVirtual().start(
+                () -> ProcessIo.pump(process.getInputStream(), sink, null));
 
         boolean finished;
         try {
             finished = process.waitFor(budget, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            killTree(process);
-            joinQuietly(reader);
+            ProcessIo.killTree(process);
+            ProcessIo.joinQuietly(reader);
             return new Outcome(143, sink.toString(), false, "命令被中断：" + String.join(" ", argv));
         }
 
         if (!finished) {
-            killTree(process);
-            joinQuietly(reader);
+            ProcessIo.killTree(process);
+            ProcessIo.joinQuietly(reader);
             return new Outcome(124, sink.toString(), true,
                     "命令超时（" + (budget / 1000) + "s），已终止：" + String.join(" ", argv));
         }
 
-        joinQuietly(reader);
+        ProcessIo.joinQuietly(reader);
         int exit = process.exitValue();
         return new Outcome(exit, sink.toString(), false,
                 exit == 0 ? null : "命令失败（exit " + exit + "）：" + String.join(" ", argv));
     }
 
-    /** 按字符解码（中文日志按字节切块会乱码），并限制总长度。 */
-    private static void pump(InputStream in, StringBuilder sink) {
-        try (var reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
-            char[] buffer = new char[4096];
-            int read;
-            while ((read = reader.read(buffer)) >= 0) {
-                synchronized (sink) {
-                    sink.append(buffer, 0, read);
-                    int overflow = sink.length() - MAX_OUTPUT_CHARS;
-                    if (overflow > 0) {
-                        sink.delete(0, overflow);
-                    }
-                }
-            }
-        } catch (IOException ignored) {
-            // 进程被强杀时读会抛，属预期；输出已收集的部分仍然可用
-        }
-    }
-
-    /** 终止进程树：CLI 常拉起子进程，只杀 CLI 会留下持有管道写端的后代。 */
-    private static void killTree(Process process) {
-        try {
-            process.descendants().forEach(handle -> {
-                try {
-                    handle.destroyForcibly();
-                } catch (RuntimeException ignored) {
-                    // 已退出的子进程
-                }
-            });
-        } catch (RuntimeException ignored) {
-            // 平台不支持 descendants 时退化为只杀主进程
-        }
-        process.destroyForcibly();
-        try {
-            process.getInputStream().close();
-        } catch (IOException ignored) {
-            // 流已关闭
-        }
-    }
-
-    private static void joinQuietly(Thread thread) {
-        try {
-            thread.join(READER_JOIN_MS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
 }

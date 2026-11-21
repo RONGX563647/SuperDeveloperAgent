@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import top.rongx.agent.domain.conversation.ConversationTimelineRepository;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * 服务端会话时间线记录器：把一轮对话真实发生的事件落盘。
@@ -118,9 +119,6 @@ public class ConversationTimelineRecorder {
     }
 
     private static String truncate(String text, int max) {
-        if (text == null) {
-            return null;
-        }
-        return text.length() <= max ? text : text.substring(0, max) + "…(截断)";
+        return text == null ? null : LogTail.prefix(text, max, "…(截断)");
     }
 }

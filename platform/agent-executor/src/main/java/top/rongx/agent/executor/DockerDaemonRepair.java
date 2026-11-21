@@ -1,9 +1,14 @@
 package top.rongx.agent.executor;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
+import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.retry.Retry;
 
 /**
  * 确定性修复：Docker 守护进程未运行（环境类故障）→ 尝试启动 → 平台复核。
@@ -15,7 +20,7 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>只做"启动本机 Docker"，不删容器、不改镜像；</li>
  *   <li>先只读探测：守护进程已正常时直接交回后续诊断，不乱启动；</li>
- *   <li>成功与否由平台自己执行 {@code docker version} 复核，不采信启动命令的退出码。</li>
+ *   <li>成功与否由平台自己执行 {@code docker info} 复核，不采信启动命令的退出码。</li>
  * </ul>
  */
 final class DockerDaemonRepair implements FailureRepair {
@@ -27,7 +32,6 @@ final class DockerDaemonRepair implements FailureRepair {
             Pattern.CASE_INSENSITIVE);
 
     private static final long START_TIMEOUT_MS = 120_000L;
-    private static final long PROBE_TIMEOUT_MS = 5_000L;
     private static final long WAIT_MS = 100_000L;
     private static final long SLEEP_MS = 3_000L;
 
@@ -49,7 +53,7 @@ final class DockerDaemonRepair implements FailureRepair {
         String docker = ctx.inspectCommand().get(0);
 
         // 先只读复核：守护进程其实正常时不要乱启动（日志里的旧文本不代表当前状态）
-        if (probe(docker, ctx).errorCode() == null) {
+        if (probe(docker, ctx)) {
             lines.add("[autofix] Docker 守护进程已可用，本次失败另有原因");
             return Outcome.notFixed("Docker 已运行，当前失败另有原因（交给后续诊断）", lines);
         }
@@ -71,32 +75,32 @@ final class DockerDaemonRepair implements FailureRepair {
             return Outcome.notFixed("自动启动 Docker 失败，请手动启动 Docker 后重跑", lines);
         }
 
-        long deadline = System.currentTimeMillis() + WAIT_MS;
-        ProcessExecutor.StepOutcome last = launched;
-        while (System.currentTimeMillis() < deadline) {
-            if (ctx.cancelled().getAsBoolean()) {
-                return Outcome.notFixed("运行已取消，停止等待 Docker 启动", lines);
-            }
-            last = probe(docker, ctx);
-            if (last.errorCode() == null) {
-                lines.add("[autofix] ✅ Docker 守护进程已启动并通过 docker version 复核");
-                return Outcome.fixed("Docker 守护进程已启动", lines);
-            }
-            try {
-                Thread.sleep(SLEEP_MS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+        Retry.Result result = Retry.until(WAIT_MS, SLEEP_MS, ctx.cancelled(),
+                () -> probe(docker, ctx));
+        if (result == Retry.Result.CANCELLED) {
+            return Outcome.notFixed("运行已取消，停止等待 Docker 启动", lines);
         }
-        lines.add("[autofix] ❌ Docker 仍未就绪：" + truncate(String.valueOf(last.summary()), 240));
+        if (result == Retry.Result.SUCCESS) {
+            lines.add("[autofix] ✅ Docker 守护进程已启动并通过 docker info 复核");
+            return Outcome.fixed("Docker 守护进程已启动", lines);
+        }
+        lines.add("[autofix] ❌ Docker 仍未就绪（docker info 探测不可用）");
         return Outcome.notFixed("Docker 守护进程启动后仍不可用", lines);
     }
 
-    /** 平台复核：与 dry-run 的可用性探测同一条命令。 */
-    private static ProcessExecutor.StepOutcome probe(String docker, Context ctx) {
-        return ctx.command().run(List.of(docker, "version", "--format", "{{.Server.Version}}"),
-                PROBE_TIMEOUT_MS, null);
+    /**
+     * 平台复核：与其它地方同一条 {@link DockerOps#available()} 判定（{@code docker info}），
+     * 不再额外用 {@code docker version} 做第二判据——两者只在守护进程半启动时不一致。
+     */
+    private static boolean probe(String docker, Context ctx) {
+        DockerOps ops = new DockerOps(docker, Path.of("."), (argv, workdir, timeoutMs) -> {
+            ProcessExecutor.StepOutcome outcome = ctx.command().run(argv, timeoutMs, null);
+            return new BoundedCommand.Outcome(outcome.exitCode(),
+                    outcome.summary() == null ? "" : outcome.summary(),
+                    ErrorCode.TIMEOUT.code().equals(outcome.errorCode()),
+                    outcome.errorCode());
+        });
+        return ops.available();
     }
 
     /** 各系统的"启动 Docker"命令；不支持的平台返回空（不猜）。 */
@@ -112,7 +116,6 @@ final class DockerDaemonRepair implements FailureRepair {
     }
 
     private static String truncate(String value, int max) {
-        String one = value == null ? "" : value.replaceAll("\\s+", " ").trim();
-        return one.length() > max ? one.substring(0, max) + "…" : one;
+        return LogTail.oneLine(value, max);
     }
 }

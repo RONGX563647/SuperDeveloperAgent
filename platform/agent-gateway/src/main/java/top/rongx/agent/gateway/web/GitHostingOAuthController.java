@@ -2,6 +2,8 @@ package top.rongx.agent.gateway.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.http.HttpClients;
+import top.rongx.agent.domain.json.JsonMappers;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -60,8 +62,8 @@ public class GitHostingOAuthController {
     /** 进行中的授权：state → (userId, provider)。进程内即可，量小且短时有效。 */
     private static final Map<String, State> STATES = new ConcurrentHashMap<>();
 
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = OutboundHttp.client(Duration.ofSeconds(10));
+    private final ObjectMapper mapper = JsonMappers.readOnly();
+    private final HttpClient http = HttpClients.withProxy(Duration.ofSeconds(10));
     private final GitHostingAccountRepository accounts;
     private final GitOauthAppRepository oauthApps;
     private final CurrentUser currentUser;

@@ -21,6 +21,7 @@ import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.ProcessIdentity;
 import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * 开发环境本机托管：后端 {@code java -jar} + 前端 dist（Node 静态服务器），全部跑在宿主机。
@@ -551,13 +552,7 @@ public class LocalDevHostDeployer {
     }
 
     private static String tail(Path logFile) {
-        try {
-            List<String> lines = Files.readAllLines(logFile, StandardCharsets.UTF_8);
-            int from = Math.max(0, lines.size() - 60);
-            return String.join("\n", new ArrayList<>(lines.subList(from, lines.size())));
-        } catch (IOException e) {
-            return "";
-        }
+        return LogTail.lastLines(logFile, 60);
     }
 
     /** 构建日志尾部（供流水线展示）。 */

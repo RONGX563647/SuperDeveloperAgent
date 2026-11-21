@@ -4,7 +4,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
+import top.rongx.agent.domain.docker.ContainerState;
+import top.rongx.agent.domain.retry.Retry;
 import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.process.BoundedCommand;
 
@@ -33,6 +34,12 @@ public final class DockerOps {
     /** 变更类命令（network create / rm -f）的统一预算。 */
     private static final long MUTATE_TIMEOUT_MS = 30_000L;
 
+    /** 可注入的命令执行器：便于单测与需要自定义工作目录/环境的调用方。 */
+    @FunctionalInterface
+    public interface CommandRunner {
+        BoundedCommand.Outcome run(List<String> argv, Path workdir, long timeoutMs);
+    }
+
     /** 一条 {@code docker ps} 记录（只取排障真正需要的字段）。 */
     public record PsRow(String name, String state, String status) {
 
@@ -44,24 +51,26 @@ public final class DockerOps {
          * 原实现散在 5 处、判据各不相同（有的只看退出码、有的只看 "true"），这里只留一份。
          */
         public boolean running() {
-            if (state != null && !state.isBlank()) {
-                return "running".equalsIgnoreCase(state.trim());
-            }
-            String s = status == null ? "" : status.trim().toLowerCase(java.util.Locale.ROOT);
-            return s.startsWith("up");
+            return ContainerState.running(state, status);
         }
     }
 
     private final String dockerBinary;
     private final Path workdir;
+    private final CommandRunner runner;
 
     public DockerOps(String dockerBinary) {
         this(dockerBinary, Path.of("."));
     }
 
     public DockerOps(String dockerBinary, Path workdir) {
+        this(dockerBinary, workdir, BoundedCommand::run);
+    }
+
+    public DockerOps(String dockerBinary, Path workdir, CommandRunner runner) {
         this.dockerBinary = dockerBinary == null || dockerBinary.isBlank() ? "docker" : dockerBinary.trim();
         this.workdir = workdir == null ? Path.of(".") : workdir;
+        this.runner = runner == null ? BoundedCommand::run : runner;
     }
 
     public String binary() {
@@ -83,12 +92,30 @@ public final class DockerOps {
     }
 
     public BoundedCommand.Outcome run(List<String> argv, long timeoutMs) {
-        return BoundedCommand.run(argv, workdir, timeoutMs);
+        return runner.run(argv, workdir, timeoutMs);
     }
 
     /** 守护进程是否可用（3s：启动路径上不允许被 CLI 拖住）。 */
     public boolean available() {
-        return BoundedCommand.run(cmd("info", "--format", "{{.ServerVersion}}"), 3_000L).ok();
+        return run(cmd("info", "--format", "{{.ServerVersion}}"), 3_000L).ok();
+    }
+
+    /** 守护进程版本（{@code docker version --format {{.Server.Version}}}）；不可用返回空。 */
+    public Optional<String> daemonVersion() {
+        BoundedCommand.Outcome out = run(cmd("version", "--format", "{{.Server.Version}}"),
+                PROBE_TIMEOUT_MS);
+        String text = out.ok() ? out.output().trim() : "";
+        return text.isEmpty() ? Optional.empty() : Optional.of(text);
+    }
+
+    /** 镜像详情（JSON）；不存在或守护进程不可用返回空。 */
+    public Optional<String> imageInspect(String ref) {
+        if (ref == null || ref.isBlank()) {
+            return Optional.empty();
+        }
+        BoundedCommand.Outcome out = run(cmd("image", "inspect", "--format", "{{json .}}", ref));
+        String text = out.ok() ? out.output().trim() : "";
+        return text.isEmpty() ? Optional.empty() : Optional.of(text);
     }
 
     /** 镜像 ID（{@code sha256:...}）；不存在返回空。 */
@@ -132,7 +159,7 @@ public final class DockerOps {
                 argv.add(filter);
             }
         }
-        BoundedCommand.Outcome out = BoundedCommand.run(argv, workdir, PROBE_TIMEOUT_MS);
+        BoundedCommand.Outcome out = run(argv, PROBE_TIMEOUT_MS);
         return out.ok() ? parsePs(out.output()) : List.of();
     }
 
@@ -231,22 +258,10 @@ public final class DockerOps {
     /** 等待容器进入 running（{@code --wait} 不可用时的兜底轮询）。 */
     public boolean awaitRunning(String container, long timeoutMs, long pollMs,
                                 BooleanSupplier cancelled) {
-        long deadline = System.currentTimeMillis() + Math.max(1L, timeoutMs);
-        long interval = Math.max(100L, pollMs);
-        while (System.currentTimeMillis() < deadline) {
-            if (cancelled != null && cancelled.getAsBoolean()) {
-                return false;
-            }
-            if (containerRunning(container).orElse(false)) {
-                return true;
-            }
-            try {
-                TimeUnit.MILLISECONDS.sleep(interval);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        return containerRunning(container).orElse(false);
+        Retry.Result result = Retry.until(timeoutMs, pollMs, cancelled,
+                () -> containerRunning(container).orElse(false));
+        // 超时边界上再补一次，避免「刚好在最后一次睡眠里就绪」被误判为失败
+        return result == Retry.Result.SUCCESS
+                || (result == Retry.Result.TIMEOUT && containerRunning(container).orElse(false));
     }
 }

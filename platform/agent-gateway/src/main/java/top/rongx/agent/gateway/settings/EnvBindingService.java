@@ -1,6 +1,7 @@
 package top.rongx.agent.gateway.settings;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.json.JsonMappers;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -37,7 +38,7 @@ public class EnvBindingService implements EnvBindingPort {
 
     private final EnvironmentStore envStore;
     private final ProjectRepoLocator repoLocator;
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json = JsonMappers.readOnly();
 
     public EnvBindingService(EnvironmentStore envStore, ProjectRepoLocator repoLocator) {
         this.envStore = envStore;

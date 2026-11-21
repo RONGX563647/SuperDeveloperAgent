@@ -27,6 +27,7 @@ import top.rongx.agent.domain.port.RepoInspector;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.fs.PathGuard;
 
 /**
  * 仓库只读工具：git 状态 / 提交 / 对比，以及项目内文件浏览与读取。
@@ -154,7 +155,7 @@ public class RepoQueryTools {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "正则非法：" + e.getDescription());
         }
         Path root = repoRoot(ctx);
-        Path target = resolveInside(root, path);
+        Path target = PathGuard.resolveInside(root, path);
         if (!Files.exists(target)) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径不存在：" + path);
         }
@@ -349,7 +350,7 @@ public class RepoQueryTools {
                                     description = "相对仓库根的目录，默认根目录；根目录传 . 或省略")
                             String path) {
         Path root = repoRoot(ctx);
-        Path target = resolveInside(root, path);
+        Path target = PathGuard.resolveInside(root, path);
         if (!Files.isDirectory(target)) {
             // 只读工具不把"目录不存在"当错误：这是正常取证结果，报错会浪费一次迭代并误导 Agent
             String wanted = path == null || path.isBlank() ? "." : path;
@@ -397,7 +398,7 @@ public class RepoQueryTools {
                                    description = "最多读取的行数（默认全部，单次上限 400）")
                            Integer limit) {
         Path root = repoRoot(ctx);
-        Path target = resolveInside(root, path);
+        Path target = PathGuard.resolveInside(root, path);
         if (!Files.isRegularFile(target)) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件不存在：" + path);
         }
@@ -484,53 +485,6 @@ public class RepoQueryTools {
         } catch (IOException e) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, label + "不可读：" + dir + "（" + e.getMessage() + "）");
         }
-    }
-
-    /**
-     * 解析相对路径并保证不逃逸出仓库根。
-     *
-     * <p>光靠 {@code normalize()} 只能挡住 {@code ../}，挡不住符号链接：仓库里一个
-     * {@code link -> /etc} 会让 {@code read_file("link/passwd")} 读到仓库外。
-     * 因此这里额外校验「已存在的最近祖先」的真实路径必须仍在 root 内；
-     * 目标不存在时校验其父目录，防止先写后读式的绕过。
-     */
-    private static Path resolveInside(Path root, String path) {
-        String relative = path == null ? "" : path.trim();
-        if (relative.isEmpty()) {
-            return root;
-        }
-        Path candidate;
-        try {
-            candidate = Path.of(relative);
-        } catch (RuntimeException e) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径非法：" + path);
-        }
-        // 绝对路径会直接丢弃 root，必须显式拒绝
-        if (candidate.isAbsolute()) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + path);
-        }
-        Path resolved = root.resolve(candidate).normalize();
-        if (!resolved.startsWith(root)) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + path);
-        }
-        // 找到最近一个存在的祖先（目标可能尚不存在），用真实路径做范围校验
-        Path existing = resolved;
-        while (existing != null && !Files.exists(existing)) {
-            existing = existing.getParent();
-        }
-        if (existing == null) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + path);
-        }
-        Path real;
-        try {
-            real = existing.toRealPath();
-        } catch (IOException e) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径不可读：" + path);
-        }
-        if (!real.startsWith(root)) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径经符号链接超出仓库范围：" + path);
-        }
-        return resolved;
     }
 
     private static String formatCommit(RepoInspector.Commit c) {

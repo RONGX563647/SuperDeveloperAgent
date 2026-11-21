@@ -14,8 +14,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -37,6 +35,7 @@ import top.rongx.agent.gateway.bugfix.BugFixRedactor;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.DeployException;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.executor.HostProcessSupervisor;
 
 /**
  * 工作区「环境」视图：按 版本 × 环境 汇总部署产物（Docker 容器 / HOST 进程）并支持一键启停。
@@ -63,9 +62,7 @@ public class DeploymentControlService {
     /** 应用自身启动日志里的真实监听端口（比流水线租约更可信）。 */
     private static final Pattern TOMCAT_PORT = Pattern.compile("Tomcat started on port (\\d+)");
     private static final Pattern DOCKER_HOST_PORT = Pattern.compile("→[^:]*:(\\d+)");
-    private static final Pattern PROCESS_PORT = Pattern.compile("--server\\.port=(\\d+)");
     private static final Pattern SAFE_VERSION = Pattern.compile("[A-Za-z0-9._-]{1,64}");
-    private static final long HOST_START_PROBE_MS = 800;
     private static final long DOCKER_TIMEOUT_MS = 30_000;
     /** 停止旧进程后等待端口释放的时间（Windows 上 docker-proxy / socket 异步释放）。 */
     private static final long PORT_RELEASE_WAIT_MS = 3_000;
@@ -324,31 +321,23 @@ public class DeploymentControlService {
         int preferredPort = preferredPort(projectId, targetEnv, host, effective);
         PortChoice portChoice = choosePort(preferredPort);
         int port = portChoice.port();
-        Path pidFile = stateDir.resolve("app.pid");
-        Path logFile = stateDir.resolve("app.log");
+        Path pidFile = stateDir.resolve(HostProcessSupervisor.PID_FILE);
+        Path logFile = stateDir.resolve(HostProcessSupervisor.LOG_FILE);
         List<String> argv = List.of(JavaRuntime.javaBinary(), "-jar", jar.toString(),
                 "--server.port=" + port);
-        ProcessBuilder pb = new ProcessBuilder(argv)
-                .directory(stateDir.toFile())
-                .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
-        pb.environment().put("CI", "true");
-        effective.values().forEach((key, value) ->
-                pb.environment().put(key, value == null ? "" : value));
+        Map<String, String> runtimeEnv = new java.util.LinkedHashMap<>(effective.values());
         Path webDist = jar.getParent().resolve("web");
         if (Files.isDirectory(webDist)) {
-            pb.environment().put("AGENT_WEB_DIST", webDist.toAbsolutePath().toString());
+            runtimeEnv.put("AGENT_WEB_DIST", webDist.toAbsolutePath().toString());
         }
         try {
-            Process process = pb.start();
-            Files.writeString(pidFile, String.valueOf(process.pid()), StandardCharsets.UTF_8);
-            boolean exited = process.waitFor(HOST_START_PROBE_MS, TimeUnit.MILLISECONDS);
-            if (exited && process.exitValue() != 0) {
+            Process process = HostProcessSupervisor.start(stateDir, argv, runtimeEnv);
+            if (HostProcessSupervisor.exitedDuringProbe(process) && process.exitValue() != 0) {
                 Files.deleteIfExists(pidFile);
                 throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "进程启动即退出（exit " + process.exitValue()
-                        + "）：" + tail(logFile, 8));
+                        + "）：" + HostProcessSupervisor.tail(logFile, 8));
             }
-            writePortFile(stateDir, port);
+            HostProcessSupervisor.writePort(stateDir, port);
             rotatePointers(stateDir, sha);
             String portNote = portChoice.fallback()
                     ? "（原端口 " + preferredPort + " 被占用，已改用 " + port + "）" : "";
@@ -643,17 +632,7 @@ public class DeploymentControlService {
 
     /** 从运行中的 HOST 进程命令行取 {@code --server.port}，给没有 port 文件的旧部署兜底。 */
     private static int hostProcessPort(long pid) {
-        if (pid <= 0) {
-            return 0;
-        }
-        return ProcessHandle.of(pid)
-                .filter(ProcessHandle::isAlive)
-                .map(handle -> handle.info().commandLine().orElse(""))
-                .map(commandLine -> {
-                    Matcher matcher = PROCESS_PORT.matcher(commandLine);
-                    return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
-                })
-                .orElse(0);
+        return HostProcessSupervisor.portFromCommandLine(pid);
     }
 
     private boolean isHostProcess(long pid) {
@@ -670,30 +649,11 @@ public class DeploymentControlService {
     }
 
     private void stopHostProcess(Path stateDir) {
-        Path pidFile = stateDir.resolve("app.pid");
-        long pid = readPid(pidFile);
-        if (pid <= 0) {
-            deleteQuietly(pidFile);
-            return;
-        }
-        Optional<ProcessHandle> handle = ProcessHandle.of(pid).filter(ProcessHandle::isAlive);
-        if (handle.isEmpty()) {
-            deleteQuietly(pidFile);
-            return;
-        }
-        String commandLine = handle.get().info().commandLine().orElse("");
-        if (!commandLine.isEmpty() && !commandLine.contains("app.jar")) {
-            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, "pid=" + pid
-                    + " 不是平台部署的 app.jar，拒绝停止（可能是 pid 被复用）");
-        }
-        handle.get().descendants().forEach(ProcessHandle::destroy);
-        handle.get().destroy();
         try {
-            handle.get().onExit().get(5, TimeUnit.SECONDS);
-        } catch (Exception ignored) {
-            handle.get().destroyForcibly();
+            HostProcessSupervisor.stop(stateDir, true, new StringBuilder());
+        } catch (IllegalStateException e) {
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_INPUT, e.getMessage());
         }
-        deleteQuietly(pidFile);
     }
 
     private void rotatePointers(Path stateDir, String sha) {
@@ -781,25 +741,8 @@ public class DeploymentControlService {
         return PortProbe.isFree(port);
     }
 
-    private static void writePortFile(Path stateDir, int port) {
-        try {
-            Files.writeString(stateDir.resolve("port"), String.valueOf(port),
-                    StandardCharsets.UTF_8);
-        } catch (IOException ignored) {
-            // 端口记录失败不影响启动，下次会回落到 app.log
-        }
-    }
-
     private static int readPort(Path file) {
-        String value = readText(file);
-        if (value == null) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
+        return HostProcessSupervisor.readPort(file);
     }
 
     // ------------------------------------------------------------------ DOCKER 辅助
@@ -919,27 +862,11 @@ public class DeploymentControlService {
     }
 
     private static String readText(Path file) {
-        try {
-            if (!Files.isRegularFile(file)) {
-                return null;
-            }
-            String value = Files.readString(file, StandardCharsets.UTF_8).trim();
-            return value.isEmpty() ? null : value;
-        } catch (IOException e) {
-            return null;
-        }
+        return HostProcessSupervisor.readText(file);
     }
 
     private static long readPid(Path file) {
-        String value = readText(file);
-        if (value == null) {
-            return 0;
-        }
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
+        return HostProcessSupervisor.readPid(file);
     }
 
     /** 日志里的监听端口：优先应用自身「Tomcat started on port N」，再回落到部署器标记。 */
@@ -968,22 +895,7 @@ public class DeploymentControlService {
     }
 
     private static String tail(Path logFile, int lines) {
-        try {
-            String text = Files.readString(logFile, StandardCharsets.UTF_8);
-            String[] all = text.split("\\R");
-            int from = Math.max(0, all.length - lines);
-            return String.join("\n", java.util.Arrays.copyOfRange(all, from, all.length));
-        } catch (IOException e) {
-            return "";
-        }
-    }
-
-    private static void deleteQuietly(Path file) {
-        try {
-            Files.deleteIfExists(file);
-        } catch (IOException ignored) {
-            // 删不掉不影响后续操作
-        }
+        return HostProcessSupervisor.tail(logFile, lines);
     }
 
     // ------------------------------------------------------------------ DTO

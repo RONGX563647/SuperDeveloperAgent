@@ -3,6 +3,7 @@ package top.rongx.agent.gateway.settings;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.http.HttpClient;
+import top.rongx.agent.domain.http.HttpClients;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
@@ -45,9 +46,7 @@ public class ModelProbe {
             if (apiKey != null && !apiKey.isBlank()) {
                 builder.header("Authorization", "Bearer " + apiKey);
             }
-            HttpResponse<String> response = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(5))
-                    .build()
+            HttpResponse<String> response = HttpClients.withProxy(Duration.ofSeconds(5))
                     .send(builder.build(), HttpResponse.BodyHandlers.ofString());
             long latency = (System.nanoTime() - start) / 1_000_000L;
             if (response.statusCode() >= 200 && response.statusCode() < 300) {

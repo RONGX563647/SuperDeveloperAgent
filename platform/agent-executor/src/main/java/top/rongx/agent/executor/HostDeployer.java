@@ -6,7 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeployTarget;
@@ -47,9 +47,6 @@ public class HostDeployer implements Deployer {
      */
     private static final int COPY_ATTEMPTS = 6;
     private static final long COPY_RETRY_DELAY_MS = 500L;
-
-    /** 槽内进程登记（追加写）：每行 {@code pid 启动时刻毫秒}，pid 文件丢失时据此回收遗留进程。 */
-    private static final String PIDS_FILE = "app.pids";
 
     /** 稳定的部署状态根（通常 platform/data/workspaces/_deploy）；null = 退回工作树内旧行为。 */
     private final Path deployRoot;
@@ -147,50 +144,34 @@ public class HostDeployer implements Deployer {
             }
         }
 
-        Path pidFile = stateDir.resolve("app.pid");
-        Path logFile = stateDir.resolve("app.log");
-        stopPrevious(pidFile, log);
+        Path pidFile = stateDir.resolve(HostProcessSupervisor.PID_FILE);
+        Path logFile = stateDir.resolve(HostProcessSupervisor.LOG_FILE);
         // pid 文件可能在上一次运行里丢失/被覆盖（线上日志里 8090 上的旧实例就是这么留下的）。
-        // 槽内另有追加式进程登记，按它再回收一遍，避免旧进程继续占端口、健康检查打到旧进程。
-        stopRecorded(stateDir, log);
+        // 槽内另有追加式进程登记，一并回收，避免旧进程继续占端口、健康检查打到旧进程。
+        HostProcessSupervisor.stop(stateDir, false, log);
 
         // 用与当前平台一致的 JDK 启动，不去 PATH 上碰运气（PATH 可能是 JDK17、平台跑在 25）。
         List<String> argv = List.of(JavaRuntime.javaBinary(), "-jar", jar.toString(),
                 "--server.port=" + request.hostPort());
-        // 工作目录必须是稳定的部署状态目录：放在本次运行的临时工作树里，进程会占用
-        // node_modules/相对 data 目录，Windows 上导致运行结束后的 worktree 清理失败（exit 255）。
-        ProcessBuilder pb = new ProcessBuilder(argv)
-                .directory(stateDir.toFile())
-                .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
-        pb.environment().put("CI", "true");
         // 平台「设置 → 项目环境」里的变量（与 DOCKER 目标同一份数据）
-        request.env().forEach((key, value) -> pb.environment().put(key, value == null ? "" : value));
+        Map<String, String> env = new java.util.LinkedHashMap<>(request.env());
         // 前端静态目录：后端同端口托管页面（SPA fallback 由网关实现），省掉第二个静态服务
         Path webDist = jar.getParent().resolve("web");
         if (Files.isDirectory(webDist)) {
-            pb.environment().put("AGENT_WEB_DIST", webDist.toAbsolutePath().toString());
+            env.put("AGENT_WEB_DIST", webDist.toAbsolutePath().toString());
             log.append("[host] 前端由后端同端口托管 ").append(webDist.toAbsolutePath()).append('\n');
         }
 
         try {
-            Process process = pb.start();
-            Files.writeString(pidFile, String.valueOf(process.pid()), StandardCharsets.UTF_8);
-            recordProcess(stateDir, process.toHandle());
-            boolean exited = process.waitFor(STARTUP_PROBE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-            if (exited && process.exitValue() != 0) {
+            Process process = HostProcessSupervisor.start(stateDir, argv, env);
+            if (HostProcessSupervisor.exitedDuringProbe(process) && process.exitValue() != 0) {
                 Files.deleteIfExists(pidFile);
                 return DeployResult.failed(DeployTarget.HOST, ErrorCode.DEPLOY_START_FAILED.code(),
                         "进程启动即退出（exit " + process.exitValue() + "）", tailOf(logFile));
             }
             rotatePointers(stateDir, releaseSha, request.rollback());
             // 端口落盘：控制台「重启」要沿用流水线分配的端口，冲突时才漂移
-            try {
-                Files.writeString(stateDir.resolve("port"),
-                        String.valueOf(request.hostPort()), StandardCharsets.UTF_8);
-            } catch (IOException ignored) {
-                // 记录失败不影响本次启动，重启会回落到 app.log 里的端口
-            }
+            HostProcessSupervisor.writePort(stateDir, request.hostPort());
             log.append("[host] started pid=").append(process.pid())
                     .append(" release=").append(releaseSha)
                     .append(" port=").append(request.hostPort()).append('\n');
@@ -232,15 +213,7 @@ public class HostDeployer implements Deployer {
     }
 
     private String readPointer(Path file) {
-        try {
-            if (!Files.isRegularFile(file)) {
-                return null;
-            }
-            String value = Files.readString(file, StandardCharsets.UTF_8).trim();
-            return value.isEmpty() ? null : value;
-        } catch (IOException e) {
-            return null;
-        }
+        return HostProcessSupervisor.readText(file);
     }
 
     private void writePointer(Path file, String value) throws IOException {
@@ -259,100 +232,12 @@ public class HostDeployer implements Deployer {
      * 一律跳过，避免误杀无关进程。
      */
     void stopRecorded(Path stateDir, StringBuilder log) {
-        Path file = stateDir.resolve(PIDS_FILE);
-        if (!Files.isRegularFile(file)) {
-            return;
-        }
-        List<String> survivors = new java.util.ArrayList<>();
-        try {
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                String[] parts = line.trim().split("\\s+");
-                if (parts.length == 0 || parts[0].isEmpty()) {
-                    continue;
-                }
-                long pid;
-                long startedAt;
-                try {
-                    pid = Long.parseLong(parts[0]);
-                    startedAt = parts.length > 1 ? Long.parseLong(parts[1]) : 0L;
-                } catch (NumberFormatException invalid) {
-                    continue;
-                }
-                if (pid == ProcessHandle.current().pid()) {
-                    continue;
-                }
-                Optional<ProcessHandle> handle = ProcessHandle.of(pid);
-                if (handle.isEmpty() || !handle.get().isAlive()) {
-                    continue;
-                }
-                long actual = handle.get().info().startInstant()
-                        .map(java.time.Instant::toEpochMilli).orElse(-1L);
-                if (startedAt > 0 && actual > 0 && Math.abs(actual - startedAt) > 2000L) {
-                    survivors.add(line);
-                    continue;
-                }
-                handle.get().destroy();
-                if (!waitForExit(handle.get(), 5)) {
-                    handle.get().destroyForcibly();
-                    waitForExit(handle.get(), 3);
-                }
-                log.append("[host] stopped orphan pid=").append(pid).append('\n');
-            }
-            // 回写未能回收的登记，避免下次失去线索
-            Files.write(file, survivors, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.append("[host] 遗留进程登记读取失败（继续）：").append(e.getMessage()).append('\n');
-        }
+        HostProcessSupervisor.stopRecorded(stateDir, log);
     }
 
     /** 追加登记刚拉起的进程：每行 {@code pid 启动时刻毫秒}。 */
     void recordProcess(Path stateDir, ProcessHandle handle) {
-        long startedAt = handle.info().startInstant().map(java.time.Instant::toEpochMilli).orElse(0L);
-        try {
-            Files.writeString(stateDir.resolve(PIDS_FILE),
-                    handle.pid() + " " + startedAt + System.lineSeparator(), StandardCharsets.UTF_8,
-                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-        } catch (IOException e) {
-            ProcessExecutor.warn("进程登记写入失败：" + e.getMessage());
-        }
-    }
-
-    /** 停掉上一次由平台拉起的进程（按 pid 文件；已死则清理文件）。 */
-    private void stopPrevious(Path pidFile, StringBuilder log) {
-        if (!Files.isRegularFile(pidFile)) {
-            return;
-        }
-        try {
-            String raw = Files.readString(pidFile).trim();
-            long pid = Long.parseLong(raw);
-            Optional<ProcessHandle> handle = ProcessHandle.of(pid);
-            if (handle.isPresent()) {
-                handle.get().destroy();
-                if (!waitForExit(handle.get(), 5)) {
-                    // 强杀后也要等句柄释放（Windows 上 app.log 被占用会导致目录清理失败）
-                    handle.get().destroyForcibly();
-                    waitForExit(handle.get(), 3);
-                }
-                log.append("[host] stopped previous pid=").append(pid).append('\n');
-            }
-        } catch (Exception e) {
-            log.append("[host] 旧进程停止失败（继续）：").append(e.getMessage()).append('\n');
-        }
-        try {
-            Files.deleteIfExists(pidFile);
-        } catch (IOException ignored) {
-            // 删不掉不影响后续写入
-        }
-    }
-
-    /** 等待进程退出；超时返回 false（调用方决定是否强杀）。 */
-    private static boolean waitForExit(ProcessHandle handle, int seconds) {
-        try {
-            handle.onExit().get(seconds, java.util.concurrent.TimeUnit.SECONDS);
-            return true;
-        } catch (Exception notYet) {
-            return false;
-        }
+        HostProcessSupervisor.recordProcess(stateDir, handle);
     }
 
     /** 找可运行 jar：显式 artifact 优先，否则 target/*.jar（排除 sources/javadoc）。 */
@@ -385,15 +270,7 @@ public class HostDeployer implements Deployer {
     }
 
     private String tailOf(Path logFile) {
-        try {
-            String text = Files.readString(logFile, StandardCharsets.UTF_8);
-            String[] lines = text.split("\\R");
-            int from = Math.max(0, lines.length - 20);
-            return ProcessExecutor.redact(String.join("\n",
-                    java.util.Arrays.copyOfRange(lines, from, lines.length)));
-        } catch (IOException e) {
-            return "";
-        }
+        return HostProcessSupervisor.tail(logFile, 20);
     }
 
     private static String safePath(String healthPath) {

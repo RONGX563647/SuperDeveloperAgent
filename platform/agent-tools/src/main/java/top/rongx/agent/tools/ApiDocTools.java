@@ -2,6 +2,7 @@ package top.rongx.agent.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.json.JsonMappers;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.io.IOException;
@@ -42,7 +43,7 @@ public class ApiDocTools {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
 
     private final Path snapshotPath;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = JsonMappers.readOnly();
 
     private volatile Snapshot snapshot;
 

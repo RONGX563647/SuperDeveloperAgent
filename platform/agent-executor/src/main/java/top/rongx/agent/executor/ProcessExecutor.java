@@ -1,8 +1,6 @@
 package top.rongx.agent.executor;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
@@ -13,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.process.LogRedactor;
+import top.rongx.agent.domain.process.LogTail;
+import top.rongx.agent.domain.process.ProcessIo;
 
 /**
  * 单条命令的执行内核（宿主进程与容器共用）。
@@ -22,9 +22,6 @@ import top.rongx.agent.domain.process.LogRedactor;
 final class ProcessExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessExecutor.class);
-
-    /** 单次动作日志上限（字符）：只保留尾部，避免大构建撑爆内存。 */
-    private static final int MAX_LOG_CHARS = 200_000;
 
     /** 一步的结果。 */
     record StepOutcome(int exitCode, String errorCode, String summary) {
@@ -176,7 +173,7 @@ final class ProcessExecutor {
                     "无法启动命令 " + argv.get(0) + "：" + e.getMessage());
         }
 
-        Thread reader = Thread.ofVirtual().start(() -> pump(process.getInputStream(), sink, chunk -> {
+        Thread reader = Thread.ofVirtual().start(() -> ProcessIo.pump(process.getInputStream(), sink, chunk -> {
             lastOutputAt.set(System.nanoTime());
             if (live != null) {
                 live.accept(chunk);
@@ -192,8 +189,8 @@ final class ProcessExecutor {
         try {
             while (true) {
                 if (cancelled != null && cancelled.getAsBoolean()) {
-                    killTree(process);
-                    joinQuietly(reader);
+                    ProcessIo.killTree(process);
+                    ProcessIo.joinQuietly(reader);
                     return StepOutcome.failed(143, ErrorCode.CANCELLED.code(), "执行被取消：" + String.join(" ", argv));
                 }
                 if (process.waitFor(200, TimeUnit.MILLISECONDS)) {
@@ -217,22 +214,22 @@ final class ProcessExecutor {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            killTree(process);
-            joinQuietly(reader);
+            ProcessIo.killTree(process);
+            ProcessIo.joinQuietly(reader);
             return StepOutcome.failed(143, ErrorCode.CANCELLED.code(), "执行被中断");
         }
 
         if (!finished) {
-            killTree(process);
+            ProcessIo.killTree(process);
             try {
                 if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                    killTree(process);
+                    ProcessIo.killTree(process);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                killTree(process);
+                ProcessIo.killTree(process);
             }
-            joinQuietly(reader);
+            ProcessIo.joinQuietly(reader);
             // 预算可能是秒级碎片（多步配方里前一步吃掉大半预算），按整秒显示会变成
             // "执行超时（0s）"，读日志的人无法判断到底是超时还是命令本身有问题。
             String verdict = stalled
@@ -242,48 +239,13 @@ final class ProcessExecutor {
                     verdict + String.join(" ", argv));
         }
 
-        joinQuietly(reader);
+        ProcessIo.joinQuietly(reader);
         int exit = process.exitValue();
         if (exit != 0) {
             FailureKind kind = failureKind != null ? failureKind : FailureKind.fromArgv(argv);
             return StepOutcome.failed(exit, kind.errorCode(), kind.summary(exit, argv));
         }
         return StepOutcome.ok();
-    }
-
-    private void pump(InputStream in, StringBuilder sink, Consumer<String> live) {
-        // 按字符解码：日志里有中文时，按字节切块会把多字节字符切成两半（表现为乱码）。
-        try (var reader = new java.io.InputStreamReader(in, StandardCharsets.UTF_8)) {
-            char[] buffer = new char[4096];
-            int read;
-            while ((read = reader.read(buffer)) >= 0) {
-                String chunk = new String(buffer, 0, read);
-                append(sink, chunk);
-                if (live != null) {
-                    live.accept(chunk);
-                }
-            }
-        } catch (IOException ignored) {
-            // 进程被终止时读会抛，属正常
-        }
-    }
-
-    private void append(StringBuilder sink, String chunk) {
-        synchronized (sink) {
-            sink.append(chunk);
-            int overflow = sink.length() - MAX_LOG_CHARS;
-            if (overflow > 0) {
-                sink.delete(0, overflow);
-            }
-        }
-    }
-
-    private void joinQuietly(Thread thread) {
-        try {
-            thread.join(3_000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     /** 预算的人类可读形式：不足 1s 时显示毫秒，避免"超时（0s）"这种没有信息量的摘要。 */
@@ -295,46 +257,14 @@ final class ProcessExecutor {
         return seconds < 60 ? seconds + "s" : (seconds / 60) + "m" + (seconds % 60) + "s";
     }
 
-    /**
-     * 终止进程树并关闭输出管道。
-     *
-     * <p>Windows 上 docker CLI 会拉起子进程，只 destroy CLI 会留下继续持有管道写端的
-     * 后代进程，读线程永远等不到 EOF；关掉输入流让 pump 立即结束，joinQuietly 才不会
-     * 白等 3 秒，超时/取消也能真正收敛。
-     */
-    private static void killTree(Process process) {
-        try {
-            process.descendants().forEach(handle -> {
-                try {
-                    handle.destroyForcibly();
-                } catch (RuntimeException ignored) {
-                    // 已退出的子进程
-                }
-            });
-        } catch (RuntimeException ignored) {
-            // 平台不支持 descendants 时忽略
-        }
-        process.destroyForcibly();
-        try {
-            process.getInputStream().close();
-        } catch (IOException ignored) {
-            // 流已关闭
-        }
-    }
-
     /** 日志尾部：最后 30 行且不超过 4000 字符。输出前经 {@link #redact} 脱敏。 */
     static String tail(StringBuilder sink) {
         String text;
         synchronized (sink) {
             text = sink.toString();
         }
-        String[] lines = text.split("\\R");
-        int from = Math.max(0, lines.length - 30);
-        String joined = String.join("\n", java.util.Arrays.copyOfRange(lines, from, lines.length));
-        if (joined.length() > 4000) {
-            joined = "…" + joined.substring(joined.length() - 4000);
-        }
-        return redact(joined);
+        String joined = LogTail.lastLines(text, 30);
+        return redact(LogTail.lastChars(joined, 4000, "…"));
     }
 
     /**

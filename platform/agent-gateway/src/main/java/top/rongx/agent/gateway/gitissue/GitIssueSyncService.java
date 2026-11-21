@@ -2,6 +2,7 @@ package top.rongx.agent.gateway.gitissue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.json.JsonMappers;
 import jakarta.annotation.PreDestroy;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -40,7 +41,7 @@ public class GitIssueSyncService {
     private final GitIssueAgentWaker waker;
     private final BugFixTrigger bugFixTrigger;
     private final ProjectRepository projects;
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json = JsonMappers.readOnly();
     private final ExecutorService executor;
 
     public GitIssueSyncService(GitIssueRepository issues,

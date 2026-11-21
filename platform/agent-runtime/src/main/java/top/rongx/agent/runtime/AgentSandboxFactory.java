@@ -38,6 +38,9 @@ public class AgentSandboxFactory {
     public AgentSandboxFactory(ProjectRepoLocator repoLocator, AgentSandboxProperties props) {
         this.repoLocator = repoLocator;
         this.props = props;
+        for (String problem : props.normalize()) {
+            log.warn("Agent 沙箱配置：{}", problem);
+        }
     }
 
     public boolean enabled() {

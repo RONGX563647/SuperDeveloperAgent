@@ -3,6 +3,7 @@ package top.rongx.agent.runtime.workspace;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.json.JsonMappers;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.agentscope.core.event.AgentEvent;
@@ -59,7 +60,7 @@ public class WorkspaceRunExecutor implements RunAborter {
     private static final int MAX_RESULT_CHARS = 20_000;
     /** 与前端保持一致：单个会话时间线最多保留 200 条消息。 */
     private static final int MAX_TRANSCRIPT_MESSAGES = 200;
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = JsonMappers.readOnly();
 
     private record Results(String result, String error) {
     }

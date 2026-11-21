@@ -18,6 +18,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.IntakeException;
+import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.fs.PathGuard;
 import top.rongx.agent.domain.port.ProjectRepoLocator;
 import top.rongx.agent.domain.port.SessionWorkspaceEditor;
 import top.rongx.agent.infra.git.GitWorktreeManager;
@@ -86,7 +88,7 @@ public class SessionWorktreeEditor implements SessionWorkspaceEditor {
                                 return FileVisitResult.SKIP_SUBTREE;
                             }
                             if (!path.equals(start)) {
-                                String rel = relative(wt, path);
+                                String rel = PathGuard.relative(wt, path);
                                 if (rel != null) {
                                     out.add(rel + "/");
                                 }
@@ -102,7 +104,7 @@ public class SessionWorktreeEditor implements SessionWorkspaceEditor {
                             if (SKIP_DIRS.contains(file.getFileName().toString())) {
                                 return FileVisitResult.CONTINUE;
                             }
-                            String rel = relative(wt, file);
+                            String rel = PathGuard.relative(wt, file);
                             if (rel != null) {
                                 out.add(rel);
                             }
@@ -298,11 +300,11 @@ public class SessionWorktreeEditor implements SessionWorkspaceEditor {
         if (relative.isAbsolute()) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "不允许绝对路径：" + path);
         }
-        Path resolved = worktree.resolve(relative).normalize();
-        if (!resolved.startsWith(worktree)) {
+        try {
+            return PathGuard.resolveInside(worktree, normalized);
+        } catch (RunException e) {
             throw new IntakeException(ErrorCode.INTAKE_INVALID_INPUT, "路径越界：" + path);
         }
-        return resolved;
     }
 
     /** 凭证类文件拒绝写入/删除（Agent 不应触碰密钥）。 */
@@ -328,12 +330,4 @@ public class SessionWorktreeEditor implements SessionWorkspaceEditor {
         return line.length() > 3 ? line.substring(3).trim() : line.trim();
     }
 
-    /** 工作树内相对路径（/ 分隔）；不在树内返回 null。 */
-    private static String relative(Path worktree, Path path) {
-        Path normalized = path.toAbsolutePath().normalize();
-        if (!normalized.startsWith(worktree)) {
-            return null;
-        }
-        return worktree.relativize(normalized).toString().replace('\\', '/');
-    }
 }

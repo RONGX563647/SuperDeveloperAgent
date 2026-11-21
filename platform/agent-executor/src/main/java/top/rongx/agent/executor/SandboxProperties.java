@@ -3,6 +3,7 @@ package top.rongx.agent.executor;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import top.rongx.agent.domain.docker.DockerLimits;
 
 /**
  * {@code agent.sandbox.*} 的全部配置项（唯一的声明点）。
@@ -66,33 +67,15 @@ public class SandboxProperties {
         List<String> problems = new ArrayList<>();
 
         dockerBinary = blankTo(dockerBinary, "docker");
-        image = blankTo(image, "maven:3.9-eclipse-temurin-21");
-        network = blankTo(network, "bridge");
-        // --memory 只接受 docker 的尺寸语法。<b>单位必填</b>：docker 确实接受纯字节数
-        // （--memory 2 就是 2 字节），但在这份配置里写 "2" 几乎一定是想写 "2g" 漏了单位——
-        // 真的给容器 2 字节内存会让它立刻 OOM，且报错完全看不出是配置问题。
-        // 宁可在这里拦下并告警，也不要让"漏一个字母"变成一次神秘的构建失败。
-        if (memory == null || !memory.trim().matches("[1-9][0-9]*[bkmgBKMG]")) {
-            problems.add("agent.sandbox.memory 非法：" + memory
-                    + "（必须带单位，如 2g / 512m；纯数字会被当成字节数），已回落到 2g");
-            memory = "2g";
-        } else {
-            memory = memory.trim();
-        }
-        // --cpus 只接受正数（小数表示核数的分数）
-        if (cpus == null || !cpus.trim().matches("[0-9]+(\\.[0-9]+)?")) {
-            problems.add("agent.sandbox.cpus 非法：" + cpus + "（应为 2 / 1.5），已回落到 2");
-            cpus = "2";
-        } else {
-            cpus = cpus.trim();
-        }
-        // pids-limit 必须 > 0：0 在 docker 里表示"无限制"，那正好抵消了这条隔离
-        if (pidsLimit <= 0) {
-            problems.add("agent.sandbox.pids-limit 必须 > 0（0 表示无限制，会抵消隔离）："
-                    + pidsLimit + "，已回落到 512");
-            pidsLimit = 512;
-        }
-        user = blankTo(user, "1000:1000");
+        // 资源限制的默认值与校验只在 DockerLimits 里维护（会话沙箱共用同一套）
+        DockerLimits limits = DockerLimits.normalize(image, network, memory, cpus, pidsLimit, user,
+                "bridge", "1000:1000", "agent.sandbox.", problems);
+        image = limits.image();
+        network = limits.network();
+        memory = limits.memory();
+        cpus = limits.cpus();
+        pidsLimit = limits.pidsLimit();
+        user = limits.user();
         cacheVolumePrefix = cacheVolumePrefix == null ? "" : cacheVolumePrefix.trim();
 
         // 超时/重试必须为正：0 或负数会让"等待"变成"立即失败"

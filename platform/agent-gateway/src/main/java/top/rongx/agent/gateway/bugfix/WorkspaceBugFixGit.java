@@ -18,6 +18,7 @@ import top.rongx.agent.gateway.gitissue.GitIssueRemoteClient;
 import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.fs.PathGuard;
 
 /**
  * 自动修复的 Git 适配器：在基线提交上建临时 worktree → 应用补丁 → 提交到独立分支 → 推送并建 PR。
@@ -123,7 +124,7 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
         for (BugFixEdit edit : edits) {
             String path = normalize(edit.path());
             validate(path, edit.replaceMode() ? edit.newText() : edit.content());
-            Path target = resolveInside(worktree, path);
+            Path target = PathGuard.resolveInside(worktree, path);
             String text;
             if (edit.replaceMode()) {
                 text = replaceOnce(target, path, edit.oldText(), edit.newText());
@@ -288,14 +289,6 @@ public class WorkspaceBugFixGit implements BugFixGitPort {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "文件内容过大：" + path + "（上限 "
                     + MAX_CONTENT_CHARS + " 字符）");
         }
-    }
-
-    private static Path resolveInside(Path root, String relative) {
-        Path resolved = root.resolve(relative).normalize();
-        if (!resolved.startsWith(root.normalize())) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + relative);
-        }
-        return resolved;
     }
 
     private static String username(String provider) {

@@ -3,6 +3,7 @@ package top.rongx.agent.executor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * 确定性修复：工具链镜像缺失（E-209 / No such image）→ 自动 docker pull → 平台复核。
@@ -82,7 +83,6 @@ final class ImagePullRepair implements FailureRepair {
     }
 
     private static String truncate(String value, int max) {
-        String one = value == null ? "" : value.replaceAll("\\s+", " ").trim();
-        return one.length() > max ? one.substring(0, max) + "…" : one;
+        return LogTail.oneLine(value, max);
     }
 }

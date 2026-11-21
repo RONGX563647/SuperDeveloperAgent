@@ -8,6 +8,7 @@ import java.net.ProxySelector;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
+import top.rongx.agent.domain.http.HttpClients;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -802,29 +803,13 @@ public class RemoteCapabilityMarket implements CapabilityMarket {
         }
     }
 
-    /** 与 git 一致读 HTTPS_PROXY / HTTP_PROXY：Java 的 HttpClient 不会自动读代理环境变量。 */
+    /** 代理统一走 HttpClients；这里只额外挂系统信任库。 */
     private static HttpClient client() {
-        HttpClient.Builder builder = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(6))
+        HttpClient.Builder builder = HttpClients.builder(Duration.ofSeconds(6))
                 .followRedirects(HttpClient.Redirect.NORMAL);
         SSLContext ssl = sslContext();
         if (ssl != null) {
             builder.sslContext(ssl);
-        }
-        String raw = env("HTTPS_PROXY");
-        if (raw == null || raw.isBlank()) {
-            raw = env("HTTP_PROXY");
-        }
-        if (raw != null && !raw.isBlank()) {
-            try {
-                URI uri = URI.create(raw.trim().contains("://") ? raw.trim() : "http://" + raw.trim());
-                if (uri.getHost() != null) {
-                    builder.proxy(ProxySelector.of(new InetSocketAddress(uri.getHost(),
-                            uri.getPort() > 0 ? uri.getPort() : 8080)));
-                }
-            } catch (PlatformException | IllegalArgumentException e) {
-                // 代理变量格式不对时按直连处理，后面请求失败会给出明确错误
-            }
         }
         return builder.build();
     }

@@ -1,11 +1,10 @@
 package top.rongx.agent.gateway.config;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import top.rongx.agent.domain.json.JsonMappers;
 
 /**
  * Jackson 2 的 ObjectMapper。
@@ -24,8 +23,7 @@ public class Jackson2Config {
     @Bean
     @ConditionalOnMissingBean(ObjectMapper.class)
     public ObjectMapper jackson2ObjectMapper() {
-        return new ObjectMapper()
-                .registerModule(new JavaTimeModule())
-                .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        // 与全平台共享同一份配置，避免事件序列化与工具侧对同一份 JSON 判断不一致
+        return JsonMappers.readOnly();
     }
 }

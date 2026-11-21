@@ -62,7 +62,9 @@ import top.rongx.agent.domain.port.PipelineEngine.ImageVersion;
 import top.rongx.agent.domain.port.PipelineEngine.LogSlice;
 import top.rongx.agent.domain.port.PipelineEngine.StagePreview;
 import top.rongx.agent.domain.release.ReleaseVersion;
+import top.rongx.agent.domain.http.HttpClients;
 import top.rongx.agent.domain.process.BoundedCommand;
+import top.rongx.agent.domain.process.LogTail;
 import top.rongx.agent.domain.process.PortProbe;
 import top.rongx.agent.domain.run.StageResult;
 import top.rongx.agent.domain.run.StageStatus;
@@ -2410,7 +2412,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         synchronized (state.log) {
             text = state.log.toString();
         }
-        return text.length() > max ? text.substring(text.length() - max) : text;
+        return LogTail.lastChars(text, max);
     }
 
     /**
@@ -2432,10 +2434,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             start = text.lastIndexOf("[" + stageId + "]");
         }
         if (start < 0) {
-            return text.length() > max ? text.substring(text.length() - max) : text;
+            return LogTail.lastChars(text, max);
         }
         String segment = text.substring(start);
-        return segment.length() > max ? segment.substring(segment.length() - max) : segment;
+        return LogTail.lastChars(segment, max);
     }
 
     /** 线程安全地追加一行日志，并刷新「最后输出时间」避免看护误写心跳。 */
@@ -3672,7 +3674,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     private boolean probeLocalDev(RunState state, String endpoint, int attempts) {
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        HttpClient client = HttpClients.withProxy(Duration.ofSeconds(2));
         for (int i = 0; i < attempts; i++) {
             try {
                 HttpResponse<String> response = client.send(
@@ -5110,7 +5112,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         long deadlineNanos = System.nanoTime() + windowMs * 1_000_000L;
         boolean waitingHealth = false;
         String homeIssue = null;
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        HttpClient client = HttpClients.withProxy(Duration.ofSeconds(2));
         String body = "";
         String exitInfo = null;
         for (int i = 0; i < attempts && (i == 0 || System.nanoTime() < deadlineNanos); i++) {

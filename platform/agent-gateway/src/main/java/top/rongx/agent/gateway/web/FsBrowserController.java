@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import top.rongx.agent.tools.SecretRedactor;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.fs.PathGuard;
 
 /**
  * 本地目录浏览接口（供前端"选择本地文件夹"）。
@@ -150,13 +151,7 @@ public class FsBrowserController {
         if (sharedRoot == null) {
             return;
         }
-        Path root = sharedRoot;
-        try {
-            root = sharedRoot.toRealPath();
-        } catch (IOException ignored) {
-            // 边界目录无法解析时回退到规范化路径：宁严勿松，仍按 startsWith 判断
-        }
-        if (!real.equals(root) && !real.startsWith(root)) {
+        if (!PathGuard.isInside(sharedRoot, real)) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出工作区边界：" + real + "（边界：" + sharedRoot + "）");
         }
     }

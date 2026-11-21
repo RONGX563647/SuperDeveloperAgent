@@ -2,6 +2,8 @@ package top.rongx.agent.gateway.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.http.HttpClients;
+import top.rongx.agent.domain.json.JsonMappers;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -44,8 +46,8 @@ import top.rongx.agent.domain.error.IntakeException;
 @RequestMapping("/api/v1/settings/git-hosts")
 public class GitHostingController {
 
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = OutboundHttp.client(Duration.ofSeconds(10));
+    private final ObjectMapper mapper = JsonMappers.readOnly();
+    private final HttpClient http = HttpClients.withProxy(Duration.ofSeconds(10));
     private final GitHostingAccountRepository accounts;
     private final GitWorktreeManager git;
     private final CurrentUser currentUser;

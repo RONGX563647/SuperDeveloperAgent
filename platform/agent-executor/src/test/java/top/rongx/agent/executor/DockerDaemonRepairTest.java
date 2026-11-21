@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Docker 守护进程修复：先探测、再启动、最后由平台 docker version 复核。
+ * Docker 守护进程修复：先探测、再启动、最后由平台 docker info 复核。
  *
  * <p><b>平台约束</b>：涉及"自动启动守护进程"的用例只在 Windows 上有意义——那条启动命令
  * 本身就是 {@code docker desktop start}，而 {@link DockerDaemonRepair#startCommand} 在 Linux
@@ -27,7 +27,7 @@ class DockerDaemonRepairTest {
 
     private static final List<String> INSPECT = List.of("docker", "image", "inspect", "maven:cfg");
     private static final List<String> PROBE =
-            List.of("docker", "version", "--format", "{{.Server.Version}}");
+            List.of("docker", "info", "--format", "{{.ServerVersion}}");
 
     private static final class Recorder implements FailureRepair.CommandRunner {
         private final List<List<String>> commands = new ArrayList<>();
@@ -77,7 +77,7 @@ class DockerDaemonRepairTest {
 
     @Test
     @EnabledOnOs(OS.WINDOWS)
-    @DisplayName("启动 Docker 后由 docker version 复核通过才允许续跑")
+    @DisplayName("启动 Docker 后由 docker info 复核通过才允许续跑")
     void startsThenVerified() {
         Recorder recorder = new Recorder();
         recorder.outcomes.add(ProcessExecutor.StepOutcome.failed(1, "E-101", "cannot connect"));
@@ -92,7 +92,7 @@ class DockerDaemonRepairTest {
         assertEquals(PROBE, recorder.commands.get(0));
         assertEquals(PROBE, recorder.commands.get(2));
         assertFalse(recorder.commands.get(1).equals(PROBE), "中间必须是启动命令");
-        assertTrue(outcome.lines().stream().anyMatch(l -> l.contains("docker version 复核")));
+        assertTrue(outcome.lines().stream().anyMatch(l -> l.contains("docker info 复核")));
     }
 
     @Test
@@ -108,7 +108,7 @@ class DockerDaemonRepairTest {
                 .repair(diagnosis("Cannot connect to the Docker daemon"), context(recorder, false));
 
         assertFalse(outcome.verified());
-        assertEquals(2, recorder.commands.size(), "启动失败后不再轮询 docker version");
+        assertEquals(2, recorder.commands.size(), "启动失败后不再轮询 docker info");
         assertTrue(outcome.summary().contains("手动启动"), outcome.summary());
     }
 

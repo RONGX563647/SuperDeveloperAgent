@@ -3,6 +3,7 @@ package top.rongx.agent.gateway.bugfix;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import top.rongx.agent.domain.http.HttpClients;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
@@ -112,8 +113,7 @@ public class WorkspaceBugFixCheck implements BugFixCheckPort {
             return CheckResult.fail("禁止对生产环境做自动冒烟检查：" + policy.testEnv(), "");
         }
         try {
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(10))
+            HttpClient client = HttpClients.builder(Duration.ofSeconds(10))
                     .followRedirects(HttpClient.Redirect.NORMAL)
                     .build();
             HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl))

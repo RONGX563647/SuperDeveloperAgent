@@ -2,6 +2,8 @@ package top.rongx.agent.gateway.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.http.HttpClients;
+import top.rongx.agent.domain.json.JsonMappers;
 import io.agentscope.core.tool.mcp.McpClientBuilder;
 import io.agentscope.core.tool.mcp.McpClientWrapper;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -51,8 +53,8 @@ public class McpSettingsController {
 
     private static final String PROTOCOL_VERSION = "2024-11-05";
 
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = OutboundHttp.client(Duration.ofSeconds(8));
+    private final ObjectMapper mapper = JsonMappers.readOnly();
+    private final HttpClient http = HttpClients.withProxy(Duration.ofSeconds(8));
     private final McpServerRepository servers;
     private final CurrentUser currentUser;
 

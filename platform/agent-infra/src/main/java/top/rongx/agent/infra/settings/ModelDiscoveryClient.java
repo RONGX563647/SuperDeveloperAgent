@@ -7,6 +7,7 @@ import java.net.InetSocketAddress;
 import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
+import top.rongx.agent.domain.http.HttpClients;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
@@ -120,32 +121,10 @@ public class ModelDiscoveryClient {
         return url.toLowerCase(Locale.ROOT).endsWith("/models") ? url : url + "/models";
     }
 
-    /** 与 git / 能力市场一致读 HTTPS_PROXY / HTTP_PROXY。 */
+    /** 与 git / 能力市场一致读 HTTPS_PROXY / HTTP_PROXY（统一走 HttpClients）。 */
     private static HttpClient client() {
-        HttpClient.Builder builder = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(6))
-                .followRedirects(HttpClient.Redirect.NORMAL);
-        String raw = env("HTTPS_PROXY");
-        if (raw == null || raw.isBlank()) {
-            raw = env("HTTP_PROXY");
-        }
-        if (raw != null && !raw.isBlank()) {
-            try {
-                URI uri = URI.create(raw.trim().contains("://")
-                        ? raw.trim() : "http://" + raw.trim());
-                if (uri.getHost() != null) {
-                    builder.proxy(ProxySelector.of(new InetSocketAddress(uri.getHost(),
-                            uri.getPort() > 0 ? uri.getPort() : 8080)));
-                }
-            } catch (PlatformException | IllegalArgumentException e) {
-                // 代理变量格式不对时按直连处理
-            }
-        }
-        return builder.build();
-    }
-
-    private static String env(String name) {
-        String value = System.getenv(name);
-        return value != null ? value : System.getenv(name.toLowerCase(Locale.ROOT));
+        return HttpClients.builder(Duration.ofSeconds(6))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
     }
 }

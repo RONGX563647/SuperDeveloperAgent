@@ -1,6 +1,7 @@
 package top.rongx.agent.tools;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.json.JsonMappers;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import java.util.List;
@@ -33,7 +34,7 @@ public class EnvCommandTools {
     private final top.rongx.agent.domain.env.EnvProvisioner provisioner;
     private final EnvironmentStore envStore;
     private final PolicyPort policy;
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json = JsonMappers.readOnly();
 
     public EnvCommandTools(EnvBindingPort bindings,
                            top.rongx.agent.domain.env.EnvProvisioner provisioner,

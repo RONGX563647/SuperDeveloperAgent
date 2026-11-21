@@ -825,8 +825,8 @@ public class DockerSandbox {
      * @return 实际删除的容器名（空 = 没有需要清扫的）
      */
     public List<String> sweepStaleContainers(Consumer<String> log) {
-        BoundedCommand.Outcome listed = BoundedCommand.run(
-                List.of(dockerBinary, "ps", "-a", "--filter", "label=" + MANAGED_LABEL,
+        BoundedCommand.Outcome listed = new DockerOps(dockerBinary).run(
+                List.of("ps", "-a", "--filter", "label=" + MANAGED_LABEL,
                         "--format", "{{.Names}}|{{.Label \"" + OWNER_LABEL + "\"}}"),
                 15_000L);
         if (!listed.ok()) {
@@ -970,8 +970,7 @@ public class DockerSandbox {
 
     /** 守护进程是否可用（3 秒硬超时 + 并行排空输出，避免启动被拖住）。 */
     public boolean available() {
-        return BoundedCommand.run(
-                List.of(dockerBinary, "info", "--format", "{{.ServerVersion}}"), 3_000L).ok();
+        return new DockerOps(dockerBinary).available();
     }
 
     public String image() {
@@ -1158,8 +1157,8 @@ public class DockerSandbox {
             return;     // 默认 runc，无需探测
         }
         if (availableRuntimes == null) {
-            BoundedCommand.Outcome info = BoundedCommand.run(
-                    List.of(dockerBinary, "info", "--format", "{{json .Runtimes}}"),
+            BoundedCommand.Outcome info = new DockerOps(dockerBinary).run(
+                    List.of("info", "--format", "{{json .Runtimes}}"),
                     IMAGE_INSPECT_TIMEOUT_MS);
             // 探测失败时留空列表：requireRuntimeAvailable 对空列表按"无法断言"放行，
             // 让后面的 docker run 给出真实错误，而不是在这里误拦一个可能正常的部署。

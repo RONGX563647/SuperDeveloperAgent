@@ -26,6 +26,7 @@ import top.rongx.agent.domain.conversation.DispatchResult;
 import top.rongx.agent.domain.conversation.RunIds;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * DAG 并行调度器：把"串行 send + wait"换成"就绪即派发、并行等待、提前终止"。
@@ -529,10 +530,7 @@ public final class WorkspaceDispatchScheduler {
     }
 
     private static String truncate(String value, int max) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() > max ? value.substring(0, max) + "…" : value;
+        return LogTail.prefix(value, max, "…");
     }
 
     private static String safeMessage(Throwable error) {

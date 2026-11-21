@@ -1,6 +1,7 @@
 package top.rongx.agent.tools;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.json.JsonMappers;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.Toolkit;
 import java.io.IOException;
@@ -53,7 +54,7 @@ public class AgentToolCatalog {
 
     private final ApplicationContext context;
     private final Path catalogPath;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = JsonMappers.readOnly();
 
     private volatile Catalog catalog;
 

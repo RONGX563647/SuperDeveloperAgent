@@ -33,6 +33,8 @@ import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.project.ProjectContext;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import top.rongx.agent.domain.error.PlatformException;
+import top.rongx.agent.domain.http.HttpClients;
+import top.rongx.agent.domain.process.LogTail;
 
 /**
  * 应用运行时工具：只回答"应用有没有在跑、日志里报了什么"，不启停任何东西。
@@ -52,9 +54,7 @@ public class RuntimeTools {
     private static final Pattern HOST_PORT =
             Pattern.compile("\\[host] started pid=\\d+ release=\\S+ port=(\\d+)");
 
-    private static final HttpClient HTTP = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(2))
-            .build();
+    private static final HttpClient HTTP = HttpClients.withProxy(Duration.ofSeconds(2));
 
     private final EnvironmentStore envStore;
     private final ServiceRuntime services;
@@ -483,12 +483,7 @@ public class RuntimeTools {
 
     /** 读取文件末尾若干行（文件不存在或不可读时返回空）。 */
     private static List<String> tail(Path file, int maxLines) {
-        try {
-            List<String> all = Files.readAllLines(file, StandardCharsets.UTF_8);
-            return all.size() <= maxLines ? all : all.subList(all.size() - maxLines, all.size());
-        } catch (IOException | RuntimeException e) {
-            return List.of();
-        }
+        return LogTail.lastLineList(file, maxLines);
     }
 
     private boolean appendLogSection(StringBuilder sb, String sourceKind, String container,

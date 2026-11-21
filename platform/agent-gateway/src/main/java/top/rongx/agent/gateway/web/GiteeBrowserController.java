@@ -2,6 +2,8 @@ package top.rongx.agent.gateway.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.http.HttpClients;
+import top.rongx.agent.domain.json.JsonMappers;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -51,9 +53,8 @@ public class GiteeBrowserController {
     /** OAuth scope：仓库读写 + 用户信息 + issues（webhook 预留）。 */
     private static final String OAUTH_SCOPES = "user_info projects issues";
 
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10)).build();
+    private final ObjectMapper mapper = JsonMappers.readOnly();
+    private final HttpClient http = HttpClients.withProxy(Duration.ofSeconds(10));
     private final GiteeAccountStore accounts;
     private final GitOauthAppRepository oauthApps;
     private final PasswordVerifier passwordVerifier;

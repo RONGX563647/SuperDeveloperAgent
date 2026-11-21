@@ -2,6 +2,8 @@ package top.rongx.agent.gateway.gitissue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import top.rongx.agent.domain.http.HttpClients;
+import top.rongx.agent.domain.json.JsonMappers;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -37,11 +39,10 @@ public class GitIssueRemoteClient {
     private static final Logger log = LoggerFactory.getLogger(GitIssueRemoteClient.class);
     private static final Duration TIMEOUT = Duration.ofSeconds(20);
 
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(8))
+    private final HttpClient http = HttpClients.builder(Duration.ofSeconds(8))
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json = JsonMappers.readOnly();
     private final GiteeAccountStore gitee;
     private final GitHostingAccountRepository hosts;
 

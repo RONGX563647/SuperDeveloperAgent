@@ -1,6 +1,9 @@
 package top.rongx.agent.runtime;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import top.rongx.agent.domain.docker.DockerLimits;
 
 /**
  * Agent 会话沙箱配置（{@code agent.agent-sandbox.*}）。
@@ -25,6 +28,27 @@ public class AgentSandboxProperties {
     private String user = "";
     /** 挂载时使用的容器内工作区根；工具路径会按它归一化。 */
     private String workspaceRoot = "/workspace";
+
+    /**
+     * 规整并校验资源限制，返回发现的问题（由装配方记录告警）。
+     *
+     * <p>与会话默认值保持一致的只有 memory/cpus/pids 的校验；网络默认 {@code none}、
+     * 用户默认留空（沿用镜像用户），这两项与流水线沙箱不同，因此不合并配置类。
+     */
+    public List<String> normalize() {
+        List<String> problems = new ArrayList<>();
+        DockerLimits limits = DockerLimits.normalize(image, network, memory, cpus, pidsLimit, user,
+                "none", "", "agent.agent-sandbox.", problems);
+        image = limits.image();
+        network = limits.network();
+        memory = limits.memory();
+        cpus = limits.cpus();
+        pidsLimit = limits.pidsLimit();
+        user = limits.user();
+        workspaceRoot = workspaceRoot == null || workspaceRoot.isBlank()
+                ? "/workspace" : workspaceRoot.trim();
+        return List.copyOf(problems);
+    }
 
     public boolean isEnabled() {
         return enabled;

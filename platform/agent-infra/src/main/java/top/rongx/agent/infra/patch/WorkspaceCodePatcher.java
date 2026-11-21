@@ -19,6 +19,7 @@ import top.rongx.agent.infra.git.GitWorktreeManager;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.PatchPathDeniedException;
 import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.domain.fs.PathGuard;
 
 /**
  * 受限补丁器：Agent 能改动的仓库内容全部经这里落地。
@@ -152,7 +153,7 @@ public class WorkspaceCodePatcher implements CodePatcher {
                 String relative = normalize(edit.path());
                 // 应用阶段再校一次：补丁可能来自持久化存储，不能只信 stage 时的判断
                 guard(relative);
-                Path target = resolveInside(worktree, relative);
+                Path target = PathGuard.resolveInside(worktree, relative);
                 try {
                     Files.createDirectories(target.getParent());
                     Files.writeString(target, edit.content(), StandardCharsets.UTF_8);
@@ -274,14 +275,6 @@ public class WorkspaceCodePatcher implements CodePatcher {
         String name = path.substring(path.lastIndexOf('/') + 1);
         return name.startsWith("application")
                 && (name.endsWith(".yml") || name.endsWith(".yaml") || name.endsWith(".properties"));
-    }
-
-    private static Path resolveInside(Path root, String relative) {
-        Path resolved = root.resolve(relative).normalize();
-        if (!resolved.startsWith(root.normalize())) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "路径超出仓库范围：" + relative);
-        }
-        return resolved;
     }
 
     private static String sha256(String text) {
