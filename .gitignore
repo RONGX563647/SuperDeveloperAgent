@@ -64,6 +64,9 @@ tsconfig.tsbuildinfo
 .screenshots/
 .playwright-cli/
 docs/research/*.png
+# AgentScope 运行时工作区（会话 jsonl / memory）：属于本机运行状态，
+# 含对话内容与记忆摘要，不是源码。漏掉这一行会让一次 `git add -A` 把会话日志提交进仓库。
+.agentscope/
 
 # 会话归档运行时状态（active 会话与测试证据，归档在 docs/process、docs/summary）
 docs/.session/
