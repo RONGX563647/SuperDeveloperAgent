@@ -63,14 +63,28 @@ class EncryptedAgentStateStoreTest {
     @Test
     void legacyPlaintextIsIgnored() throws Exception {
         EncryptedAgentStateStore store = newStore();
-        store.save("u1", "s1", "agent", new SampleState("x"));
-        Path file;
-        try (var walk = Files.walk(temp.resolve("state"))) {
-            file = walk.filter(p -> p.getFileName().toString().endsWith(".state.enc")).findFirst().orElseThrow();
-        }
-        Files.writeString(file, "{\"text\":\"legacy\"}", StandardCharsets.UTF_8);
+        Path legacy = temp.resolve("state/u1/s1/agent.state.enc");
+        Files.createDirectories(legacy.getParent());
+        Files.writeString(legacy, "{\"text\":\"legacy\"}", StandardCharsets.UTF_8);
 
         assertTrue(store.get("u1", "s1", "agent", SampleState.class).isEmpty());
+    }
+
+    @Test
+    void legacyEncryptedStateIsMigrated() throws Exception {
+        SecretBox box = new SecretBox(temp.toString(), "");
+        EncryptedAgentStateStore store = new EncryptedAgentStateStore(temp.resolve("state"), box);
+        Path legacy = temp.resolve("state/u1/s1/agent.state.enc");
+        Files.createDirectories(legacy.getParent());
+        SecretBox.Sealed sealed = box.encrypt("{\"text\":\"旧会话\"}");
+        Files.writeString(legacy, sealed.cipherB64() + ":" + sealed.ivB64(), StandardCharsets.UTF_8);
+
+        assertEquals("旧会话",
+                store.get("u1", "s1", "agent", SampleState.class).orElseThrow().text());
+        assertTrue(Files.notExists(legacy), "旧格式应在迁移后清理");
+        // 再读一次走新格式
+        assertEquals("旧会话",
+                store.get("u1", "s1", "agent", SampleState.class).orElseThrow().text());
     }
 
     @Test

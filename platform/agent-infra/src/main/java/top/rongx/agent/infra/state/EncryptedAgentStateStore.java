@@ -1,59 +1,49 @@
 package top.rongx.agent.infra.state;
 
 import io.agentscope.core.state.AgentStateStore;
+import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.core.state.State;
 import io.agentscope.core.util.JsonCodec;
 import io.agentscope.core.util.JsonUtils;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.RunException;
+import top.rongx.agent.infra.security.SecretBox;
 
 /**
  * 会话状态存储（AES-256-GCM 落盘）。
  *
- * <p>AgentScope 自带的 {@code JsonFileAgentStateStore} 只写明文 JSON，对话内容（可能含
- * 日志片段、环境变量摘要）会直接躺在磁盘上。这里用平台主密钥
- * （{@link SecretBox}，同一把 {@code AGENT_SECURITY_MASTER_KEY}）加密后再落盘：
+ * <p>底层复用 AgentScope 的 {@link JsonFileAgentStateStore}：目录布局、原子写、会话列举、
+ * 删除、clearAll 都由它负责；这里只在其上叠加一层“状态 JSON 加密”编解码。
+ * 这样不会出现平台自研一套文件状态库、AgentScope 升级后路径语义分叉的问题。
  *
- * <ul>
- *   <li>单值：一个文件一行密文（Base64(cipher):Base64(iv)）；</li>
- *   <li>列表：一行一个元素密文，追加语义由整体重写替代（会话状态量很小）；</li>
- *   <li>写入用临时文件 + 原子移动，避免读到半截；目录 700、文件 600。</li>
- * </ul>
- *
- * <p>兼容性：早期明文 JSON 文件无法解密，按"不存在"处理（会话从下一轮重新开始），
- * 不会因为升级而让对话接口报错。
+ * <p>兼容旧格式：历史版本使用 {@code *.state.enc} / {@code *.list.enc}，读取时先查新格式，
+ * 再回退旧格式；回退命中后会顺手迁移到新格式。
  */
 public class EncryptedAgentStateStore implements AgentStateStore {
 
     private static final Logger log = LoggerFactory.getLogger(EncryptedAgentStateStore.class);
 
-    private static final String VALUE_SUFFIX = ".state.enc";
-    private static final String LIST_SUFFIX = ".list.enc";
+    private static final String LEGACY_VALUE_SUFFIX = ".state.enc";
+    private static final String LEGACY_LIST_SUFFIX = ".list.enc";
     private static final String SEPARATOR = ":";
 
     private final Path root;
     private final SecretBox cipher;
     private final JsonCodec codec = JsonUtils.getJsonCodec();
-    /**
-     * 会话级互斥：同一 sessionId 并发两轮对话时，不能出现"读-改-写"互相覆盖。
-     * 锁按 (user, session) 分片，不同会话之间不互相阻塞。
-     */
+    /** 懒初始化：匿名槽位不应在磁盘上创建任何状态目录。 */
+    private volatile JsonFileAgentStateStore delegate;
+
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>
             sessionLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -62,17 +52,34 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         this.cipher = cipher;
     }
 
+    private JsonFileAgentStateStore delegate() {
+        JsonFileAgentStateStore current = delegate;
+        if (current == null) {
+            synchronized (this) {
+                current = delegate;
+                if (current == null) {
+                    current = new JsonFileAgentStateStore(root);
+                    delegate = current;
+                }
+            }
+        }
+        return current;
+    }
+
+    /** 加密后的状态载荷；真正内容由 {@link #cipher} 保护，JsonFileAgentStateStore 只看到密文。 */
+    public record EncryptedState(String token) implements State {
+    }
+
     @Override
-    // @handbook state-agent-state-store/save | 会话状态加密落盘
     public void save(String userId, String sessionId, String key, State state) {
         if (state == null || isAnonymous(userId)) {
             return;
         }
-        // 上下文压缩由 HarnessAgent 的 CompactionMiddleware 在运行期接管（写回 AgentState），
-        // 这里只负责加密落盘，不再做二次裁剪，避免两套裁剪口径互相干扰。
-        withSessionLock(userId, sessionId, () -> write(
-                file(userId, sessionId, key, VALUE_SUFFIX),
-                encrypt(codec.toJson(state)) + System.lineSeparator()));
+        withSessionLock(userId, sessionId, () -> {
+            delegate().save(userId, sessionId, key,
+                    new EncryptedState(encrypt(codec.toJson(state))));
+            deleteLegacy(userId, sessionId, key, LEGACY_VALUE_SUFFIX);
+        });
     }
 
     @Override
@@ -80,16 +87,17 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         if (isAnonymous(userId)) {
             return;
         }
-        withSessionLock(userId, sessionId, () -> {
-            StringBuilder body = new StringBuilder();
-            if (states != null) {
-                for (State state : states) {
-                    if (state != null) {
-                        body.append(encrypt(codec.toJson(state))).append(System.lineSeparator());
-                    }
+        List<EncryptedState> payload = new ArrayList<>();
+        if (states != null) {
+            for (State state : states) {
+                if (state != null) {
+                    payload.add(new EncryptedState(encrypt(codec.toJson(state))));
                 }
             }
-            write(file(userId, sessionId, key, LIST_SUFFIX), body.toString());
+        }
+        withSessionLock(userId, sessionId, () -> {
+            delegate().save(userId, sessionId, key, payload);
+            deleteLegacy(userId, sessionId, key, LEGACY_LIST_SUFFIX);
         });
     }
 
@@ -100,17 +108,22 @@ public class EncryptedAgentStateStore implements AgentStateStore {
             return Optional.empty();
         }
         return withSessionLock(userId, sessionId, () -> {
-            String token = readToken(file(userId, sessionId, key, VALUE_SUFFIX));
+            Optional<EncryptedState> stored = delegate().get(userId, sessionId, key, EncryptedState.class);
+            if (stored.isPresent()) {
+                return decryptState(stored.get(), type, userId, sessionId, key);
+            }
+            // 旧格式回退：迁移到新格式后返回，避免升级丢会话
+            String token = readLegacyToken(userId, sessionId, key, LEGACY_VALUE_SUFFIX);
             if (token == null) {
                 return Optional.empty();
             }
-            try {
-                return Optional.of(codec.fromJson(decrypt(token), type));
-            } catch (RuntimeException e) {
-                // 旧版明文 / 主密钥轮换后的历史数据：当成没有，别让整轮对话失败
-                log.warn("会话状态无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
-                return Optional.empty();
+            Optional<T> migrated = decryptState(new EncryptedState(token), type, userId, sessionId, key);
+            migrated.ifPresent(value -> delegate().save(userId, sessionId, key,
+                    new EncryptedState(encrypt(codec.toJson(value)))));
+            if (migrated.isPresent()) {
+                deleteLegacy(userId, sessionId, key, LEGACY_VALUE_SUFFIX);
             }
+            return migrated;
         });
     }
 
@@ -121,29 +134,29 @@ public class EncryptedAgentStateStore implements AgentStateStore {
             return List.of();
         }
         return withSessionLock(userId, sessionId, () -> {
-            Path file = file(userId, sessionId, key, LIST_SUFFIX);
-            if (!Files.isRegularFile(file)) {
-                return List.of();
+            List<EncryptedState> stored = delegate().getList(userId, sessionId, key, EncryptedState.class);
+            if (!stored.isEmpty()) {
+                return stored.stream()
+                        .map(item -> decryptState(item, type, userId, sessionId, key))
+                        .flatMap(Optional::stream)
+                        .toList();
             }
-            List<T> result = new ArrayList<>();
-            try {
-                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                    if (line.isBlank()) {
-                        continue;
-                    }
-                    result.add(codec.fromJson(decrypt(line.trim()), type));
-                }
-            } catch (IOException | RuntimeException e) {
-                log.warn("会话状态列表无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
-                return List.of();
+            List<T> migrated = readLegacyList(userId, sessionId, key, type);
+            if (!migrated.isEmpty()) {
+                List<EncryptedState> payload = migrated.stream()
+                        .map(value -> new EncryptedState(encrypt(codec.toJson(value))))
+                        .toList();
+                delegate().save(userId, sessionId, key, payload);
+                deleteLegacy(userId, sessionId, key, LEGACY_LIST_SUFFIX);
             }
-            return result;
+            return migrated;
         });
     }
 
     @Override
     public boolean exists(String userId, String sessionId) {
-        return !isAnonymous(userId) && Files.isDirectory(sessionDirectory(userId, sessionId));
+        return !isAnonymous(userId)
+                && (delegate().exists(userId, sessionId) || Files.isDirectory(legacySessionDir(userId, sessionId)));
     }
 
     @Override
@@ -151,8 +164,10 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         if (isAnonymous(userId)) {
             return;
         }
-        withSessionLock(userId, sessionId,
-                () -> deleteRecursively(sessionDirectory(userId, sessionId)));
+        withSessionLock(userId, sessionId, () -> {
+            delegate().delete(userId, sessionId);
+            deleteRecursively(legacySessionDir(userId, sessionId));
+        });
     }
 
     @Override
@@ -161,8 +176,9 @@ public class EncryptedAgentStateStore implements AgentStateStore {
             return;
         }
         withSessionLock(userId, sessionId, () -> {
-            deleteIfExists(file(userId, sessionId, key, VALUE_SUFFIX));
-            deleteIfExists(file(userId, sessionId, key, LIST_SUFFIX));
+            delegate().delete(userId, sessionId, key);
+            deleteLegacy(userId, sessionId, key, LEGACY_VALUE_SUFFIX);
+            deleteLegacy(userId, sessionId, key, LEGACY_LIST_SUFFIX);
         });
     }
 
@@ -171,44 +187,87 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         if (isAnonymous(userId)) {
             return Set.of();
         }
-        Path dir = userDirectory(userId);
-        if (!Files.isDirectory(dir)) {
-            return Set.of();
+        java.util.Set<String> sessions = new java.util.HashSet<>(delegate().listSessionIds(userId));
+        Path legacyUserDir = legacyUserDirectory(userId);
+        if (Files.isDirectory(legacyUserDir)) {
+            try (Stream<Path> entries = Files.list(legacyUserDir)) {
+                entries.filter(Files::isDirectory)
+                        .map(p -> p.getFileName().toString())
+                        .forEach(sessions::add);
+            } catch (IOException ignored) {
+                // 目录可能被并发删除
+            }
         }
-        try (Stream<Path> entries = Files.list(dir)) {
-            return entries.filter(Files::isDirectory)
-                    .map(p -> p.getFileName().toString())
-                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        } catch (IOException e) {
-            return Set.of();
+        return Set.copyOf(sessions);
+    }
+
+    // ---------------------------------------------------------------- 加解密
+
+    private <T extends State> Optional<T> decryptState(EncryptedState stored, Class<T> type,
+                                                       String userId, String sessionId, String key) {
+        if (stored == null || stored.token() == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(codec.fromJson(decrypt(stored.token()), type));
+        } catch (RuntimeException e) {
+            // 旧版明文 / 主密钥轮换后的历史数据：当成没有，别让整轮对话失败
+            log.warn("会话状态无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
+            return Optional.empty();
         }
     }
 
-    // ---------------------------------------------------------------- 路径与 IO
+    private <T extends State> List<T> readLegacyList(String userId, String sessionId, String key,
+                                                     Class<T> type) {
+        Path file = legacyFile(userId, sessionId, key, LEGACY_LIST_SUFFIX);
+        if (!Files.isRegularFile(file)) {
+            return List.of();
+        }
+        List<T> result = new ArrayList<>();
+        try {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                if (!line.isBlank()) {
+                    result.add(codec.fromJson(decrypt(line.trim()), type));
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            log.warn("旧会话状态列表无法解密，已忽略：user={} session={} key={}", userId, sessionId, key);
+            return List.of();
+        }
+        return result;
+    }
 
-    /**
-     * 匿名槽位：AgentScope 在会话槽位绑定前会用 {@code (userId=null, 默认 sessionId=agent 名)}
-     * 探一次状态（{@code GracefulShutdownMiddleware} 的 no-arg {@code getAgentState()}），
-     * 窗口关闭时也可能用它兜底保存。这类槽位没有真实用户，既不该落盘也不该报错——
-     * 按"没有状态"处理，避免每次对话都刷一条 WARN。
-     */
+    private String encrypt(String plaintext) {
+        SecretBox.Sealed sealed = cipher.encrypt(plaintext);
+        return sealed.cipherB64() + SEPARATOR + sealed.ivB64();
+    }
+
+    private String decrypt(String token) {
+        int sep = token.indexOf(SEPARATOR);
+        if (sep <= 0) {
+            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "状态数据不是加密格式");
+        }
+        return cipher.decrypt(token.substring(0, sep), token.substring(sep + 1));
+    }
+
+    // ---------------------------------------------------------------- 旧路径兼容
+
     private static boolean isAnonymous(String userId) {
         return userId == null || userId.isBlank();
     }
 
-    private Path userDirectory(String userId) {
+    private Path legacyUserDirectory(String userId) {
         return root.resolve(safeName(userId, "userId"));
     }
 
-    private Path sessionDirectory(String userId, String sessionId) {
-        return userDirectory(userId).resolve(safeName(sessionId, "sessionId"));
+    private Path legacySessionDir(String userId, String sessionId) {
+        return legacyUserDirectory(userId).resolve(safeName(sessionId, "sessionId"));
     }
 
-    private Path file(String userId, String sessionId, String key, String suffix) {
-        return sessionDirectory(userId, sessionId).resolve(safeName(key, "key") + suffix);
+    private Path legacyFile(String userId, String sessionId, String key, String suffix) {
+        return legacySessionDir(userId, sessionId).resolve(safeName(key, "key") + suffix);
     }
 
-    /** 只允许安全字符，且拒绝 . / ..，避免状态目录被路径穿越。 */
     private static String safeName(String raw, String label) {
         if (raw == null || raw.isBlank()) {
             throw new RunException(ErrorCode.RUN_INVALID_INPUT, label + " 不能为空");
@@ -220,7 +279,44 @@ public class EncryptedAgentStateStore implements AgentStateStore {
         return name.length() > 120 ? name.substring(0, 120) : name;
     }
 
-    /** 同一会话内的状态读写串行化，避免并发轮次 last-write-wins。 */
+    private String readLegacyToken(String userId, String sessionId, String key, String suffix) {
+        Path file = legacyFile(userId, sessionId, key, suffix);
+        if (!Files.isRegularFile(file)) {
+            return null;
+        }
+        try {
+            String text = Files.readString(file, StandardCharsets.UTF_8).trim();
+            return text.isEmpty() ? null : text;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private void deleteLegacy(String userId, String sessionId, String key, String suffix) {
+        try {
+            Files.deleteIfExists(legacyFile(userId, sessionId, key, suffix));
+        } catch (IOException ignored) {
+            // 删除失败不影响新格式读写
+        }
+    }
+
+    private static void deleteRecursively(Path dir) {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // 目录可能已被并发删除
+                }
+            });
+        } catch (IOException ignored) {
+            // 目录可能已被并发删除
+        }
+    }
+
     private <T> T withSessionLock(String userId, String sessionId,
                                   java.util.function.Supplier<T> action) {
         String key = userId + "/" + sessionId;
@@ -239,76 +335,5 @@ public class EncryptedAgentStateStore implements AgentStateStore {
             action.run();
             return null;
         });
-    }
-
-    private String encrypt(String plaintext) {
-        SecretBox.Sealed sealed = cipher.encrypt(plaintext);
-        return sealed.cipherB64() + SEPARATOR + sealed.ivB64();
-    }
-
-    private String decrypt(String token) {
-        int sep = token.indexOf(SEPARATOR);
-        if (sep <= 0) {
-            throw new RunException(ErrorCode.RUN_INVALID_INPUT, "状态数据不是加密格式");
-        }
-        return cipher.decrypt(token.substring(0, sep), token.substring(sep + 1));
-    }
-
-    private static String readToken(Path file) {
-        if (!Files.isRegularFile(file)) {
-            return null;
-        }
-        try {
-            String text = Files.readString(file, StandardCharsets.UTF_8).trim();
-            return text.isEmpty() ? null : text;
-        } catch (IOException e) {
-            return null;
-        }
-    }
-
-    private void write(Path file, String body) {
-        try {
-            Files.createDirectories(file.getParent());
-            Path tmp = file.resolveSibling(file.getFileName() + ".tmp-" + UUID.randomUUID());
-            Files.writeString(tmp, body, StandardCharsets.UTF_8);
-            restrict(tmp, "rw-------");
-            try {
-                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
-            }
-            restrict(file, "rw-------");
-            restrict(file.getParent(), "rwx------");
-        } catch (IOException e) {
-            throw new RunException(ErrorCode.RUN_INVALID_STATE, "会话状态写入失败：" + e.getMessage(), e);
-        }
-    }
-
-    private static void restrict(Path path, String permissions) {
-        try {
-            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(permissions));
-        } catch (UnsupportedOperationException | IOException ignored) {
-            // 非 POSIX 文件系统：退化为默认权限，不影响功能
-        }
-    }
-
-    private static void deleteIfExists(Path file) {
-        try {
-            Files.deleteIfExists(file);
-        } catch (IOException ignored) {
-            // 删除失败不影响后续写入（会被覆盖）
-        }
-    }
-
-    private static void deleteRecursively(Path dir) {
-        if (!Files.exists(dir)) {
-            return;
-        }
-        try (Stream<Path> walk = Files.walk(dir)) {
-            walk.sorted(java.util.Comparator.reverseOrder()).forEach(EncryptedAgentStateStore::deleteIfExists);
-        } catch (IOException ignored) {
-            // 目录可能已被并发删除
-        }
     }
 }
