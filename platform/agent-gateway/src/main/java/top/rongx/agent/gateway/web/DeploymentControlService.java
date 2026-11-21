@@ -2,8 +2,6 @@ package top.rongx.agent.gateway.web;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,7 +25,9 @@ import top.rongx.agent.domain.env.EffectiveEnvironment;
 import top.rongx.agent.domain.env.EnvironmentStore;
 import top.rongx.agent.domain.env.PortLease;
 import top.rongx.agent.domain.port.PipelineEngine;
+import top.rongx.agent.domain.process.BoundedCommand;
 import top.rongx.agent.domain.process.JavaRuntime;
+import top.rongx.agent.domain.process.PortProbe;
 import top.rongx.agent.domain.runtime.RuntimeInspector;
 import top.rongx.agent.domain.runtime.RuntimeInspector.ContainerStatus;
 import top.rongx.agent.domain.settings.DeployServer;
@@ -771,14 +771,14 @@ public class DeploymentControlService {
         }
     }
 
+    /**
+     * 端口是否可绑定。
+     *
+     * <p>这条路径是 HOST 目标（起本机 {@code java -jar}），必须事先挑好端口告诉 JVM，
+     * 没有"让内核挑"的余地，所以保留探测；实现走 {@link PortProbe}（全平台唯一一份）。
+     */
     private static boolean portFree(int port) {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(false);
-            socket.bind(new InetSocketAddress("0.0.0.0", port));
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+        return PortProbe.isFree(port);
     }
 
     private static void writePortFile(Path stateDir, int port) {
@@ -857,28 +857,27 @@ public class DeploymentControlService {
         return hostSlots(projectId, env).stream().anyMatch(slot -> !slot.releases().isEmpty());
     }
 
+    /**
+     * 启停单个容器。
+     *
+     * <p><b>必须走 {@link BoundedCommand}</b>：原实现先 {@code readAllBytes()} 再
+     * {@code waitFor(30s)}，docker CLI 不退出时读流永远不返回，超时判定写在读流之后
+     * 等于不存在（同一缺陷在 8 处已修，这里是第 9 处）。{@code BoundedCommand} 用虚拟线程
+     * 并行排空输出 + 硬超时 + 杀进程树，语义才是"30 秒内必返回"。
+     *
+     * <p>失败信息进 {@link BugFixRedactor}：docker 报错会回显完整命令行（含环境变量）。
+     */
     private String docker(String action, String container) {
-        List<String> argv = List.of("docker", action, container);
-        try {
-            Process process = new ProcessBuilder(argv)
-                    .redirectErrorStream(true)
-                    .start();
-            byte[] output = process.getInputStream().readAllBytes();
-            if (!process.waitFor(DOCKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-                throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "docker " + action + " 超时：" + container);
-            }
-            String text = new String(output, StandardCharsets.UTF_8).trim();
-            if (process.exitValue() != 0) {
-                throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "docker " + action + " 失败：" + text);
-            }
-            return text;
-        } catch (IOException e) {
-            throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "Docker 不可用：" + e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE, "docker " + action + " 被中断");
+        BoundedCommand.Outcome outcome = BoundedCommand.run(
+                List.of("docker", action, container), DOCKER_TIMEOUT_MS);
+        if (!outcome.ok()) {
+            String detail = outcome.output() == null || outcome.output().isBlank()
+                    ? outcome.detail()
+                    : outcome.detail() + "｜" + BugFixRedactor.redact(outcome.output()).trim();
+            throw new DeployException(ErrorCode.DEPLOY_INVALID_STATE,
+                    "docker " + action + " " + container + " 失败：" + detail);
         }
+        return outcome.output().trim();
     }
 
     private String stateOf(String projectId, String env, String version) {

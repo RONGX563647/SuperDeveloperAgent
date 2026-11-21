@@ -1,8 +1,5 @@
 package top.rongx.agent.gateway.settings;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -10,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.env.EnvironmentStore;
@@ -17,6 +16,7 @@ import top.rongx.agent.domain.env.ServiceLease;
 import top.rongx.agent.domain.env.ServiceRuntime;
 import top.rongx.agent.domain.error.ErrorCode;
 import top.rongx.agent.domain.error.EnvironmentException;
+import top.rongx.agent.domain.process.PortProbe;
 
 /**
  * dev 本地前后端服务的端口分配与生命周期管理。
@@ -166,14 +166,9 @@ public class LocalServiceManager {
         return !(mine && "RUNNING".equals(runtime.status(projectId, env, service)));
     }
 
+    /** 端口是否空闲（走 {@link PortProbe}：全平台唯一一份，统一绑 0.0.0.0 的严格判据）。 */
     private static boolean free(int port) {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(false);
-            socket.bind(new InetSocketAddress("127.0.0.1", port));
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
+        return PortProbe.isFree(port);
     }
 
     private static int basePort(String env, String service) {

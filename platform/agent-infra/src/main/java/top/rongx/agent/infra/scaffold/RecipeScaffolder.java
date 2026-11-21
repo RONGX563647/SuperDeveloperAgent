@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.deploy.DeployTarget;
 import top.rongx.agent.domain.error.ErrorCode;
+import top.rongx.agent.domain.image.ImageBuildCommand;
 import top.rongx.agent.domain.port.ProjectScaffolder;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan;
 import top.rongx.agent.domain.scaffold.ScaffoldPlan.ScaffoldFile;
@@ -147,8 +148,11 @@ public class RecipeScaffolder implements ProjectScaffolder {
             String dockerfileRel = relative(repoRoot, dockerfile);
             String context = dockerfile.getParent().equals(repoRoot)
                     ? "." : relative(repoRoot, dockerfile.getParent());
+            // 命令字面量只有一份（ImageBuildCommand）：与内置默认配方完全同一字符串，
+            // 避免"骨架生成的 actions.yml"与"平台内置配方"再次漂移成 build / buildx。
             actions.put("image_package",
-                    "docker buildx build --load -f " + dockerfileRel + " -t ${tag} " + context);
+                    ImageBuildCommand.render(
+                            ImageBuildCommand.withDockerfile(dockerfileRel, "${tag}", context)));
         } else if (target == DeployTarget.HOST) {
             diags.add(Diag.info("HOST_TARGET",
                     "HOST 目标直接运行 Java jar；前端静态产物不会由平台托管"));

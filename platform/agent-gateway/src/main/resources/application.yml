@@ -157,6 +157,13 @@ agent:
     # 与 RecipeScaffolder.DEFAULT_NODE_IMAGE 保持一致：前端依赖已要求 Node >= 22，
     # 默认值写成 20 会让生成的配方在 frontend 阶段报 Unsupported engine。
     node-image: ${AGENT_SCAFFOLD_NODE_IMAGE:node:22-bookworm}
+  # 部署链路：SERVER 目标默认走 SSH + docker save/load（不依赖运维侧配置）。
+  # 打开 use-docker-context 后改走本机 docker --context 直连远端守护进程：
+  # 镜像由 docker 自己传（不经 tar 中转），命令是 argv 而不是拼接的字符串。
+  # 前提是运维已执行 `docker context create <name> --docker host=ssh://user@host`；
+  # context 不存在时会自动回落到 SSH 路径并在日志里说明。
+  deploy:
+    use-docker-context: ${AGENT_DEPLOY_USE_DOCKER_CONTEXT:false}
   # Gitee OAuth 网页授权（推荐）：gitee.com → 设置 → 第三方应用 创建应用，
   # 回调地址填 http://localhost:8090/api/v1/gitee/oauth/callback
   gitee:
@@ -186,6 +193,9 @@ agent:
   env:
     middleware-images: ${AGENT_ENV_MIDDLEWARE_IMAGES:}
     precheck-images: ${AGENT_ENV_PRECHECK_IMAGES:true}
+    # 中间件用 docker compose up -d --wait 一次起齐（加固参数声明式、就绪判定交给 healthcheck）。
+    # 极简安装（只有 docker CLI、没有 compose 插件）可关掉，回落到逐容器 docker run。
+    compose-enabled: ${AGENT_ENV_COMPOSE_ENABLED:true}
   # 自动修复的确定性构建/测试命令解释器：留空按操作系统自适应
   #（Windows → cmd.exe /c；其余 → /bin/sh -c），离线/特殊环境可显式覆盖，
   # 例如 AGENT_BUGFIX_SHELL="/bin/bash -c"，或换成自定义 bash / PowerShell 的可执行文件。
@@ -227,8 +237,20 @@ agent:
     # 离线/自建 registry 场景可关闭预检（关闭后会回到 docker CLI 自行拉取的行为）
     precheck-image: ${AGENT_SANDBOX_PRECHECK_IMAGE:true}
     # 网络策略：bridge=能拉依赖（默认）；build-net=专用网络（生产建议，见文档）；
-    #          none=完全断网，仅用于"缓存已预热"的发布构建或构建不可信代码
+    #          none=完全断网，仅用于"缓存已预热"的发布构建或构建不可信代码。
+    # 注意：none 档位下动作会被判为"需要外联"并以 E-707 拒绝（结构化提示改档位），
+    # 确实要离线构建时显式打开下面的 allow-offline。
     network: ${AGENT_SANDBOX_NETWORK:bridge}
+    # 离线逃生门：打开后 network=none 不再被前置门拒绝，交给实际网络错误。
+    # 默认关闭——"静默跑 60 秒然后 Could not resolve host" 是无法归因的失败。
+    allow-offline: ${AGENT_SANDBOX_ALLOW_OFFLINE:false}
+    # 镜像准入（在语法校验之上）：允许列表为空 = 不限制仓库/registry；
+    # 支持 glob（如 maven:*,node:*,registry.internal:5000/*）。
+    # stage.image 与 deploy.image 走同一份判定。
+    image-allowlist: ${AGENT_SANDBOX_IMAGE_ALLOWLIST:}
+    # 是否允许浮动 tag（:latest 或无 tag）。构建/部署用的镜像建议设 false（仓库输入必须钉版本）；
+    # 默认 true 保持与引入该策略前完全一致的行为。
+    allow-floating-tags: ${AGENT_SANDBOX_ALLOW_FLOATING_TAGS:true}
     memory: 2g
     cpus: "2"
     pids-limit: 512

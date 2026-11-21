@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：spec-checks
 
-27 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+28 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+
+## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
+- 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…
+- 方案：接线 require* 隔离策略并在起容器前 fail-closed；Dockerfile 改 dind sidecar + 非 root + …
+- 验证：全平台 mvn -o verify 9/9 模块通过（agent-executor 321 绿）；pre-commit spec-checks …
 
 ## 2026-11-20 · 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6`）
 - 问题：0.2 线缺今晚后半段工作：skills 路由层、门禁并发健壮性、防回潮守卫、token/deploy 并行会话成果。

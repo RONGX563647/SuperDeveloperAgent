@@ -3,7 +3,7 @@ package top.rongx.agent.executor;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import top.rongx.agent.domain.port.ActionRunner;
@@ -21,10 +21,15 @@ import top.rongx.agent.domain.image.ImageReadinessStore;
  *   <li>{@code process} —— 强制宿主（仅开发，必须显式开启）。</li>
  * </ul>
  *
- * <p>历史配置 {@code auto} 仍然接受，但语义改为 fail-closed：Docker 不可用时启动失败，
- * 不再静默退回宿主进程。
+ * <p>历史值 {@code auto} 与任何未知值一律启动失败（见 {@link #actionRunner}）：
+ * 它曾经是"自动切换"，现在即使写了也会得到明确报错，而不是悄悄降级为无隔离执行。
+ *
+ * <p>所有 {@code agent.sandbox.*} 旋钮的声明点在 {@link SandboxProperties}：
+ * 23 个 {@code @Value} 散在 bean 方法签名里的写法，加一个旋钮要改三处（yml / 签名 / 装配链），
+ * 漏一处就是静默不生效，而且没法做启动期校验。
  */
 @Configuration
+@EnableConfigurationProperties(SandboxProperties.class)
 public class SandboxConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SandboxConfig.class);
@@ -32,25 +37,13 @@ public class SandboxConfig {
     @Bean
     public DockerSandbox dockerSandbox(
             org.springframework.beans.factory.ObjectProvider<ImageReadinessStore> readinessStore,
-            @Value("${agent.sandbox.docker-binary:docker}") String binary,
-            @Value("${agent.sandbox.image:maven:3.9-eclipse-temurin-21}") String image,
-            @Value("${agent.sandbox.network:bridge}") String network,
-            @Value("${agent.sandbox.memory:2g}") String memory,
-            @Value("${agent.sandbox.cpus:2}") String cpus,
-            @Value("${agent.sandbox.pids-limit:512}") int pidsLimit,
-            @Value("${agent.sandbox.user:1000:1000}") String user,
-            @Value("${agent.sandbox.cache-volume-prefix:}") String cacheVolumePrefix,
-            @Value("${agent.sandbox.precheck-image:true}") boolean precheckImage,
-            @Value("${agent.sandbox.pull-timeout-seconds:900}") long pullTimeoutSeconds,
-            @Value("${agent.sandbox.pull-idle-timeout-seconds:60}") long pullIdleTimeoutSeconds,
-            @Value("${agent.sandbox.pull-attempts:2}") int pullAttempts,
-            @Value("${agent.sandbox.pull-backoff-seconds:60}") long pullBackoffSeconds,
-            @Value("${agent.sandbox.pull-backoff-max-seconds:900}") long pullBackoffMaxSeconds,
-            @Value("${agent.sandbox.pull-mirrors:}") String pullMirrors,
-            @Value("${agent.sandbox.host:}") String host,
-            @Value("${agent.sandbox.npm-registry:}") String npmRegistry,
-            @Value("${agent.sandbox.runtime:}") String runtime,
-            @Value("${agent.sandbox.init-image:busybox:1.36}") String initImage) {
+            SandboxProperties props) {
+        // 配置问题在这里收敛成"一条明确告警 + 安全默认"，而不是让 docker run 时报 CLI 原始错误。
+        // 例：memory 写成 "2"（少了单位）过去要等到起容器才失败，现在是启动时就说清楚。
+        for (String problem : props.normalize()) {
+            log.warn("沙箱配置：{}", problem);
+        }
+        log.info("沙箱配置：{}", props.describe());
         // 镜像标签由 agent.sandbox.image 决定；缺镜像时自动 pull 并复核，
         // 离线/自建 registry 仍可通过 agent.sandbox.precheck-image=false 关闭预检。
         // pull-timeout-seconds 是总上限（只在一直有进度时兜底），判卡死用的是静默阈值：
@@ -60,18 +53,28 @@ public class SandboxConfig {
         if (store == null) {
             log.warn("未接镜像就绪状态存储：每次动作前都会重新探测/拉取（不影响正确性，只是更慢）");
         }
-        return new DockerSandbox(binary, image, network, memory, cpus, pidsLimit, user,
-                cacheVolumePrefix).setImagePrecheck(precheckImage)
-                .setImagePullTimeout(pullTimeoutSeconds * 1000L)
-                .setImagePullIdle(pullIdleTimeoutSeconds * 1000L)
-                .setImagePullAttempts(pullAttempts)
-                .setPullBackoff(pullBackoffSeconds * 1000L, pullBackoffMaxSeconds * 1000L)
-                .setPullMirrors(splitList(pullMirrors))
-                .setHost(host)
+        SandboxImagePolicy policy = new SandboxImagePolicy(
+                splitList(props.getImageAllowlist()), props.isAllowFloatingTags());
+        if (!policy.describe().get(1).endsWith("(不限)")) {
+            log.info("镜像准入策略：{}", String.join(" ", policy.describe()));
+        }
+        return new DockerSandbox(props.getDockerBinary(), props.getImage(), props.getNetwork(),
+                props.getMemory(), props.getCpus(), props.getPidsLimit(), props.getUser(),
+                props.getCacheVolumePrefix())
+                .setImagePrecheck(props.isPrecheckImage())
+                .setImagePullTimeout(props.getPullTimeoutSeconds() * 1000L)
+                .setImagePullIdle(props.getPullIdleTimeoutSeconds() * 1000L)
+                .setImagePullAttempts(props.getPullAttempts())
+                .setPullBackoff(props.getPullBackoffSeconds() * 1000L,
+                        props.getPullBackoffMaxSeconds() * 1000L)
+                .setPullMirrors(splitList(props.getPullMirrors()))
+                .setHost(props.getHost())
                 .setReadinessStore(store)
-                .setNpmRegistry(npmRegistry)
-                .setRuntime(runtime)
-                .setInitImage(initImage);
+                .setNpmRegistry(props.getNpmRegistry())
+                .setRuntime(props.getRuntime())
+                .setInitImage(props.getInitImage())
+                .setAllowOffline(props.isAllowOffline())
+                .setImagePolicy(policy);
     }
 
     /** 逗号/空白分隔的配置项拆成列表（镜像加速源等）。 */
@@ -85,37 +88,48 @@ public class SandboxConfig {
                 .toList();
     }
 
+    /**
+     * 执行模式装配。
+     *
+     * <p>取值只有两个，<b>没有默认兜底分支</b>：
+     * <ul>
+     *   <li>{@code docker}（默认）—— 强制容器；守护进程不可用则<b>启动失败</b>
+     *       （不让"以为隔离了其实没隔离"发生）；</li>
+     *   <li>{@code process} —— 强制宿主（仅开发，必须显式开启）。</li>
+     * </ul>
+     *
+     * <p>历史值 {@code auto} 与任何未知值（含拼写错误 {@code dockr}）一律抛
+     * {@link ErrorCode#ENVIRONMENT_INVALID_STATE}：原先 {@code default ->} 会把未知值静默当
+     * docker 处理，"配置写错了"表现为"行为和预期不同"而不是一条明确报错。
+     */
     @Bean
     @org.springframework.context.annotation.Primary
-    public ActionRunner actionRunner(DockerSandbox sandbox,
-                                     @Value("${agent.sandbox.mode:docker}") String mode) {
-        String normalized = mode == null ? "docker" : mode.trim().toLowerCase();
-        switch (normalized) {
+    public ActionRunner actionRunner(DockerSandbox sandbox, SandboxProperties props) {
+        String mode = props.getMode();
+        String normalized = mode == null || mode.isBlank() ? "docker" : mode.trim().toLowerCase();
+        return switch (normalized) {
             case "process" -> {
                 log.warn("动作执行模式：宿主进程（无隔离，仅用于开发）");
-                return new ProcessActionRunner();
+                yield new ProcessActionRunner();
             }
-            case "docker" -> {
-                if (!sandbox.available()) {
-                    throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "agent.sandbox.mode=docker 但 Docker 守护进程不可用；"
-                                    + "请启动 Docker，或改为 mode=process（不隔离）");
-                }
-                log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
-                sweep(sandbox);
-                return new DockerActionRunner(sandbox);
-            }
-            default -> {
-                if (sandbox.available()) {
-                    log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
-                    sweep(sandbox);
-                    return new DockerActionRunner(sandbox);
-                }
-                // fail-closed：绝不因为 Docker 没起来就悄悄降级为无隔离的宿主执行
-                throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE, "Docker 不可用，拒绝以宿主进程执行（无隔离）。"
-                                + "请启动 Docker，或仅限本地开发显式设置 "
-                                + "agent.sandbox.mode=process");
-            }
+            case "docker" -> dockerRunner(sandbox);
+            default -> throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
+                    "agent.sandbox.mode 取值非法：'" + mode + "'（合法值：docker | process）；"
+                            + "历史值 auto 已废弃——它过去会在 Docker 不可用时静默降级为无隔离的宿主执行，"
+                            + "现在一律 fail-closed");
+        };
+    }
+
+    /** 起容器执行器；Docker 不可用直接失败，绝不降级为宿主执行。 */
+    private ActionRunner dockerRunner(DockerSandbox sandbox) {
+        if (!sandbox.available()) {
+            throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
+                    "agent.sandbox.mode=docker 但 Docker 守护进程不可用；"
+                            + "请启动 Docker，或仅限本地开发显式设置 agent.sandbox.mode=process（无隔离）");
         }
+        log.info("动作执行模式：容器沙箱（{}）", sandbox.describe());
+        sweep(sandbox);
+        return new DockerActionRunner(sandbox);
     }
 
     /**
