@@ -6,8 +6,12 @@
 ## 2026-W47
 
 - 2026-11-21 **chore** 修复 refactor 线引入的 A1 分层违规与 EC5 通用 throw（`7e02977`）
+- 2026-11-21 **chore** 补录 0.1.1 已发布迁移 V5-V8 基线，恢复 pre-push 门禁（`8398697`）
 - 2026-11-21 **chore** 恢复 EncryptedAgentStateStore 的 handbook 锚点（refactor 重排时丢失）（`8d83f53`）
+- 2026-11-21 **bug** BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ（`24906a0` `c1e3777`）
+- 2026-11-21 **chore** 修复远端 refactor 引入的规约违规（A1 分层 / EC5 错误码 / R11 禁令）（`b908869`）
 - 2026-11-21 **chore** 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档（`d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
+- 2026-11-21 **chore** 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛（`d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
 - 2026-11-21 **bug** 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期（`d4320a7`）
 - 2026-11-21 **chore** 合并后重算迁移基线（V7/V8 补登记）（`2358d08`）
 - 2026-11-21 **bug** 沙箱与 Docker 机制缺陷修复与重复实现收敛（`e427338` `7c654cf`）

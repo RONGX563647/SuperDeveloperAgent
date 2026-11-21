@@ -3,6 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { manualChunkOf } from './src/utils/chunkSplit'
 
 const MOCK_DIR = fileURLToPath(new URL('./mock/', import.meta.url))
 
@@ -63,13 +64,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // 第三方依赖单独成块：业务代码更新不影响 vendor 缓存命中
-        manualChunks(id) {
-          if (!id.includes('node_modules')) return undefined
-          if (id.includes('element-plus')) return 'element-plus'
-          if (id.includes('/vue/') || id.includes('@vue/')) return 'vue-vendor'
-          return 'vendor'
-        },
+        // 第三方依赖统一进单一 vendor chunk，规则见 src/utils/chunkSplit.ts。
+        // 拆分 element-plus / vue / 其余会触发跨 chunk 循环依赖 TDZ → 部署后白屏。
+        manualChunks: manualChunkOf,
       },
     },
   },
