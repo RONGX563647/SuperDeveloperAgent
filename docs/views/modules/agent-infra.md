@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-infra
 
-56 个会话；检索用 `python tools/docs/find.py --module agent-infra`。
+57 个会话；检索用 `python tools/docs/find.py --module agent-infra`。
+
+## 2026-11-21 · 恢复 EncryptedAgentStateStore 的 handbook 锚点（refactor 重排时丢失）（chore `8d83f53`）
+- 问题：refactor 4bcbb324 重写状态存储（复用 JsonFileAgentStateStore）时把 state-agent-state…
+- 方案：在 EncryptedAgentStateStore#save 声明上方补回 // @handbook state-agent-state-st…
+- 验证：pre-commit 门禁 agent-infra EncryptedAgentStateStoreTest 6 用例 PASSED；
 
 ## 2026-11-21 · 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
 - 问题：0.2.0-snapshot 上 8 个 refactor 提交（d0aaa4d4..781ba1f5）由并行会话推送时未走会话归档，pre-p…

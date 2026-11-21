@@ -5,6 +5,7 @@
 
 ## 2026-W47
 
+- 2026-11-21 **chore** 恢复 EncryptedAgentStateStore 的 handbook 锚点（refactor 重排时丢失）（`8d83f53`）
 - 2026-11-21 **chore** 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档（`d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
 - 2026-11-21 **bug** 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期（`d4320a7`）
 - 2026-11-21 **chore** 合并后重算迁移基线（V7/V8 补登记）（`2358d08`）
