@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-54 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+55 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-21 · 修复生产 SERVER 部署远端网络缺失与镜像元数据账本口径（bug `0ee8f9b`）
+- 问题：prod SERVER 目标只把 --network 原样传给远端 docker run，本地 DOCKER 目标却会 ensureNetwor…
+- 方案：SERVER 的 SSH 与 docker context 两条路径在 docker run 前统一执行远端网络 inspect→create（…
+- 验证：新增 ServerDeployerNetworkTest 7 项与 DeployImageLedgerEnvTest 3 项全部通过；隔离 wo…
 
 ## 2026-11-21 · 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期（bug `d4320a7`）
 - 问题：部署平台自镜像后 health 阶段失败：容器内 agent.sandbox.mode=docker 但无 Docker daemon，Sand…
