@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-65 个会话；检索用 `python tools/docs/find.py --module web`。
+66 个会话；检索用 `python tools/docs/find.py --module web`。
+
+## 2026-11-21 · BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ（bug `24906a0` `c1e3777`）
+- 问题：流水线 release 部署成功后，打开部署地址前端白屏：HTML 与各 JS/CSS 资源均返回 200，但 Vue 未挂载、#app 为空。
+- 方案：根因：vite.config 的 manualChunks 把 element-plus / vue / 其余 node_modules 拆成三…
+- 验证：新增 chunkSplit.test.ts 回归断言所有第三方依赖同处一个 vendor chunk；Edge headless 加载新构建：修…
 
 ## 2026-11-20 · 修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效（bug `a2aa87e`）
 - 问题：修复固化脚本重放路径丢失 version/tag 导致打 tag 未生效
