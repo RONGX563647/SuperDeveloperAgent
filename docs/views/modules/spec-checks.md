@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：spec-checks
 
-28 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+29 个会话；检索用 `python tools/docs/find.py --module spec-checks`。
+
+## 2026-11-21 · 合并后重算迁移基线（V7/V8 补登记）（chore `2358d08`）
+- 问题：0.1→0.2 合并后 migration-baseline.txt 取了 0.1.0 侧（5 条），覆盖不到合并后已发布的 V7/V8，spe…
+- 方案：按守卫处方用 -Dmigration.baseline.update=true 重算基线（生成物不手改哈希），并核对 V7/V8 的 sha25…
+- 验证：spec-checks 37 用例 PASSED（含 MigrationGuardTest 8 项）；
 
 ## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
 - 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…
