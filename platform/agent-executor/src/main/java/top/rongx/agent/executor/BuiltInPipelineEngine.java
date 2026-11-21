@@ -3420,7 +3420,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         }
 
         // 1. 后端构建
-        Path backendRoot = detectBackendRoot(repo);
+        Path backendRoot = RepoLayout.detectBackendRoot(repo);
         if (backendRoot == null) {
             failLocalDev(state, "build", ErrorCode.ENV_NOT_PROMOTED.code(),
                     "未找到后端模块（仓库根或一级子目录需要 pom.xml）", null);
@@ -3436,7 +3436,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     "后端构建失败：" + commandReason(exit, "mvn") + firstErrorSuffix(tail), tail);
             return;
         }
-        Path jar = findRunnableJar(backendRoot);
+        Path jar = RepoLayout.findRunnableJar(backendRoot);
         if (jar == null) {
             String tail = localDevHost.logTail(mavenLog);
             failLocalDev(state, "build", ErrorCode.ENV_NOT_PROMOTED.code(),
@@ -3456,7 +3456,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         state.stages.add(StageResult.success("build", 0, List.of(), elapsed(buildStart)));
 
         // 2. 前端构建（有前端模块才做）
-        Path frontendRoot = detectFrontendRoot(repo);
+        Path frontendRoot = RepoLayout.detectFrontendRoot(repo);
         Path dist = null;
         if (frontendRoot == null) {
             state.log.append("[dev] 未检测到前端模块，跳过前端构建与托管\n");
@@ -3464,7 +3464,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
         } else {
             dist = frontendRoot.resolve("dist");
             long feStart = System.nanoTime();
-            if (isFrontendUpToDate(frontendRoot, dist)) {
+            if (RepoLayout.isFrontendUpToDate(frontendRoot, dist)) {
                 state.log.append("[dev] 前端产物较新，跳过构建：").append(dist).append('\n');
             } else {
                 Path npmLog = work.resolve("npm.log");
@@ -3683,111 +3683,6 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
         }
         return false;
-    }
-
-    /** 后端根：仓库根有 pom.xml 用它；否则一层子目录（RuoYi 的 RuoYi-Vue/）。 */
-    private static Path detectBackendRoot(Path repo) {
-        if (Files.isRegularFile(repo.resolve("pom.xml"))) {
-            return repo;
-        }
-        for (Path child : children(repo)) {
-            if (Files.isRegularFile(child.resolve("pom.xml"))
-                    || Files.isRegularFile(child.resolve("ruoyi-admin/pom.xml"))
-                    || Files.isDirectory(child.resolve("src/main/java"))) {
-                return child;
-            }
-        }
-        return null;
-    }
-
-    /** 前端根：仓库根 package.json；否则一层子目录；再否则两层（RuoYi-Vue/ruoyi-ui）。 */
-    private static Path detectFrontendRoot(Path repo) {
-        if (Files.isRegularFile(repo.resolve("package.json"))) {
-            return repo;
-        }
-        List<Path> first = children(repo);
-        for (Path child : first) {
-            if (Files.isRegularFile(child.resolve("package.json"))) {
-                return child;
-            }
-        }
-        List<String> names = List.of("ui", "web", "frontend", "client", "ruoyi-ui");
-        for (Path child : first) {
-            for (Path second : children(child)) {
-                if (names.contains(second.getFileName().toString().toLowerCase())
-                        && Files.isRegularFile(second.resolve("package.json"))) {
-                    return second;
-                }
-            }
-        }
-        return null;
-    }
-
-    private static List<Path> children(Path dir) {
-        try (var stream = Files.list(dir)) {
-            return stream.filter(Files::isDirectory)
-                    .filter(p -> !p.getFileName().toString().startsWith("."))
-                    .sorted()
-                    .toList();
-        } catch (IOException e) {
-            return List.of();
-        }
-    }
-
-    /** 可运行 jar：优先含 BOOT-INF 的 Spring Boot 包，多个取最新。 */
-    static Path findRunnableJar(Path backendRoot) {
-        try (var stream = Files.walk(backendRoot, 4)) {
-            List<Path> candidates = stream
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().endsWith(".jar"))
-                    .filter(p -> !p.getFileName().toString().endsWith("-sources.jar"))
-                    .filter(p -> !p.getFileName().toString().endsWith("-javadoc.jar"))
-                    .filter(p -> p.getParent() != null
-                            && "target".equals(p.getParent().getFileName().toString()))
-                    .filter(BuiltInPipelineEngine::isExecutableJar)
-                    .toList();
-            return candidates.stream()
-                    .max(java.util.Comparator.comparingLong(BuiltInPipelineEngine::lastModified))
-                    .orElse(null);
-        } catch (IOException e) {
-            return null;
-        }
-    }
-
-    private static boolean isExecutableJar(Path jar) {
-        try (java.util.jar.JarFile file = new java.util.jar.JarFile(jar.toFile())) {
-            return file.getEntry("BOOT-INF/") != null;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    /** 构建日志尾部（供流水线展示）。 */
-    private static long lastModified(Path file) {
-        try {
-            return Files.getLastModifiedTime(file).toMillis();
-        } catch (IOException e) {
-            return 0L;
-        }
-    }
-
-    /** 前端 dist 是否比 src 新（避免每次发布都全量打包）。 */
-    private static boolean isFrontendUpToDate(Path frontendRoot, Path dist) {
-        Path index = dist.resolve("index.html");
-        if (!Files.isRegularFile(index)) {
-            return false;
-        }
-        Path src = frontendRoot.resolve("src");
-        if (!Files.isDirectory(src)) {
-            return true;
-        }
-        long distTime = lastModified(index);
-        try (var stream = Files.walk(src)) {
-            return stream.filter(Files::isRegularFile)
-                    .noneMatch(p -> lastModified(p) > distTime);
-        } catch (IOException e) {
-            return false;
-        }
     }
 
     /**
@@ -4199,7 +4094,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             return prefixed;
         }
         List<ArtifactRef> runnable = jars.stream()
-                .filter(a -> isExecutableJar(runDir.resolve(a.ref()).normalize()))
+                .filter(a -> RepoLayout.isExecutableJar(runDir.resolve(a.ref()).normalize()))
                 .toList();
         if (runnable.isEmpty()) {
             return prefixed;
@@ -4746,7 +4641,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
             }
         }
         // Maven 聚合工程：jar 在子模块 target 下
-        return findRunnableJar(runDir) != null;
+        return RepoLayout.findRunnableJar(runDir) != null;
     }
 
     /**

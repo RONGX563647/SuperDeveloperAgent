@@ -266,7 +266,7 @@ public class HostDeployer implements Deployer {
             }
         }
         // Maven 聚合工程：可运行 jar 在子模块的 target 下（如 ruoyi-admin/target/*.jar）
-        return BuiltInPipelineEngine.findRunnableJar(base);
+        return RepoLayout.findRunnableJar(base);
     }
 
     private String tailOf(Path logFile) {
