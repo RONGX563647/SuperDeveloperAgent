@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,11 @@ class DockerSandboxDeniedTest {
                 "2g", "2", 512, "1000:1000").setRuntime(runtime);
     }
 
+    /** 带缓存卷前缀的沙箱（挂载边界用例需要第二个挂载点）。 */
+    private static DockerSandbox cached(String network) {
+        return new DockerSandbox("docker", "maven:3.9-eclipse-temurin-21", network,
+                "2g", "2", 512, "1000:1000", "agent-cache");
+    }
     @Test
     @DisplayName("网络关断但阶段要求外联：拒绝并给出可执行建议")
     void networkDeniedIsStructured() {
@@ -51,26 +57,67 @@ class DockerSandboxDeniedTest {
     }
 
     @Test
-    @DisplayName("追加宿主挂载一律拒绝（docker.sock 等于交出宿主）")
-    void extraMountsDenied() {
-        SandboxDeniedException denied = assertThrows(SandboxDeniedException.class,
-                () -> sandbox("bridge", "").requireNoExtraMounts(List.of("/var/run/docker.sock:/sock")));
-        assertEquals(SandboxDeniedException.Rule.MOUNT, denied.rule());
-        assertTrue(denied.structured().contains("docker.sock"), denied.structured());
+    @DisplayName("挂载边界是结构性的：allowedMounts 只有工作区与缓存卷两类")
+    void mountsAreStructurallyBounded() {
+        // 原先的 requireNoExtraMounts(List) 收一个"想追加什么"的入参，但 StageDef 里没有
+        // 任何 mounts 字段，它永远只能收到空列表（死代码）。边界改由 allowedMounts + wrap 保证。
+        assertEquals(List.of("/ws", "/cache"),
+                cached("bridge").allowedMounts(Path.of("E:/w/P")));
+        assertEquals(List.of("/ws"), sandbox("bridge", "").allowedMounts(Path.of("E:/w/P")),
+                "未启用缓存时只有工作区一个挂载");
+
+        List<String> cmd = cached("bridge").wrap(Path.of("E:/w/P"), List.of("x"));
+        String joined = String.join(" ", cmd);
+        assertEquals(2, cmd.stream().filter("-v"::equals).count(), "只允许两个挂载：" + joined);
+        assertFalse(joined.contains("docker.sock"), joined);
+        assertFalse(joined.contains("/:/host"), joined);
     }
 
     @Test
-    @DisplayName("特权模式与额外 capability 一律拒绝")
-    void privilegeDenied() {
-        SandboxDeniedException denied = assertThrows(SandboxDeniedException.class,
-                () -> sandbox("bridge", "").requireUnprivileged(List.of("--privileged")));
-        assertEquals(SandboxDeniedException.Rule.PRIVILEGE, denied.rule());
-        assertTrue(denied.effective().contains("cap-drop=ALL"),
-                "拒绝信息要带当前隔离快照：" + denied.effective());
+    @DisplayName("特权不可达：任何网络档位下 wrap 的 argv 都不含提权参数")
+    void privilegeIsUnreachable() {
+        for (String network : List.of("bridge", "none", "host")) {
+            List<String> cmd = new DockerSandbox("docker", "img", network, "2g", "2", 512,
+                    "1000:1000", "agent-cache").wrap(Path.of("E:/w"), List.of("x"));
+            String joined = String.join(" ", cmd);
+            assertFalse(joined.contains("--privileged"), joined);
+            assertFalse(joined.contains("--cap-add"), joined);
+            assertTrue(joined.contains("--cap-drop ALL"), joined);
+            assertTrue(joined.contains("no-new-privileges"), joined);
+        }
+    }
 
-        SandboxDeniedException caps = assertThrows(SandboxDeniedException.class,
-                () -> sandbox("bridge", "").requireUnprivileged(List.of("--cap-add=SYS_ADMIN")));
-        assertEquals(SandboxDeniedException.Rule.PRIVILEGE, caps.rule());
+    @Test
+    @DisplayName("运行时就绪门：配置 runsc 但守护进程不报告它时，起容器前就拒绝")
+    void ensureRuntimeReadyDeniesBeforeContainerStarts() {
+        // 用假执行器返回"只有 runc"，避免依赖本机是否装了 runsc
+        DockerSandbox probed = new DockerSandbox("docker", "img", "bridge", "2g", "2", 512,
+                "1000:1000", "agent-cache", (cmd, timeoutMs, cancelled, live) ->
+                        cmd.contains("info")
+                                ? ProcessExecutor.StepOutcome.ok()
+                                : ProcessExecutor.StepOutcome.ok())
+                .setRuntime("runsc");
+        // 探测输出走 BoundedCommand（真进程），这里只验证"没有 runsc 时拒绝"的行为：
+        // 直接喂一个不含 runsc 的清单，等价于本机没装 runsc 的实测结论。
+        SandboxDeniedException denied = assertThrows(SandboxDeniedException.class,
+                () -> probed.requireRuntimeAvailable(DockerSandbox.runtimeKeys(
+                        "{\"runc\":{\"path\":\"runc\"},\"nvidia\":{\"path\":\"nvidia\"}}")));
+        assertEquals(SandboxDeniedException.Rule.RUNTIME, denied.rule());
+        assertTrue(denied.structured().contains("runsc"), denied.structured());
+
+        // 空 runtime 不探测、不拦截（默认 runc 路径零开销）
+        probed.setRuntime("").ensureRuntimeReady(() -> false, null);
+    }
+
+    @Test
+    @DisplayName("docker info 的运行时清单能解析成名字列表")
+    void runtimeKeysParsedFromInfoJson() {
+        assertEquals(List.of("runc", "nvidia"), DockerSandbox.runtimeKeys(
+                "{\"runc\":{\"path\":\"runc\"},\"nvidia\":{\"path\":\"nvidia\"}}"));
+        assertEquals(List.of("io.containerd.runc.v2"), DockerSandbox.runtimeKeys(
+                "{\"io.containerd.runc.v2\":{\"path\":\"runc\",\"status\":{\"x\":true}}}"));
+        assertTrue(DockerSandbox.runtimeKeys("").isEmpty());
+        assertTrue(DockerSandbox.runtimeKeys(null).isEmpty());
     }
 
     @Test

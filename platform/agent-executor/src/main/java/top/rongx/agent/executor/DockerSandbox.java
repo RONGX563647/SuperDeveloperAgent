@@ -101,6 +101,9 @@ public class DockerSandbox {
     /** 清扫遗留容器时识别"本平台起的容器"的容器名前缀（与 {@link #beginContainer} 一致）。 */
     private static final String CONTAINER_PREFIX = "agent-act-";
 
+    /** 初始化容器的名字前缀：同样以 {@link #CONTAINER_PREFIX} 开头，清扫逻辑一并覆盖。 */
+    private static final String INIT_PREFIX = CONTAINER_PREFIX + "init-";
+
     /** 外部命令执行器：抽出以便超时逻辑复用、也便于在不依赖 Docker 的情况下单测。 */
     @FunctionalInterface
     interface CommandExecutor {
@@ -165,6 +168,24 @@ public class DockerSandbox {
     private String runtime = "";
     /** 缓存卷初始化使用的可信镜像（只做 mkdir/chown/touch）。 */
     private String initImage = DEFAULT_INIT_IMAGE;
+
+    /**
+     * 镜像准入策略（允许列表 / 浮动 tag）。
+     *
+     * <p>默认 {@link SandboxImagePolicy#permissive()}：引入本字段不改变任何现有行为，
+     * 收紧靠 {@code agent.sandbox.image-allowlist} 与 {@code agent.sandbox.allow-floating-tags}。
+     */
+    private SandboxImagePolicy imagePolicy = SandboxImagePolicy.permissive();
+
+    /** 离线逃生门：{@code network=none} 是否需要按"必须外联"拒绝（默认拒绝）。 */
+    private boolean allowOffline;
+
+    /**
+     * 守护进程报告的可用运行时（{@code docker info} 结论，探测一次后缓存）。
+     *
+     * <p>{@code null} = 尚未探测；空列表 = 探测过但拿不到结论（按"未知"放行）。
+     */
+    private List<String> availableRuntimes;
 
     public DockerSandbox(String dockerBinary, String image, String network,
                          String memory, String cpus, int pidsLimit, String user) {
@@ -271,6 +292,16 @@ public class DockerSandbox {
         cmd.add(cpus);
         cmd.add("--pids-limit");
         cmd.add(String.valueOf(pidsLimit));
+        // 3b. pid 1 必须是会回收僵尸的 init：镜像自带的 ENTRYPOINT 已被清空，业务进程
+        //     直接当 pid 1，不会 wait 子进程——pnpm/maven 这类会 fork 大量短命子进程的工具
+        //     在 pids-limit 下会真的撞上限（表现为莫名其妙的 "Resource temporarily unavailable"）。
+        cmd.add("--init");
+        // 3c. 停止宽限与 core dump：默认 10s 会在构建脚本写盘时被 SIGKILL 打断缓存卷；
+        //     core dump 对构建容器没有价值，只会往只读根文件系统外写大文件。
+        cmd.add("--stop-timeout");
+        cmd.add("10");
+        cmd.add("--ulimit");
+        cmd.add("core=0");
         // 4. 降权：非 root + 禁提权 + 丢全部 Linux capabilities
         cmd.add("--user");
         cmd.add(user);
@@ -337,17 +368,47 @@ public class DockerSandbox {
     }
 
     /**
-     * 缓存卷的项目键：worktree 每次运行名字都不同（wt-build-run-xxx），
-     * 用 worktree 目录名会让缓存永远命中不了；取 {@code <project>/worktrees/<wt>} 里的项目名。
+     * 缓存卷的项目键：<b>可读前缀 + 规范化项目根路径的哈希</b>。
+     *
+     * <p>原实现只取目录名（worktree 时取所属项目名），等于假设"目录名唯一"。三种真实撞名：
+     * 同名的两份仓库拷贝、被 {@link #safeVolumeName} 60 字符截断的长名字、以及不同父目录下
+     * 的同名工程——它们会落到同一个卷上，A 项目投毒的 {@code ~/.m2} 会被 B 项目解析。
+     *
+     * <p>现在读起来仍然是项目名（便于 {@code docker volume ls} 排障），但末尾带 16 位
+     * 路径哈希作为唯一性来源：不同绝对路径必然不同卷，同一路径跨运行稳定命中。
      */
     static String cacheKey(Path workspace) {
-        Path parent = workspace.getParent();
-        if (parent != null && parent.getFileName() != null
-                && "worktrees".equals(parent.getFileName().toString())
-                && parent.getParent() != null && parent.getParent().getFileName() != null) {
-            return parent.getParent().getFileName().toString();
+        Path root = workspace.toAbsolutePath().normalize();
+        Path parent = root.getParent();
+        // worktree 每次运行名字都不同（wt-build-run-xxx），键要取所属项目根，否则缓存永远不命中
+        if (parent != null && "worktrees".equals(fileName(parent)) && parent.getParent() != null) {
+            root = parent.getParent();
         }
-        return workspace.getFileName() == null ? "default" : workspace.getFileName().toString();
+        String readable = safeVolumeName(fileName(root));
+        if (readable.length() > 24) {
+            readable = readable.substring(0, 24);
+        }
+        return readable + "-" + pathHash(root);
+    }
+
+    /** 目录名（null 安全）。 */
+    private static String fileName(Path path) {
+        Path name = path == null ? null : path.getFileName();
+        return name == null ? "default" : name.toString();
+    }
+
+    /** 路径的稳定指纹：SHA-256 前 16 位小写 hex（碰撞概率足够低，且不会像截断那样丢熵）。 */
+    private static String pathHash(Path root) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            return java.util.HexFormat.of()
+                    .formatHex(md.digest(root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                    .substring(0, 16);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // 平台只跑在 JDK 21 上，SHA-256 必然存在；真缺失时退回路径 hashCode，
+            // 宁可退化也不能让整个构建因为缓存卷命名而失败。
+            return Integer.toHexString(root.toString().hashCode());
+        }
     }
 
     /** 卷名（未启用缓存时返回 null）。 */
@@ -358,10 +419,30 @@ public class DockerSandbox {
 
     /** 开始一次容器执行：生成容器名并绑定到当前线程，供超时清理使用。 */
     public String beginContainer() {
-        String name = "agent-act-" + java.util.UUID.randomUUID().toString()
+        String name = CONTAINER_PREFIX + java.util.UUID.randomUUID().toString()
                 .replace("-", "").substring(0, 12);
         ACTIVE_CONTAINER.set(name);
         return name;
+    }
+
+    /**
+     * 初始化容器名：按卷分区（同一卷的两次初始化串行，不同卷互不干扰），带 8 位随机后缀。
+     *
+     * <p>必须唯一：{@code docker run} 遇到重名会直接失败，而初始化失败会被当成
+     * "缓存卷不可用"导致构建失败。
+     */
+    private static String initContainerName(String volume) {
+        String base = safeVolumeName(volume == null || volume.isBlank() ? "default" : volume);
+        if (base.length() > 40) {
+            base = base.substring(0, 40);
+        }
+        return INIT_PREFIX + base + "-" + java.util.UUID.randomUUID().toString()
+                .replace("-", "").substring(0, 8);
+    }
+
+    /** 是否为平台自己起、可被清扫的容器名（活动容器与初始化容器都算）。 */
+    static boolean isManagedContainerName(String name) {
+        return name != null && name.startsWith(CONTAINER_PREFIX);
     }
 
     /** 关闭/开启镜像预检（由 SandboxConfig 的配置注入）。 */
@@ -417,19 +498,14 @@ public class DockerSandbox {
         return this;
     }
 
-    /** 默认主机名：优先容器/系统环境变量，拿不到就退回本机主机名。 */
+    /**
+     * 默认主机名（就绪状态的归属主机）。
+     *
+     * <p>与容器归属标签共用 {@link #localHostName()}：两处必须是<em>同一个</em>名字，
+     * 否则就绪状态与容器标签会指向不同主机（见 {@link #localHostName()} 的说明）。
+     */
     private static String defaultHost() {
-        for (String key : new String[] {"HOSTNAME", "COMPUTERNAME"}) {
-            String value = System.getenv(key);
-            if (value != null && !value.isBlank()) {
-                return value.trim();
-            }
-        }
-        try {
-            return java.net.InetAddress.getLocalHost().getHostName();
-        } catch (Exception ignored) {
-            return "unknown";
-        }
+        return localHostName();
     }
 
     /** 设置 npm registry 镜像；空值表示用容器默认源。 */
@@ -447,6 +523,33 @@ public class DockerSandbox {
     /** 设置缓存卷初始化的可信镜像；空值回落到默认最小镜像。 */
     public DockerSandbox setInitImage(String initImage) {
         this.initImage = initImage == null || initImage.isBlank() ? DEFAULT_INIT_IMAGE : initImage.trim();
+        return this;
+    }
+
+    /** 设置镜像准入策略（允许列表 / 浮动 tag）；null = 不限制。 */
+    public DockerSandbox setImagePolicy(SandboxImagePolicy policy) {
+        this.imagePolicy = policy == null ? SandboxImagePolicy.permissive() : policy;
+        return this;
+    }
+
+    /** 当前镜像准入策略（部署器与设置页共用同一份判定）。 */
+    SandboxImagePolicy imagePolicy() {
+        return imagePolicy;
+    }
+
+    /**
+     * 是否允许在 {@code network=none} 下执行需要外联的动作（逃生门，默认关闭）。
+     *
+     * <p>关闭时{@code network=none} + 需要外联 = 立即 E-707 结构化拒绝；
+     * 打开时不拦截，交给实际网络错误（用于"缓存已完全预热、确实要离线构建"的场景）。
+     */
+    public boolean allowOffline() {
+        return allowOffline;
+    }
+
+    /** 设置离线逃生门（由 SandboxConfig 注入 {@code agent.sandbox.allow-offline}）。 */
+    public DockerSandbox setAllowOffline(boolean allowOffline) {
+        this.allowOffline = allowOffline;
         return this;
     }
 
@@ -574,7 +677,13 @@ public class DockerSandbox {
      * <p>为什么不能只用 root：Docker Desktop（Windows/WSL2）对已有卷做 userns 映射时，
      * 容器内 root 反而写不了属主为 1000 的目录（Permission denied）；而全新卷的根目录
      * 属主是 root，1000 用户又写不了。两种卷都要能初始化，所以按"1000 → root"回退。
-     * 只对命令被拒（E-101）回退，超时/中断直接抛出，避免双倍等待。
+     *
+     * <p><b>回退条件是"命令失败"，不是某个特定错误码</b>：早先这里只认
+     * {@code COMPILE_FAILED}(E-101)，而初始化容器（{@code busybox mkdir}）的失败按
+     * {@link ProcessExecutor.FailureKind#fromArgv} 归类为 {@code SCRIPT_FAILED}(E-104)——
+     * 于是回退分支从未执行过。这个 bug 长期被掩盖，因为卷名过去不含哈希，测试复用同一批
+     * 已 chmod 777 的旧卷；卷名唯一化（D4）后每个新卷都是冷卷，立刻暴露。
+     * 现在只放过"超时/取消"（那是基础设施问题，换 root 也一样会超时）。
      */
     private void runInit(String volume, BooleanSupplier cancelled, Consumer<String> live,
                          String... argv) {
@@ -583,8 +692,7 @@ public class DockerSandbox {
         if (outcome.errorCode() == null) {
             return;
         }
-        // 只有"命令被执行器拒绝/非零退出"才值得换 root 再试；超时与取消是基础设施问题。
-        if (!ErrorCode.COMPILE_FAILED.code().equals(outcome.errorCode())) {
+        if (isInfrastructureFailure(outcome)) {
             throw initFailure(outcome, volume, argv);
         }
         ProcessExecutor.StepOutcome asRoot =
@@ -592,6 +700,14 @@ public class DockerSandbox {
         if (asRoot.errorCode() != null) {
             throw initFailure(asRoot, volume, argv);
         }
+        notify(live, "[sandbox] 以构建用户执行 " + String.join(" ", argv)
+                + " 被拒（" + outcome.errorCode() + "），已用 root 完成\n");
+    }
+
+    /** 超时与取消换用户也没用：直接抛出，别把等待时间翻倍。 */
+    private static boolean isInfrastructureFailure(ProcessExecutor.StepOutcome outcome) {
+        String code = outcome.errorCode();
+        return ErrorCode.TIMEOUT.code().equals(code) || ErrorCode.CANCELLED.code().equals(code);
     }
 
     private EnvironmentException initFailure(ProcessExecutor.StepOutcome outcome, String volume,
@@ -637,6 +753,16 @@ public class DockerSandbox {
         cmd.add(dockerBinary);
         cmd.add("run");
         cmd.add("--rm");
+        // 初始化容器也必须带生命周期标签 + 固定名字：
+        //   · 没有标签 → sweepStaleContainers 按 MANAGED_LABEL 过滤，永远看不到它们；
+        //   · 没有名字 → CLI 被 kill 时 --rm 不生效，只能靠标签清扫（而现在清扫也看不见）。
+        // 结果就是一次 Ctrl-C 会在 `docker ps -a` 里永久留下一个无名 init 容器。
+        cmd.add("--label");
+        cmd.add(MANAGED_LABEL);
+        cmd.add("--label");
+        cmd.add(OWNER_LABEL + "=" + OWNER_TAG);
+        cmd.add("--name");
+        cmd.add(initContainerName(volume));
         if (runtime != null && !runtime.isBlank()) {
             cmd.add("--runtime");
             cmd.add(runtime);
@@ -739,7 +865,7 @@ public class DockerSandbox {
             int sep = line.indexOf('|');
             String name = sep < 0 ? line : line.substring(0, sep).trim();
             String owner = sep < 0 ? "" : line.substring(sep + 1).trim();
-            if (!name.startsWith(CONTAINER_PREFIX) || owner.isBlank()) {
+            if (!isManagedContainerName(name) || owner.isBlank()) {
                 continue;
             }
             if (!owner.startsWith(host + ":")) {
@@ -787,19 +913,42 @@ public class DockerSandbox {
         return id;
     }
 
+    /**
+     * 主机名的唯一实现（{@link #defaultHost} 与 {@link #hostName} 曾经是两份，
+     * 环境变量优先级相反——见 {@link #localHostName()}）。
+     */
     private static String hostName() {
-        String name = System.getenv("COMPUTERNAME");
-        if (name == null || name.isBlank()) {
-            name = System.getenv("HOSTNAME");
-        }
-        if (name == null || name.isBlank()) {
-            try {
-                name = java.net.InetAddress.getLocalHost().getHostName();
-            } catch (java.net.UnknownHostException e) {
-                name = "unknown";
+        return localHostName();
+    }
+
+    /**
+     * 本机主机名：<b>HOSTNAME 优先，其次 COMPUTERNAME</b>，最后退回 {@code InetAddress}。
+     *
+     * <p>为什么顺序必须固定且只有一份：这个值同时被两个地方消费——
+     * <ul>
+     *   <li>{@code OWNER_LABEL = hostName() + ":" + pid}：容器归属标签，清扫孤儿容器时按它比对；</li>
+     *   <li>{@code defaultHost()}：镜像就绪状态的归属主机，落库时按它分区。</li>
+     * </ul>
+     * 两份实现一旦顺序相反（原来 {@code defaultHost} 是 HOSTNAME→COMPUTERNAME，
+     * {@code hostName} 是 COMPUTERNAME→HOSTNAME），在同时设置这两个变量的混合主机上
+     * （Windows + Git-Bash / WSL / 某些 CI runner）就会出现：就绪状态记在 A 名下，
+     * 容器标签写着 B —— 表现为"刚拉好的镜像又被判缺失"或"活着的容器被当孤儿扫掉"。
+     *
+     * <p>选 HOSTNAME 优先：容器内它由 docker 注入且一定存在；Windows 宿主上两者通常相同，
+     * 不同时以 HOSTNAME 为准更接近"docker 守护进程眼里这台机器叫什么"。
+     */
+    static String localHostName() {
+        for (String key : new String[] {"HOSTNAME", "COMPUTERNAME"}) {
+            String value = System.getenv(key);
+            if (value != null && !value.isBlank()) {
+                return value.trim();
             }
         }
-        return name.trim();
+        try {
+            return java.net.InetAddress.getLocalHost().getHostName();
+        } catch (Exception ignored) {
+            return "unknown";   // 解析失败时不抛：主机名只用于分区，不是关键路径
+        }
     }
 
     /** pid 是否仍存活；解析失败在 {@link #staleCandidates} 里按"已退出"处理。 */
@@ -807,7 +956,12 @@ public class DockerSandbox {
         return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
     }
 
-    /** 卷名只允许小写字母/数字/_-，避免非法项目名注入 docker 参数。 */
+    /**
+     * 卷名只允许小写字母/数字/_-，避免非法项目名注入 docker 参数。
+     *
+     * <p>60 字符上限是 docker 侧的实际约束；唯一性由 {@link #cacheKey} 末尾的路径哈希保证，
+     * 不再依赖"名字短到不会被截断"。
+     */
     static String safeVolumeName(String raw) {
         String normalized = raw.toLowerCase(java.util.Locale.ROOT)
                 .replaceAll("[^a-z0-9_-]", "-");
@@ -834,18 +988,47 @@ public class DockerSandbox {
         return List.of(dockerBinary, "image", "inspect", image);
     }
 
-    /** 复制一份沙箱，只替换镜像（其余隔离参数与缓存卷不变）。 */
+    /**
+     * 复制一份沙箱，只替换镜像（其余隔离参数、缓存卷、就绪状态全部带走）。
+     *
+     * <p>改用拷贝构造而不是"构造 + 一串 setter"：原先新增一个旋钮只要忘了在
+     * {@code :928-933} 补一行，派生沙箱就会静默丢掉它（比如后加的 {@code initImage} /
+     * {@code runtime} 都曾漏过）。拷贝构造把"字段清单"变成编译期唯一的同步点。
+     */
     public DockerSandbox withImage(String newImage) {
-        // stage.image 来自仓库里的流水线定义，是外部输入：校验与基础镜像完全一致
-        DockerSandbox copy = new DockerSandbox(dockerBinary,
-                ImageRef.require(newImage, "stage.image"), network, memory, cpus,
-                pidsLimit, user, cacheVolumePrefix, initializedVolumes, commandExecutor);
-        return copy.setImagePrecheck(precheckImage).setImagePullTimeout(imagePullTimeoutMs)
-                .setImagePullIdle(imagePullIdleMs).setPullMirrors(pullMirrors)
-                .setImagePullAttempts(imagePullAttempts)
-                .setPullBackoff(pullBackoffBaseMs, pullBackoffMaxMs)
-                .setReadinessStore(readinessStore).setHost(host)
-                .setNpmRegistry(npmRegistry).setRuntime(runtime).setInitImage(initImage);
+        // stage.image 来自仓库里的流水线定义，是外部输入：语法校验与准入策略都要过
+        String checked = ImageRef.require(newImage, "stage.image");
+        imagePolicy.require(checked, SandboxImagePolicy.Source.STAGE);
+        return new DockerSandbox(this, checked);
+    }
+
+    /** 拷贝构造：所有可变配置原样带走，只换镜像。 */
+    private DockerSandbox(DockerSandbox base, String image) {
+        this.dockerBinary = base.dockerBinary;
+        this.image = image;
+        this.network = base.network;
+        this.memory = base.memory;
+        this.cpus = base.cpus;
+        this.pidsLimit = base.pidsLimit;
+        this.user = base.user;
+        this.cacheVolumePrefix = base.cacheVolumePrefix;
+        this.initializedVolumes = base.initializedVolumes;
+        this.commandExecutor = base.commandExecutor;
+        this.precheckImage = base.precheckImage;
+        this.imagePullTimeoutMs = base.imagePullTimeoutMs;
+        this.imagePullIdleMs = base.imagePullIdleMs;
+        this.pullMirrors = base.pullMirrors;
+        this.imagePullAttempts = base.imagePullAttempts;
+        this.pullBackoffBaseMs = base.pullBackoffBaseMs;
+        this.pullBackoffMaxMs = base.pullBackoffMaxMs;
+        this.readinessStore = base.readinessStore;
+        this.host = base.host;
+        this.npmRegistry = base.npmRegistry;
+        this.runtime = base.runtime;
+        this.initImage = base.initImage;
+        this.imagePolicy = base.imagePolicy;
+        this.allowOffline = base.allowOffline;
+        this.availableRuntimes = base.availableRuntimes;
     }
 
     public String describe() {
@@ -942,40 +1125,107 @@ public class DockerSandbox {
     }
 
     /**
-     * 挂载校验：只允许工作区与缓存卷，其余宿主路径一律拒绝。
+     * 挂载边界（<b>不变量</b>，不是请求校验）。
      *
-     * <p>挂载是沙箱边界上最危险的一项（{@code -v /var/run/docker.sock} 等于交出宿主），
-     * 因此不允许任何来自流水线定义/模型的额外挂载。
+     * <p>曾经的 {@code requireNoExtraMounts(List)} / {@code requireUnprivileged(List)} 收一个
+     * "调用方想追加什么"的入参，但 {@code PipelineDefinition.StageDef} 里根本没有
+     * mounts / privileged / capAdd 字段——它们永远只能收到空列表，属于给评审看的死代码，
+     * 线上一次都没触发过。真正的边界由 {@link #wrap} 保证，并由
+     * {@code DockerSandboxTest#wrapNeverRelaxesIsolation} 每次构建都验一遍。
      *
-     * @param requestedMounts 调用方想追加的宿主路径
-     * @throws SandboxDeniedException 出现工作区/缓存卷之外的挂载
+     * @return 本沙箱允许的全部宿主挂载（只有工作区与缓存卷两类）
      */
-    public void requireNoExtraMounts(List<String> requestedMounts) {
-        if (requestedMounts == null || requestedMounts.isEmpty()) {
-            return;
-        }
-        throw new SandboxDeniedException(SandboxDeniedException.Rule.MOUNT,
-                "不允许追加宿主挂载：" + String.join(", ", requestedMounts),
-                isolationSnapshot(),
-                "把需要的文件放进工作区（它已挂到 /ws），或用缓存卷 /cache；"
-                        + "宿主目录与 docker.sock 永不挂载");
+    List<String> allowedMounts(Path workspace) {
+        String cache = cacheVolumeName(workspace);
+        return cache == null
+                ? List.of(CONTAINER_WORKDIR)
+                : List.of(CONTAINER_WORKDIR, "/cache");
     }
 
     /**
-     * 特权校验：特权模式、额外 capability、关闭 no-new-privileges 一律拒绝。
+     * 运行时就绪保证：配置了 gVisor 等运行时但守护进程不支持时必须**在起容器前**拒绝。
      *
-     * @param requested 调用方请求的越权项（如 {@code --privileged}）
-     * @throws SandboxDeniedException 请求里出现任何提升权限的项
+     * <p>原实现只有 {@link #requireRuntimeAvailable}，而它零生产调用——配置
+     * {@code agent.sandbox.runtime=runsc} 却装不上 runsc 时，用户要等到
+     * {@code docker run} 才拿到一句 {@code unknown or invalid runtime name: runsc}，
+     * 既没有隔离快照也没有可执行的下一步。
+     *
+     * <p>探测只做一次（结论缓存在实例上）：{@code docker info} 在冷启动时可能要 1~2s，
+     * 每次动作前都问一遍是纯浪费。空 runtime 直接返回，不产生任何子进程。
      */
-    public void requireUnprivileged(List<String> requested) {
-        if (requested == null || requested.isEmpty()) {
-            return;
+    public void ensureRuntimeReady(BooleanSupplier cancelled, Consumer<String> live) {
+        if (runtime == null || runtime.isBlank()) {
+            return;     // 默认 runc，无需探测
         }
-        throw new SandboxDeniedException(SandboxDeniedException.Rule.PRIVILEGE,
-                "不允许提升容器权限：" + String.join(", ", requested),
-                isolationSnapshot(),
-                "构建与部署都不需要特权；确需特殊能力时改平台配置（需人工评审），"
-                        + "不要写在流水线定义里");
+        if (availableRuntimes == null) {
+            BoundedCommand.Outcome info = BoundedCommand.run(
+                    List.of(dockerBinary, "info", "--format", "{{json .Runtimes}}"),
+                    IMAGE_INSPECT_TIMEOUT_MS);
+            // 探测失败时留空列表：requireRuntimeAvailable 对空列表按"无法断言"放行，
+            // 让后面的 docker run 给出真实错误，而不是在这里误拦一个可能正常的部署。
+            availableRuntimes = info.ok() ? runtimeKeys(info.output()) : List.of();
+            notify(live, "[sandbox] 守护进程可用运行时："
+                    + (availableRuntimes.isEmpty() ? "未知" : String.join(", ", availableRuntimes))
+                    + "\n");
+        }
+        requireRuntimeAvailable(availableRuntimes);
+    }
+
+    /**
+     * 从 {@code docker info --format '{{json .Runtimes}}'} 的 JSON 里取出<b>顶层</b>运行时名。
+     *
+     * <p>必须按花括号深度过滤：每个运行时对象内部还有嵌套对象（真实输出里
+     * {@code "io.containerd.runc.v2":{"path":"runc","status":{"org.opencontainers...":"..."}}}），
+     * 只抓 {@code "key":\{} 的正则会把 {@code status} 也当成运行时名——于是
+     * {@code agent.sandbox.runtime=status} 这种明显错误的配置会被判定为"可用"。
+     * 不引 JSON 库是为了让 executor 模块保持零额外依赖；手写解析只需区分
+     * "顶层键 + 值是对象"这一种情况，可变复杂度很低。
+     */
+    static List<String> runtimeKeys(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        List<String> keys = new ArrayList<>();
+        int depth = 0;
+        int i = 0;
+        while (i < json.length()) {
+            char c = json.charAt(i);
+            if (c == '"') {
+                int j = i + 1;
+                StringBuilder name = new StringBuilder();
+                while (j < json.length() && json.charAt(j) != '"') {
+                    if (json.charAt(j) == '\\' && j + 1 < json.length()) {
+                        j++;
+                    }
+                    name.append(json.charAt(j));
+                    j++;
+                }
+                int after = skipWhitespace(json, j + 1);
+                if (depth == 1 && after < json.length() && json.charAt(after) == ':') {
+                    int value = skipWhitespace(json, after + 1);
+                    if (value < json.length() && json.charAt(value) == '{') {
+                        keys.add(name.toString());
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+            if (c == '{' || c == '[') {
+                depth++;
+            } else if (c == '}' || c == ']') {
+                depth--;
+            }
+            i++;
+        }
+        return List.copyOf(keys);
+    }
+
+    private static int skipWhitespace(String text, int from) {
+        int i = from;
+        while (i < text.length() && Character.isWhitespace(text.charAt(i))) {
+            i++;
+        }
+        return i;
     }
 
     /**

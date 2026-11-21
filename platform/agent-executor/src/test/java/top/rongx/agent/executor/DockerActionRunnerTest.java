@@ -33,7 +33,11 @@ class DockerActionRunnerTest {
 
     @BeforeAll
     static void requireDocker() {
-        sandbox = new DockerSandbox("docker", IMAGE, "none", "1g", "1", 256, "1000:1000");
+        // 这些用例故意用 network=none 证明"容器内无外联"，因此必须显式声明离线意图
+        // （agent.sandbox.allow-offline=true）。否则新的前置门会直接以 E-707 拒绝，
+        // 而那条拒绝本身另有专门用例覆盖。
+        sandbox = new DockerSandbox("docker", IMAGE, "none", "1g", "1", 256, "1000:1000")
+                .setAllowOffline(true);
         Assumptions.assumeTrue(sandbox.available(), "Docker 守护进程不可用，跳过容器测试");
         Assumptions.assumeTrue(imageExists(IMAGE), "本地镜像 " + IMAGE + " 不存在，跳过容器测试");
     }
@@ -116,5 +120,24 @@ class DockerActionRunnerTest {
         assertEquals("E-101", result.result().errorCode());
         assertEquals(3, result.result().exitCode());
         assertTrue(result.logTail().contains("boom"));
+    }
+
+    @Test
+    @DisplayName("network=none 且未声明离线：起容器前就以 E-707 结构化拒绝")
+    void offlineNetworkDeniedBeforeContainerStarts(@TempDir Path dir) {
+        // 与 @BeforeAll 的沙箱唯一的差别：不打开 allow-offline 逃生门。
+        // 这条用例存在的意义：证明前置门接在了真实执行路径上，而不是只有单测在调用。
+        DockerSandbox strict = new DockerSandbox("docker", IMAGE, "none", "1g", "1", 256, "1000:1000");
+
+        ActionResult result = new DockerActionRunner(strict)
+                .run(dir, spec(List.of("node", "-v"), List.of()));
+
+        assertEquals(StageStatus.FAILED, result.result().status());
+        assertEquals("E-707", result.result().errorCode(),
+                "网络档位与阶段需求冲突必须是策略拒绝，而不是等 60 秒后的 DNS 失败：" + result.logTail());
+        assertTrue(result.logTail().contains("SANDBOX_DENIED"), result.logTail());
+        assertTrue(result.logTail().contains("rule: NETWORK"), result.logTail());
+        // 提示要给出可执行动作，而不是只说"不行"
+        assertTrue(result.logTail().contains("agent.sandbox.network=bridge"), result.logTail());
     }
 }

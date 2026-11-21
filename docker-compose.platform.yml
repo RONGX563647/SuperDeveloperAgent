@@ -1,0 +1,73 @@
+# 平台自身的容器化部署（含沙箱隔离）
+#
+# 为什么不是"直接 docker run 平台镜像"：
+#   平台的业务是**在容器里跑仓库里的构建配方**。若平台容器自己没有守护进程，
+#   agent.sandbox.mode=docker 就起不来（fail-closed），于是只能退化成 process 模式——
+#   隔离被整体拆除，且从界面看不出来。这份 compose 用 dind sidecar 提供真守护进程，
+#   平台容器因此可以保持默认的 docker 模式。
+#
+# 用法：
+#   docker compose -f docker-compose.platform.yml up -d --build --wait
+#   open http://127.0.0.1:8090
+#
+# 安全边界说明（不要删）：
+#   · dind 本身需要 privileged（它要管 cgroup/网络命名空间），这是 docker-in-docker 的
+#     固有代价。它承载的"不可信代码"已经在 sidecar 内部再套一层容器（cap-drop ALL /
+#     no-new-privileges / read-only rootfs），所以风险面是"dind 守护进程"，不是平台容器。
+#   · 只应部署在专用构建机上；不接受多租户共享宿主的场景。
+#   · 需要更强隔离时给 sidecar 换 gVisor：agent.sandbox.runtime=runsc。
+services:
+  # ------------------------------------------------------------------ 沙箱守护进程
+  dind:
+    image: docker:29-dind
+    privileged: true
+    restart: unless-stopped
+    environment:
+      # TLS：平台经 tcp://dind:2376 连入，凭 /certs/client 双向认证，
+      # 避免 2375 明文端口在宿主机网络上裸奔。
+      DOCKER_TLS_CERTDIR: /certs
+    volumes:
+      - dind-certs:/certs
+      - dind-data:/var/lib/docker
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ------------------------------------------------------------------ 平台
+  platform:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      dind:
+        # 等 dind 的 docker info 通过：否则平台启动时 fail-closed 直接失败
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      DOCKER_HOST: tcp://dind:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
+      # 显式写出来便于审计：容器化部署也保持 docker 模式（真隔离）
+      AGENT_SANDBOX_MODE: docker
+      AGENT_WORKSPACE_ROOT: /data/workspaces
+      AGENT_SQLITE_FILE: /data/_platform/platform.db
+    volumes:
+      - dind-certs:/certs
+      - platform-data:/data
+    ports:
+      # 只绑回环：平台界面不对外，需要远程访问时前面加反向代理
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/actuator/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  dind-certs:
+  dind-data:
+  platform-data:

@@ -7,8 +7,9 @@ import java.util.List;
 /**
  * 宿主进程执行模式。
  *
- * <p>只做预算、日志、产物，**不做隔离**。用于本地开发或没有 Docker 的环境；
- * 有 Docker 时由 {@code agent.sandbox.mode=auto} 自动切到 {@link DockerActionRunner}。
+ * <p>只做预算、日志、产物，**不做隔离**。仅用于本地开发或没有 Docker 的环境，
+ * 必须由 {@code agent.sandbox.mode=process} 显式开启；默认的 docker 模式在守护进程
+ * 不可用时启动失败，不会自动切换到这里。
  *
  * <p>Windows 适配：mvn/pnpm/make/task 等工具链在 Windows 上是 .cmd/.bat 包装器，
  * {@code ProcessBuilder} 不会按 PATHEXT 解析，直接传 "mvn" 会 E-209。

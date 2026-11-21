@@ -46,6 +46,8 @@ public class DockerDeployer implements Deployer {
 
     private final ProcessExecutor executor = new ProcessExecutor();
     private final DockerCli docker;
+    /** 镜像准入策略（与构建沙箱共用同一份判定）；null 视为不限制。 */
+    private SandboxImagePolicy imagePolicy = SandboxImagePolicy.permissive();
 
     public DockerDeployer() {
         this(DockerCli.defaults());
@@ -53,6 +55,12 @@ public class DockerDeployer implements Deployer {
 
     public DockerDeployer(DockerCli docker) {
         this.docker = docker == null ? DockerCli.defaults() : docker;
+    }
+
+    /** 注入镜像准入策略（由 PipelineConfig 从 DockerSandbox 取同一份，保证判定一致）。 */
+    public DockerDeployer setImagePolicy(SandboxImagePolicy policy) {
+        this.imagePolicy = policy == null ? SandboxImagePolicy.permissive() : policy;
+        return this;
     }
 
     @Override
@@ -172,9 +180,8 @@ public class DockerDeployer implements Deployer {
         if (image == null || image.isBlank()) {
             return false;
         }
-        BooleanSupplier never = () -> false;
-        return executor.exec(dir, docker.cmd("image", "inspect", image), 15_000,
-                new StringBuilder(), never).exitCode() == 0;
+        // 走 DockerOps：与引擎预检、中间件预检共用同一份"存在性"判据与超时
+        return new DockerOps(docker.binary(), dir).imageExists(image);
     }
 
     private DeployResult run(Path dir, String name, String image, int hostPort, int containerPort,
@@ -204,7 +211,12 @@ public class DockerDeployer implements Deployer {
         String imageRef;
         try {
             imageRef = ImageRef.require(image, "deploy.image");
+            imagePolicy.require(imageRef, SandboxImagePolicy.Source.DEPLOY);
         } catch (RecipeException e) {
+            return DeployResult.failed(DeployTarget.DOCKER, e.code(),
+                    e.getMessage(), ProcessExecutor.redact(log.toString()));
+        } catch (top.rongx.agent.domain.error.SandboxDeniedException e) {
+            // 镜像不在允许列表 / 浮动 tag：这是策略拒绝（E-707），不是启动失败
             return DeployResult.failed(DeployTarget.DOCKER, e.code(),
                     e.getMessage(), ProcessExecutor.redact(log.toString()));
         }
@@ -251,7 +263,13 @@ public class DockerDeployer implements Deployer {
                 "--security-opt", "no-new-privileges",
                 "--label", "com.docker.compose.project=" + composeProject(network, null),
                 "--label", "com.docker.compose.service=" + name,
-                "-p", hostPort + ":" + containerPort));
+                // hostPort<=0 表示"让 docker 自己挑一个"（端口分配的真相交给 docker）：
+                //   -p 127.0.0.1::8080
+                // 原实现用 ServerSocket 试绑再释放，窗口期（释放→docker 真正绑定）会被抢占，
+                // 而且要在 200 个候选端口里循环试。docker 分配没有窗口，事后用 docker port 回读。
+                "-p", hostPort > 0
+                        ? "127.0.0.1:" + hostPort + ":" + containerPort
+                        : "127.0.0.1::" + containerPort));
         if (containerPort <= 1024) {
             // 绑 <1024 需要 CAP_NET_BIND_SERVICE（镜像以非 root 运行时丢了就起不来）；
             // 只补回这一项，不给 NET_RAW / SETUID 等其它能力
@@ -280,8 +298,13 @@ public class DockerDeployer implements Deployer {
             String summary = sanitize(run.summary(), env);
             if (summary.contains("port is already allocated")
                     || summary.contains("address already in use")) {
+                // hostPort<=0 时是 docker 自己挑端口，理论上不该冲突；
+                // 真冲突说明是容器端口（镜像里已经监听的那一个）被占，报错要指向容器端口。
+                String target = hostPort > 0
+                        ? "宿主端口 " + hostPort
+                        : "容器端口 " + containerPort + "（由 docker 分配宿主端口）";
                 return DeployResult.failed(DeployTarget.DOCKER, ErrorCode.DEPLOY_START_FAILED.code(),
-                        "宿主端口 " + hostPort + " 已被其它进程/容器占用：" + summary,
+                        target + " 已被其它进程/容器占用：" + summary,
                         ProcessExecutor.redact(log.toString()));
             }
             return DeployResult.failed(DeployTarget.DOCKER, ErrorCode.DEPLOY_START_FAILED.code(),
@@ -292,8 +315,30 @@ public class DockerDeployer implements Deployer {
                 // 部署地址 = 用户点「打开部署地址」要跳转的页面入口（根路径 → 前端首页），
                 // 不是 healthPath：healthPath（/actuator/health）只用于探活判定，
                 // 返回的是一段 JSON，拿它当部署地址会让用户以为部署错了地方。
-                "http://" + endpointHost + ":" + hostPort + "/",
+                // 端口必须用"容器实际映射的端口"：hostPort<=0 时具体值只有 docker 知道。
+                "http://" + endpointHost + ":"
+                        + resolvePublishedPort(name, containerPort, hostPort, dir, log) + "/",
                 name, ProcessExecutor.redact(log.toString()));
+    }
+
+    /**
+     * 容器实际映射的宿主端口；docker 分配失败时回落请求端口（保证地址仍可拼出来）。
+     *
+     * <p>只问 docker，不再用 {@code ServerSocket} 试探：试绑-释放-再绑之间必然有窗口，
+     * 而且既然端口是 docker 分的，它的答案才是唯一权威。
+     */
+    private int resolvePublishedPort(String container, int containerPort, int requested, Path dir,
+                                     StringBuilder log) {
+        int actual = new DockerOps(docker.binary(), dir).publishedPort(container, containerPort);
+        if (actual > 0) {
+            if (actual != requested) {
+                log.append("[port] docker 分配宿主端口 ").append(actual)
+                        .append("（请求 ").append(requested).append("）\n");
+            }
+            return actual;
+        }
+        log.append("[port] 未能回读容器端口映射，沿用请求端口 ").append(requested).append('\n');
+        return requested;
     }
 
     /** 失败摘要里抹掉环境变量值（docker 报错可能回显完整命令行）。 */

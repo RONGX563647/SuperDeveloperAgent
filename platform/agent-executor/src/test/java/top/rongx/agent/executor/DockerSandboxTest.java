@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import top.rongx.agent.domain.error.RecipeException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -88,11 +90,71 @@ class DockerSandboxTest {
         List<String> cmd = cached.wrap(Path.of("E:/work/RY"), List.of("corepack", "pnpm", "install"));
         assertTrue(cmd.contains("npm_config_store_dir=/cache/pnpm"), cmd.toString());
         assertTrue(cmd.contains("npm_config_registry=https://registry.npmmirror.com"), cmd.toString());
-        assertTrue(cmd.contains("agent-cache-ry:/cache"), "缓存卷按项目隔离：" + cmd);
+        // 缓存卷按项目隔离：名字里既可读（便于 docker volume ls 排障）又带路径哈希（唯一性来源）
+        assertTrue(cmd.stream().anyMatch(a -> a.matches("agent-cache-ry-[0-9a-f]{16}:/cache")),
+                "缓存卷按项目隔离且带路径哈希：" + cmd);
         // 未配置镜像源时不应注入，避免覆盖用户 .npmrc
         List<String> plain = sandbox.wrap(Path.of("E:/work/RY"), List.of("true"));
         assertTrue(plain.stream().noneMatch(arg -> arg.startsWith("npm_config_registry=")),
                 plain.toString());
+    }
+
+    @Test
+    @DisplayName("缓存卷键：不同绝对路径必然不同卷，同一路径跨运行稳定")
+    void cacheKeyIsPathScoped() {
+        // 同名目录、不同父目录 → 不同卷（原实现只看目录名，两者会撞在一起）
+        String a = DockerSandbox.cacheKey(Path.of("E:/work/alpha/RY"));
+        String b = DockerSandbox.cacheKey(Path.of("E:/work/beta/RY"));
+        assertNotEquals(a, b, "同名工程在不同父目录下不能共用缓存卷：" + a + " vs " + b);
+        assertEquals(a, DockerSandbox.cacheKey(Path.of("E:/work/alpha/RY")), "同一路径必须稳定命中");
+        // 可读前缀保留，唯一性由末尾 16 位哈希保证
+        assertTrue(a.startsWith("ry-"), a);
+        assertTrue(a.matches("ry-[0-9a-f]{16}"), "哈希尾巴不能丢熵：" + a);
+        // worktree：键取所属项目根，不同 worktree 命中同一个卷
+        String wt1 = DockerSandbox.cacheKey(Path.of("E:/work/alpha/worktrees/wt-run-1"));
+        String wt2 = DockerSandbox.cacheKey(Path.of("E:/work/alpha/worktrees/wt-run-2"));
+        assertEquals(wt1, wt2, "同一项目的不同 worktree 必须共用缓存卷");
+        assertEquals(DockerSandbox.cacheKey(Path.of("E:/work/alpha")), wt1,
+                "worktree 的键必须等于项目根的键");
+    }
+
+    @Test
+    @DisplayName("隔离不变量：任何配置组合都不能放宽边界")
+    void wrapNeverRelaxesIsolation() {
+        Path ws = Path.of("E:/work/inv");
+        for (DockerSandbox candidate : List.of(
+                sandbox,
+                new DockerSandbox(null, "img", null, null, null, 0, null, "agent-cache"),
+                new DockerSandbox("docker", "img", "none", "1g", "1", 64, "1000:1000", "agent-cache")
+                        .setRuntime("runsc"))) {
+            List<String> cmd = candidate.wrap(ws, List.of("mvn", "-v"));
+            String joined = String.join(" ", cmd);
+
+            assertTrue(joined.contains("--cap-drop ALL"), joined);
+            assertTrue(joined.contains("no-new-privileges"), joined);
+            assertTrue(joined.contains("--read-only"), joined);
+            assertFalse(joined.contains("--privileged"), joined);
+            assertFalse(joined.contains("--cap-add"), joined);
+            assertFalse(joined.contains("docker.sock"), "宿主 socket 永不挂载：" + joined);
+            assertFalse(joined.contains("--pid=host"), joined);
+            assertFalse(joined.contains("--network=host"), joined);
+            assertFalse(joined.contains("--userns=host"), joined);
+            // 只允许工作区 +（可选）缓存卷两类挂载。只数镜像之前的 "-v"：
+            // 业务 argv 里也可能有 -v（如 `mvn -v`），那是参数不是挂载。
+            int imageAt = cmd.indexOf(candidate.image());
+            long mounts = cmd.subList(0, imageAt).stream().filter("-v"::equals).count();
+            assertEquals(candidate.allowedMounts(ws).size(), mounts,
+                    "挂载数量必须等于 allowedMounts：" + joined);
+        }
+    }
+
+    @Test
+    @DisplayName("容器有 init（僵尸回收）与停止宽限，避免 pids 上限被短命子进程撞满")
+    void containerUsesInitAndStopGrace() {
+        List<String> cmd = sandbox.wrap(Path.of("E:/w"), List.of("x"));
+        assertTrue(cmd.contains("--init"), "pid 1 必须是会回收僵尸的 init：" + cmd);
+        assertEquals("10", cmd.get(cmd.indexOf("--stop-timeout") + 1), cmd.toString());
+        assertEquals("core=0", cmd.get(cmd.indexOf("--ulimit") + 1), cmd.toString());
     }
 
     @Test

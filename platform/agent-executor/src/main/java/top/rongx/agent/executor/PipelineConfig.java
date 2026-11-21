@@ -42,14 +42,22 @@ public class PipelineConfig {
             top.rongx.agent.domain.settings.DeployServerRepository servers,
             top.rongx.agent.domain.settings.SshAccess sshAccess,
             DockerCli dockerCli,
-            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot) {
+            DockerSandbox sandbox,
+            @Value("${agent.workspace.root:./data/workspaces}") String workspaceRoot,
+            @Value("${agent.deploy.use-docker-context:false}") boolean useDockerContext) {
         // HOST 部署状态放在平台数据目录（跨运行稳定）：工作树随每次运行重建，
         // 状态目录若落在里面，日志会消失、previous 指针永远为空（回滚 E-507）。
         Path deployRoot = Path.of(workspaceRoot).toAbsolutePath().normalize()
                 .resolve("_platform").resolve("deploy");
+        // 镜像准入策略只有一份：构建沙箱判定 stage.image，部署器判定 deploy.image，
+        // 两处必须用同一个策略实例，否则"沙箱放行、部署拦截"会让排障变成猜谜。
+        SandboxImagePolicy imagePolicy = sandbox.imagePolicy();
         return new Deployers(java.util.List.of(
-                new DockerDeployer(dockerCli), new HostDeployer(deployRoot),
-                new ServerDeployer(servers, sshAccess)));
+                new DockerDeployer(dockerCli).setImagePolicy(imagePolicy),
+                new HostDeployer(deployRoot),
+                new ServerDeployer(servers, sshAccess)
+                        .setImagePolicy(imagePolicy)
+                        .setUseDockerContext(useDockerContext)));
     }
 
     /** SSH 访问实现（设置页测试连接与远程部署共用；known_hosts 留在平台工作区）。 */
@@ -84,10 +92,12 @@ public class PipelineConfig {
             top.rongx.agent.domain.port.ProjectRepoLocator repoLocator,
             @Value("${agent.env.middleware-images:}") String middlewareImages,
             @Value("${agent.env.precheck-images:true}") boolean precheckImages,
+            @Value("${agent.env.compose-enabled:true}") boolean composeEnabled,
             DockerCli dockerCli) {
         return new DockerEnvProvisioner(envStore, repoLocator,
                 DockerEnvProvisioner.parseImageOverrides(middlewareImages), precheckImages,
-                dockerCli);
+                dockerCli)
+                .setComposeEnabled(composeEnabled);
     }
 
     /** 开发环境本机托管（后端 jar + 前端 dist）；登记 ServiceLease 并共用 dev 日志目录。 */

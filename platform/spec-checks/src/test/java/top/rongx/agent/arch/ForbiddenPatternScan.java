@@ -65,7 +65,16 @@ final class ForbiddenPatternScan {
             new Rule("R13", "软删必须用 deleted_at，禁止 is_deleted 布尔字段",
                     Pattern.compile("\\bis_deleted\\b|\\bisDeleted\\b"), "both"),
             new Rule("R14", "错误码必须使用 ErrorCode 枚举，禁止硬编码 E-xxx 字面量",
-                    Pattern.compile("\"E-\\d{3}"), "java")
+                    Pattern.compile("\"E-\\d{3}"), "java"),
+            new Rule("R15", "禁止 waitFor 之前的无界读流：必须走 BoundedCommand",
+                    // 只匹配「赋值给 byte[]」的形态：
+                    //   byte[] out = p.getInputStream().readAllBytes();
+                    // BoundedCommand 的 javadoc 里也写着这段代码（但那是 {@code ...} 里的
+                    // 方法链，没有 byte[] 赋值），泛匹配会把注释判成违规。
+                    // 这不是风格问题：读流写在 waitFor 之前时，CLI 不退出就等于没有超时
+                    // （同一缺陷在 8 处复发过，第 9 处是 DeploymentControlService）。
+                    Pattern.compile("\\bbyte\\s*\\[\\s*\\]\\s*\\w+\\s*=\\s*\\w+\\s*\\."
+                            + "\\s*getInputStream\\s*\\(\\s*\\)\\s*\\.\\s*readAllBytes\\s*\\("), "java")
     );
 
     /** 错误码定义文件本身允许出现字面量，其余生产代码一律走枚举。 */

@@ -57,6 +57,14 @@ public class DockerActionRunner extends AbstractActionRunner {
             long prepareStart = System.nanoTime();
             // 隔离参数先落日志：出问题时第一句话永远是「这次到底隔离了什么」
             sandbox.logIsolation(live);
+            // 网络档位与阶段需求必须在起容器前对齐：否则用户等到 60 秒后只看到
+            //   Could not resolve host（dig 失败），无法判断是策略还是网络问题。
+            // 容器内所有动作（mvn/pnpm/docker build）都需要外联，"none 档位 + 缓存全命中"
+            // 是唯一可能成功的组合，因此默认按"需要外联"判定；确需离线构建时
+            // 显式打开 agent.sandbox.allow-offline。
+            sandbox.requireNetworkFor(!sandbox.allowOffline(), spec.action().wireName());
+            // 运行时（gVisor/Kata）必须在本机真实存在，绝不静默回落 runc
+            sandbox.ensureRuntimeReady(cancelled, live);
             // 网络先就绪（BUG-35）：配置了自定义网络（build-net）但不存在时，
             // 在跑构建前就明确报"网络未就绪"，而不是等 docker run 报 network not found。
             sandbox.prepareNetwork(cancelled, live);
