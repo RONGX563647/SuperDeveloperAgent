@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-tools
 
-36 个会话；检索用 `python tools/docs/find.py --module agent-tools`。
+37 个会话；检索用 `python tools/docs/find.py --module agent-tools`。
+
+## 2026-11-21 · 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
+- 问题：trae 会话在远程 0.2 推送了 8 条 refactor 提交（d0aaa4d4..781ba1f5），未走会话归档门禁，导致 0.1 修…
+- 方案：本会话补登记这 8 条远端 refactor 提交（从共同祖先 c784ff18 起），连同 deploy health 修复提交 d4320a…
+- 验证：handbook check 10 锚点/10 份 L3 通过；docs/views check 16 文件一致；session-archive…
 
 ## 2026-11-20 · 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线（chore `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6`）
 - 问题：0.2 线缺今晚后半段工作：skills 路由层、门禁并发健壮性、防回潮守卫、token/deploy 并行会话成果。

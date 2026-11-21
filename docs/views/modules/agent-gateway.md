@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-95 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+96 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-21 · 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
+- 问题：trae 会话在远程 0.2 推送了 8 条 refactor 提交（d0aaa4d4..781ba1f5），未走会话归档门禁，导致 0.1 修…
+- 方案：本会话补登记这 8 条远端 refactor 提交（从共同祖先 c784ff18 起），连同 deploy health 修复提交 d4320a…
+- 验证：handbook check 10 锚点/10 份 L3 通过；docs/views check 16 文件一致；session-archive…
 
 ## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
 - 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…

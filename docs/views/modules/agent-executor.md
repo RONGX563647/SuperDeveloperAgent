@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-57 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+58 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-21 · 补归档：远端 0.2 八条 refactor 提交并入 0.1 修复收敛（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
+- 问题：trae 会话在远程 0.2 推送了 8 条 refactor 提交（d0aaa4d4..781ba1f5），未走会话归档门禁，导致 0.1 修…
+- 方案：本会话补登记这 8 条远端 refactor 提交（从共同祖先 c784ff18 起），连同 deploy health 修复提交 d4320a…
+- 验证：handbook check 10 锚点/10 份 L3 通过；docs/views check 16 文件一致；session-archive…
 
 ## 2026-11-21 · 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期（bug `d4320a7`）
 - 问题：部署平台自镜像后 health 阶段失败：容器内 agent.sandbox.mode=docker 但无 Docker daemon，Sand…
