@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-96 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+97 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-21 · 修复 refactor 线引入的 A1 分层违规与 EC5 通用 throw（chore `7e02977`）
+- 问题：并行会话的 refactor 线推送后 0.2 spec-checks 红：A1 分层——gateway 的 DeploymentControl…
+- 方案：HostProcessSupervisor 移入 domain.process（executor 与 gateway 共同可达的唯一层，与 Lo…
+- 验证：pre-commit 三模块全量 701 用例 PASSED（0 失败 5 跳过）；
 
 ## 2026-11-21 · 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档（chore `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58`）
 - 问题：0.2.0-snapshot 上 8 个 refactor 提交（d0aaa4d4..781ba1f5）由并行会话推送时未走会话归档，pre-p…

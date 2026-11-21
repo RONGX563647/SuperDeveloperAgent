@@ -1,12 +1,13 @@
 <!-- 由 tools/docs/build.py 生成，勿手改；文档地图见 ../README.md -->
 # 近期变更索引
 
-留痕数据：`docs/ledger/*.jsonl`（195 个会话，截至 2026-11-21）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
+留痕数据：`docs/ledger/*.jsonl`（196 个会话，截至 2026-11-21）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
 
 ## 最近 10 个会话
 
 | 日期 | 类别 | 标题 | 模块 | 提交 |
 |---|---|---|---|---|
+| 2026-11-21 | chore | 修复 refactor 线引入的 A1 分层违规与 EC5 通用 throw | agent-domain, agent-executor, agent-gateway | `7e02977` |
 | 2026-11-21 | chore | 恢复 EncryptedAgentStateStore 的 handbook 锚点（refactor 重排时丢失） | agent-infra | `8d83f53` |
 | 2026-11-21 | chore | 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | agent-domain, agent-executor, agent-gateway, agent-governance, agent-infra, agent-runtime, agent-tools, web | `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58` |
 | 2026-11-21 | bug | 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期 | agent-executor | `d4320a7` |
@@ -16,16 +17,15 @@
 | 2026-11-20 | chore | 合并 0.1 线到 0.2 线并解决台账链冲突 | agent-gateway, web | `864e974` `426e75d` `f584dd7` |
 | 2026-11-20 | chore | 0.1→0.2 同步：token/deploy 工作 + skills 路由 + 并发健壮性入线 | agent-domain, agent-gateway, agent-infra, agent-runtime, agent-tools, spec-checks, web | `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` `3dc7dc1` `b39e594` `737dd49` `dc587a0` `2d470d6` |
 | 2026-11-20 | chore | 防旧归档模型回潮：validate 拦截 docs/process 复活 | other | `dc587a0` |
-| 2026-11-20 | chore | 合并 token/deploy 并行工作并移植门禁并发健壮性 | agent-domain, agent-gateway, agent-infra, agent-runtime, agent-tools, spec-checks, web | `e94171d` `3501d3b` `8145b76` `b9add58` `415b525` `3f97378` `b7aaa93` `43eb19c` `8139279` `35611ee` `c8aaf93` `d630a8c` `e6c9349` `363eccd` `a533133` `77b14fe` |
 
 ## 模块索引
 
 | 模块 | 会话数 | 最近变更 | 详见 |
 |---|---|---|---|
+| agent-domain | 53 | 2026-11-21 修复 refactor 线引入的 A1 分层违规与 EC5 通用 throw | [modules/agent-domain.md](modules/agent-domain.md) |
+| agent-executor | 59 | 2026-11-21 修复 refactor 线引入的 A1 分层违规与 EC5 通用 throw | [modules/agent-executor.md](modules/agent-executor.md) |
+| agent-gateway | 97 | 2026-11-21 修复 refactor 线引入的 A1 分层违规与 EC5 通用 throw | [modules/agent-gateway.md](modules/agent-gateway.md) |
 | agent-infra | 57 | 2026-11-21 恢复 EncryptedAgentStateStore 的 handbook 锚点（refactor 重排时丢失） | [modules/agent-infra.md](modules/agent-infra.md) |
-| agent-domain | 52 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-domain.md](modules/agent-domain.md) |
-| agent-executor | 58 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-executor.md](modules/agent-executor.md) |
-| agent-gateway | 96 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-gateway.md](modules/agent-gateway.md) |
 | agent-governance | 15 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-governance.md](modules/agent-governance.md) |
 | agent-runtime | 35 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-runtime.md](modules/agent-runtime.md) |
 | agent-tools | 37 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-tools.md](modules/agent-tools.md) |
