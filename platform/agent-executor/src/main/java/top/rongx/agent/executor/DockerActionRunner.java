@@ -55,6 +55,21 @@ public class DockerActionRunner extends AbstractActionRunner {
         String container = sandbox.beginContainer();
         try {
             long prepareStart = System.nanoTime();
+            // fail-closed 从「启动期」后移到「执行期」：平台本身（UI/配置/health）不该因
+            // 没有 daemon 而起不来，但真正要跑不可信构建配方时必须有隔离能力——守护进程
+            // 不可用就在这里结构化失败，绝不降级为无隔离的宿主进程。
+            if (!sandbox.available()) {
+                String why = "agent.sandbox.mode=docker 但 Docker 守护进程不可用，本次动作拒绝执行"
+                        + "（fail-closed：不以无隔离的宿主进程运行不可信代码）；"
+                        + "容器化部署请见 docker-compose.platform.yml 的 dind sidecar，"
+                        + "或仅限本地开发显式设置 agent.sandbox.mode=process";
+                if (live != null) {
+                    live.accept("[sandbox] ⛔ " + ErrorCode.ENVIRONMENT_INVALID_STATE.code()
+                            + " " + why + "\n");
+                }
+                return new ActionResult(StageResult.failed(spec.action().wireName(), 1,
+                        ErrorCode.ENVIRONMENT_INVALID_STATE.code(), why, 0), why);
+            }
             // 隔离参数先落日志：出问题时第一句话永远是「这次到底隔离了什么」
             sandbox.logIsolation(live);
             // 网络档位与阶段需求必须在起容器前对齐：否则用户等到 60 秒后只看到
