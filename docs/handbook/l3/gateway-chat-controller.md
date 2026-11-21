@@ -11,7 +11,7 @@ summary: 建立 SSE、注册取消与心跳，把 Agent 事件流转成客户端
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| SSE 对话入口与事件下发 | `ChatController#chat` | `platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java:132-243` | agent-gateway |
+| SSE 对话入口与事件下发 | `ChatController#chat` | `platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java:133-244` | agent-gateway |
 <!-- generated:end -->
 
 ## 行为拆解

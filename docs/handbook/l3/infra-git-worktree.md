@@ -11,7 +11,7 @@ summary: 在平台 bare 仓库上按 sha 建 detached worktree，重名先清理
 <!-- generated:begin（由 tools/handbook/build.py 生成，勿手改） -->
 | 行为单元 | 入口 | 源码位置 | 模块 |
 |---|---|---|---|
-| 平台 worktree 创建 | `GitWorktreeManager#addWorktree` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java:222-236` | agent-infra |
+| 平台 worktree 创建 | `GitWorktreeManager#addWorktree` | `platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java:214-228` | agent-infra |
 <!-- generated:end -->
 
 ## 行为拆解

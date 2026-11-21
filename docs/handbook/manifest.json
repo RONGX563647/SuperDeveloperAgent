@@ -1,7 +1,7 @@
 {
   "schema": "harness-handbook/v1",
-  "generatedAt": "2026-11-21T16:24:22+08:00",
-  "sourceCommit": "35c160363b0f69cdb89f60816b6c26507e32983c",
+  "generatedAt": "2026-11-21T21:01:42+08:00",
+  "sourceCommit": "047b4e6711fa943a84627a62a4008f83e4be21e6",
   "docs": [
     {
       "level": "L1",
@@ -100,8 +100,8 @@
       "symbol": "BuiltInPipelineEngine#trigger",
       "source": "platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java",
       "module": "agent-executor",
-      "start": 1332,
-      "end": 1430
+      "start": 1128,
+      "end": 1226
     },
     {
       "id": "gateway-chat-controller/chat-stream",
@@ -110,8 +110,8 @@
       "symbol": "ChatController#chat",
       "source": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/web/ChatController.java",
       "module": "agent-gateway",
-      "start": 132,
-      "end": 243
+      "start": 133,
+      "end": 244
     },
     {
       "id": "gateway-deploy-gate/require-if-needed",
@@ -120,8 +120,8 @@
       "symbol": "DeployGate#requireIfNeeded",
       "source": "platform/agent-gateway/src/main/java/top/rongx/agent/gateway/deploy/DeployGate.java",
       "module": "agent-gateway",
-      "start": 46,
-      "end": 59
+      "start": 47,
+      "end": 60
     },
     {
       "id": "governance-env-policy/require-not-denied",
@@ -140,8 +140,8 @@
       "symbol": "GitWorktreeManager#addWorktree",
       "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/git/GitWorktreeManager.java",
       "module": "agent-infra",
-      "start": 222,
-      "end": 236
+      "start": 214,
+      "end": 228
     },
     {
       "id": "infra-project-intake/submit",
@@ -160,8 +160,8 @@
       "symbol": "AgentFactory#createChat",
       "source": "platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java",
       "module": "agent-runtime",
-      "start": 187,
-      "end": 191
+      "start": 201,
+      "end": 205
     },
     {
       "id": "runtime-chat-service/stream",
@@ -172,16 +172,6 @@
       "module": "agent-runtime",
       "start": 81,
       "end": 110
-    },
-    {
-      "id": "state-agent-state-store/save",
-      "doc": "state-agent-state-store",
-      "label": "会话状态加密落盘",
-      "symbol": "EncryptedAgentStateStore#save",
-      "source": "platform/agent-infra/src/main/java/top/rongx/agent/infra/state/EncryptedAgentStateStore.java",
-      "module": "agent-infra",
-      "start": 67,
-      "end": 76
     },
     {
       "id": "tools-deploy-tools/env-status",
