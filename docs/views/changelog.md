@@ -1,10 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（181 个），完整数据在 `docs/ledger/`。
+每行一个会话（182 个），完整数据在 `docs/ledger/`。
 
 ## 2026-11-21
 
+- **bug** 修复部署 health 失败：沙箱 fail-closed 从启动期后移到执行期（`d4320a7`）— 部署平台自镜像后 health 阶段失败：容器内 agent.sandbox.mode=docker 但无 Docker daemon，Sand…
 - **bug** 沙箱与 Docker 机制缺陷修复与重复实现收敛（`e427338` `7c654cf`）— 沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…
 ## 2026-11-20
 
