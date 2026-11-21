@@ -1,5 +1,6 @@
 package top.rongx.agent.infra.settings;
 
+import io.agentscope.core.skill.util.MarkdownSkillParser;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -425,41 +426,23 @@ public class SkillsStore implements top.rongx.agent.domain.settings.SkillCatalog
     record Frontmatter(String name, String description) {
     }
 
-    /** 单行 YAML frontmatter 解析：足够覆盖 name / description（规范只读这两个字段）。 */
+    /** SKILL.md frontmatter 解析，复用 AgentScope 实现。 */
     static Frontmatter parseFrontmatter(String content) {
         if (content == null || !content.startsWith("---")) {
             return new Frontmatter(null, null);
         }
-        String[] lines = content.split("\\R");
-        String name = null;
-        String description = null;
-        for (int i = 1; i < lines.length; i++) {
-            String line = lines[i];
-            if (line.trim().equals("---")) {
-                break;
-            }
-            int idx = line.indexOf(':');
-            if (idx <= 0) {
-                continue;
-            }
-            String key = line.substring(0, idx).trim();
-            String value = stripQuotes(line.substring(idx + 1).trim());
-            if (key.equals("name")) {
-                name = value;
-            } else if (key.equals("description")) {
-                description = value;
-            }
+        // 复用 AgentScope 的 SKILL.md 解析（YAML frontmatter、引号、嵌套元数据），
+        // 平台只关心 name/description，其余元数据由 AgentScope 侧保留。
+        try {
+            MarkdownSkillParser.ParsedMarkdown parsed = MarkdownSkillParser.parse(content);
+            Object name = parsed.getMetadata().get("name");
+            Object description = parsed.getMetadata().get("description");
+            return new Frontmatter(name == null ? null : name.toString(),
+                    description == null ? null : description.toString());
+        } catch (RuntimeException e) {
+            // 单个技能文件损坏不应让整个技能列表/设置页不可用
+            return new Frontmatter(null, null);
         }
-        return new Frontmatter(name, description);
-    }
-
-    private static String stripQuotes(String value) {
-        if (value.length() >= 2
-                && ((value.startsWith("\"") && value.endsWith("\""))
-                || (value.startsWith("'") && value.endsWith("'")))) {
-            return value.substring(1, value.length() - 1);
-        }
-        return value;
     }
 
     /** 复制目录：只复制普通文件与子目录，跳过符号链接（防越界）。 */

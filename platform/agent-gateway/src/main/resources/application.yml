@@ -261,6 +261,16 @@ agent:
     # npm 源镜像：默认直连 npmjs 在沙箱里只有几 KB/s，冷安装会吃光构建预算；
     # 内网/自建源用 AGENT_SANDBOX_NPM_REGISTRY 覆盖，留空则用容器默认源
     npm-registry: ${AGENT_SANDBOX_NPM_REGISTRY:https://registry.npmmirror.com}
+  # Agent 会话沙箱：只在非只读、非生产且已绑定工作树时启用；与上面的流水线沙箱分离。
+  agent-sandbox:
+    enabled: ${AGENT_AGENT_SANDBOX_ENABLED:false}
+    image: ${AGENT_AGENT_SANDBOX_IMAGE:maven:3.9-eclipse-temurin-21}
+    network: ${AGENT_AGENT_SANDBOX_NETWORK:none}
+    memory: ${AGENT_AGENT_SANDBOX_MEMORY:2g}
+    cpus: ${AGENT_AGENT_SANDBOX_CPUS:2}
+    pids-limit: ${AGENT_AGENT_SANDBOX_PIDS_LIMIT:512}
+    user: ${AGENT_AGENT_SANDBOX_USER:}
+    workspace-root: ${AGENT_AGENT_SANDBOX_WORKSPACE_ROOT:/workspace}
   model:
     base-url: ${AGENT_MODEL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${AGENT_MODEL_API_KEY:}          # 可选：留空不阻塞启动，设置页可随时补配

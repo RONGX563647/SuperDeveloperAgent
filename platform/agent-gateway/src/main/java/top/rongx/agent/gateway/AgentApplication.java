@@ -8,6 +8,7 @@ import top.rongx.agent.infra.persistence.config.AgentDbProperties;
 import top.rongx.agent.infra.persistence.config.DbBackendConfig;
 import top.rongx.agent.infra.security.SecretBox;
 import top.rongx.agent.runtime.AgentProperties;
+import top.rongx.agent.runtime.AgentSandboxProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -21,7 +22,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * 该文件已被 .gitignore 忽略，凭证不入配置库（规约 §8）。
  */
 @SpringBootApplication(scanBasePackages = "top.rongx.agent")
-@EnableConfigurationProperties({AgentProperties.class, AgentDbProperties.class})
+@EnableConfigurationProperties({AgentProperties.class, AgentSandboxProperties.class,
+        AgentDbProperties.class})
 @EnableScheduling
 public class AgentApplication {
 

@@ -2,7 +2,6 @@ package top.rongx.agent.tools;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
-import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
 import top.rongx.agent.domain.change.ChangePlan;
@@ -25,7 +24,7 @@ import top.rongx.agent.domain.tool.ToolLevel;
  *   <li>写/删/提交需要<b>分支级一次授权</b>：登记 {@code editor_branch:<branch>} 变更单，
  *       用户在确认卡片上确认后放行；Agent 自己无法签发确认令牌。</li>
  * </ul>
- * 只读操作（open/read/list/diff）不需要授权。
+ * 只读操作（open/diff）和仓库文件读取统一走 read_file/list_files，不重复实现。
  */
 @Component
 public class EditorTools {
@@ -96,46 +95,6 @@ public class EditorTools {
                     branch: %s
                     next: 用 workspace_diff 查看改动，workspace_commit 提交。
                     """.formatted(path.trim(), content == null ? 0 : content.length(), branch);
-        } catch (PlatformException | IllegalArgumentException e) {
-            return "err: " + e.getMessage();
-        }
-    }
-
-    @Tool(name = "workspace_read", description = "Read a file from the session worktree.",
-            readOnly = true, concurrencySafe = true)
-    public String read(
-            @ToolParam(name = "path", description = "相对工作树根的文件路径") String path,
-            ProjectContext ctx) {
-        String blocked = guard(ctx);
-        if (blocked != null) {
-            return blocked;
-        }
-        if (path == null || path.isBlank()) {
-            return "err: path 不能为空";
-        }
-        try {
-            return editor.read(ctx.projectId(), ctx.worktree(), path);
-        } catch (PlatformException | IllegalArgumentException e) {
-            return "err: " + e.getMessage();
-        }
-    }
-
-    @Tool(name = "workspace_list", description = "List files in the session worktree.",
-            readOnly = true, concurrencySafe = true)
-    public String list(
-            @ToolParam(name = "path", description = "相对目录，空 = 工作树根", required = false) String path,
-            @ToolParam(name = "depth", description = "递归深度 1-3，默认 1", required = false) int depth,
-            ProjectContext ctx) {
-        String blocked = guard(ctx);
-        if (blocked != null) {
-            return blocked;
-        }
-        try {
-            List<String> entries = editor.list(ctx.projectId(), ctx.worktree(), path, depth);
-            if (entries.isEmpty()) {
-                return "empty: 目录没有文件";
-            }
-            return String.join("\n", entries);
         } catch (PlatformException | IllegalArgumentException e) {
             return "err: " + e.getMessage();
         }

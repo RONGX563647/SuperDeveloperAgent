@@ -66,6 +66,7 @@ public class AgentFactory {
     private final AgentStateStore stateStore;
     private final McpServerRepository mcpServers;
     private final SkillCatalog skillsStore;
+    private final AgentSandboxFactory sandboxFactory;
     /** 首轮自动加载插件的策略：session（默认，只做一次）/ off。 */
     private final String autoActivate;
 
@@ -81,6 +82,7 @@ public class AgentFactory {
                         AgentStateStore stateStore,
                         McpServerRepository mcpServers,
                         SkillCatalog skillsStore,
+                        AgentSandboxFactory sandboxFactory,
                         @org.springframework.beans.factory.annotation.Value(
                                 "${agent.tools.auto-activate:session}") String autoActivate) {
         this.fullToolkit = fullToolkit;
@@ -93,6 +95,7 @@ public class AgentFactory {
         this.stateStore = stateStore;
         this.mcpServers = mcpServers;
         this.skillsStore = skillsStore;
+        this.sandboxFactory = sandboxFactory;
         this.autoActivate = autoActivate;
     }
 
@@ -140,15 +143,24 @@ public class AgentFactory {
      * 与生产环境只读工具面（不存在 ASK 审批通道）的设计一致。
      */
     static HarnessAgent.Builder baseBuilder(String name) {
-        return HarnessAgent.builder()
+        return baseBuilder(name, false);
+    }
+
+    /**
+     * @param sandboxed 是否已装配 Harness 沙箱。只有装配了 filesystem 时才保留 shell 工具；
+     *                  文件工具仍关闭，避免与平台的 read_file/list_files 重名。
+     */
+    static HarnessAgent.Builder baseBuilder(String name, boolean sandboxed) {
+        HarnessAgent.Builder builder = HarnessAgent.builder()
                 .name(name)
                 .enablePendingToolRecovery(true)
                 .enableAgentTracingLog(false)
-                // 平台自建执行隔离/门禁/工具面，关闭 harness 的默认编排以免职责重叠或绕过
+                // Agent 单轮内部 TODO 用 harness 的 task list；产品任务板 task_* 仍由业务工具提供。
+                .enableTaskList()
+                // 平台自建门禁/工具面，关闭 harness 的默认编排以免职责重叠或绕过
                 .disableWorkspaceContext()
                 .disableAtPathExpansion()
                 .disableFilesystemTools()
-                .disableShellTool()
                 .disableSubagents()
                 .disableDynamicSubagents()
                 .disableDynamicSkills()
@@ -157,8 +169,10 @@ public class AgentFactory {
                 .disableMemoryHooks()
                 .disableSessionPersistence()
                 .disableToolsConfig();
-        // 刻意不 disableCompaction()/disableToolResultEviction()：这两项纳入 harness 替换范围，
-        // 结果写回 AgentState（由 EncryptedAgentStateStore 接管落盘），见阶段2说明。
+        if (!sandboxed) {
+            builder.disableShellTool();
+        }
+        return builder;
     }
 
     /** 为一个会话构造 Agent（不挂载额外能力；保留给只读调用方）。Agent 无状态，可每次新建。 */
@@ -225,7 +239,10 @@ public class AgentFactory {
         if (rolePrompt != null && !rolePrompt.isBlank()) {
             prompt = prompt + "\n\n" + rolePrompt;
         }
-        HarnessAgent.Builder builder = baseBuilder("devops-agent")
+        // 只读/生产不挂可执行沙箱；工作树不存在时也保持原工具面（没有 shell）。
+        AgentSandboxFactory.Sandbox sandbox = readOnly || ctx.isProduction()
+                ? null : sandboxFactory.create(ctx).orElse(null);
+        HarnessAgent.Builder builder = baseBuilder("devops-agent", sandbox != null)
                 .sysPrompt(prompt)
                 .model(modelProvider.current(connectionId, modelName))
                 .toolkit(toolkit)
@@ -237,6 +254,9 @@ public class AgentFactory {
                 .middleware(new ProgressiveToolMiddleware(plugins, autoActivate))
                 // 选项卡片：把 ask_user 的入参提前翻译成 ask.requested 事件
                 .middleware(new AskUserMiddleware());
+        if (sandbox != null) {
+            builder.workspace(sandbox.workspace()).filesystem(sandbox.filesystem());
+        }
         return new AgentSession(builder.build(), closeables, plugins);
     }
 
