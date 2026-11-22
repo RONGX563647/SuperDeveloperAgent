@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-67 个会话；检索用 `python tools/docs/find.py --module web`。
+68 个会话；检索用 `python tools/docs/find.py --module web`。
+
+## 2026-11-22 · 修复 CI：前端 schema.d.ts 契约同步 + jackson 2.21.1 安全漏洞升级到 2.21.4（chore `f2fe649`）
+- 问题：最近多次 CI 连续失败：frontend job 的 check:api-types 检测 schema.d.ts 与 openapi.jso…
+- 方案：1) npm run gen:api-types 重新生成 schema.d.ts，补上 replay query 的 branch?: str…
+- 验证：dependency:tree 确认 jackson core/databind/datatype 解析为 2.21.4、annotations…
 
 ## 2026-11-21 · BUG-8 重放打 tag 失败：branch 未透传到引擎（bug `ee4bc36`）
 - 问题：BUG-8：test 环境有固化脚本时，点主发布按钮打 tag 触发失败，报『正式发布必须选择版本分支（例如 0.1.0-snapshot）』(…
