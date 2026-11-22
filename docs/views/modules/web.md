@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-76 个会话；检索用 `python tools/docs/find.py --module web`。
+77 个会话；检索用 `python tools/docs/find.py --module web`。
+
+## 2026-11-22 · 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复）（chore `ee4bc36` `9a87b34` `0ee8f9b` `70c2051` `e9de11b` `3a48994`）
+- 问题：用户要求把 0.1.0-snapshot 的 6 个新提交（移除 prod sha 一致性校验、重放打 tag 补传分支、生产 SERVER 网…
+- 方案：git merge --no-ff 0.1：EnvironmentPromotion 取 0.1 移除校验版本（清掉未使用的 Hashes im…
+- 验证：pre-commit 门禁 713 用例 0 失败/0 错误/5 跳过（agent-domain/executor/gateway），前端自检 …
 
 ## 2026-11-21 · 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复）（chore `f5c15a1` `b908869` `24906a0` `c1e3777` `f082fb5` `8398697` `20b85e4` `9cdd275`）
 - 问题：推送被拒（fetch first）：远端并行会话与本会话对同一批问题各自修复——都把 HostProcessSupervisor 移入 doma…

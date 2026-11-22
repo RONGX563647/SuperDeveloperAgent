@@ -1,12 +1,13 @@
 <!-- 由 tools/docs/build.py 生成，勿手改；文档地图见 ../README.md -->
 # 近期变更索引
 
-留痕数据：`docs/ledger/*.jsonl`（204 个会话，截至 2026-11-22）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
+留痕数据：`docs/ledger/*.jsonl`（205 个会话，截至 2026-11-22）。查历史用 `python tools/docs/find.py "<关键词>"`，不要整树通读。
 
 ## 最近 10 个会话
 
 | 日期 | 类别 | 标题 | 模块 | 提交 |
 |---|---|---|---|---|
+| 2026-11-22 | chore | 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复） | agent-domain, agent-executor, agent-gateway, web | `ee4bc36` `9a87b34` `0ee8f9b` `70c2051` `e9de11b` `3a48994` |
 | 2026-11-22 | bug | 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景 | agent-domain, agent-executor | `e9de11b` |
 | 2026-11-21 | bug | 修复生产 SERVER 部署远端网络缺失与镜像元数据账本口径 | agent-executor | `0ee8f9b` |
 | 2026-11-21 | chore | 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复） | agent-domain, agent-executor, agent-gateway, spec-checks, web | `f5c15a1` `b908869` `24906a0` `c1e3777` `f082fb5` `8398697` `20b85e4` `9cdd275` |
@@ -16,17 +17,16 @@
 | 2026-11-21 | chore | 恢复 EncryptedAgentStateStore 的 handbook 锚点（refactor 重排时丢失） | agent-infra | `8d83f53` |
 | 2026-11-21 | bug | BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ | web | `24906a0` `c1e3777` |
 | 2026-11-21 | chore | 修复远端 refactor 引入的规约违规（A1 分层 / EC5 错误码 / R11 禁令） | agent-domain, agent-executor, agent-gateway | `b908869` |
-| 2026-11-21 | chore | 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | agent-domain, agent-executor, agent-gateway, agent-governance, agent-infra, agent-runtime, agent-tools, web | `d0aaa4d` `4bcbb32` `539d4ba` `dbfa7c2` `ca0a837` `e9e294a` `b6487a3` `781ba1f` `d4320a7` `cd05f58` |
 
 ## 模块索引
 
 | 模块 | 会话数 | 最近变更 | 详见 |
 |---|---|---|---|
-| agent-domain | 57 | 2026-11-22 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景 | [modules/agent-domain.md](modules/agent-domain.md) |
-| agent-executor | 64 | 2026-11-22 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景 | [modules/agent-executor.md](modules/agent-executor.md) |
-| agent-gateway | 101 | 2026-11-21 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复） | [modules/agent-gateway.md](modules/agent-gateway.md) |
+| agent-domain | 58 | 2026-11-22 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复） | [modules/agent-domain.md](modules/agent-domain.md) |
+| agent-executor | 65 | 2026-11-22 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复） | [modules/agent-executor.md](modules/agent-executor.md) |
+| agent-gateway | 102 | 2026-11-22 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复） | [modules/agent-gateway.md](modules/agent-gateway.md) |
+| web | 77 | 2026-11-22 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复） | [modules/web.md](modules/web.md) |
 | spec-checks | 31 | 2026-11-21 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复） | [modules/spec-checks.md](modules/spec-checks.md) |
-| web | 76 | 2026-11-21 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复） | [modules/web.md](modules/web.md) |
 | agent-infra | 58 | 2026-11-21 恢复 EncryptedAgentStateStore 的 handbook 锚点（refactor 重排时丢失） | [modules/agent-infra.md](modules/agent-infra.md) |
 | agent-governance | 16 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-governance.md](modules/agent-governance.md) |
 | agent-runtime | 36 | 2026-11-21 合并 0.1.0-snapshot（沙箱 fail-closed 后移到执行期）并补录 0.2 refactor 线归档 | [modules/agent-runtime.md](modules/agent-runtime.md) |
