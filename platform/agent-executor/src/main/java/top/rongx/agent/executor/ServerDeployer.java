@@ -14,6 +14,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import top.rongx.agent.domain.deploy.DeployRequest;
 import top.rongx.agent.domain.deploy.DeployResult;
 import top.rongx.agent.domain.deploy.DeploySlot;
@@ -174,6 +175,24 @@ public class ServerDeployer implements Deployer {
             return DeployResult.failed(DeployTarget.SERVER, ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
                     "远端部署目录不可写：请检查「设置 → 服务器」里的部署目录权限"
                             + "（或让 SSH 用户对 $HOME 可写）", redact(log));
+        }
+
+        // SERVER 目标与 DOCKER 目标的网络语义对齐：本地会 ensureNetwork，
+        // 远端过去却把 --network 原样塞给 docker run，prod 因此停在
+        // "network agent-prod-net not found"。在传镜像之前先确保，避免白传几百 MB。
+        String network = request.network();
+        if (!ensureRemoteNetwork(network, "远端环境",
+                () -> ssh.run(server, secret,
+                        networkCommand(docker, "inspect", network), PROBE_TIMEOUT_MS).ok(),
+                () -> ssh.run(server, secret,
+                        networkCommand(docker, "create", network), PROBE_TIMEOUT_MS).ok(),
+                log)) {
+            return DeployResult.failed(DeployTarget.SERVER,
+                    ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                    "远端环境网络 " + network.trim() + " 不存在且创建失败："
+                            + "请在远端执行 docker network create " + network.trim()
+                            + "，或确认远端 docker 用户有建网权限",
+                    redact(log));
         }
 
         Path workdir = Path.of(request.workspace());
@@ -451,6 +470,24 @@ public class ServerDeployer implements Deployer {
                                           String slot) {
         StringBuilder log = new StringBuilder();
         String name = contextName(server);
+        // 0. 与 SSH 路径一样先确保远端网络存在（context 直连的是同一台远端守护进程）。
+        String network = request.network();
+        if (!ensureRemoteNetwork(network, "远端环境",
+                () -> executor.exec(Path.of("."),
+                        contextNetworkArgv("docker", name, "inspect", network),
+                        PROBE_TIMEOUT_MS, new StringBuilder(), BooleanSupplierNever.INSTANCE)
+                        .exitCode() == 0,
+                () -> executor.exec(Path.of("."),
+                        contextNetworkArgv("docker", name, "create", network),
+                        PROBE_TIMEOUT_MS, new StringBuilder(), BooleanSupplierNever.INSTANCE)
+                        .exitCode() == 0,
+                log)) {
+            return DeployResult.failed(DeployTarget.SERVER,
+                    ErrorCode.DEPLOY_PREREQUISITE_MISSING.code(),
+                    "远端环境网络 " + network.trim() + " 不存在且创建失败（docker context "
+                            + name + "）：请在远端执行 docker network create " + network.trim(),
+                    redact(log));
+        }
         // 1. 远端是否已有该镜像；没有就先 pull（镜像同名时必须能被 registry 解析，
         //    否则会明确报"镜像不存在"，而不是像 save/load 那样传几百 MB 才发现）
         ProcessExecutor.StepOutcome exists = executor.exec(Path.of("."),
@@ -848,6 +885,46 @@ public class ServerDeployer implements Deployer {
         }
         argv.add(image);
         return java.util.List.copyOf(argv);
+    }
+
+    /**
+     * 远端网络就绪保证：语义与本地 {@link DockerNetwork#ensure} 完全一致（inspect → create）。
+     *
+     * <p>抽成纯逻辑 + 两个 {@link BooleanSupplier} 是为了让 SSH 路径与 context 路径
+     * 共用同一份判定，同时能不依赖真实 SSH / Docker 做回归测试。
+     *
+     * @param scope 日志前缀（如「远端环境」），拼出「已创建远端环境网络 xxx」
+     * @return true = 内置网络 / 已存在 / 创建成功
+     */
+    static boolean ensureRemoteNetwork(String network, String scope,
+                                       BooleanSupplier inspect, BooleanSupplier create,
+                                       StringBuilder log) {
+        if (DockerNetwork.isBuiltIn(network)) {
+            return true;
+        }
+        String name = network.trim();
+        if (inspect.getAsBoolean()) {
+            return true;
+        }
+        if (create.getAsBoolean()) {
+            log.append("[deploy] 已创建").append(scope).append("网络 ").append(name).append('\n');
+            return true;
+        }
+        log.append("[deploy] ").append(scope).append("网络 ").append(name)
+                .append(" 创建失败\n");
+        return false;
+    }
+
+    /** SSH 路径的远端网络命令（docker 前缀可能是 {@code sudo docker}）。 */
+    static String networkCommand(String docker, String operation, String network) {
+        return docker + " network " + operation + " " + JschSsh.shellQuote(network.trim());
+    }
+
+    /** context 路径的远端网络 argv（--context 必须在子命令之前）。 */
+    static List<String> contextNetworkArgv(String dockerBinary, String contextName,
+                                           String operation, String network) {
+        return List.of(dockerBinary, "--context", contextName, "network", operation,
+                network.trim());
     }
 
     /**

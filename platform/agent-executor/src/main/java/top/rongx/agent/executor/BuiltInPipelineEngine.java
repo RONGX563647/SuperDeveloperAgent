@@ -1583,6 +1583,21 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
     }
 
     /**
+     * 按版本部署时复用镜像的账本元信息（digest / sizeBytes / version）。
+     *
+     * <p>必须和 {@link #gitShaForImage} / {@link #deployPreflight} 同源走 {@link #ledgerEnv}：
+     * prod 的版本选项来自 test 账本，若这里按 prod 账本查，查不到就把 version 退化成 tag、
+     * digest 记成空串，界面上表现为"镜像明明在却说不在/没有版本信息"。
+     */
+    static ImageVersion reusedImageVersion(ImageVersionStore store, String projectId,
+                                           String env, String tag) {
+        if (store == null || tag == null || tag.isBlank()) {
+            return null;
+        }
+        return store.find(projectId, ledgerEnv(env), tag).orElse(null);
+    }
+
+    /**
      * 按版本部署的触发前预检：把"触发后才失败"的错误提前到 400。
      *
      * <p>校验顺序与执行期一致：版本归属 → 镜像是否存在 / Docker 是否可用 →
@@ -2530,9 +2545,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     state.status = StageStatus.FAILED;
                     return;
                 }
-                // 复用版本的摘要/大小/版本号沿用账本，避免按版本部署把元信息覆盖成 tag
-                ImageVersion known = imageVersions.find(state.projectId, state.env,
-                        state.deployImage).orElse(null);
+                // 复用版本的摘要/大小/版本号沿用账本，避免按版本部署把元信息覆盖成 tag。
+                // 账本环境必须与版本选项/预检一致（prod 从 test 账本取），否则元数据全空。
+                ImageVersion known = reusedImageVersion(imageVersions, state.projectId,
+                        state.env, state.deployImage);
                 String reusedVersion = known == null || known.version() == null
                         || known.version().isBlank() ? state.deployImage : known.version();
                 state.artifacts.add(new ArtifactRef("image", state.deployImage,
