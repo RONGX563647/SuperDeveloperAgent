@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-55 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+56 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-22 · 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景（bug `e9de11b`）
+- 问题：prod 发布前置校验 EnvironmentPromotion.problem 要求测试环境证据 gitSha 与本次发布 sha 一致；重放…
+- 方案：正式移除提交一致性校验：干净删除校验段与 shortSha() 死代码、更新 Javadoc 明确不校验提交一致、保留 sha 参数兼容调用方；…
+- 验证：pre-commit 门禁跑 agent-domain/agent-executor 共 467 用例，0 失败/0 错误/0 跳过；新增 pr…
 
 ## 2026-11-21 · 修复生产 SERVER 部署远端网络缺失与镜像元数据账本口径（bug `0ee8f9b`）
 - 问题：prod SERVER 目标只把 --network 原样传给远端 docker run，本地 DOCKER 目标却会 ensureNetwor…

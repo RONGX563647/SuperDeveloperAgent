@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-domain
 
-47 个会话；检索用 `python tools/docs/find.py --module agent-domain`。
+48 个会话；检索用 `python tools/docs/find.py --module agent-domain`。
+
+## 2026-11-22 · 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景（bug `e9de11b`）
+- 问题：prod 发布前置校验 EnvironmentPromotion.problem 要求测试环境证据 gitSha 与本次发布 sha 一致；重放…
+- 方案：正式移除提交一致性校验：干净删除校验段与 shortSha() 死代码、更新 Javadoc 明确不校验提交一致、保留 sha 参数兼容调用方；…
+- 验证：pre-commit 门禁跑 agent-domain/agent-executor 共 467 用例，0 失败/0 错误/0 跳过；新增 pr…
 
 ## 2026-11-21 · 沙箱与 Docker 机制缺陷修复与重复实现收敛（bug `e427338` `7c654cf`）
 - 问题：沙箱执行面四类缺陷：隔离策略 require* 为零生产调用的死代码；交付镜像把 AGENT_SANDBOX_MODE 改成 process 拆…

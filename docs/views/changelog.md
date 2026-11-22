@@ -1,8 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（186 个），完整数据在 `docs/ledger/`。
+每行一个会话（187 个），完整数据在 `docs/ledger/`。
 
+## 2026-11-22
+
+- **bug** 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景（`e9de11b`）— prod 发布前置校验 EnvironmentPromotion.problem 要求测试环境证据 gitSha 与本次发布 sha 一致；重放…
 ## 2026-11-21
 
 - **bug** 修复生产 SERVER 部署远端网络缺失与镜像元数据账本口径（`0ee8f9b`）— prod SERVER 目标只把 --network 原样传给远端 docker run，本地 DOCKER 目标却会 ensureNetwor…
