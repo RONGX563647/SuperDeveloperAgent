@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：other
 
-40 个会话；检索用 `python tools/docs/find.py --module other`。
+41 个会话；检索用 `python tools/docs/find.py --module other`。
+
+## 2026-11-22 · 刷新 0.1 Code Wiki 到封版状态并准备 0.1.2 tag（docs `6296a44`）
+- 问题：0.1 分支 Code Wiki 基线停在 e9a39d3（2026-11-20），此后 0.1 的生产 SERVER 网络/账本口径修复、pr…
+- 方案：以 0.1 代码为准逐篇核对，刷新 12 篇 wiki：补 0.1 近期部署/沙箱/token/CI/前端事实；纠正 @Tool 数为实测 90…
+- 验证：所有写入事实均用 grep/read 在 0.1 worktree 代码核实（含 90 @Tool/24 工具类、R15=waitFor 无界读…
 
 ## 2026-11-20 · 防旧归档模型回潮：validate 拦截 docs/process 复活（chore `dc587a0`）
 - 问题：旧归档模型可被旧基点分支合并静默带回（今晚已实际发生，gate.py 被回退、500+ 文件复活），validate 不拦。

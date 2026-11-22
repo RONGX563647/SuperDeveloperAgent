@@ -1,10 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（188 个），完整数据在 `docs/ledger/`。
+每行一个会话（189 个），完整数据在 `docs/ledger/`。
 
 ## 2026-11-22
 
+- **docs** 刷新 0.1 Code Wiki 到封版状态并准备 0.1.2 tag（`6296a44`）— 0.1 分支 Code Wiki 基线停在 e9a39d3（2026-11-20），此后 0.1 的生产 SERVER 网络/账本口径修复、pr…
 - **chore** 修复 CI：前端 schema.d.ts 契约同步 + jackson 2.21.1 安全漏洞升级到 2.21.4（`f2fe649`）— 最近多次 CI 连续失败：frontend job 的 check:api-types 检测 schema.d.ts 与 openapi.jso…
 - **bug** 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景（`e9de11b`）— prod 发布前置校验 EnvironmentPromotion.problem 要求测试环境证据 gitSha 与本次发布 sha 一致；重放…
 ## 2026-11-21
