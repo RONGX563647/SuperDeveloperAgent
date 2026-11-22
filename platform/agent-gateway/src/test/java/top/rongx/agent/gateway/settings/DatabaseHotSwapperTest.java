@@ -163,6 +163,31 @@ class DatabaseHotSwapperTest {
     }
 
     @Test
+    @DisplayName("切回已有 schema 的 SQLite：不重放 Flyway 历史迁移（V7 drop app_url）")
+    void switchToSqliteSkipsFlywayWhenSchemaExists() throws Exception {
+        // 模拟"平台原本的 SQLite 库"：Hibernate 建的是最终模型——project_envs 已无 app_url 列，
+        // 且没有 flyway_schema_history。旧实现会让 Flyway baseline-version=1 重放 V7 的
+        // DROP COLUMN app_url，在无该列的库上报 no such column；这里断言不再重放。
+        Path existing = tempDir.resolve("existing-schema.db");
+        try (var c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + existing);
+             var st = c.createStatement()) {
+            st.execute("CREATE TABLE run_ledger (id TEXT PRIMARY KEY)");
+            st.execute("CREATE TABLE project_envs (env TEXT NOT NULL, project_id TEXT NOT NULL,"
+                    + " compose_dir TEXT, PRIMARY KEY (env, project_id))");
+        }
+        AgentDbProperties props = new AgentDbProperties("", "", "", existing.toString(), 2);
+        PlatformDb live = liveBackend();
+
+        DatabaseHotSwapper.Result result = new DatabaseHotSwapper(live).switchToSqlite(props);
+
+        assertTrue(result.ok(), result.message());
+        assertEquals("SQLITE", result.toBackend());
+        // schema 未被破坏：核心表仍在，且没有因为重放迁移报错
+        assertEquals(1L, countTable(live, "run_ledger"));
+        assertEquals(1L, countTable(live, "project_envs"));
+    }
+
+    @Test
     @DisplayName("liveStatus 报告的是连接池真相，不是配置")
     void liveStatusReadsFromPool() {
         PlatformDb live = liveBackend();

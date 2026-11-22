@@ -157,6 +157,15 @@ public class DatabaseHotSwapper {
     /** 用同一套迁移脚本把目标库建到当前版本。SQLite 与 PG 走各自的 vendor 目录。 */
     private void createSchema(String url, String username, String password) {
         boolean sqlite = url.startsWith("jdbc:sqlite:");
+        // 回退到已存在的 SQLite 库时，其 schema 已由 Hibernate ddl-auto 建到当前模型，
+        // 但没有 flyway_schema_history。此时若让 Flyway baseline-version=1 重放，
+        // V7 的 DROP COLUMN app_url 会在"列已被 Hibernate 删掉"的库上重放，报 no such column；
+        // V8 的 ADD COLUMN 同理会撞已存在的列。核心表在 = schema 已就绪，直接跳过建表。
+        // 空库仍走 Flyway 从头建（见 DatabaseHotSwapperTest.switchToSqliteWorksOnEmptyDirectory）。
+        if (sqlite && hasCoreTable(url)) {
+            log.info("目标 SQLite 已有 schema（run_ledger），跳过 Flyway 建表：{}", mask(url));
+            return;
+        }
         String vendor = sqlite ? "sqlite" : "postgresql";
         try {
             Flyway.configure()
@@ -169,6 +178,19 @@ public class DatabaseHotSwapper {
         } catch (RuntimeException e) {
             throw new EnvironmentException(ErrorCode.ENVIRONMENT_INVALID_STATE,
                     "目标库建表失败（检查账号是否有 DDL 权限）：" + rootMessage(e), e);
+        }
+    }
+
+    /** 目标 SQLite 是否已有核心业务表（schema 已就绪，无需 Flyway 建表）。 */
+    private static boolean hasCoreTable(String url) {
+        try (Connection connection = DriverManager.getConnection(url);
+             var ps = connection.prepareStatement(
+                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'run_ledger' LIMIT 1");
+             var rs = ps.executeQuery()) {
+            return rs.next();
+        } catch (SQLException e) {
+            // 文件不存在或不可读：交给后续 Flyway 建表流程处理，这里按"无表"论。
+            return false;
         }
     }
 
