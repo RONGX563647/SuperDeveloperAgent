@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：other
 
-41 个会话；检索用 `python tools/docs/find.py --module other`。
+42 个会话；检索用 `python tools/docs/find.py --module other`。
+
+## 2026-11-22 · jackson 漏洞跟进升级 2.21.4→2.21.7（osv 新增 GHSA）（chore `0d5f853`）
+- 问题：0.2 CI security job 仍失败：此前升级到 jackson 2.21.4 后，osv.dev 漏洞库持续更新，新增一批 GHSA…
+- 方案：jackson-bom.version 从 2.21.4 升到 2.21.7，dependencyManagement 显式覆盖继续生效。
+- 验证：osv.dev 批量查询接口确认 jackson-core/databind 2.21.7 漏洞数均为 0；dependency:tree 确认…
 
 ## 2026-11-20 · 防旧归档模型回潮：validate 拦截 docs/process 复活（chore `dc587a0`）
 - 问题：旧归档模型可被旧基点分支合并静默带回（今晚已实际发生，gate.py 被回退、500+ 文件复活），validate 不拦。

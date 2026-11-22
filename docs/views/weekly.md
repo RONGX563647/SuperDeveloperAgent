@@ -5,6 +5,7 @@
 
 ## 2026-W47
 
+- 2026-11-22 **chore** jackson 漏洞跟进升级 2.21.4→2.21.7（osv 新增 GHSA）（`0d5f853`）
 - 2026-11-22 **chore** 合并 0.1 的 CI 修复（前端契约/jackson 漏洞/PG 回退）到 0.2（`f2fe649` `24eceb9` `9f054d9` `3e1d20f`）
 - 2026-11-22 **bug** 修复 CI backend：真 PG 热切换回退时 Flyway 重放 V7 drop app_url 失败（`9f054d9`）
 - 2026-11-22 **chore** 修复 CI：前端 schema.d.ts 契约同步 + jackson 2.21.1 安全漏洞升级到 2.21.4（`f2fe649`）
