@@ -1,11 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（205 个），完整数据在 `docs/ledger/`。
+每行一个会话（206 个），完整数据在 `docs/ledger/`。
 
 ## 2026-11-22
 
 - **chore** 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复）（`ee4bc36` `9a87b34` `0ee8f9b` `70c2051` `e9de11b` `3a48994`）— 用户要求把 0.1.0-snapshot 的 6 个新提交（移除 prod sha 一致性校验、重放打 tag 补传分支、生产 SERVER 网…
+- **bug** 将生产 SERVER 部署网络与镜像账本口径修复移植到 0.2 分支（`011511e`）— 0.2 分支生产 SERVER 目标部署只把 --network 原样传给远端 docker run，本地 DOCKER 目标却会 ensure…
 - **bug** 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景（`e9de11b`）— prod 发布前置校验 EnvironmentPromotion.problem 要求测试环境证据 gitSha 与本次发布 sha 一致；重放…
 ## 2026-11-21
 
