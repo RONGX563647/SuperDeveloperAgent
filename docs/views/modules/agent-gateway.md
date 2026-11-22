@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-102 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+103 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-22 · 修复 CI backend：真 PG 热切换回退时 Flyway 重放 V7 drop app_url 失败（bug `9f054d9`）
+- 问题：CI backend (mvn verify) 持续失败：DatabaseHotSwapperPostgresIT.switchBackKeep…
+- 方案：createSchema 在 SQLite 目标已有 run_ledger 表时判定 schema 已就绪、跳过 Flyway 建表；空库仍走 …
+- 验证：本地起 postgres:16-alpine（CI 同配置），带 AGENT_TEST_PG_URL 跑 DatabaseHotSwapperP…
 
 ## 2026-11-22 · 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复）（chore `ee4bc36` `9a87b34` `0ee8f9b` `70c2051` `e9de11b` `3a48994`）
 - 问题：用户要求把 0.1.0-snapshot 的 6 个新提交（移除 prod sha 一致性校验、重放打 tag 补传分支、生产 SERVER 网…

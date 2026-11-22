@@ -6781,6 +6781,7 @@ export interface operations {
                 deployTarget?: string;
                 version?: string;
                 tag?: string;
+                branch?: string;
             };
             header?: never;
             path: {

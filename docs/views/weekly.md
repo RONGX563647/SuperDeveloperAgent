@@ -5,6 +5,8 @@
 
 ## 2026-W47
 
+- 2026-11-22 **bug** 修复 CI backend：真 PG 热切换回退时 Flyway 重放 V7 drop app_url 失败（`9f054d9`）
+- 2026-11-22 **chore** 修复 CI：前端 schema.d.ts 契约同步 + jackson 2.21.1 安全漏洞升级到 2.21.4（`f2fe649`）
 - 2026-11-22 **chore** 合并 0.1.0-snapshot 到 0.2.0-snapshot（移除 prod sha 校验 + 重放打 tag 分支透传 + SERVER 网络/账本口径修复）（`ee4bc36` `9a87b34` `0ee8f9b` `70c2051` `e9de11b` `3a48994`）
 - 2026-11-22 **bug** 将生产 SERVER 部署网络与镜像账本口径修复移植到 0.2 分支（`011511e`）
 - 2026-11-22 **bug** 移除 prod 晋升的提交一致性校验，放行重放/打 tag 场景（`e9de11b`）
