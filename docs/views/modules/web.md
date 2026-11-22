@@ -1,12 +1,17 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-75 个会话；检索用 `python tools/docs/find.py --module web`。
+76 个会话；检索用 `python tools/docs/find.py --module web`。
 
 ## 2026-11-21 · 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复）（chore `f5c15a1` `b908869` `24906a0` `c1e3777` `f082fb5` `8398697` `20b85e4` `9cdd275`）
 - 问题：推送被拒（fetch first）：远端并行会话与本会话对同一批问题各自修复——都把 HostProcessSupervisor 移入 doma…
 - 方案：合并 origin/0.2.0-snapshot：A1/EC5 修复取远端已推送版本（EnvironmentException 方案，domai…
 - 验证：pre-commit 门禁 agent-domain 全量 141 用例 PASSED（含 PathGuardTest 7/7）；
+
+## 2026-11-21 · BUG-8 重放打 tag 失败：branch 未透传到引擎（bug `ee4bc36`）
+- 问题：BUG-8：test 环境有固化脚本时，点主发布按钮打 tag 触发失败，报『正式发布必须选择版本分支（例如 0.1.0-snapshot）』(…
+- 方案：根因是 a2aa87e9 修复重放丢 version/tag 时漏了 branch：replayEnv→deployReplay→DeployC…
+- 验证：新增 DeployControllerReplayTargetTest 2 例（带 branch 下发/不带不下发）；DeployControl…
 
 ## 2026-11-21 · BUG-22 部署成功后前端白屏：vendor 分包循环依赖 TDZ（bug `24906a0` `c1e3777`）
 - 问题：流水线 release 部署成功后，打开部署地址前端白屏：HTML 与各 JS/CSS 资源均返回 200，但 Vue 未挂载、#app 为空。

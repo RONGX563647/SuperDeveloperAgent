@@ -1576,10 +1576,25 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * <p>不这样做的后果：界面上给出的"测试跑通过的版本"在触发时会被
      * {@link #deployPreflight} / {@code gitShaForImage} 判成"镜像版本不存在或不属于 prod"，
      * 选项与解析不同源 = 看得见点不动。安全性不受影响——是否放行仍由
-     * {@link EnvironmentPromotion} 校验测试环境证据（同一个 sha）。
+     * {@link EnvironmentPromotion} 校验测试环境已有成功证据。
      */
     private static String ledgerEnv(String env) {
         return EnvironmentPromotion.requiresTestEvidence(env) ? "test" : env;
+    }
+
+    /**
+     * 按版本部署时复用镜像的账本元信息（digest / sizeBytes / version）。
+     *
+     * <p>必须和 {@link #gitShaForImage} / {@link #deployPreflight} 同源走 {@link #ledgerEnv}：
+     * prod 的版本选项来自 test 账本，若这里按 prod 账本查，查不到就把 version 退化成 tag、
+     * digest 记成空串，界面上表现为"镜像明明在却说不在/没有版本信息"。
+     */
+    static ImageVersion reusedImageVersion(ImageVersionStore store, String projectId,
+                                           String env, String tag) {
+        if (store == null || tag == null || tag.isBlank()) {
+            return null;
+        }
+        return store.find(projectId, ledgerEnv(env), tag).orElse(null);
     }
 
     /**
@@ -2530,9 +2545,10 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
                     state.status = StageStatus.FAILED;
                     return;
                 }
-                // 复用版本的摘要/大小/版本号沿用账本，避免按版本部署把元信息覆盖成 tag
-                ImageVersion known = imageVersions.find(state.projectId, state.env,
-                        state.deployImage).orElse(null);
+                // 复用版本的摘要/大小/版本号沿用账本，避免按版本部署把元信息覆盖成 tag。
+                // 账本环境必须与版本选项/预检一致（prod 从 test 账本取），否则元数据全空。
+                ImageVersion known = reusedImageVersion(imageVersions, state.projectId,
+                        state.env, state.deployImage);
                 String reusedVersion = known == null || known.version() == null
                         || known.version().isBlank() ? state.deployImage : known.version();
                 state.artifacts.add(new ArtifactRef("image", state.deployImage,

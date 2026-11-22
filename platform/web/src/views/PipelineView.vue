@@ -1017,10 +1017,10 @@ async function replayEnv(): Promise<void> {
   assertReleaseVersion(version, tagged)
   const result = await deployReplay(
     projectId.value, env.value, sha.value, undefined, targetForTrigger(),
-    version || undefined, tagged)
+    version || undefined, tagged, branch.value || undefined)
   attachRun(result, {
     env: env.value, pipelineId: 'release', sha: sha.value,
-    version: version || undefined,
+    version: version || undefined, branch: branch.value,
   })
   ElMessage.success(tagged ? '已按环境脚本重放并打 tag' : '已按环境脚本重放')
 }

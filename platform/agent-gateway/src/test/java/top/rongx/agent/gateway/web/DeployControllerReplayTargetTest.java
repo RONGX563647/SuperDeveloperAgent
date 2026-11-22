@@ -108,6 +108,26 @@ class DeployControllerReplayTargetTest {
         assertTriggeredWithVersionAndTag(engine, "0.1.2-snapshot", null);
     }
 
+    @Test
+    @DisplayName("重放打 tag 带版本分支 → 引擎收到 branch（缺它会抛『正式发布必须选择版本分支』）")
+    void replayForwardsBranchWithTag() {
+        PipelineEngine engine = engine();
+        controller(engine).replay(PROJECT, "test", SHA, null, "docker",
+                "0.1.2", "true", "0.1.0-snapshot");
+
+        assertTriggeredWithBranch(engine, "0.1.0-snapshot");
+    }
+
+    @Test
+    @DisplayName("重放不带 branch → 不下发该参数（快照构建不校验分支）")
+    void replayWithoutBranchLeavesItUnset() {
+        PipelineEngine engine = engine();
+        controller(engine).replay(PROJECT, "test", SHA, null, "docker",
+                "0.1.2-snapshot", null, null);
+
+        assertTriggeredWithoutBranch(engine);
+    }
+
     @SuppressWarnings("unchecked")
     private void assertTriggeredWithVersionAndTag(PipelineEngine engine, String version, String tag) {
         var captor = ArgumentCaptor.forClass(Map.class);
@@ -119,6 +139,22 @@ class DeployControllerReplayTargetTest {
         } else {
             assertEquals(tag, sent.get("tag"));
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertTriggeredWithBranch(PipelineEngine engine, String expected) {
+        var captor = ArgumentCaptor.forClass(Map.class);
+        org.mockito.Mockito.verify(engine).trigger(eq(PROJECT), eq("release"), captor.capture());
+        Map<String, String> sent = (Map<String, String>) captor.getValue();
+        assertEquals(expected, sent.get("branch"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertTriggeredWithoutBranch(PipelineEngine engine) {
+        var captor = ArgumentCaptor.forClass(Map.class);
+        org.mockito.Mockito.verify(engine).trigger(eq(PROJECT), eq("release"), captor.capture());
+        Map<String, String> sent = (Map<String, String>) captor.getValue();
+        assertFalse(sent.containsKey("branch"));
     }
 
     @SuppressWarnings("unchecked")

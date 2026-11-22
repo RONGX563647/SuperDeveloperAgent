@@ -3716,6 +3716,13 @@
           "schema" : {
             "type" : "string"
           }
+        }, {
+          "name" : "branch",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "responses" : {
           "200" : {

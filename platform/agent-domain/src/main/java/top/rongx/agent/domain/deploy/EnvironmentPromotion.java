@@ -1,6 +1,5 @@
 package top.rongx.agent.domain.deploy;
 
-import top.rongx.agent.domain.hash.Hashes;
 import java.util.function.Function;
 import top.rongx.agent.domain.port.RecipeStore;
 import top.rongx.agent.domain.run.StageStatus;
@@ -11,9 +10,11 @@ import top.rongx.agent.domain.run.StageStatus;
  * <p>这不是审批流（不要求第二个人点同意），而是一次**证据校验**：
  * <ol>
  *   <li>测试环境有已固化的可复现脚本；</li>
- *   <li>该脚本关联的证据运行仍然是 SUCCEEDED；</li>
- *   <li>证据验证的提交与本次要发布的提交一致。</li>
+ *   <li>该脚本关联的证据运行仍然是 SUCCEEDED。</li>
  * </ol>
+ *
+ * <p>注意：这里<b>不校验</b>证据验证的提交与本次发布提交是否一致——
+ * 重放/打 tag 等路径下两者本就可能不同，由发布分支与账本口径另行约束。
  *
  * <p>缺任何一条都拒绝在服务器上操作。放在 domain 是为了让引擎与 HTTP 层用同一份规则，
  * 而不是各写一遍（两处不一致 = 有人能找到绕过路径）。
@@ -35,7 +36,7 @@ public final class EnvironmentPromotion {
      * @param statusOf 按 runId 查运行状态（由调用方提供，避免 domain 依赖引擎实现）
      * @param projectId 项目
      * @param env      目标环境
-     * @param sha      本次要发布的提交（可为 null：不校验提交一致）
+     * @param sha      本次要发布的提交（保留参数以兼容调用方；当前不参与校验）
      * @return 不满足时的可读原因；满足返回 null
      */
     public static String problem(RecipeStore store, Function<String, StageStatus> statusOf,
@@ -58,12 +59,6 @@ public final class EnvironmentPromotion {
         if (evidence != StageStatus.SUCCEEDED) {
             return "测试环境证据运行 " + recipe.evidenceRunId() + " 状态为 " + evidence + "（需要成功）";
         }
-        if (sha != null && !sha.isBlank() && recipe.gitSha() != null && !recipe.gitSha().isBlank()
-                && !recipe.gitSha().equals(sha)) {
-            return "测试环境验证的是提交 " + Hashes.shortSha(recipe.gitSha())
-                    + "，本次发布是 " + Hashes.shortSha(sha) + "：请先在测试环境验证该提交";
-        }
         return null;
     }
-
 }
