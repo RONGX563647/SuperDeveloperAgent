@@ -1,8 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（201 个），完整数据在 `docs/ledger/`。
+每行一个会话（202 个），完整数据在 `docs/ledger/`。
 
+## 2026-11-22
+
+- **bug** 将生产 SERVER 部署网络与镜像账本口径修复移植到 0.2 分支（`011511e`）— 0.2 分支生产 SERVER 目标部署只把 --network 原样传给远端 docker run，本地 DOCKER 目标却会 ensure…
 ## 2026-11-21
 
 - **chore** 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复）（`f5c15a1` `b908869` `24906a0` `c1e3777` `f082fb5` `8398697` `20b85e4` `9cdd275`）— 推送被拒（fetch first）：远端并行会话与本会话对同一批问题各自修复——都把 HostProcessSupervisor 移入 doma…

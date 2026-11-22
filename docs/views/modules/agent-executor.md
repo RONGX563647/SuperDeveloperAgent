@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-executor
 
-62 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+63 个会话；检索用 `python tools/docs/find.py --module agent-executor`。
+
+## 2026-11-22 · 将生产 SERVER 部署网络与镜像账本口径修复移植到 0.2 分支（bug `011511e`）
+- 问题：0.2 分支生产 SERVER 目标部署只把 --network 原样传给远端 docker run，本地 DOCKER 目标却会 ensure…
+- 方案：将 0.1 的修复移植到 0.2：SERVER 的 SSH 与 docker context 两条路径在 docker run 前统一执行远端网…
+- 验证：门禁 pre-commit 10 项回归测试全绿；隔离 worktree 上 0.2 全 reactor 9 模块全量测试 BUILD SUCC…
 
 ## 2026-11-21 · 收敛并行会话的 0.2 修复线（规约违规平行修复 + 0.1 再入线 + 白屏修复）（chore `f5c15a1` `b908869` `24906a0` `c1e3777` `f082fb5` `8398697` `20b85e4` `9cdd275`）
 - 问题：推送被拒（fetch first）：远端并行会话与本会话对同一批问题各自修复——都把 HostProcessSupervisor 移入 doma…
