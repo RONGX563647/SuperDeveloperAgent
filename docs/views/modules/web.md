@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：web
 
-78 个会话；检索用 `python tools/docs/find.py --module web`。
+79 个会话；检索用 `python tools/docs/find.py --module web`。
+
+## 2026-11-22 · 合并 0.1 的 CI 修复（前端契约/jackson 漏洞/PG 回退）到 0.2（chore `f2fe649` `24eceb9` `9f054d9` `3e1d20f`）
+- 问题：0.1 上的三处 CI 修复（前端 schema.d.ts 契约同步、jackson 2.21.1→2.21.4 漏洞、真 PG 热切换回退 V…
+- 方案：git merge --no-ff 0.1：DatabaseHotSwapper.java 取 0.2 的通用方案（更优，已在 0.2 验证），…
+- 验证：0.2 合并后 DatabaseHotSwapperTest 7/7（-am 重跑）；pre-commit override 门禁 7 用例通过…
 
 ## 2026-11-22 · 修复 CI：前端 schema.d.ts 契约同步 + jackson 2.21.1 安全漏洞升级到 2.21.4（chore `f2fe649`）
 - 问题：最近多次 CI 连续失败：frontend job 的 check:api-types 检测 schema.d.ts 与 openapi.jso…
