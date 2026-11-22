@@ -5,6 +5,7 @@
 
 ## 2026-W47
 
+- 2026-11-22 **chore** 0.1.2 封版 jackson 升级 2.21.4→2.21.7（osv 新增 GHSA）（`12ee680`）
 - 2026-11-22 **chore** 收敛并行 DatabaseHotSwapper 修复到 0.1.2 封版基线（`9f054d9` `3e1d20f`）
 - 2026-11-22 **docs** 刷新 0.1 Code Wiki 到封版状态并准备 0.1.2 tag（`6296a44`）
 - 2026-11-22 **bug** 修复 CI backend：真 PG 热切换回退时 Flyway 重放 V7 drop app_url 失败（`9f054d9`）

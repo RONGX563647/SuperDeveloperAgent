@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：other
 
-41 个会话；检索用 `python tools/docs/find.py --module other`。
+42 个会话；检索用 `python tools/docs/find.py --module other`。
+
+## 2026-11-22 · 0.1.2 封版 jackson 升级 2.21.4→2.21.7（osv 新增 GHSA）（chore `12ee680`）
+- 问题：0.1.2 封版基线的 jackson 仍是 2.21.4，osv.dev 漏洞库持续更新后新增一批要求 2.21.7 的 GHSA（0.2 C…
+- 方案：jackson-bom.version 2.21.4 → 2.21.7，dependencyManagement 显式覆盖继续生效。
+- 验证：osv.dev 批量查询确认 jackson-core/databind 2.21.7 漏洞数均为 0；pre-commit 门禁 Databa…
 
 ## 2026-11-22 · 刷新 0.1 Code Wiki 到封版状态并准备 0.1.2 tag（docs `6296a44`）
 - 问题：0.1 分支 Code Wiki 基线停在 e9a39d3（2026-11-20），此后 0.1 的生产 SERVER 网络/账本口径修复、pr…

@@ -1,10 +1,11 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 变更日志
 
-每行一个会话（191 个），完整数据在 `docs/ledger/`。
+每行一个会话（192 个），完整数据在 `docs/ledger/`。
 
 ## 2026-11-22
 
+- **chore** 0.1.2 封版 jackson 升级 2.21.4→2.21.7（osv 新增 GHSA）（`12ee680`）— 0.1.2 封版基线的 jackson 仍是 2.21.4，osv.dev 漏洞库持续更新后新增一批要求 2.21.7 的 GHSA（0.2 C…
 - **chore** 收敛并行 DatabaseHotSwapper 修复到 0.1.2 封版基线（`9f054d9` `3e1d20f`）— 收敛并行 DatabaseHotSwapper 修复到 0.1.2 封版基线
 - **docs** 刷新 0.1 Code Wiki 到封版状态并准备 0.1.2 tag（`6296a44`）— 0.1 分支 Code Wiki 基线停在 e9a39d3（2026-11-20），此后 0.1 的生产 SERVER 网络/账本口径修复、pr…
 - **bug** 修复 CI backend：真 PG 热切换回退时 Flyway 重放 V7 drop app_url 失败（`9f054d9`）— CI backend (mvn verify) 持续失败：DatabaseHotSwapperPostgresIT.switchBackKeep…
