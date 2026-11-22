@@ -15,6 +15,10 @@ summary: 环境要求、后端/前端构建与启动、Docker 部署、关键环
 | 包管理 | npm 或 pnpm 9.15.4（`packageManager` 已声明） |
 | Docker | 可选但**默认必需**（`agent.sandbox.mode=docker`，Docker 不可用则启动失败） |
 | 数据库 | 默认 SQLite（零运维）；生产建议 PostgreSQL |
+| Python 3 | 会话归档门禁 / git hooks 依赖（`tools/session-archive/gate.py`，自动探测 `python` / `python3` / `py`） |
+| git | `core.hooksPath=.githooks`（pre-commit / commit-msg / pre-push）；CI 与迁移守卫需要完整历史与 tag |
+
+> **JDK 构建校验**：门禁 `tools/session-archive/gate.py` 在每次构建前探测满足 **JDK ≥ 21** 的 `JAVA_HOME`——环境变量优先，否则扫描常见安装位并选最贴近基线（release 21）的一个，探测结果缓存到 `.git/session-archive/jdk.json` 后续复用；只把结果注入构建子进程环境（`JAVA_HOME` + `PATH` 前置 bin），**不把 JDK 路径写进项目配置**。本机 JDK 低于 21 或缺失时门禁直接报错。
 
 ## 2. 后端
 
@@ -36,6 +40,9 @@ java --enable-native-access=ALL-UNNAMED \
 - 健康检查：`http://127.0.0.1:8090/actuator/health`。
 - jar 带 `-exec` 后缀：`repackage` 使用 classifier，主 artifact 保持普通 jar（否则 ArchUnit 读不到类）。
 - 也可直接 `mvn -pl agent-gateway -am spring-boot:run` 开发调试。
+- surefire 并行度默认 `forkCount=2`（`platform/pom.xml` 的 `surefire.forkCount`），可用 `-Dsurefire.forkCount=N` 覆盖；会话归档门禁在核数 ≥8 的机器上显式提到 4。测试类各自用 `@TempDir`，可安全并发；但若 fork 出的 JVM 与编译目标 JDK 版本不一致（如旧 JVM 加载 class file 65.0），会直接崩，所以门禁统一先注入探测到的 JDK ≥21 再跑构建。
+- 依赖安全：Spring Boot 4.0.4 BOM 默认带 Jackson 2.21.1（命中 GHSA-r7wm-3cxj-wff9 / GHSA-j3rv-43j4-c7qm 等），项目以 `jackson-bom.version=2.21.4` 覆盖（只影响 Jackson 2 的 `com.fasterxml.jackson.*`，Jackson 3 不受影响），保持 minor 线内兼容。
+- Flyway（Boot 4）：迁移依赖需显式声明 `spring-boot-flyway`（配合 `flyway-core` 与 PG 的 `flyway-database-postgresql`，Flyway 10+ 按库拆模块）。迁移脚本在 `platform/agent-infra/src/main/resources/db/migration/{common,postgresql,sqlite}/`，V5-V8（`audit_event` / `image_readiness` / `drop_project_env_app_url` / `token_usage_attribution`）已补录进基线；改动已发布迁移会被迁移校验门禁拦截（含 CI 的 tag 守卫）。
 
 ### 2.1 模型配置
 
@@ -49,7 +56,7 @@ java --enable-native-access=ALL-UNNAMED \
 
 默认：`AGENT_MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`、`AGENT_MODEL_NAME=qwen-plus`。OpenAI 兼容端点均可（DeepSeek、vLLM 等）。
 
-`.env` 加载规则：应用启动时读取 `platform/.env`，真实环境变量优先。
+`.env` 加载规则：应用启动前由 `AgentApplication` 向上最多 3 层查找并读取 `.env`（K=V 每行一条，文件已 gitignore），**只在环境变量未设置时注入**——优先级为「真实环境变量 / CLI 系统属性 > `.env` > `application.yml` 默认值」，故 CLI 参数能强制覆盖 `.env` 里的同名（含空）值。PostgreSQL 连接可用 `AGENT_DB_URL` 直接配置，也可由设置页写入 `<workspace>/_platform/db-backend.yml`（密码 AES-GCM 密文、明文不入盘），启动时注入系统属性；已有真实环境变量 / CLI 参数不被覆盖。
 
 ## 3. 前端
 
@@ -116,6 +123,7 @@ docker run -d --name agent-platform \
 - `/app/data` 必须持久化（库、工作区、会话状态、部署产物）。
 - 若容器内要执行构建，需要挂载 Docker socket 或改用 remote buildkitd（`AGENT_SANDBOX_DOCKER_BINARY` 可指向 podman）。
 - `AGENT_SECURITY_MASTER_KEY` 丢失将无法解密历史密文。
+- 镜像内置 `HEALTHCHECK`：用 curl 探 `/actuator/health`（30s 间隔、3s 超时、90s start-period、3 次重试，覆盖 Spring Boot + JPA + Flyway 冷启动）。`AGENT_WEB_DIST=/app/web` 指向内置前端产物（`COPY platform/web/dist/ /app/web/`），由网关 `StaticWebConfig` 单端口托管。
 
 ## 6. 关键环境变量
 
@@ -213,4 +221,6 @@ docker run -d --name agent-platform \
 
 ## 9. CI
 
-[.workflow/build.yml](file:///workspace/.workflow/build.yml)（Gitee Go）：本质是 `mvn -B verify`，可平移到任何 CI。`verify` 会执行 spec-checks 的全部规约测试。
+- **GitHub Actions** [`.github/workflows/ci.yml`](file:///workspace/.github/workflows/ci.yml)：五个 job — `backend`（mvn verify，带 PG16 容器在 CI 上也跑端到端用例）、`frontend`（typecheck + `pnpm check:api-types` 前端契约 + vitest）、`docs`（doc-marshal / 会话归档 / 视图一致性 / Handbook 漂移）、`contract`（api-docs-mcp 严格审计）、`security`（gitleaks + osv-scanner）。所有 checkout 用 `actions/checkout@v7.0.1`；`backend` job 显式 `fetch-depth: 0` + `fetch-tags: true`，因为迁移守卫要读已发布 tag（x.y.z）判断哪些迁移算已发布，浅克隆缺 tag 会退化成「全部按已发布」、未发布迁移被迫冻结。
+- **Gitee Go** [`.workflow/build.yml`](file:///workspace/.workflow/build.yml)：构建兜底，只依赖四个稳定事实——`doc-marshal check --all`、`audit.mjs --strict` 前端契约审计、`mvn -B verify`、固定产物 `platform/agent-gateway/target/*-exec.jar`，可平移到任意 CI。
+- 本地 `mvn -q verify` 会执行 spec-checks 的全部规约测试，与 CI 同口径。

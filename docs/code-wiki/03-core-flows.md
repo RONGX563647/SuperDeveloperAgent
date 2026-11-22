@@ -129,6 +129,40 @@ POST /api/v1/workspaces/{projectId}/deployments/{env}/start 或 deploy_* 工具
 
 部署目标未注册时 fail-closed（E-505），不会"静默成功"。
 
+### 4.1 生产发布：从测试验证版本直接部署
+
+生产页不再让用户按分支/提交现拼发布对象，而是复用 test 环境已验证的镜像直接部署：
+
+```text
+test 构建/部署成功 → 登记镜像账本（verify 运行只构建、不固化脚本，不算晋升证据）
+  → 生产页候选：buildReleaseCandidates(images, history, gitTags)（web/src/utils/releaseCandidates.ts）
+    （候选 = test 账本 + 历史 git tag 证据；无 gitSha 的记录剔除，避免"看得见、点不动"）
+  → deployConfirm(projectId, 'prod', sha)：按该版本提交校验测试证据并签发一次性令牌
+  → deployImageVersion(deployImage=镜像tag, deployTarget=server, tagged=false, branch=候选分支)
+    （不重打 git 标签；镜像已构建，跳过构建阶段）
+  → 引擎 planFor() 命中 deployImage → forDeployOnly()：只跑 deploy + health，
+    不检出、不构建、不重新固化脚本
+```
+
+触发前的防错（以 0.1 实现为准）：
+
+- `deployPreflight(projectId, env, tag)` 前移：版本归属 → 镜像是否存在 / Docker 是否可用 → 环境密钥（E-704）→ 必填变量（E-509），不通过直接 400，不留到执行期才失败。
+- `DeployGate.requireIfNeeded()`：test 证据缺失 E-601、令牌缺失 E-602；令牌绑定 project+env+sha，5 分钟、一次性。
+- `EnvironmentPromotion.problem()`（domain，HTTP 层与引擎共用）只校验"test 已有固化脚本 + 该脚本关联证据运行仍为 SUCCEEDED"，**不校验**证据提交与本次发布提交是否一致——重放 / 打 tag 下两者本就可能不同；`sha` 参数保留以兼容调用方，当前不参与校验。
+- 阶段预览同步标注"按版本直接部署：不重新构建"，界面与实际执行一致。
+
+### 4.2 重放 / 打 tag 的版本分支透传
+
+有固化脚本的 test 环境点主发布会走 `replayEnv → deployReplay → DeployController.replay`：
+
+```text
+前端 deployReplay(projectId, env, sha, confirmToken, deployTarget, version, tag, branch)
+  → DeployController.replay(..., version, tag, branch) 写入 triggerParams
+  → BuiltInPipelineEngine 打 tag 前 requireVersionBranch：提交须落在 x.y.0-snapshot 版本分支上
+```
+
+`version` / `tag` / `branch` 必须随重放一起下发；缺 `branch` 时打 tag 会报 `BUILD_INVALID_INPUT`（"正式发布必须选择版本分支"）。
+
 ## 5. 项目接入链路
 
 ```text
@@ -163,6 +197,7 @@ DONE           关闭 Issue / 通知
 调度特征：
 
 - 全局并发 `Semaphore(MAX_CONCURRENT_RUNS)`，项目级锁 `projectLocks`。
+- **BugFix 不碰生产**：`BugFixPolicy.productionLike()` 识别 prod / production / preprod / prd / live / online / 生产 等；策略 `validate()` 保存时即拒绝生产测试环境，部署类阶段（`REPRO_DEPLOY` / `VERIFY_DEPLOY`）执行前再拦一次并 `block()`——宁可误判也拒绝部署到线上。
 - 每个 run 用虚拟线程执行，`retryScheduler` 处理瞬时失败。
 - `apply()` 按 `BugFixPolicy` 决定该阶段是否需要人工审核；`block()` 进入等待，`resume()` 继续。
 - 事件（`BugFixEvent`）与阶段记录（`BugFixStageRun`）持久化，供前端时间线展示。

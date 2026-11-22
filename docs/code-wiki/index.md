@@ -19,9 +19,9 @@ summary: 研发运维智能体平台 Code Wiki 总目录：定位、模块地图
 | 认证 | Sa-Token（Bearer Token，30 天），角色 ADMIN / DEVOPS / VIEWER |
 | 模型 | OpenAI 兼容端点，默认阿里云 DashScope（qwen-plus），设置页可热切换 |
 | 执行 | 仓库配方 `ci/actions.yml → Taskfile.yml → Makefile → 内置默认`，Docker 沙箱可选 |
-| 质量门禁 | ArchUnit 架构规则、禁令扫描、Flyway 迁移锁、Handbook 漂移、会话归档 |
+| 质量门禁 | ArchUnit 架构规则、禁令扫描、Flyway 迁移锁、Handbook 漂移、会话归档哈希链 + views 一致性、提交编码门禁、token 量化基线 |
 
-当前 HEAD：`e9a39d3`（2026-11-20，分支 `0.1.0-snapshot`）。
+当前基线：`0.1.2`（封版 tag，2026-11-22；分支 `0.1.0-snapshot` tip `24eceb9d`）。
 
 ## 文档目录
 
@@ -63,8 +63,8 @@ summary: 研发运维智能体平台 Code Wiki 总目录：定位、模块地图
 │   ├── agent-gateway/        # Spring Boot 入口、HTTP/SSE、Sa-Token、BugFix
 │   ├── spec-checks/          # 构建期规约检查（仅测试代码）
 │   └── web/                  # Vue3 前端
-├── docs/                     # 文档、Handbook、会话归档、本 Wiki
-├── tools/                    # 工程脚本（Handbook、会话归档、任务板、API 文档 MCP）
+├── docs/                     # skills 路由卡、ledger 会话留痕、views 生成视图、Handbook 锚点、本 Wiki
+├── tools/                    # docs 视图生成/检索、session-archive 归档门禁、handbook 锚点、ci 编码门禁、api-docs-mcp、task-board
 ├── specs/                    # 功能规格（editor tools、token budget）
 ├── .workflow/build.yml       # Gitee Go CI
 ├── Dockerfile                # 平台自部署镜像

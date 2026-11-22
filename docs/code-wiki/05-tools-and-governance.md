@@ -7,7 +7,7 @@ summary: 工具面装配、插件渐进披露、环境策略矩阵、变更单�
 
 ## 1. 工具面全景
 
-- **91 个 `@Tool` 方法**，分布在 24 个工具类中（`platform/agent-tools`）。
+- **90 个 `@Tool` 方法**，分布在 24 个工具类中（`platform/agent-tools`）。
 - 工具名由 AgentScope 从方法名派生，插件目录里用的是稳定工具名。
 - 所有工具通过构造器注入依赖；`agent-tools` 禁止 `ProcessBuilder`（A7），执行必须走 executor 的端口。
 

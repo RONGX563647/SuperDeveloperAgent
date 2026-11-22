@@ -28,7 +28,7 @@ Authorization: Bearer <token>
 
 - 权限来源：`SaPermissionSource` 从 `UserStore` 读取角色权限。
 - 拦截：`SaTokenConfig` 注册 `SaInterceptor`，默认全路径登录校验。
-- 首次启动 seed 三个账号（admin / devops / viewer），初始密码见 README / `AGENT_SEED_PASSWORDS`；登录后应在"账号安全"修改。
+- 首次启动 seed 三个账号（admin / devops / viewer），初始密码统一为 `admin-2026`（[`UserStore.DEFAULT_INITIAL_PASSWORD`](file:///workspace/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/auth/UserStore.java)），可用 `AGENT_SEED_PASSWORDS=admin=...,devops=...,viewer=...` 覆盖；登录后到「设置 → 账号安全」重置，不能改回初始密码。
 
 其它认证端点：`POST /auth/change-password`、`POST /auth/logout`、`POST /auth/me`。
 
@@ -84,6 +84,9 @@ SSE 请求（`Accept` 只有 `text/event-stream`）出错时返回**无 body 的
 ### 3.3 部署与环境
 
 - `/api/v1/deploy`（`DeployController`）：`GET /ports`、`GET /{projectId}/envs`、`POST /{projectId}/confirm`、`POST /{projectId}/replay`、`GET /{projectId}/recipes`、`POST /{projectId}/recipes/activate`。
+  - `POST /{projectId}/replay` 除 `env/sha/confirmToken/deployTarget` 外还接收可选的 `version/tag/branch`。`version/tag/branch` 必须随重放一起下发：test 环境点主发布会走固化脚本重放（`replayEnv`），缺 `branch` 时引擎在 `requireVersionBranch` 抛「正式发布必须选择版本分支」——即"已打 tag 却提示必须选版本分支"；`deployTarget` 不传则按脚本里记录的目标执行，面板上选的「打包成镜像」会被静默丢弃。`deployTarget` 只接受 `docker/host/server`。
+  - 按版本部署（复用历史镜像 tag、跳过构建）走 `POST /api/v1/ci/pipelines/{id}/run`，body 带 `deployImage/gitSha/version/tag/branch/deployTarget/confirmToken`，同样透传 `branch`；prod 还需 DeployGate 校验测试证据后签发的一次性确认令牌。
+  - 部署详情元数据以**运行中的容器**为准：`DeploymentControlService.versionOf` 优先取容器 `agent.version` 标签，标签缺失或为无意义的 `latest` 时回落到容器 sha（仅在两者都没有时才用 `latest`），并把残留的 `version=latest` / 无 pid 的纯 HOST 槽（STOPPED 的 "latest" 卡）单独分开，避免与新容器并存时误判为旧版本还在运行。
 - `/api/v1/workspaces/{projectId}/deployments`（`WorkspaceDeploymentController`）：`GET`、`POST /{env}/start|stop|restart`、`GET /{env}/logs`。
 - `/api/v1/settings/projects`（`ProjectEnvController`）：项目环境与变量。
 - `/api/v1/settings/projects/{projectId}/secrets`（`SecretController`）：密钥写入/查看（`settings:reveal` 才可看明文，写审计）。
@@ -135,6 +138,7 @@ SSE 请求（`Accept` 只有 `text/event-stream`）出错时返回**无 body 的
 ### 3.7 Issue 与集成
 
 - `/api/v1/git-issues`：列表、计数、详情、创建、更新、关闭/重开、同步、评论、版本。
+- `GET /api/v1/git-issues/versions?projectId&kind`：版本号候选项，返回 `{branch, suggested, tags}`。建议值由后端按类型推导（前端不自算）：`kind=BUG`（缺省）取当前版本线（如 `0.1`）已打 tag 的最大补丁号 +1；`kind=FEAT` 取该 major 下已发布的最高次版本 +1、补丁归零（若当前分支次版本未发布则用 `x.y.0`），避免建议一个已打过 tag 的版本；非版本分支下 Bug 退回最新 tag、Feat 从该 tag 往后取一个次版本。建任务时前端把 `suggested` 固定排下拉首项并标「推荐」，切换类型时仅在当前值为空或等于旧建议值时回填。
 - `/api/v1/git-issue-images`：Issue 图片。
 - `/api/v1/settings/git-integration`：Issue 集成设置。
 - `/api/v1/webhooks/git`、`/api/v1/webhooks/gitee`：Webhook（按签名/密钥校验）。
@@ -189,6 +193,6 @@ data: {"type":"tool.started","version":2,"payload":{"name":"ci_run",...}}
 
 ## 5. 兼容与版本
 
-- API 路径带 `/v1`；响应字段以 OpenAPI 快照为准（`ApiDocContractTest` 校验控制器与快照一致）。
+- API 路径带 `/v1`；响应字段以 OpenAPI 快照为准。快照落在 `platform/agent-gateway/src/main/resources/api/openapi.json`，由 [`ApiDocsSnapshotTest`](file:///workspace/platform/agent-gateway/src/test/java/top/rongx/agent/gateway/apidocs/ApiDocsSnapshotTest.java) 守新鲜度（过期快照会被隔离），[`ApiDocContractTest`](file:///workspace/platform/spec-checks/src/test/java/top/rongx/agent/arch/ApiDocContractTest.java) 校验控制器与快照一致；前端 `pnpm check:api-types` 保证 `schema.d.ts` 与快照不漂移。
 - SSE 协议 `version=2`：新增事件类型只会以 `agent.<enum>` 兜底，前端忽略未知类型。
 - 错误码属于对外契约，新增需登记到 `ErrorCode`，不得复用。

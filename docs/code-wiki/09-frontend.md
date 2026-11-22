@@ -5,7 +5,7 @@ summary: Vue3 前端：目录结构、路由与登录守卫、API 层、SSE 客�
 
 # 前端架构
 
-技术栈：Vue 3.5、Vite 7、Element Plus、vue-router 4、`@unovis/vue` 图表、TypeScript + `vue-tsc`。包管理 `pnpm@9.15.4`。
+技术栈：Vue 3.5、Vite 7、Element Plus、vue-router 4、`@unovis/vue` 图表、TypeScript + `vue-tsc`。包管理 `pnpm@9.15.4`。状态管理仍是 `stores/app.ts` 的 `reactive` 单例（**不引 Pinia**），会话级常驻状态在 `state/*`；API 类型由 openapi-typescript 从后端 OpenAPI 快照生成（`gen:api-types`，CI 的 `check:api-types` 做一致性校验）。
 
 ## 1. 目录结构
 
@@ -83,7 +83,7 @@ public 页 → 放行
 | `change.ts` | 变更详情、确认、应用 |
 | `project.ts` | 项目、接入、Git 操作 |
 | `workspace.ts` | 会话、时间线、事件、部署矩阵 |
-| `issues.ts` | Issue CRUD、评论、同步 |
+| `issues.ts` | Issue CRUD、评论、同步、版本建议（`kind` 口径，后端推导） |
 | `bugfix.ts` | BugFix 运行 |
 | `settings.ts` | 模型、服务器、数据库、MCP、Skill、密钥 |
 | `action.ts` / `agent.ts` | 标准动作、Agent 配置 |
@@ -149,11 +149,26 @@ reduceAgentEvent(current: AgentProjection, rawEvent: AgentEvent): AgentProjectio
 - `ChatTraceRail.vue` / `ChatTraceView.vue`：右侧轨迹。
 - `ChatStatusStrip.vue` / `EnvironmentStatusBar.vue`：状态条与环境。
 - `ConversationTimeline.vue`：时间线。
+- `ChatIssuesView.vue`：任务看板（版本号选择见下）。
 - `MarkdownView.vue`：Markdown 渲染。
+
+### 任务看板与版本号选择（ChatIssuesView）
+
+- 版本候选来自 `GET /api/v1/git-issues/versions?projectId&kind`：`kind=BUG` 建议当前版本线最大补丁 +1、`kind=FEAT` 建议最高次版本 +1（后端推导，前端不自算，避免与打 tag 的版本对不上）。
+- `suggested` 固定排下拉第一项并打「推荐」徽标；`el-select` 可搜索、可手输（`allow-create`）。切换任务类型重拉建议值，仅当当前值为空或等于旧建议值时回填，用户手选的值不动。
+- 版本筛选的纯逻辑在 `utils/taskVersionFilter.ts`，由零依赖单测锁行为。
+
+### 部署矩阵（DeploymentMatrix，工作区「环境」视图）
+
+- 环境列 × 版本卡片（运行状态、target/server/ports/health、相对时间、「访问↗」、启停按钮）+ 详情抽屉（启停/重启、容器或进程日志跟随、10s 轮询）。
+- 「最近保留的镜像」面板展示镜像账本保留策略内的版本，每张卡可按 gitSha 一键重新触发 test 环境构建（不打 tag、覆盖默认部署槽）；部署地址指向应用根路径（前端页面），不再跳 `/actuator/health` 的 JSON。
+- 结构回归测试 `DeploymentMatrix.test.ts` 锁死环境网格与镜像面板是两个独立 `v-if`——曾因 `v-else` 与网格错配互斥，导致页面空白（空卡片 bug）。
 
 ### 流水线
 
 `TriggerBar`、`StageTimeline`、`RunLog`、`HistoryList`、`EnvStateBand`、`EnvSummary`。
+
+生产「直接部署」入口 `PipelineView.promoteProdVersion`：发布对象只来自**测试环境验证过的版本**（镜像账本候选），先按该版本提交查测试证据并申请一次性令牌（`deployConfirm`），确认后走 `deployImageVersion`（指定镜像 tag 跳过构建 + `deployTarget=server`，生产固定远程）；已有的 git 标签只作展示，不重打 tag。
 
 ### 项目
 
@@ -176,9 +191,12 @@ pnpm dev            # Vite 开发服务器（默认 5173，代理 /api 到 8090�
 pnpm build          # vue-tsc -b && vite build → dist/
 pnpm typecheck      # 仅类型检查
 pnpm test           # 三个 .test.ts（node --experimental-strip-types）
-pnpm gen:api-types  # 从 OpenAPI 生成 schema.d.ts
+pnpm gen:api-types  # 从 OpenAPI 快照生成 schema.d.ts
+pnpm check:api-types # 校验 schema.d.ts 与 OpenAPI 一致（CI 同款，漂移即失败）
 pnpm dev:mock       # 生成 mock 后以 VITE_MOCK=1 启动
 ```
+
+> **部署后白屏（TDZ）回归**：Vite 的 `manualChunks` 曾按 element-plus / vue / 其余拆成多个 vendor chunk，`element-plus` 与 `@vue/runtime-core`、`@vueuse` 等存在循环引用；浏览器按 ES module 拓扑执行跨 chunk 循环依赖时踩到暂时性死区（`Cannot access '$' before initialization`），Vue 挂不上导致**构建产物白屏**——dev 模式不复现，HTML 与各资源请求全是 200，极易误判成"部署没生效"。现把全部 `node_modules` 依赖收敛到**单一 vendor chunk**，业务代码仍按动态 import 独立分包；规则是 [`utils/chunkSplit.ts`](file:///workspace/platform/web/src/utils/chunkSplit.ts) 的纯函数 `manualChunkOf`，由 `chunkSplit.test.ts` 零依赖回归锁死。
 
 构建产物 `dist/` 由网关 `StaticWebConfig` 托管（单端口部署），生产镜像见 [Dockerfile](file:///workspace/Dockerfile)。
 

@@ -73,7 +73,7 @@ Agent（ReAct，按环境装配工具面）
 | `agent-infra` | Git/worktree、项目接入、JPA 持久化、Flyway、AES-GCM 加解密、会话状态、配方存储 | `ProjectIntakeService`、`GitWorktreeManager`、`SecretBox`、`EncryptedAgentStateStore` |
 | `agent-governance` | 环境策略矩阵、变更单登记、确认令牌签发/消费、补丁登记 | `EnvPolicyService`、`ChangeRegistry`、`ConfirmTokenService` |
 | `agent-executor` | 流水线引擎、动作执行器、Docker 沙箱、部署器、环境供给、自动修复 | `BuiltInPipelineEngine`、`DockerSandbox`、`Deployers` |
-| `agent-tools` | 91 个 `@Tool` 方法、4 套 Toolkit、工具目录导出 | `ToolCatalog`、`ActionService` |
+| `agent-tools` | 90 个 `@Tool` 方法、4 套 Toolkit、工具目录导出 | `ToolCatalog`、`ActionService` |
 | `agent-runtime` | Agent 构造、工具面裁剪、模型热切换、SSE 事件源、工作区 DAG | `AgentFactory`、`ChatService`、`WorkspaceDispatchScheduler` |
 | `agent-gateway` | Boot 入口、40 个 Controller、认证鉴权、项目上下文、BugFix 编排 | `AgentApplication`、`ChatController`、`BugFixOrchestrator` |
 | `spec-checks` | 构建期规约检查 | `ArchitectureRulesTest`、`ForbiddenPatternScanTest` |
@@ -88,9 +88,9 @@ Agent（ReAct，按环境装配工具面）
 ```text
 POST /api/v1/chat
   → ChatController#chat           认证 + 解析 ProjectContext + 并发闸门
-  → ChatService#stream            校验输入、绑定 sessionId、解析模型
-  → AgentFactory#createChat       按环境/角色选 Toolkit、挂 MCP/Skill、建 HarnessAgent
-  → HarnessAgent.streamEvents       模型 ↔ 工具循环（AgentScope）
+  → ChatService#stream            校验输入、绑定 sessionId、解析模型；role=deploy 走部署路由，否则走通用路由
+  → AgentFactory#createChat / #createDeploy   按环境装配 Toolkit、挂 MCP/Skill、建 HarnessAgent
+  → HarnessAgent.streamEvents       模型 ↔ 工具循环（AgentScope）；ProgressiveToolMiddleware 首轮按需披露工具插件
   → ChatController#onEvent        事件映射为 SSE（text.delta / tool.* / usage / change.created）
 ```
 
@@ -144,7 +144,7 @@ POST /api/v1/projects/intake/local|remote
 | 流水线编排放在仓库 `ci/pipeline.yml` | 模型只能触发已定义流水线，不能拼 stage |
 | 环境策略未知环境按 `prod` 处理 | fail-closed |
 | 沙箱不注入凭据 | 降低构建期泄露面；需要时挂只读 `settings.xml` |
-| 工具按插件渐进披露 | 避免 90+ 工具 schema 每轮进入上下文，节省 token |
+| 工具按插件渐进披露（token 三段治理） | `ToolPlugins.CORE` 8 个常驻工具 + 10 个插件按需披露，`ProgressiveToolMiddleware` 首轮只路由一次；`TokenBaselineTest` 把按需 schema 相对全量下降 ≥40% 固化为 CI 基线，token 用量按插件分项归因。避免 90+ 工具 schema 每轮进入上下文，节省 token |
 
 ## 7. 已知边界
 

@@ -77,6 +77,15 @@ ci/actions.yml（仓库显式声明）
 
 所有阈值都可配置（`agent.sandbox.pull-*` / `pull-mirrors` / `host`），不写死在代码里；加速源只是“可选加成”，未配置时仍走守护进程自带 mirrors。
 
+### 3.2 沙箱模式与 fail-closed 时机
+
+- `agent.sandbox.mode` 只有两档：`docker`（默认，强制容器）与 `process`（强制宿主，仅开发、必须显式开启）。历史值 `auto` 及任何未知值一律 `ENVIRONMENT_INVALID_STATE`——不再静默降级为无隔离执行。
+- 旋钮集中在 [SandboxProperties](file:///workspace/platform/agent-executor/src/main/java/top/rongx/agent/executor/SandboxProperties.java)（`agent.sandbox.*`），`normalize()` 在装配时把非法值收敛为安全默认并告警（如 memory 必须带单位、`pids-limit > 0`、cpus 为正数），避免漏一个字母就变成一次神秘的构建失败。
+- Docker 守护进程的可用性检查**从启动期后移到执行期**：[DockerActionRunner](file:///workspace/platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerActionRunner.java) 在每次 `run()` 前调 `sandbox.available()`，不可用则该次动作结构化失败（fail-closed），但平台本身（UI / 配置 / health）照常启动。安全属性不变——不可信配方永远不会以无隔离的宿主进程运行。
+- 启动期 `sweepStaleContainers()` 清扫上个进程遗留的构建容器（`--rm` 在超时 / kill 时不生效）；只清“平台前缀 + 本机 + pid 已退出”的容器，清扫失败只告警不影响启动。
+- 镜像准入 `SandboxImagePolicy`：可配 `image-allowlist` / `allow-floating-tags`，默认宽松，不改变既有行为。
+- 自定义网络 `agent.sandbox.network`（非 bridge/host/none）在 prepare 阶段先 `prepareNetwork()`：`DockerNetwork.ensure()` 做 `inspect → create`，内置网络经 `DockerNetwork.isBuiltIn()` 跳过；失败给可执行的 `docker network create <name>` 提示，不让构建死于 `network not found` 并被误归因为代码问题。
+
 
 ## 4. 流水线引擎
 
@@ -140,6 +149,12 @@ DeployResult deploy(DeployRequest)
 
 未注册目标 **fail-closed**：`DEPLOY_TARGET_UNCONFIGURED (E-505)`；目标无法判定 `E-504`；前置条件缺失 `E-501`；回滚版本缺失 `E-507`。
 
+**SERVER 部署的网络就绪**：生产 SERVER 的 SSH 与 `docker --context` 两条路径在传镜像 / `docker run` 之前统一走 `ServerDeployer.ensureRemoteNetwork()`——远端 `docker network inspect → create`，`bridge` / `host` / `none` 等内置网络经 `DockerNetwork.isBuiltIn()` 跳过；失败返回 `DEPLOY_PREREQUISITE_MISSING` 并给出可复制的 `docker network create` 命令。此前远端原样把 `--network` 塞给 `docker run`，prod 常停在 `network agent-prod-net not found`。
+
+**镜像账本口径**：`BuiltInPipelineEngine.reusedImageVersion()` 与 `gitShaForImage()` / `deployPreflight()` 同源走 `ledgerEnv()`——需要测试证据的环境（prod）从 **test 账本**取 digest / size / version，避免“镜像明明在却说不在 / 没有版本信息”。是否放行仍由 `EnvironmentPromotion` 的测试证据校验决定。
+
+**前端部署产物（白屏 TDZ 回归）**：生产构建的 `manualChunks` 由 [manualChunkOf](file:///workspace/platform/web/src/utils/chunkSplit.ts) 统一返回单一 `vendor` chunk；此前 element-plus 与 `@vue/runtime-core` / `@vueuse` 等跨 chunk 循环依赖在浏览器按 ES module 拓扑执行时踩 TDZ（`Cannot access '$' before initialization`），表现为部署后白屏而 HTML 与各资源请求全是 200。`chunkSplit.test.ts` 锁死该回归；业务代码仍按动态 import 独立分包，vendor hash 稳定。
+
 ## 6. 环境供给（中间件）
 
 - `DockerEnvProvisioner`：按配方为项目创建 Redis/MySQL 等容器（端口、卷、网络、健康检查）。
@@ -164,8 +179,8 @@ DeployResult deploy(DeployRequest)
 
 | 组件 | 作用 |
 |---|---|
-| `RunHistoryStore` | 每 run 的 stage、日志尾部、产物、心跳、修复记录 |
-| `ImageVersionStore` | 镜像版本与回滚候选 |
+| `RunHistoryStore` | 每 run 的 stage、日志尾部、产物、心跳、修复记录；快照持久化 version / tagStatus / branch |
+| `ImageVersionStore` | 镜像版本与回滚候选；生产候选来自 test 账本（ledgerEnv） |
 | `DbRunLedgerRepository` | 统一账本（CHAT/DEPLOY/WORKSPACE/BUGFIX/PIPELINE） |
 | `TriggerScheduler` | 同项目同环境串行触发，避免并发踩踏 |
 | `PomVersionSync` / `ReleaseVersion` | 版本号同步与发布标签 |
@@ -178,3 +193,5 @@ DeployResult deploy(DeployRequest)
 - 超时、资源、日志脱敏。
 - 失败可归因（错误码 + 证据）。
 - 部署目标明确，不静默降级。
+
+生产晋升的领域规则在 `EnvironmentPromotion`（domain，HTTP 层与引擎内共用同一份）：要求 test 已有固化脚本 + 该脚本关联证据运行仍为 SUCCEEDED，缺一拒绝；**不校验**证据提交与本次发布提交是否一致，放行重放 / 打 tag 场景。`sha` 参数保留以兼容调用方，但不参与校验。

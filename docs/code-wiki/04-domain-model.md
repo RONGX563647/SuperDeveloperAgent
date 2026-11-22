@@ -36,6 +36,10 @@ summary: 领域模型字典：核心记录、枚举、端口、错误码分段�
 
 `mutating()` = L2/L3；`requiresConfirmToken()` = L3。
 
+### ToolPlugins 与渐进披露
+
+`ToolPlugins.CORE` 是 8 个常驻核心工具（`project_info`、`list_envs`、`tool_search`、`tool_get`、`tool_load`、`tool_plugins`、`skill_load`、`api_search`），其余按能力切成 10 个插件。装配出的工具面由 `ProgressiveToolMiddleware` 首轮按需披露（核心常驻、插件按需加载），避免 90+ 工具 schema 每轮进入上下文。
+
 ## 2. 环境与策略
 
 ### EnvPolicy / PolicyDecision
@@ -55,6 +59,16 @@ if ("prod".equals(env) && l3 == ALLOW) throw ...;  // 生产 L3 永不放行
 | `SERVER` | 全部服务端 |
 
 `of(raw, env)` 空值按环境名给默认；`localProcess()` / `localDocker()` 供执行器选择路径。
+
+### EnvironmentPromotion
+
+服务器（prod）上线前的证据校验规则（[源码](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/deploy/EnvironmentPromotion.java)），引擎与 HTTP 层共用同一份：
+
+- `requiresTestEvidence(env)`：仅 `prod` 需要先有测试环境成功案例（fail-closed，未知环境按 prod 处理）。
+- `problem(store, statusOf, projectId, env, sha)` 返回不满足原因（满足返回 `null`）：测试环境须有已固化脚本、脚本须关联成功运行证据，且证据运行 `StageStatus == SUCCEEDED`。
+- **不校验**证据提交与本次发布 `sha` 是否一致——重放/打 tag 路径下两者本就可能不同；`sha` 仅保留参数兼容调用方，当前不参与校验。
+
+> 该规则也决定部署账本的读取口径：`BuiltInPipelineEngine.ledgerEnv` 对需要测试证据的环境统一读 `test` 账本，使版本选项、镜像复用与触发预检同源。
 
 ### DeployTarget
 
@@ -99,6 +113,17 @@ QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED
 ### RunKind
 
 `CHAT / DEPLOY / WORKSPACE / BUGFIX / PIPELINE`——统一运行账本的分类维度。
+
+### token 分项归因（token_usage，V8）
+
+token 用法记录 `TokenUsageRepository.Record`（V8 迁移 `V8__token_usage_attribution.sql`）携带两个可空归因字段：
+
+| 字段 | 列 | 语义 |
+|---|---|---|
+| `activatedPlugins` | `activated_plugins` | 本轮处于激活态的插件名（CSV，已剔除路由标记） |
+| `pluginSchemaChars` | `plugin_schema_chars` | 各插件贡献的 schema 字符数（如 `repo:24`，CSV） |
+
+由运行时 `ToolAttribution` 计算、`TokenUsageRecorder` 写入；`ToolPlugins.CORE` 的 8 个常驻工具作为兜底桶。`TokenBaselineTest` 将"按需披露相对全量下降 ≥40%"固化为 CI 基线。可空值对应老记录。
 
 ### 工作区会话
 

@@ -24,6 +24,7 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 | [ErrorCode](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/error/ErrorCode.java) | 对外错误码字典 | `E-1xx` 构建、`E-2xx` 配方/参数、`E-3xx` 运行时、`E-4xx` 产物、`E-5xx` 部署、`E-6xx` 晋升/门禁、`E-7xx` 环境/策略、`E-8xx` 接入 |
 | [BugFixStage](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/bugfix/BugFixStage.java) | Bug 修复状态机 | `ANALYZE → REPRO_DEPLOY → REPRODUCE → FIX → VERIFY_DEPLOY → VERIFY → PULL_REQUEST → DONE` |
 | [ToolPlugins](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/tool/ToolPlugins.java) | 工具插件目录 | `CORE` 8 个常驻工具 + 10 个插件 |
+| [EnvironmentPromotion](file:///workspace/platform/agent-domain/src/main/java/top/rongx/agent/domain/deploy/EnvironmentPromotion.java) | 环境晋升规则（prod 上线前需测试成功证据） | `requiresTestEvidence()`、`problem()`；只校验测试环境证据为 `SUCCEEDED`，不校验两环境提交一致性（放行重放/打 tag） |
 
 ### 端口（`domain/port`）
 
@@ -87,12 +88,12 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 
 | 类 | 职责 |
 |---|---|
-| [BuiltInPipelineEngine](file:///workspace/platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java) | 流水线编排：checkout → build/test → image → deploy → health；看门狗、续跑、日志分页 |
+| [BuiltInPipelineEngine](file:///workspace/platform/agent-executor/src/main/java/top/rongx/agent/executor/BuiltInPipelineEngine.java) | 流水线编排：checkout → build/test → image → deploy → health；看门狗、续跑、日志分页。镜像版本复用 `reusedImageVersion` 与触发预检、sha 反查统一走 `ledgerEnv`（prod 读 test 账本），保证版本选项与解析同源 |
 | `AbstractActionRunner` / `DockerActionRunner` / `ProcessActionRunner` | 动作执行：沙箱内 / 宿主 |
 | [DockerSandbox](file:///workspace/platform/agent-executor/src/main/java/top/rongx/agent/executor/DockerSandbox.java) | 把命令包装成受限 `docker run`（非 root、cap-drop、资源上限、只读根） |
 | `DockerCli` | Docker CLI 抽象（可指向 podman） |
 | [Deployers](file:///workspace/platform/agent-executor/src/main/java/top/rongx/agent/executor/Deployers.java) | 部署器注册表；未命中 fail-closed（E-505） |
-| `DockerDeployer` / `HostDeployer` / `ServerDeployer` / `LocalDevHostDeployer` | 容器替换 / HOST 发布 / SSH 远程 / dev 本机托管 |
+| `DockerDeployer` / `HostDeployer` / `ServerDeployer` / `LocalDevHostDeployer` | 容器替换 / HOST 发布 / SSH 远程 / dev 本机托管。`ServerDeployer` 的 SSH 与 docker context 两条 SERVER 路径均经 `ensureRemoteNetwork` 做远端 `docker network inspect → create`；`DockerNetwork.isBuiltIn` 跳过 bridge/host/none 等内置网络 |
 | `DockerEnvProvisioner` / `DockerEnvRuntime` | 中间件容器按需创建、启停、发现 |
 | `RunHistoryStore` / `ImageVersionStore` | 运行历史、镜像版本账本 |
 | `AutoRepairCoordinator` / `ImagePullRepair` / `DockerDaemonRepair` / `AgentDiagnosisRepair` | 失败自动修复闭环 |
@@ -104,12 +105,12 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 
 ## 5. agent-tools（工具层）
 
-**定位**：模型能调用的所有能力都在这里，共 **91 个 `@Tool` 方法 / 24 个工具类**。
+**定位**：模型能调用的所有能力都在这里，共 **90 个 `@Tool` 方法 / 24 个工具类**。
 
 | 分类 | 类（工具数） |
 |---|---|
-| 只读查询 | `CiQueryTools`(7)、`RepoQueryTools`(6)、`EnvQueryTools`(3)、`RuntimeTools`(3)、`ActionQueryTools`(2)、`GitIssueQueryTools`(2)、`ChangeQueryTools`(1)、`ProjectTools`(2)、`ConfigTools`(1)、`ApiDocTools`(3)、`ToolCatalogTools`(5) |
-| 写/执行 | `CiCommandTools`(3)、`ActionCommandTools`(1)、`DeployTools`(5)、`DockerfileTools`(1)、`EnvCommandTools`(4)、`GitIssueCommandTools`(6)、`ChangeTools`(3)、`PatchTools`(1)、`EditorTools`(7)、`OpsAgentTools`(1)、`CapabilityMarketTools`(2) |
+| 只读查询 | `CiQueryTools`(7)、`RepoQueryTools`(6)、`EnvQueryTools`(3)、`RuntimeTools`(3)、`ActionQueryTools`(2)、`GitIssueQueryTools`(2)、`ChangeStatusTool`(1)、`ProjectTools`(2)、`ConfigTools`(1)、`ApiDocTools`(3)、`ToolCatalogTools`(5) |
+| 写/执行 | `CiCommandTools`(3)、`ActionCommandTools`(1)、`DeployTools`(5)、`DockerfileTools`(1)、`EnvCommandTools`(4)、`GitIssueCommandTools`(6)、`ChangeTools`(2)、`PatchTools`(1)、`EditorTools`(7)、`OpsAgentTools`(1)、`CapabilityMarketTools`(2) |
 | 交互/调度 | `AskUserTools`(1，`ask_user`)、`WorkspaceSupervisorTools`(21) |
 | 编排/缓存 | [ActionService](file:///workspace/platform/agent-tools/src/main/java/top/rongx/agent/tools/ActionService.java)、`CachingAgentTool`、`ToolResultCache`、`SecretRedactor` |
 
@@ -128,14 +129,14 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 
 | 类 | 职责 | 关键方法 |
 |---|---|---|
-| [AgentFactory](file:///workspace/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java) | 按上下文构造 Agent | `createChat()`、`createDeploy()`、`createSupervisor()`、`systemPrompt()` |
+| [AgentFactory](file:///workspace/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/AgentFactory.java) | 按上下文构造 Agent | `createChat()`（通用会话）、`createDeploy()`（发布 Agent：dev/test 用 `BYPASS` 避免停在等待确认，prod 保持 `DEFAULT` 且控制器直接拒绝）、`createSupervisor()`、`systemPrompt()`；`ChatService` 按 `role=deploy` 选择部署路由，否则走通用路由 |
 | [ChatService](file:///workspace/platform/agent-runtime/src/main/java/top/rongx/agent/runtime/ChatService.java) | 把输入变成事件流 | `stream()`（4 个重载）、`streamSupervisor()`、`structured()` |
 | `AgentSession` | Agent + 可关闭资源 | `close()` 关闭本轮 MCP/临时资源 |
 | `DynamicModelProvider` | 每次请求解析当前模型（设置页热切换） | `current()`、`activeConfig()` |
 | `ChatSessionRegistry` | `sessionId` 与 `(project, env, user)` 绑定校验 | `bindOrVerify()` |
-| `ProgressiveToolMiddleware` | 工具渐进披露：核心工具常驻，插件按需加载 | 首轮路由只做一次 |
-| `AskUserMiddleware` | `ask_user` 入参 → `ask.requested` 事件 | |
-| `TokenUsageRecorder` / `ConversationTimelineRecorder` | token 用量、服务端时间线 | |
+| `ProgressiveToolMiddleware` | 工具渐进披露：`ToolPlugins.CORE` 8 个核心工具常驻，10 个插件按需加载 | 首轮路由只做一次 |
+| `ToolAttribution` / `AskUserMiddleware` | 插件分项归因（本轮激活插件与各插件 schema 字符数）；`ask_user` 入参 → `ask.requested` 事件 | |
+| `TokenUsageRecorder` / `ConversationTimelineRecorder` | token 用量、服务端时间线 | 写入 `activatedPlugins` / `pluginSchemaChars`（V8 迁移） |
 | `workspace/*` | 工作区调度：`ConversationManager`、`WorkspaceDispatchScheduler`、`WorkspaceRunExecutor`、`WorkspaceEventBus`、`WorkspaceRunWatchdog`、`RunAborter` | DAG 并行派发、超时熔断、事件订阅 |
 
 ## 7. agent-gateway（接入层）
@@ -144,12 +145,12 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 |---|---|
 | `gateway` | [AgentApplication](file:///workspace/platform/agent-gateway/src/main/java/top/rongx/agent/gateway/AgentApplication.java)：`.env` 加载、数据库后端配置预注入、Boot 启动 |
 | `gateway/web` | 40 个 Controller（对话、流水线、部署、环境、设置、项目、Issue、工作区…） |
-| `gateway/auth` | Sa-Token 配置、登录、角色与权限码、`CurrentUser`、`UserStore` |
+| `gateway/auth` | Sa-Token 配置、登录、角色与权限码、`CurrentUser`、`UserStore`；种子账号初始密码统一为 `admin-2026`（`UserStore.DEFAULT_INITIAL_PASSWORD`），登录后可在「设置 → 账号安全」重置 |
 | `gateway/deploy` | `DeployGate`、`ChatRunRecoveryAdvisor` |
 | `gateway/bugfix` | Bug 自动修复编排器、7 个阶段处理器、结构化输出、PR、通知 |
 | `gateway/gitissue`、`gateway/gitee` | Issue 同步、Gitee OAuth/PAT、Webhook |
 | `gateway/settings` | 数据库热切换、模型探测、环境发现、本机服务管理 |
-| `gateway/config` | 构建新鲜度检查、治理清理任务、Jackson 配置 |
+| `gateway/config` | 构建新鲜度检查、治理清理任务、Jackson 配置；根 `pom.xml` 以 `jackson-bom.version=2.21.4` 覆盖 Spring Boot BOM 统一 Jackson 版本（修复 CI CVE） |
 | `gateway/persistence` | 用户、Gitee 账号、流租约实体 |
 
 ## 8. spec-checks（规约检查）
@@ -165,6 +166,9 @@ summary: 九个模块的职责边界、关键类与函数、对外端口，以�
 | `HandbookDriftTest` | Handbook 锚点与行号漂移 |
 | `ProcessArchiveTest` | 会话归档完整性 |
 | `ToolSchemaBudgetTest` | 工具 schema token 预算 |
+| `TokenBaselineTest` | token 量化基线（按需 schema 相对全量下降 ≥40%，且总量有硬上限防回涨） |
+| `ToolkitAssemblyTest` | 工具面装配的超集关系与防回退 |
+| `HostToolExclusionTest` | 宿主 shell 工具不得进入工具面 |
 | `ConfigCredentialScanTest` | 配置/代码中的明文凭证 |
 | `ApiDocContractTest` | OpenAPI 快照与控制器一致 |
 
