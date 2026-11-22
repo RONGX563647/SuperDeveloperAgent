@@ -1,7 +1,12 @@
 <!-- 由 tools/docs/build.py 生成，勿手改 -->
 # 模块：agent-gateway
 
-88 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+89 个会话；检索用 `python tools/docs/find.py --module agent-gateway`。
+
+## 2026-11-22 · 收敛并行 DatabaseHotSwapper 修复到 0.1.2 封版基线（chore `9f054d9` `3e1d20f`）
+- 问题：收敛并行 DatabaseHotSwapper 修复到 0.1.2 封版基线
+- 方案：docs(archive): 归档 ci-backend-pg-hotswap-schema-replay 会话
+- 验证：合并后 gate.py validate 归档链 190 份通过、views check 16 文件一致；pre-commit 覆盖命令 Dat…
 
 ## 2026-11-22 · 修复 CI backend：真 PG 热切换回退时 Flyway 重放 V7 drop app_url 失败（bug `9f054d9`）
 - 问题：CI backend (mvn verify) 持续失败：DatabaseHotSwapperPostgresIT.switchBackKeep…
