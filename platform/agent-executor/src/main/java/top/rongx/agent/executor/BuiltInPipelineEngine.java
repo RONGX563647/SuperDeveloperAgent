@@ -1784,7 +1784,7 @@ public class BuiltInPipelineEngine implements PipelineEngine, AutoCloseable {
      * <p>不这样做的后果：界面上给出的"测试跑通过的版本"在触发时会被
      * {@link #deployPreflight} / {@code gitShaForImage} 判成"镜像版本不存在或不属于 prod"，
      * 选项与解析不同源 = 看得见点不动。安全性不受影响——是否放行仍由
-     * {@link EnvironmentPromotion} 校验测试环境证据（同一个 sha）。
+     * {@link EnvironmentPromotion} 校验测试环境已有成功证据。
      */
     private static String ledgerEnv(String env) {
         return EnvironmentPromotion.requiresTestEvidence(env) ? "test" : env;

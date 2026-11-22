@@ -107,7 +107,7 @@ class DeployRecipeFlowTest {
     }
 
     @Test
-    @DisplayName("测试证据成功后 prod 放行；但换了未验证的提交又会被拒")
+    @DisplayName("测试证据成功后 prod 放行；提交不一致不再作为拦截条件")
     void promotesAfterTestEvidence(@TempDir Path temp) throws Exception {
         Path repo = newRepo(temp);
         String sha = commit(repo, "init");
@@ -122,14 +122,13 @@ class DeployRecipeFlowTest {
             String prodRun = engine.trigger(PROJECT, "release", Map.of("gitSha", sha, "env", "prod"));
             assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, prodRun), engine.logTail(prodRun));
 
-            // 新提交未在测试环境验证过 → 拒绝
+            // 提交一致性校验已移除：换了提交也放行（重放/打 tag 路径下两提交本就可能不同）
             Files.writeString(repo.resolve("second.txt"), "x", StandardCharsets.UTF_8);
             String otherSha = commit(repo, "second");
-            PromotionException e = assertThrows(PromotionException.class,
-                    () -> engine.trigger(PROJECT, "release",
-                            Map.of("gitSha", otherSha, "env", "prod")));
-            assertEquals("E-601", e.code());
-            assertTrue(e.getMessage().contains("测试环境验证的是"), e.getMessage());
+            String otherProdRun = engine.trigger(PROJECT, "release",
+                    Map.of("gitSha", otherSha, "env", "prod"));
+            assertEquals(StageStatus.SUCCEEDED, awaitTerminal(engine, otherProdRun),
+                    engine.logTail(otherProdRun));
         } finally {
             engine.close();
         }
@@ -167,7 +166,7 @@ class DeployRecipeFlowTest {
     }
 
     @Test
-    @DisplayName("晋升规则矩阵：无脚本 / 无证据 / 证据失败 / sha 不一致")
+    @DisplayName("晋升规则矩阵：无脚本 / 无证据 / 证据失败；提交一致性与 test 环境不拦")
     void promotionMatrix(@TempDir Path temp) {
         RecipeStore recipes = new MemoryRecipeStore(temp.resolve("ws"));
         // 无脚本
@@ -180,12 +179,31 @@ class DeployRecipeFlowTest {
                 "run-x", "aaaaaaa", 0L, "agent"));
         assertTrue(EnvironmentPromotion.problem(recipes, r -> StageStatus.FAILED, PROJECT, "prod", "aaaaaaa")
                 .contains("需要成功"));
-        // 证据成功但提交不一致
-        assertTrue(EnvironmentPromotion.problem(recipes, r -> StageStatus.SUCCEEDED, PROJECT, "prod", "bbbbbbb")
-                .contains("测试环境验证的是"));
+        // 提交一致性校验已移除：证据成功但提交不一致也放行
+        assertEquals(null, EnvironmentPromotion.problem(recipes, r -> StageStatus.SUCCEEDED,
+                PROJECT, "prod", "bbbbbbb"));
         // 全满足
         assertEquals(null, EnvironmentPromotion.problem(recipes, r -> StageStatus.SUCCEEDED,
                 PROJECT, "prod", "aaaaaaa"));
+    }
+
+    @Test
+    @DisplayName("提交一致性已移除：证据成功时，任意发布 sha（不同/空）都放行")
+    void promotionIgnoresShaConsistency(@TempDir Path temp) {
+        RecipeStore recipes = new MemoryRecipeStore(temp.resolve("ws"));
+        // 测试固化的脚本：证据 run-x 成功，验证的是 aaaaaaa
+        recipes.save(new DeployRecipe(PROJECT, "test", 0, "name: x\nstages: []\n", null,
+                "run-x", "aaaaaaa", 0L, "agent"));
+
+        // 发布一个完全不同的提交 → 不再拦截
+        assertEquals(null, EnvironmentPromotion.problem(recipes, r -> StageStatus.SUCCEEDED,
+                PROJECT, "prod", "ffffffffffffffff"));
+        // 发布 sha 为空 → 也不拦截
+        assertEquals(null, EnvironmentPromotion.problem(recipes, r -> StageStatus.SUCCEEDED,
+                PROJECT, "prod", null));
+        // 但证据失败仍要拦（确认移除的只是 sha 校验，不是整个证据门）
+        assertTrue(EnvironmentPromotion.problem(recipes, r -> StageStatus.FAILED,
+                PROJECT, "prod", "ffffffffffffffff").contains("需要成功"));
     }
 
     @Test
